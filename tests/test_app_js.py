@@ -177,6 +177,25 @@ const out = {};
     stepBtn('Open').fire('click');
     await tick();
     out.skips = fetched.filter((f) => f.path === '/api/setup/skip').map((f) => f.body);
+    // a skipped step opened again says Skipped and offers Hide, never Skip again
+    const stepOf = (t) => $('setup').querySelectorAll('.step').find((b) => b.querySelector('h2').textContent === t);
+    const btnsOf = (t) => stepOf(t).querySelector('.band').querySelectorAll('button').map((b) => b.textContent);
+    const bandBtn = (t, text) => stepOf(t).querySelector('.band').querySelectorAll('button').find((b) => b.textContent === text);
+    out.current = btnsOf('Search model');  // Connect stays skipped (the server says so)
+    bandBtn('Search model', 'Skip').fire('click');
+    await tick();
+    bandBtn('Search model', 'Open').fire('click');
+    await tick();
+    out.reopened = [stepOf('Search model').querySelector('.band-note').textContent, btnsOf('Search model')];
+    // Try it: what to do while Cortex cannot see the AI app, and the app's own Chat
+    out.tryIt = stepOf('Try it').querySelectorAll('button').map((b) => b.textContent);
+    // Connect: an empty file list is not shown; Claude Code's plugin route lists commands
+    DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', targets: [
+      { id: 'claude-desktop', label: 'Claude Desktop', detected: false, connected: false, files: [], snippet: '', note: '' },
+      { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install cortex', commands: true, note: '' }] };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'connect').fire('click');
+    await tick();
+    out.whatLines = $('connect').querySelectorAll('details').map((d) => d.querySelectorAll('p').map((p) => p.textContent));
     // Chat with neither the search model nor a local model: both rows, each with its own button
     const settings = { length: 'normal', temperature: 0.2, passages: 8, history: true,
       sources: { notes: true, chats: true, browsing: true, private: true } };
@@ -185,6 +204,7 @@ const out = {};
     await tick();
     out.missing = $('chat').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent, r.querySelector('button').textContent]);
     out.composer = $('chat-input') !== null;
+    out.examplesOff = $('chat').querySelector('.chat-empty').querySelectorAll('button').length;
     out.pushed = replaced.filter((u) => u.startsWith('push '));
     // with both: an example fills the composer, Enter sends, the answer streams in with sources
     const chats = [{ id: '01KA0000000000000000000000', title: 'Which sites did I visit yesterday?', updated: new Date().toISOString(), count: 2 }];
@@ -262,6 +282,12 @@ const out = {};
     llmBtn('Save choice').fire('click');
     await tick();
     out.llmSaved = fetched.filter((f) => f.path === '/api/llm/settings').map((f) => f.body);
+    // no models at all: Save, Load and Test are off; Ollama reads as Setup says it
+    DATA.routes['/api/llm'] = { ...DATA.llm, ollama: null, ollama_state: 'stopped', models: [], model: null };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
+    await tick();
+    out.noModels = ['Save choice', 'Load', 'Test'].map((t) => llmBtn(t).disabled);
+    out.ollamaWord = $('llm').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Ollama').querySelector('.val').textContent;
     // Status → Updates: Check asks GitHub only on the click; Update now asks first, then the
     // page says Cortex is closing to install it
     DATA.routes['/api/status'] = { first_run: false, rows: [], vault: 'V', land: 'status', update: { current: '0.1.0', mode: 'installer' } };
@@ -269,6 +295,12 @@ const out = {};
     await tick();
     const updRows = () => $('status').querySelectorAll('.brow').map((r) => r.querySelector('.ttl').textContent);
     out.updBefore = { rows: updRows(), asked: fetched.some((f) => f.path.startsWith('/api/update')) };
+    // Check again keeps the old board up, marked as refreshing, until the answer replaces it
+    $('status').querySelector('.band').querySelectorAll('button').find((b) => b.textContent === 'Check again').fire('click');
+    out.refresh = [$('status').className, $('status').getAttribute('aria-busy')];
+    await tick();
+    out.refresh.push($('status').className, $('status').getAttribute('aria-busy'));
+    out.inertBefore = ['top', 'jobline', 'shell'].map((id) => !!$(id).inert);
     const checked = { current: '0.1.0', latest: '0.2.0', newer: true, notes_url: 'https://github.com/o/r/releases/tag/v0.2.0', mode: 'installer', size: 31 * 2 ** 20 };
     DATA.routes['/api/job'] = { seq: 3, job: { name: 'Checking for updates', section: 'update', running: false, cancellable: false, line: '', seconds: 1, error: null, result: checked } };
     rowBtn('Cortex 0.1.0', 'Check for updates').fire('click');
@@ -293,6 +325,7 @@ const out = {};
     $('confirm-ok').onclick();
     await tick();
     out.quit.after = fetched.some((f) => f.path === '/api/quit');
+    out.inertAfter = ['top', 'jobline', 'shell'].map((id) => $(id).inert);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.errors = errors;
   out.sinks = sinks;
@@ -377,7 +410,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     # R3-2: Ask names both missing pieces at once; a section click is a Back step (R3-10)
     assert out["missing"] == [["Search model", "Set up the search model"],
                               ["Local model", "Set up a local model"]]
-    assert out["composer"] is False and out["pushed"] == ["push #chat"]
+    assert out["composer"] is False and out["pushed"] == ["push #connect", "push #chat"]
     # Chat: the example fills the composer; Enter sends; the stream renders safely with sources
     assert out["empty"] == "Ask about anything you've saved or browsed."
     assert out["filled"] == "Which sites did I visit yesterday?"
@@ -419,6 +452,20 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["updAfter"]["gone"].startswith("Cortex is closing to install the update.")
     assert out["quit"] == {"title": "Stop Cortex?", "ok": "Quit", "before": False, "after": True,
                            "body": "Running jobs are cancelled; your vault is not affected."}
+    # QA fixes: after the app stops only the banner stays live; a refetch marks the old board
+    assert out["inertBefore"] == [False] * 3 and out["inertAfter"] == [True] * 3
+    assert out["refresh"] == ["refreshing", "true", "", "false"]
+    assert out["examplesOff"] == 0  # no message box, so no example questions to fill it
+    assert out["noModels"] == [True, True, True] and out["ollamaWord"] == "installed, not running"
+    assert out["current"] == ["Skip"] and out["reopened"] == ["Skipped", ["Hide"]]
+    assert "Open Chat" in out["tryIt"]
+    assert out["whatLines"] == [["Files:", "Commands Cortex runs:"],  # found apps first
+                                ["Set up a vault first; the entry points at it."]]
+
+
+def test_setup_and_browsing_name_the_same_browsers():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "Chrome or Comet" not in js and js.count("${EXT_BROWSERS}") == 2
 
 
 def test_a_command_that_failed_shows_as_failed(tmp_path):

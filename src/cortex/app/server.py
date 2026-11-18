@@ -292,6 +292,7 @@ class App:
         def chats(names):
             return [n for n in names if not localllm._NOT_CHAT.search(n)]
         return {**d, "ollama": None if d["ollama"] is None else chats(d["ollama"]),
+                "ollama_state": wizard._ollama_state(d["ollama"]),  # the words Setup uses
                 "models": [m for m in status.lms_models() if chats([m["key"]])],
                 "hardware": hw, "recommend": wizard.model(wizard.recommend(hw["gb"], hw["kind"]))}
 
@@ -345,7 +346,7 @@ class App:
                             for t in targets.describe(self.entry())],
                 "first_prompts": list(cli.FIRST_PROMPTS), "connect_skipped": _connect_skipped(),
                 "guides": {**chats.GUIDES, **importers.GUIDES},
-                "imports": status.imports(),
+                "imports": status.imports(self.root if self.entry() else None),
                 "extension": {"paired": bool(token and token.is_file()),
                               "folder": str(extension_dir())}}
 
@@ -375,15 +376,14 @@ class App:
             new["enabled"] = _bool(body, "enabled")
         if "model" in body:
             m = body["model"]
-            if m is not None and (not isinstance(m, str) or len(m) > 200
-                                  or not all(c.isalnum() or c in "._:@/-" for c in m)):
+            if not isinstance(m, str) or not m:  # never write `model: null`
+                raise ValueError("Choose a model first.")
+            if len(m) > 200 or not all(c.isalnum() or c in "._:@/-" for c in m):
                 raise ValueError("not a model name")
             r = body.get("runner", "lmstudio")  # no runner: an LM Studio choice, as before
             if r not in wizard.RUNNERS:
                 raise ValueError("runner must be ollama or lmstudio")
-            new["model"] = m
-            if m:
-                new["runner"] = r
+            new["model"], new["runner"] = m, r
         cli._write_config(localllm=new)
         return {"ok": True}
 

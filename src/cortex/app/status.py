@@ -5,6 +5,7 @@ states, dates and the owner's own settings (`safe` filters the receiver's answer
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import logging
@@ -65,11 +66,18 @@ def vault(root: Path | None) -> dict:
     ok = (root / ".cortex").is_dir()
     return {"path": str(root), "ok": ok, "exists": root.is_dir(),
             "notes": notes(root) if ok else 0,
-            "last_index": when(root / ".cortex" / "index-snapshot.json"),
+            "last_index": indexed(root),
             "dashboard": when(root / ".cortex" / "dashboard.html"),
             "backups": len(list((root / ".cortex" / "backups").glob("*.zip"))) if ok else 0,
             "last_backup": max((when(p) or "" for p in (root / ".cortex" / "backups")
                                 .glob("*.zip")), default=None) if ok else None}
+
+
+def indexed(root: Path) -> str | None:
+    """When the notes were last indexed: the vector cache "Index my notes" writes. The one
+    answer Setup, Status and Dashboard and vault all show."""
+    from cortex import semantic
+    return when(root / semantic.CACHE)
 
 
 def embedding(root: Path | None = None) -> dict:
@@ -77,7 +85,7 @@ def embedding(root: Path | None = None) -> dict:
     d = semantic.models_dir()
     out = {"downloaded": doctor.search_model_ready(), "dir": str(d)}
     if root is not None:
-        out["indexed"] = when(root / semantic.CACHE)
+        out["indexed"] = indexed(root)
     return out
 
 
@@ -262,14 +270,28 @@ def history(root: Path | None, scanned: dict) -> dict:
                          **safe(scanned.get(s.key, {}))} for s in found]}
 
 
-def imports() -> dict:
-    """Per chat-export source: conversations imported so far, and when (its folder's time)."""
+def imports(root: Path | None = None) -> dict:
+    """Per guided-import source: what is imported so far, and when. Chats: conversations in
+    their folder (its time); notes: the resource pages the notes import names; calendar: the
+    event lines on its month pages (the newest page's time)."""
     from cortex import chats
     out = {}
     for source, (folder, _) in chats.EXPORT_DIRS.items():
         d = chats.export_root() / folder
         n = sum(1 for _ in d.glob("*.jsonl")) if d.is_dir() else 0
         out[source] = {"count": n, "when": when(d) if n else None}
+    if root is not None:
+        from cortex import importers
+        res = root / "resources"
+        notes = [p for k in importers.LABELS for p in res.glob(f"{k}-*.md")]
+        cal = list(res.glob("calendar-*.md"))
+        events = 0
+        for p in cal:
+            with contextlib.suppress(OSError):
+                events += sum(x.startswith("- ") for x in p.read_text("utf-8").splitlines())
+        for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events)):
+            out[source] = {"count": n,
+                           "when": max(when(p) or "" for p in pages) if n else None}
     return out
 
 

@@ -234,6 +234,11 @@ td.n, th.n { text-align: right; }
 .step.collapsed > :not(.band) { display: none; }
 .step.current { border-color: var(--edge); }
 .done-mark { color: var(--solid); font-weight: 600; }
+/* day: --solid is 2.3:1 on the yellow step band; this green is 5.3:1 there, 7.6:1 on white */
+:root[data-theme="day"] .done-mark { color: #08603f; }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) .done-mark { color: #08603f; } }
+/* a section being fetched again keeps its old boards, dimmed (after a beat, so a quick answer never flickers) */
+.refreshing { opacity: .55; transition: opacity .2s .3s; }
 .opts { display: grid; gap: 0; }
 .opt { grid-template-columns: 24px minmax(0, 1fr) auto; cursor: pointer; }
 .opt input { accent-color: var(--lit); margin: 0; }
