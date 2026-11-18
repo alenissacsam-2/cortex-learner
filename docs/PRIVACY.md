@@ -10,7 +10,7 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 
 - **The search model** (about 150 MB, from Hugging Face, huggingface.co), once, into `~/.cortex/models`. This is the one download Cortex makes for you: `cortex setup` runs it after you say yes, and the app runs it when you click **Download search model**. You can also run `cortex model download` yourself. Nothing else downloads it; searches never do.
 - **In the app, only when you click** (Setup, Local model and Status):
-  - **Check for updates** asks GitHub (api.github.com) for the latest Cortex release. The request carries nothing about you, not even your Cortex version. **Update now** then downloads the new `CortexSetup.exe` and its checksum from that GitHub release.
+  - **Check for updates** asks GitHub (api.github.com) for the latest Cortex release. The request carries nothing about you, not even your Cortex version. If GitHub's API is limiting requests from your network, it reads the latest release from github.com's release page instead. **Update now** then downloads the new `CortexSetup.exe` and its checksum from that GitHub release.
   - Ollama itself (about 1 GB): `winget install Ollama.Ollama` on Windows (from ollama.com) or `brew install ollama` on macOS (from Homebrew). On Linux the app only shows the install command.
   - A local model: `ollama pull` (from Ollama's library) or `lms get` (LM Studio's catalogue), about 2 to 6 GB depending on the model you pick.
   - In Connect AI apps, adding the Claude Code plugin runs `claude plugin marketplace add` and `claude plugin install` on your Cortex folder.

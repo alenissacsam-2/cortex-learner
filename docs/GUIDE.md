@@ -91,7 +91,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex brief` | Your brief, teaching contract and Today |
 | `cortex dashboard` | Opens the offline dashboard |
 | `cortex recall "query"` | Searches your vault by meaning and keywords |
-| `cortex ask "question"` | Answers from your notes and browsing with your local model, with sources |
+| `cortex ask "question"` | Answers from your notes, saved AI chats and browsing with your local model, with sources |
 | `cortex claims --summary` | How well Cortex knows you, per page (and which lines you clicked vs a chat relayed) |
 | `cortex claims --unasked` | What chats saved about you without asking, each with its undo |
 | `cortex export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
@@ -232,7 +232,7 @@ Cortex can turn your browser history into pages, so it knows what you have been 
 **Optional: a local AI for summaries and `deepen`**
 Run `cortex app` → Setup. It finds or installs a runner (Ollama is recommended; LM Studio is the alternative), suggests a model that fits this computer, downloads it, tests it with a made-up sentence and turns it on.
 
-Later, `cortex app` → **Local model** lets you switch: the model list shows every chat model already installed in Ollama or LM Studio (embedding models are left out). Pick one and click **Save choice**. To get another Ollama model, type its name from ollama.com/library (for example `gemma3:4b`) and click **Download**; Ollama must be running, and cloud models are refused. The page also says which size suits this computer, with a button that fills in its name.
+Later, `cortex app` → **Local model** lets you switch: the model list shows every chat model already installed in Ollama or LM Studio (embedding models are left out). Pick one and click **Save choice**. **Test** sends one made-up sentence and shows the answer and time; **Load** starts LM Studio and loads an LM Studio model (Ollama loads its models by itself). To get another Ollama model, type its name from ollama.com/library (for example `gemma3:4b`) and click **Download**; Ollama must be running, and cloud models are refused. The page also says which size suits this computer, with a button that fills in its name.
 
 Without the app: install Ollama, run `ollama pull qwen3.5:4b` (`qwen3.5:2b` with under 6 GB of graphics memory or RAM, `qwen3.5:9b` with 10 GB or more), then add `localllm: {enabled: true}` to `~/.cortex/config.yaml` (for LM Studio, `localllm: {enabled: true, runner: lmstudio}`). `cortex llm status` checks it.
 
@@ -242,17 +242,17 @@ It only talks to your own machine. For a public day page it hears your topic nam
 Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with it about everything Cortex holds: in `cortex app` → **Chat**. Ask a question, then follow up ("and its running time?"); each answer searches again, with your new message and the one before it.
 - **What it searches:** your notes and mistakes, the AI chats you imported (Claude, ChatGPT, Gemini, Perplexity), and your browsing, private pages included. Only the model on this computer reads them; Chat never uses a cloud model, whatever the cloud settings say, and refuses any runner that is not on this computer.
 - **Dates:** "yesterday", "3 days ago" (a day either side), "last week", "this month", "on 12 Nov", "in October" and "since 2026-11-01" keep the answer to pages dated then: the browsing day pages, notes with a date, and other notes by the day they were last changed. "Which sites did I visit yesterday?" lists that day's pages, newest first.
-- **Sources:** the answer cites pages as [1], [2]; click a number to jump to its source, and a source to open it in Obsidian. When nothing fits it says "I don't know from your archive."
+- **Sources:** the answer cites pages as [1], [2]; click a number to jump to its source, and a source to open it in Obsidian. When nothing fits it says "I don't know from your archive." When an answer cites nothing, the pages it read are listed under **Searched, not cited**.
 - **Settings** (Chat settings, top right; saved under `chat:` in `~/.cortex/config.yaml`): answer length (short, normal, long), creativity (0 to 1, default 0.2), pages read per answer (4 to 12, default 8), which sources to search (notes, saved AI chats, browsing, private browsing), and Keep chat history.
 - **History:** each chat is a file in `<vault>/.cortex/browse/chat/`, inside the private browse folder: never shown to Claude or any other AI app, never on the dashboard. Delete one with its Delete button, or all with Chat settings → Delete all chats. With Keep chat history off, new chats are never written and are forgotten when the app stops.
 
-With no local model or no search model, Chat shows what is missing with a button to Setup. In a terminal, `cortex ask "what did I read about binary search?"` answers one question the same way, without history.
+With no local model or no search model, Chat shows what is missing with a button to Setup. In a terminal, `cortex ask "what did I read about binary search?"` answers one question from the same sources, without history or date phrases.
 
 **Optional: the browser extension**
 It adds time on screen and a short text excerpt of pages you read. It works in Chrome, Edge and Brave, and should work in Comet too (it is built on the same engine; not yet tried there). It never runs in private windows.
 1. Follow `extension/README.md` and use Load unpacked.
-2. Run `cortex browse pair` and paste the token in the extension's popup.
-3. Keep `cortex browse serve` running while you browse.
+2. Run `cortex browse pair` and paste the token in the extension's popup. (In `cortex app` → **Browsing**, **Set up the extension** pairs it, starts the receiver and opens the extension folder in one click.)
+3. Keep `cortex browse serve` running while you browse, or turn on **Start at login** under **Browsing**.
 
 **Settings** (in `~/.cortex/config.yaml`, under `browse:`)
 - `visible_to_claude: false` or `true`. The default is `false`: only private pages, and no journal lines, topic touches or dashboard pages from browsing. With `true`, the day pages (your topics, time and counts only), the site pages and profile of ordinary sites and of every sensitive category in `cloud_categories`, journal lines and topic touches are written too. Switching back to `false`, hiding or skipping one more category, or denying a site, removes what is no longer allowed on the next import, from older pages, visit counts and search vectors too.

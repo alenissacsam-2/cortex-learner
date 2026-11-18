@@ -59,7 +59,7 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 *A real run on the demo vault with Qwen 3.5 2B and the search model. A model this small can still get a detail wrong, so check the cited pages; a bigger model (4B, 9B) does better if your computer can run it.*
 
-**Local model** shows the runner (Ollama or LM Studio) and the chosen model.
+**Local model** shows the runner (Ollama or LM Studio) and the chosen model, with **Save choice**, **Load** and **Test**, and downloads another Ollama model by name.
 
 ![Local model: Ollama with two models, LM Studio not found, the chosen model, the on switch and the Download board with the size this computer suits](docs/images/app-local-model.png)
 
@@ -127,7 +127,7 @@ flowchart LR
     VAULT --> FOLD
     FOLD --> DASH
     IDX --> MCP
-    LLM -.->|summaries, Ask| APP
+    LLM -.->|summaries, Chat| APP
     LLM -.-> BR
     BR -.->|"only 'cloud may read' categories"| CLOUD
 ```
@@ -152,7 +152,7 @@ The tool schemas are in [docs/tools.md](docs/tools.md).
 Cortex is local-first. [docs/PRIVACY.md](docs/PRIVACY.md) has the full detail; in short:
 
 - **No account and no telemetry.** Your vault is a folder you choose; settings live in `~/.cortex/`.
-- **What reaches the internet** happens only because you asked: the one-time search model download, and in the app, downloading Ollama or a local model when you click. Installing or upgrading fetches Python packages as usual.
+- **What reaches the internet** happens only because you asked: the one-time search model download, and in the app, downloading Ollama or a local model, or checking GitHub for a Cortex update, when you click. Installing or upgrading fetches Python packages as usual.
 - **Servers listen on 127.0.0.1 only.** The app needs a key that changes each launch and stops after 30 minutes idle. The browser extension's receiver accepts only the paired extension's token. The MCP server talks over standard input and output.
 - **What the AI model sees.** Whatever a Cortex tool returns goes to the AI app you are chatting with (Anthropic, when you use Claude). Pages marked `private: true` are left out of search, recall and context. `cortex exclude add <folder>` turns Cortex off for chats in one folder.
 - **Browsing has three settings per category.** *Don't save* (adult, by default), *Local AI only* (health, money, betting, dating, sexuality, drugs and self-harm start here: only a model on this computer may read them), or *Cloud AI apps can read*. Nothing from browsing is visible to cloud AI apps until you turn that switch on. Sign-in, payment and bank pages are dropped and never stored.
@@ -169,7 +169,7 @@ Cortex is local-first. [docs/PRIVACY.md](docs/PRIVACY.md) has the full detail; i
 3. Click **Install**. It needs an internet connection this once, to download Python and Cortex's parts (a few minutes). It needs no admin rights and installs for your user only, in `%LOCALAPPDATA%\Programs\Cortex`, and adds `cortex` to your PATH.
 4. Click **Open Cortex**. Later, use the **Cortex** shortcut on the desktop or in the Start menu.
 
-To update, run a newer `CortexSetup.exe`. To uninstall, click **Quit** in the app, then remove **Cortex** under **Settings > Apps > Installed apps**. Your vault and `~/.cortex` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
+To update, click **Check for updates** under **Status** → **Updates** in the app (Cortex 0.1.0 has no such button: run a newer `CortexSetup.exe` once). To uninstall, click **Quit** in the app, then remove **Cortex** under **Settings > Apps > Installed apps**. Your vault and `~/.cortex` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
 
 ### macOS, Linux, and developers
 
@@ -200,7 +200,7 @@ The app's **Setup** walks through:
 1. **Vault.** Pick a folder (default `~/Cortex`). Cortex adds its own subfolders, starter pages about you and a git history, and never changes notes already there.
 2. **Connect AI apps.** Tick the apps to connect: Claude Desktop, Claude Code, Gemini CLI, Antigravity, Cursor, VS Code, Windsurf, LM Studio or Codex. Each change is shown first, and each config file is backed up before it is edited.
 3. **Search model.** A one-time download of about 150 MB. Without it, search uses keywords only.
-4. **Add your history** (optional). One guide per source, as in the screenshot above.
+4. **Add your history** (optional). One guide per source, as in the screenshot above. The step is done once any chat, notes, calendar or browser history import is in.
 5. **Local model** (optional). Finds or installs Ollama, suggests a model that fits this computer, downloads it, tests it with a made-up sentence and turns it on.
 6. **Try it.** A reminder to restart the apps you connected, and first things to say to Claude.
 
@@ -236,11 +236,11 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
 | Command | What it does |
 |---|---|
-| `cortex app` | Open the Cortex app (`--no-open` prints the link only) |
+| `cortex app` | Open the Cortex app (`--no-open` prints the link only; `--port N` picks the port and stops if it is busy) |
 | `cortex today --minutes 30` | Today's plan, cut to 30 minutes |
 | `cortex import <file>` | Import a chat export, notes, a calendar or Google activity; `--dry-run` shows counts, `--private` keeps imported notes private |
 | `cortex digest` | Review chats imported since the last digest and confirm their topics |
-| `cortex ask "question"` | Answer from your notes and browsing with your local model, with sources |
+| `cortex ask "question"` | Answer from your notes, saved AI chats and browsing with your local model, with sources |
 | `cortex recall "query"` | Search your vault by meaning and keywords |
 | `cortex dashboard` | Build and open the offline dashboard |
 | `cortex doctor` | Health check, with a fix for each problem |

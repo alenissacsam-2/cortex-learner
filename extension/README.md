@@ -22,7 +22,8 @@ The extension is set to `"incognito": "not_allowed"`, so it can never run in pri
 
 1. In a terminal, run `cortex browse pair` (from a source checkout, prefix `uv run`). It
    prints a token and saves it in your vault at `.cortex/browse/token` (git-ignored). Running it again makes a new token and the
-   old one stops working.
+   old one stops working. In the Cortex app, **Browsing** → **Set up the extension** does
+   steps 1 and 2 in one click and shows the token once.
 2. Start the receiver: `cortex browse serve` (port 8799 unless you pass another). It
    listens on 127.0.0.1 only and refuses any other address. It must be running for anything
    to be stored or processed; see "Run the receiver at login" below.
@@ -114,6 +115,10 @@ site names, not only your topics and time; hidden categories stay on your privat
 pages. The receiver never logs URLs or titles.
 
 ## Run the receiver at login (optional)
+
+The Cortex app's **Browsing** section has a **Start at login** switch that does this for you
+(a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux). To do it by hand
+instead:
 
 To have the receiver start whenever you sign in to Windows, create a Task Scheduler task
 once, yourself, in a terminal (find the `cortex` path with `where cortex`):
