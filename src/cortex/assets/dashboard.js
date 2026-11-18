@@ -710,19 +710,21 @@
 
   /* ---- header: wordmark, greeting, clock, theme ---- */
   const phone = () => window.innerWidth <= 760;
+  const roomy = () => window.innerWidth > 1360;  // room for "AS OF" beside the tabs (150% laptops are ~1280)
   function renderHeader() {
     $('wordmark').replaceChildren(dm('CORTEX', phone() ? 2 : 3, 'Cortex'));
     $('greet').textContent = greeting();
     const hm = D.as_of.slice(11, 16);
-    $('clock').replaceChildren(dm(phone() ? hm : 'AS OF ' + hm, phone() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
+    $('clock').replaceChildren(dm(roomy() ? 'AS OF ' + hm : hm, phone() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
     $('clock').title = `Built ${fmtDay(TODAY)} ${TODAY.slice(0, 4)}, ${hm}`;
     $('stale').hidden = !(Date.now() - Date.parse(D.as_of) > 12 * 36e5);
     $('open-search').replaceChildren(icon('search'));
   }
   $('open-search').addEventListener('click', () => openPalette());
-  let wasPhone = phone();
+  const fit = () => `${phone()} ${roomy()}`;
+  let wasFit = fit();
   window.addEventListener('resize', () => {
-    if (phone() !== wasPhone) { wasPhone = phone(); renderHeader(); setHdr(); }
+    if (fit() !== wasFit) { wasFit = fit(); renderHeader(); setHdr(); }
   });
 
   const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
