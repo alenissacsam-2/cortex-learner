@@ -675,14 +675,15 @@ def test_llm_settings_store_the_runner(app):
 
 
 @pytest.mark.parametrize("name", ["qwen3.5:4b", "gemma3:2b", "library/qwen3:8b",
-                                  "someone/my-model:q4_k_m", "llama3.2", "a" * 100])
+                                  "someone/my-model:q4_k_m", "llama3.2", "qwen3.5:4b-q4_K_M",
+                                  "a" * 100])
 def test_pull_name_accepted(name):
     assert wizard.ollama_name(name) == name
 
 
 @pytest.mark.parametrize("name", [
     "qwen3.5 4b", " qwen3.5:4b", "qwen3.5:4b\n", "https://ollama.com/library/qwen3",
-    "ollama.com/qwen3", "a/b/c", "-flag", "--insecure", "Qwen3.5:4b", "qwen3:Q4_K_M",
+    "ollama.com/qwen3", "a/b/c", "-flag", "--insecure", "Qwen3.5:4b", "qwen3:-Q4",
     "qwen;rm", "qwen&x", 'q"x', "a" * 101, "", None, 5, "gpt-oss:120b-cloud",
     "deepseek-v3.1:671b-cloud", "qwen3:cloud"])
 def test_pull_name_refused(name):

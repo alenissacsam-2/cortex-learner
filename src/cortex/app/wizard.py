@@ -301,9 +301,10 @@ def install_ollama(job) -> dict:
     return actions.run_proc(job, plan["run"])
 
 
-# an Ollama registry name: name[:tag] or namespace/name[:tag], lowercase; never a URL or option
+# an Ollama registry name: name[:tag] or namespace/name[:tag]; names are lowercase, tags may
+# not be (qwen3.5:4b-q4_K_M); never a URL or option
 _OLLAMA_NAME = re.compile(r"(?:[a-z0-9][a-z0-9_-]*/)?[a-z0-9][a-z0-9._-]*"
-                          r"(?::[a-z0-9][a-z0-9._-]*)?")
+                          r"(?::[A-Za-z0-9][A-Za-z0-9._-]*)?")
 
 
 def ollama_name(name) -> str:
