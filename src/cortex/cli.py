@@ -1497,24 +1497,46 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
                              "keeps leaving a file out, it looks like it holds a key: remove "
                              "the key and close again.")
 
+        from cortex.browse.forget import PRIVATE_IGNORE
+
+        # C3: a private browse page the commit holds (an older vault) is never reverted,
+        # committed or deleted: git may overwrite an ignored file, so what is on disk now is
+        # put back, and the index left as HEAD has it, after each step that may touch it
+        private = [p for p in _git(v.root, "diff-tree", "-r", "--name-only", "--no-commit-id",
+                                   "--relative", commit).stdout.splitlines()
+                   if p.startswith(PRIVATE_IGNORE)]
+        saved = {p: (v.root / p).read_bytes() for p in private if (v.root / p).is_file()}
+
+        def keep_private():
+            for p in private:
+                _git(v.root, "reset", "-q", "--", p)
+                if p in saved:
+                    (v.root / p).parent.mkdir(parents=True, exist_ok=True)
+                    v._atomic_write(v.root / p, saved[p])
+                elif (v.root / p).exists():
+                    v.remove(v.root / p)
+
         def restore():  # the tree was clean and we hold the lock, so HEAD is the whole state
             _git(v.root, "revert", "--abort")
             _git(v.root, "reset", "-q", "--hard", "HEAD")
+            keep_private()
 
         try:
             kept = []
             if _git(v.root, "revert", "--no-commit", commit).returncode:
-                kept = session_mod.unmerged_paths(v.root)  # where a later commit overlapped
+                kept = [p for p in session_mod.unmerged_paths(v.root)  # a later commit overlapped
+                        if not any(p.endswith(q) for q in private)]
                 restore()
                 r = _git(v.root, "revert", "--no-commit", "-X", "ours", commit)
                 if r.returncode and not session_mod.unmerged_paths(v.root):
                     raise VaultError("invalid_argument", f"git revert failed: {r.stderr.strip()}")
-                for p in session_mod.unmerged_paths(v.root):  # modify/delete: keep HEAD's side
-                    in_head = not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
-                    _git(v.root, *(("checkout", "HEAD", "--") if in_head else ("rm", "-qf", "--")),
-                         p)
-                if left := session_mod.unmerged_paths(v.root):
-                    raise VaultError("invalid_argument", f"unresolved: {', '.join(left)}")
+            keep_private()
+            for p in session_mod.unmerged_paths(v.root):  # modify/delete: keep HEAD's side
+                in_head = not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
+                _git(v.root, *(("checkout", "HEAD", "--") if in_head else ("rm", "-qf", "--")),
+                     p)
+            if left := session_mod.unmerged_paths(v.root):
+                raise VaultError("invalid_argument", f"unresolved: {', '.join(left)}")
             replay(dry_run=False, vault=v)  # stamp props and Today.md as session close does
             today(vault=v)
             try:

@@ -314,6 +314,7 @@ class Vault:
         self.root = Path(root).resolve()
         self._tlock = threading.RLock()
         self._depth = 0
+        self._jobs: set[tuple[str, int]] = set()  # (job lock, thread) held, see job_lock
         # path -> write number of its last write or removal, so a session close or a CLI
         # command commits only the files this process wrote (see wrote_since)
         self.written: dict[Path, int] = {}
@@ -431,12 +432,36 @@ class Vault:
         finally:
             self._tlock.release()
 
+    @contextmanager
+    def job_lock(self, rel: str, timeout: float, busy: str):
+        """A lock file `rel` for a long job (a browse import), apart from the vault lock so
+        short writes go on meanwhile: the same "pid ts host" file and stale rules (a crashed
+        holder never leaves it stuck), reentrant per Vault and thread. VaultError("busy",
+        `busy`) when another holder keeps it past `timeout`."""
+        key = (rel, threading.get_ident())
+        if key in self._jobs:
+            yield
+            return
+        path = self.root / rel
+        try:
+            token = self._take(path, timeout)
+        except VaultError:
+            raise VaultError("busy", busy) from None
+        self._jobs.add(key)
+        try:
+            yield
+        finally:
+            self._jobs.discard(key)
+            self._drop(path, token)
+
     @property
     def _lock_path(self) -> Path:
         return self.root / ".cortex" / "lock"
 
     def _acquire_file(self, timeout: float) -> None:
-        path = self._lock_path
+        self._token = self._take(self._lock_path, timeout)
+
+    def _take(self, path: Path, timeout: float) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + timeout
         while True:
@@ -453,8 +478,7 @@ class Vault:
                 continue
             with os.fdopen(fd, "w") as f:
                 f.write(token)
-            self._token = token
-            return
+            return token
 
     def _steal_if_stale(self, path: Path) -> bool:
         try:
@@ -491,9 +515,13 @@ class Vault:
         return True
 
     def _release_file(self) -> None:
+        self._drop(self._lock_path, self._token)
+
+    @staticmethod
+    def _drop(path: Path, token: str) -> None:
         try:
-            if self._lock_path.read_text() == self._token:
-                self._lock_path.unlink()
+            if path.read_text() == token:
+                path.unlink()
         except OSError:
             pass
 

@@ -734,6 +734,7 @@ def signals(vault: Vault, items: list[Item], where: dict, titles: dict[str, str]
 
 # ---- the run ------------------------------------------------------------------------------
 
+@sites.held
 def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=None,
         runner=None, budget=None, since: str | None = None, now: datetime | None = None,
         tz: tzinfo | None = None, dry_run: bool = False, progress=None, say=None,
@@ -754,7 +755,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     the same filter, but only its visits on days no browser or inbox visit holds: nothing
     counts twice, and a later run without it keeps those days as it keeps forgotten ones.
     `srcs` are read as given: callers that did not pick browsers explicitly pass
-    `sources.chosen(settings)` (S2)."""
+    `sources.chosen(settings)` (S2). Runs under the browse-wide lock (`sites.busy`), so a
+    forget never lands in the middle of it."""
     now = now or datetime.now(UTC)
     vis = settings.visible_to_claude
     tell = say or (lambda s: None)  # counts-only progress, so a long run is never silent
@@ -831,8 +833,9 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if not dry_run and (gone := _drop_public(vault, None if not vis else held if reset
                                              else "")):
         report["public_removed"] += gone
-        if start is None:
-            report["index_changed"] = int(write_index(vault, visible=vis))
+    # nothing to rebuild, but pages went or a refilter changed the private day pages
+    if start is None and not dry_run and (report["public_removed"] or reset):
+        report["index_changed"] = int(write_index(vault, visible=vis))
     if start is not None:
         start = _monday(start)
         tell(f"filtering {len(visits) + len(inbox)} visits from {start} on")

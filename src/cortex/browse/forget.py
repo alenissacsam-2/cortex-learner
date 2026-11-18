@@ -17,13 +17,14 @@ import os
 import re
 import subprocess
 import tempfile
-from collections import Counter
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
 from cortex._proc import NO_WINDOW
 from cortex.browse import privacy, sites
 from cortex.browse.privacy import Settings
+from cortex.render import esc
 from cortex.vault import Vault, VaultError
 
 log = logging.getLogger(__name__)
@@ -33,16 +34,21 @@ ENGINE_HOSTS = {"google": "google.com", "bing": "bing.com", "duckduckgo": "duckd
                 "brave": "search.brave.com", "youtube": "youtube.com",
                 "perplexity": "perplexity.ai", "amazon": "amazon.com", "github": "github.com"}
 _DUR = re.compile(r"^(?:\d+ h)?\s*(?:\d+ min)?$")
-_PDAY = re.compile(r"^browse-private-\d{4}-\d{2}-\d{2}\.md$")
+_PDAY = re.compile(r"^browse-private-(\d{4}-\d{2}-\d{2})\.md$")
+FORGET_WAIT_S = 2.0  # a forget refuses (sites.BUSY) rather than wait for an import
 
 
 @dataclass(frozen=True)
 class Rule:
     """What goes: a host under `hosts` (a domain covers its subdomains) or the settings'
-    deny/allow lists, and text or a site in a category of `cats`."""
+    deny/allow lists, and text or a site in a category of `cats`: by the word lists (title,
+    URL path), the local model's verdict on the text (C1) or the site's category (the
+    built-in table or the model's; `verdicts` and `llm` as `purge` loads them)."""
     hosts: tuple[str, ...] = ()
     cats: frozenset[str] = frozenset()
     settings: Settings | None = None
+    verdicts: dict = field(default_factory=dict, compare=False)
+    llm: dict = field(default_factory=dict, compare=False)
 
     @classmethod
     def of(cls, settings: Settings) -> Rule:
@@ -55,11 +61,24 @@ class Rule:
             privacy.in_domains(host, s.deny)
             or bool(s.allow and not privacy.in_domains(host, s.allow)))))
 
-    def text(self, host: str, *texts: str) -> bool:
+    def text(self, host: str, *texts: str, path: str = "/") -> bool:
         if self.host(host):
             return True
-        text = " ".join(t for t in texts if t).replace("\\", "")
-        return bool(self.cats) and privacy.category(host or "", "/", text)[0] in self.cats
+        if not self.cats:
+            return False
+        texts = tuple(t.replace("\\", "") for t in texts if t)  # a page line is escaped
+        return (privacy.category(host or "", path, " ".join(texts))[0] in self.cats
+                or any(self.verdicts.get(privacy.text_key(privacy.clean_title(t)))
+                       in self.cats for t in texts)
+                or bool(host) and sites.site_category(sites.site_of(host), self.llm)
+                in self.cats)
+
+    def engine(self, name: str) -> bool:
+        """A search line's engine ("google"): a host of the rule or the deny list on any of
+        its domains (google.co.in, google.com), or its usual host."""
+        named = (*self.hosts, *(self.settings.deny if self.settings else ()))
+        return any(sites.site_of(h).split(".")[0] == name for h in named) or self.host(
+            ENGINE_HOSTS.get(name, ""))
 
     def site(self, site: str, cat: str, llm: dict) -> bool:
         return (self.host(sites.host_of(site)) or cat in self.cats
@@ -70,41 +89,59 @@ class Rule:
         url, title = str(r.get("url") or ""), str(r.get("title") or "")
         channel = str(r.get("channel") or "")
         try:
-            host = urlsplit(url).hostname or ""
+            u = urlsplit(url)
+            host = u.hostname or ""
         except ValueError:
             return True
-        if self.text(host, title, channel):
+        if self.text(host, title, channel, path=u.path):
             return True
         return self.settings is not None and privacy.filter_record(
             url, title, settings=self.settings, channel=channel) is None
 
 
-def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str]) -> Counter:
-    """Take the rule's keys and rows out of site-days.json."""
+def _sig(text: str) -> str:
+    """A title or search term as a private day page shows it (`esc`), hashed."""
+    return sites._h(esc(text))
+
+
+def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
+          gone: dict[str, set[str]]) -> Counter:
+    """Take the rule's keys and rows out of site-days.json, and the torn copies set aside
+    (`.bad-*`: unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of every title
+    and search term that went, so the day page's lines go too, whatever matched them."""
     c: Counter = Counter()
     days, bad = sites.load_days(vault)
     if bad:
         c["site_days_set_aside"] += 1
-    for keys in days.values():
+    p = vault.root / sites.DAYS
+    for torn in sorted(p.parent.glob(p.name + ".bad-*")):
+        c["site_days_torn"] += vault.remove(torn)
+    for day, keys in days.items():
         if not isinstance(keys, dict):
             continue
         for key in list(keys):
             site, cat, _ = sites._split(key)
             a = keys[key]
             if rule.site(site, cat, llm) or not isinstance(a, dict):
-                for t, *_ in ((a or {}).get("p") or {}).values() if isinstance(a, dict) else ():
-                    gone_titles.add(sites._h(t))
+                if isinstance(a, dict):
+                    for t, *_ in (a.get("p") or {}).values():
+                        gone_titles.add(sites._h(t))
+                        gone[day].add(_sig(t))
+                    gone[day].update(map(_sig, a.get("q") or {}))
                 del keys[key]
                 c["site_keys"] += 1
                 continue
             for url, row in list((a.get("p") or {}).items()):
-                if rule.text(urlsplit(url).hostname or "", row[0]):
+                u = urlsplit(url)
+                if rule.text(u.hostname or "", row[0], path=u.path):
                     del a["p"][url]
                     gone_titles.add(sites._h(row[0]))
+                    gone[day].add(_sig(row[0]))
                     a["n"], a["s"] = max(0, a["n"] - row[1]), max(0, a["s"] - row[2])
                     c["site_rows"] += 1
             for t in [t for t in (a.get("q") or {}) if rule.text("", t)]:
                 a["n"] = max(0, a["n"] - a["q"].pop(t))
+                gone[day].add(_sig(t))
                 c["site_rows"] += 1
             for terms in (a.get("r") or {}).values():
                 for t in [t for t in terms if rule.text("", t)]:
@@ -133,33 +170,40 @@ def _fields(line: str) -> list[str]:
     return line[2:].split(" · ")
 
 
-def _line_goes(rule: Rule, section: str, line: str) -> bool:
-    """A private day page line (cortex.browse.build.private_body) the rule matches."""
+def _line_goes(rule: Rule, section: str, line: str, gone=frozenset()) -> bool:
+    """A private day page line (cortex.browse.build.private_body) the rule matches, or whose
+    title or search term is in `gone` (`_sig`s of what went from that day's site counts)."""
     if not line.startswith("- ") or line in ("- none",) or line.startswith("- and "):
         return False
     f = _fields(line)
     if section == "## Topics" and len(f) >= 3:
         if f[-1].endswith(" visits") or f[-1].endswith(" visit"):
             f = f[:-1]
-        return len(f) >= 3 and rule.text(f[-2], " · ".join(f[:-2]))
+        title = " · ".join(f[:-2])
+        return len(f) >= 3 and (sites._h(title) in gone or rule.text(f[-2], title))
     if section == "## Searches" and len(f) >= 3:
-        return rule.text(ENGINE_HOSTS.get(f[-1], ""), " · ".join(f[1:-1]))
+        term = " · ".join(f[1:-1])
+        return (sites._h(term) in gone or rule.engine(f[-1])
+                or rule.text(ENGINE_HOSTS.get(f[-1], ""), term))
     if section == "## Videos" and len(f) >= 3:
-        return rule.text("youtube.com", " · ".join(f[1:-1]))
+        # "- time · title[ · channel] · duration": a title may hold " · " itself
+        return (any(sites._h(" · ".join(f[1:i])) in gone for i in range(2, len(f)))
+                or rule.text("youtube.com", " · ".join(f[1:-1])))
     if section in ("## Top sites", "## Sites I return to") and f:
         return rule.text(f[0])  # a sensitive category's own host counts
     return False
 
 
-def _page(rule: Rule, body: str) -> tuple[str, int]:
+def _page(rule: Rule, body: str, gone=frozenset(), redo: bool = False) -> tuple[str, int]:
     """(the body without the rule's lines, lines taken out). Topic headings left with no line
-    go; when anything went, the local model's summary and session lines go too (they were
-    made from every title) and the summary is redone from the topic headings."""
+    go; when anything went, or with `redo` (a title the summary heard went, shown or not),
+    the local model's summary and session lines go too (they were made from every title) and
+    the summary is redone from the topic headings."""
     out, section, n = [], "", 0
     for line in body.splitlines():
         if line.startswith("## "):
             section = line
-        if _line_goes(rule, section, line):
+        if _line_goes(rule, section, line, gone):
             n += 1
             continue
         if section == "## Topics" and line.startswith("### ") and " · " in line:
@@ -167,7 +211,7 @@ def _page(rule: Rule, body: str) -> tuple[str, int]:
             if rule.text(head if "." in head and " " not in head else "", head):
                 line, n = f"### Other · {took}", n + 1  # a cluster label made of its titles
         out.append(line)
-    if not n:
+    if not n and not redo:
         return body, 0
     kept, section = [], ""
     for i, line in enumerate(out):  # a "### head · time" with no item under it goes
@@ -208,22 +252,25 @@ def _drop_section(lines: list[str], head: str) -> list[str]:
     return out
 
 
-def _pages(vault: Vault, rule: Rule) -> Counter:
+def _pages(vault: Vault, rule: Rule, gone: dict[str, set[str]]) -> Counter:
     """Filter every private day page on disk (the visible day pages hold hub links and counts
-    only, and the visible site pages are redone from site-days.json)."""
+    only, and the visible site pages are redone from site-days.json); `gone` as `_days` made
+    it. A page whose day lost a title has its local-model lines redone from the headings."""
     from cortex.browse.build import PRIVATE_DIR, _page_text
 
     c: Counter = Counter()
     folder = vault.root / PRIVATE_DIR
     for p in sorted(folder.glob("*.md")) if folder.is_dir() else []:
-        if not _PDAY.match(p.name):
+        if not (m := _PDAY.match(p.name)):
             continue
         try:
             note = vault.read_path(p)
         except VaultError:
             continue
-        body, n = _page(rule, note.body)
-        if not n:
+        day = gone.get(m.group(1), set())
+        redo = bool(day) and bool(note.fields.get("browse_llm"))
+        body, n = _page(rule, note.body, day, redo)
+        if not n and not redo:
             continue
         fields = {k: v for k, v in note.fields.items() if k != "browse_llm"}
         vault.write_text(p, _page_text(fields, body))
@@ -364,20 +411,24 @@ def untrack_private(vault: Vault) -> bool:
             with tempfile.TemporaryDirectory() as d:
                 env = {**os.environ, "GIT_INDEX_FILE": os.path.join(d, "index")}
                 head = _gitz(top, "rev-parse", "HEAD").stdout.strip()
-                steps = [("read-tree", "HEAD"), ("rm", "-r", "-q", "--cached", "--", spec)]
+                # --ignore-unmatch: a page staged but never committed is in the index only
+                steps = [("read-tree", "HEAD"),
+                         ("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", spec)]
                 if any(_git_env(top, *a, env=env).returncode for a in steps):
                     return False
                 tree = _git_env(top, "write-tree", env=env)
-                new = _git_env(top, "commit-tree", tree.stdout.strip(), "-p", head, "-m",
-                               UNTRACK_MESSAGE, env=env)
-                if tree.returncode or new.returncode or _gitz(
-                        top, "update-ref", "-m", UNTRACK_MESSAGE, "HEAD", new.stdout.strip(),
-                        head).returncode:
-                    log.warning("browse: private pages not untracked: %s",
-                                (new.stderr or tree.stderr).strip()[:200])
-                    return False
-                made = True
-        _gitz(top, "rm", "-r", "-q", "--cached", "--", spec)
+                if tree.returncode or tree.stdout.strip() != _gitz(
+                        top, "rev-parse", "HEAD^{tree}").stdout.strip():
+                    new = _git_env(top, "commit-tree", tree.stdout.strip(), "-p", head, "-m",
+                                   UNTRACK_MESSAGE, env=env)
+                    if tree.returncode or new.returncode or _gitz(
+                            top, "update-ref", "-m", UNTRACK_MESSAGE, "HEAD",
+                            new.stdout.strip(), head).returncode:
+                        log.warning("browse: private pages not untracked: %s",
+                                    (new.stderr or tree.stderr).strip()[:200])
+                        return False
+                    made = True
+        _gitz(top, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", spec)
     return made
 
 
@@ -395,19 +446,22 @@ def purge(vault: Vault, rule: Rule, *, settings: Settings | None = None,
     """Take what `rule` matches out of every store. `write`: then redo the site pages and the
     browse index (with `settings`, default the saved ones) and prune the vectors; `build.run`
     passes False and does those itself. Counts only."""
-    say = say or (lambda s: None)
-    gone_titles: set[str] = set()
-    llm = sites.load_cache(vault)["llm"]
-    c = _days(vault, rule, llm, gone_titles)
-    c.update(_pages(vault, rule))
-    c.update(_inbox(vault, rule))
-    c.update(_cache(vault, rule, gone_titles))
-    if write:
-        from cortex.browse import build, load_settings
+    with sites.busy(vault, FORGET_WAIT_S):  # an import or deepen pass would undo it
+        say = say or (lambda s: None)
+        gone_titles: set[str] = set()
+        gone: dict[str, set[str]] = defaultdict(set)
+        llm = sites.load_cache(vault)["llm"]
+        rule = replace(rule, verdicts=sites.load_verdicts(vault), llm=llm)
+        c = _days(vault, rule, llm, gone_titles, gone)
+        c.update(_pages(vault, rule, gone))
+        c.update(_inbox(vault, rule))
+        c.update(_cache(vault, rule, gone_titles))
+        if write:
+            from cortex.browse import build, load_settings
 
-        settings = settings or load_settings()
-        c.update({k: v for k, v in sites.write(vault, settings, say=say).items()
-                  if k == "sites_removed"})
-        build.write_index(vault, visible=settings.visible_to_claude)
-        c.update(prune_vectors(vault))
-    return +c
+            settings = settings or load_settings()
+            c.update({k: v for k, v in sites.write(vault, settings, say=say).items()
+                      if k == "sites_removed"})
+            build.write_index(vault, visible=settings.visible_to_claude)
+            c.update(prune_vectors(vault))
+        return +c

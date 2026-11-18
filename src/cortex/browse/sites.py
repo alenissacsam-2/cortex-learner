@@ -22,6 +22,7 @@ move a site INTO a sensitive category, never out of one.
 from __future__ import annotations
 
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -59,6 +60,25 @@ SAVE_EVERY = 20  # deepen saves its cache this often, so a stop loses little
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 LABELS = (*lists.SITE_CATEGORIES, *lists.CATEGORIES)
 _IP = re.compile(r"^[0-9.]+$|:")
+# one browse-wide lock: an import, a deepen pass and a forget each load the stores and save
+# them, so one running across another would bring back what the other took out
+LOCK = ".cortex/browse/lock"
+BUSY = "Browsing is being processed; try again in a minute."
+WAIT_S = 60.0  # an import or deepen pass waits this long for another to finish
+
+
+def busy(vault: Vault, wait: float | None = None):
+    """The browse-wide lock (`Vault.job_lock`); VaultError("busy", BUSY) after `wait`."""
+    return vault.job_lock(LOCK, WAIT_S if wait is None else wait, BUSY)
+
+
+def held(fn):
+    """Run `fn(vault, ...)` under the browse-wide lock."""
+    @functools.wraps(fn)
+    def wrapper(vault: Vault, *a, **kw):
+        with busy(vault):
+            return fn(vault, *a, **kw)
+    return wrapper
 
 
 # ---- sites and ids ------------------------------------------------------------------------
@@ -722,6 +742,7 @@ def _clean(text) -> str | None:
     return s if s and not secret_pattern(s) else None
 
 
+@held
 def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=None,
            pick=None, fresh=None) -> dict:
     """For each site page, most visits first, until `budget` runs out: ask the local LLM once
