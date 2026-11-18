@@ -1,5 +1,7 @@
 """v6 ideas-r2 #9 (imported mistakes become traps) and #10 (grader spot-check in reflect)."""
 
+from datetime import UTC, datetime
+
 import pytest
 from conftest import events, run
 
@@ -154,3 +156,36 @@ def test_spot_check_leaves_out_private_concepts(root):
         assert r["error"] == "invalid_argument"
 
     run(root, body)
+
+
+def test_a_voided_or_flipped_grade_leaves_no_asked_item(root):
+    """B1: a flip (void + self_report) or a plain void of a grade used to reopen its ask as
+    "asked, not graded", every day, for good. B4: the flip's regrade names the ask and the
+    voided grade."""
+    from cortex import levels, planner
+    from cortex.catalog import Catalog
+    from cortex.vault import Vault
+
+    run(root, _graded)
+    gid = next(e["id"] for e in events(root) if e["kind"] == "grade")
+
+    async def body(call):
+        await call("cortex_start", {"mode": "reflect"})
+        assert "flipped" in (await spot(call, gid, "wrong"))["display_line"]
+        ask = await call("cortex_ask", ASK)
+        await call("cortex_grade", {"item_id": ask["item_id"], "learner_answer": "b",
+                                    "verdict": "wrong"})
+        g2 = next(e["id"] for e in events(root) if e["kind"] == "grade" and e["id"] != gid)
+        await call("cortex_log", {"kind": "void",
+                                  "payload": {"event_id": g2, "reason": "misgraded"}})
+
+    run(root, body)
+    evs = events(root)
+    (sr,) = [e for e in evs if (e.get("payload") or {}).get("kind") == "self_report"]
+    first_ask = next(e for e in evs if e["kind"] == "ask")
+    assert sr["ref"] == first_ask["id"] and sr["payload"]["regrade_of"] == gid
+    v = Vault(root)
+    states, _ = levels.replay(v)
+    assert states["two-pointers"].asked_not_graded == 0
+    plan = planner.today(v, Catalog.load(v), states, now=datetime.now(UTC))
+    assert not [i for i in plan if i["kind"] == "asked"]

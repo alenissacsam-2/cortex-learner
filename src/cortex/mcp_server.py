@@ -807,10 +807,9 @@ class Cortex:
         if not up:
             return None
         tested = [c for c in planner._weights(self.catalog, up[0]["tests"]) if c not in hide]
-        # v6 item 8: the recall forecast joins the Solid count only once the learning
-        # calibration has MIN_PAIRS forecasts with history to check it against
-        pairs = learning_eval.history_pairs(events, self._pc, learning_eval.MIN_PAIRS)
-        ok = pairs >= learning_eval.MIN_PAIRS
+        # v6 item 8, B5: the recall forecast joins the Solid count only once MIN_PAIRS cold
+        # forecasts with history show it beats the base rate
+        pairs, ok = learning_eval.calibrated(events, self._pc)
         return {**up[0], "total": len(tested), "more": len(up) - 1,
                 "solid": sum(self._state(states, c) == "solid" for c in tested),
                 "forecast": planner.recall_on_day(self.vault, self.catalog, states, up[0], now)
@@ -1897,12 +1896,13 @@ class Cortex:
                       "verdict": verdict}
                 if isinstance(target.get("hints"), int):
                     pl["hints"] = target["hints"]
-                pl["note"] = "spot-check flip"
+                # B4: server-written, never tool input; levels fold it on the grade's own day
+                pl["note"], pl["regrade_of"] = "spot-check flip", eid
                 # review r4 L4, G1: keep the item's splits and links, so eval and levels see the ask
                 ask = next((e for e in self.log.iter_events() if e["kind"] == "ask"
                             and e["id"] == target.get("ref")), {}) if target.get("ref") else {}
                 same = {k: v for k in ("item_type", "confidence", "question", "problem",
-                                       "also", "targets_mistakes")
+                                       "also", "targets_mistakes", "ref")
                         if (v := target.get(k, ask.get(k))) is not None}
                 self._append("log", {"object": target["object"], **same, "payload": pl},
                              source="self")

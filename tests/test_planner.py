@@ -393,6 +393,21 @@ def test_ready_to_learn_needs_solid_prereqs_and_prefers_topic(v):
     assert new(solid) == ["hash-maps", "sorting"]
 
 
+@pytest.mark.parametrize("mode", ["learn", "review"])
+def test_a_named_topic_ranks_its_due_items_first(v, mode):
+    """Missing/better: "/cortex learn sorting" refreshes sorting before riskier other topics."""
+    no_exam(v)
+    catalog = cat(v, ("Sorting", []))
+    states = {"risky": due("risky", 0.1), "sorting": due("sorting", 0.6)}
+
+    def refresh(topic=None):
+        return [i["id"] for i in plan(v, states, catalog, mode=mode, topic=topic)
+                if i["kind"] == "refresh"]
+
+    assert refresh() == ["risky", "sorting"]
+    assert refresh("Sorting") == ["sorting", "risky"]
+
+
 # ---- readiness and week ---------------------------------------------------------------------
 
 def test_readiness(v):
@@ -473,6 +488,27 @@ def test_week_summary_counts(v):
     assert w["mistakes_opened"] == ["dsa.off-by-one"] and w["mistakes_resolved"] == []
     assert [(a["id"], a["days"], a["readiness"]) for a in w["upcoming"]] == [
         ("acme-oa-2026", 5, 0.0)]
+
+
+def test_week_summary_skips_voids_and_counts_a_flip_once(v):
+    """B8: a voided grade no longer counts, and a spot-check flip (void + regrade) is one
+    grade with its new verdict."""
+    log = EventLog(v)
+    one = {"object": "concept:two-pointers"}
+    log.append(session="cli", kind="grade", source="tutor", now=at(10),
+               fields={**one, "verdict": "correct"})
+    gone = log.append(session="cli", kind="grade", source="tutor", now=at(11),
+                      fields={**one, "verdict": "correct"})
+    wrong = log.append(session="cli", kind="grade", source="tutor", now=at(12),
+                       fields={**one, "verdict": "wrong"})
+    for g in (gone, wrong):
+        log.append(session="cli", kind="void", source="tutor", now=at(13),
+                   fields={"ref": g["id"], "payload": {"reason": "x"}})
+    log.append(session="cli", kind="log", source="self", now=at(14),
+               fields={**one, "payload": {"kind": "self_report", "concept": "two-pointers",
+                                          "verdict": "correct", "regrade_of": wrong["id"]}})
+    w = week_summary(v, Catalog.load(v), now=NOW)
+    assert (w["grades"], w["correct"]) == (2, 2)
 
 
 def test_last_night_failure_outranks_older_due(tmp_path):

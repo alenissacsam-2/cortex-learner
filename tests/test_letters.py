@@ -55,6 +55,13 @@ def test_facts_read_journal_exams_gap_and_grades(tmp_path):
     f = letters.facts(v, evs, datetime(2026, 11, 14, 23, 30).astimezone(), "2026-11-14", "s_now")
     assert f == {"hour": 23, "energy": [1, 2], "exam_days": 6, "gap": 13,
                  "verdicts": ["wrong"]}
+    # B7: today's sweep closing an old session, or a topic touch, is no study: the gap stays
+    evs += [{"id": "c", "ts": "2026-11-14T09:00:00Z", "day": "2026-11-14", "session": "s_old",
+             "kind": "close"},
+            {"id": "d", "ts": "2026-11-14T09:01:00Z", "day": "2026-11-14", "session": "s_x",
+             "kind": "log", "payload": {"kind": "touch", "ids": ["two-pointers"]}}]
+    f = letters.facts(v, evs, datetime(2026, 11, 14, 23, 30).astimezone(), "2026-11-14", "s_now")
+    assert f["gap"] == 13
 
 
 def _page(*rows):

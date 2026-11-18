@@ -123,8 +123,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
               "state": i["state"], "why": plain(i["why"])} for i in items]
 
     scores = {n.id: n.fields.get("score") for n in notes["assessment"]}
-    pairs = learning_eval.history_pairs(events, pc, learning_eval.MIN_PAIRS)
-    calibrated = pairs >= learning_eval.MIN_PAIRS
+    pairs, calibrated = learning_eval.calibrated(events, pc)
 
     def assessment(a):
         d = planner._day(a["date"]) if a["date"] else None

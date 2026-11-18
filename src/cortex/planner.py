@@ -286,11 +286,12 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
     due = {c for c, st in states.items() if is_due(st, day.isoformat())}
     # only graded concepts; Not started / Unverified exam concepts enter through `new`
     pulled = {c for c in clock if state_of(c) in ("learning", "needs_refresh")}
-    ranked = sorted((c for c in due | pulled if c not in taken), key=lambda c: (-risk(c), c))
+    topic_ids = set(_concepts(catalog, topic)) if topic else set()
+    ranked = sorted((c for c in due | pulled if c not in taken),
+                    key=lambda c: (c not in topic_ids, -risk(c), c))
 
     ready = []
     if mode != "review":
-        topic_ids = set(_concepts(catalog, topic)) if topic else set()
         tested = {c for a in upcoming for c in _weights(catalog, a["tests"])}
         ready = [e.id for e in catalog.entries.values() if e.kind == "concept"
                  and e.id not in taken and is_ready(state_of(e.id), e, states)]
@@ -568,7 +569,12 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
     cut = (start - timedelta(days=1)).isoformat()  # the state just before the week
     events = list(EventLog(vault).iter_events())
     week = [e for e in events if start.isoformat() <= str(e.get("day", "")) <= to.isoformat()]
-    grades = [e for e in week if e.get("kind") == "grade"]
+    # live grades, and a spot-check flip's regrade as one grade on its original day (B8)
+    verdicts = [e.get("verdict") if e.get("kind") == "grade" else e["payload"].get("verdict")
+                for e in levels.placed(events)
+                if start.isoformat() <= str(e.get("day", "")) <= to.isoformat()
+                and (e.get("kind") == "grade" or isinstance(e.get("payload"), dict)
+                     and "regrade_of" in e["payload"])]
     before, m_before = current_states(vault, cut, catalog,
                                       [e for e in events if str(e.get("day", "")) <= cut])
     after, m_after = current_states(vault, to.isoformat(), catalog, events)
@@ -586,8 +592,8 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
         "from": start.isoformat(), "to": to.isoformat(),
         "sessions": len({e["session"] for e in week if e.get("kind") != "open"
                          and str(e.get("session")).startswith("s_")}),
-        "grades": len(grades),
-        "correct": sum(e.get("verdict") == "correct" for e in grades),
+        "grades": len(verdicts),
+        "correct": verdicts.count("correct"),
         "changed": changed,
         "mistakes_opened": sorted(m for m in m_after if status(m_after, m) == "open"
                                   and status(m_before, m) != "open"),

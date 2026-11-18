@@ -321,17 +321,20 @@ def test_home_card_names_pending_tests_without_a_future_date(root):
 
 
 def test_home_card_forecast_waits_for_30_history_pairs(root):
-    """v6 item 8: the recall forecast joins the Solid count once calibration has 30 pairs."""
+    """v6 item 8, B5: the recall forecast joins the Solid count once calibration has 30 cold
+    pairs whose forecasts beat the base rate."""
     (root / "assessments" / "acme-oa-2026.md").unlink()
     page(root, "assessments", "g-oa", f'company: "Google"\nkind: "OA"\ndate: "{day(6)}"\n'
          'outcome: "pending"\ntests: {"concept:two-pointers": 1}\n')
     log = EventLog(Vault(root))
     t0 = datetime.now(UTC) - dt.timedelta(days=40)
 
-    def grade(i):
-        log.append(session="cli", kind="grade", source="tutor", mode="learn", predicted_p=0.8,
-                   fields={"object": "concept:two-pointers", "verdict": "correct"},
-                   now=t0 + dt.timedelta(days=i))
+    def grade(i):  # every 4th wrong, forecast low: a forecast with skill
+        ok = i % 4 != 3
+        log.append(session="cli", kind="grade", source="tutor", mode="learn",
+                   predicted_p=0.8 if ok else 0.2, now=t0 + dt.timedelta(days=i),
+                   fields={"object": "concept:two-pointers",
+                           "verdict": "correct" if ok else "wrong"})
 
     for i in range(30):  # one first review + 29 pairs with history
         grade(i)

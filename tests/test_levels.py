@@ -71,6 +71,31 @@ def test_golden_scenario(log, name):
             assert id not in concepts and id not in mistakes, (cp["after"], id)
 
 
+def test_a_regrade_folds_on_the_original_grades_day(log):
+    """B4: a spot-check flip (void + self_report with regrade_of) a week later rates the
+    grade's own day, as if the verdict had been right all along; it adds no review today."""
+    from cortex.levels import calibration
+
+    grades(log, "two-pointers", 1, ["correct"])
+    g = add(log, 2, object="concept:two-pointers", verdict="wrong", hints=0,
+            item_type="recall")
+    add(log, 9, kind="void", ref=g["id"], payload={"reason": "spot-check flip"})
+    add(log, 9, kind="log", source="self", minute=1, object="concept:two-pointers",
+        item_type="recall", payload={"kind": "self_report", "concept": "two-pointers",
+                                     "verdict": "correct", "hints": 0, "regrade_of": g["id"]})
+    flipped = list(log.iter_events())
+    right = [e for e in flipped if e["kind"] == "grade" and e["id"] != g["id"]]
+    right.append({**g, "verdict": "correct"})
+    got, want = fold(flipped, "2026-11-09")[0], fold(right, "2026-11-09")[0]
+    fields = ("pass_days", "last_pass_day", "stability", "next_due", "state")
+    assert {f: getattr(got["two-pointers"], f) for f in fields} == {
+        f: getattr(want["two-pointers"], f) for f in fields}
+    assert got["two-pointers"].last_pass_day == "2026-11-02"
+    assert calibration(flipped) == calibration(right)
+    t9 = datetime(2026, 11, 9, 18, tzinfo=UTC)
+    assert predicted_p(flipped, "two-pointers", t9) == predicted_p(right, "two-pointers", t9)
+
+
 # ---- ladder ----------------------------------------------------------------------------------
 
 def test_not_started_and_unverified(log):

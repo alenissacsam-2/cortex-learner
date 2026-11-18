@@ -149,7 +149,8 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
             bits.append(f"forecast recall on {d.day} {d:%b}: {round(100 * a['forecast'])}%")
         elif a.get("calibrating") and a.get("total"):  # why no number yet
             c = a["calibrating"]
-            bits.append(f"forecast after {c['need']} checked reviews ({c['n']} so far)")
+            bits.append(f"forecast after {c['need']} checked reviews ({c['n']} so far)"
+                        if c["n"] < c["need"] else "forecast still calibrating")  # B5: no skill
         more = f" (+{a['more']} more)" if a.get("more") else ""
         lines.append("**Coming up:** " + " · ".join(bits) + more)
     if due:  # never the raw backlog above a slice (COACH-3)

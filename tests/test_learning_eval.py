@@ -117,23 +117,28 @@ def test_cold_and_prior_splits():
     assert learning_eval.text(r).splitlines()[4].startswith("cold only")
 
 
-@pytest.mark.parametrize("extra", [0, 1])
-def test_calibrated_gate_matches_the_report(extra):
-    # z gets also-credit, then 29 + extra stamped items with history; unstamped ones never count
+def _days(n, flip=False):
+    """z credited on day 0, then per day one cold stamped item (every 3rd wrong) and a warm
+    re-test; `flip` inverts the forecasts, so they do worse than the base rate."""
     log = [grade(0, "correct", 0.5, "w", also=["concept:z"])]
-    log += [grade(i, "correct", 0.7, "z") for i in range(1, 30 + extra)]
-    log += [grade(i, "wrong", None, "z") for i in range(40, 80)]
-    n = learning_eval.report(log)["splits"]["prior"]["history"]["n"]
-    assert n == 29 + extra
-    assert learning_eval.calibrated(log) is (n >= learning_eval.MIN_PAIRS)
-    assert learning_eval.history_pairs(log) == n
+    for d in range(1, n + 1):
+        ok = d % 3 != 0
+        p = 0.8 if ok != flip else 0.2
+        log += [grade(d * 24 * 60, "correct" if ok else "wrong", p, "z"),
+                grade(d * 24 * 60 + 5, "correct", 0.9, "z"),  # warm: after feedback
+                grade(d * 24 * 60 + 9, "wrong", None, "z")]  # unstamped: never counts
+    return log
 
 
-def test_history_pairs_stops_at_its_cap():
-    log = [grade(0, "correct", 0.5, "z")] + [grade(i, "correct", 0.7, "z") for i in range(1, 41)]
-    assert learning_eval.history_pairs(log) == 40
-    assert learning_eval.history_pairs(log, cap=30) == 30
-    assert learning_eval.history_pairs(log[:5], cap=30) == 4  # under the cap: the full count
+def test_forecast_gate_counts_cold_pairs_and_needs_skill():
+    """B5: only the first item of a day per concept counts (warm re-tests pass almost
+    surely), and 30 of them open the gate only when they beat the base rate."""
+    assert learning_eval.calibrated(_days(29)) == (29, False)
+    assert learning_eval.calibrated(_days(30)) == (30, True)
+    assert learning_eval.calibrated(_days(30, flip=True)) == (30, False)
+    sure = [grade(0, "correct", 0.5, "z")] + [grade(d * 24 * 60, "correct", 0.9, "z")
+                                              for d in range(1, 40)]
+    assert learning_eval.calibrated(sure) == (39, False)  # all pass: no skill to measure
 
 
 def test_cli_is_read_only(tmp_path, monkeypatch):

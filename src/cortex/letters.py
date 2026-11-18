@@ -103,14 +103,15 @@ def _log(e: dict, kind: str) -> dict | None:
 
 def facts(vault: Vault, events: list[dict], now: dt.datetime, today: str, session: str) -> dict:
     """What the triggers read: the local hour, journal energy values (oldest first), days to
-    the next pending assessment, days since the last event outside `session`, and the
-    verdicts of graded answers (oldest first)."""
+    the next pending assessment, days since the last study event (planner._studied) outside
+    `session`, and the verdicts of graded answers (oldest first)."""
     day = dt.date.fromisoformat(today)
     energy = []
     for n in sorted(vault.iter_notes("journal"), key=lambda n: (str(n.fields.get("date")), n.id)):
         energy += [int(v) for v in _ENERGY.findall(n.body)]
     up = planner._upcoming(vault, day)
-    before = [str(e.get("day")) for e in events if e.get("session") != session and e.get("day")]
+    before = [str(e.get("day")) for e in events if e.get("session") != session and e.get("day")
+              and planner._studied(e)]  # B7: a sweep's close today is no study
     return {"hour": now.astimezone().hour, "energy": energy,
             "exam_days": min((a["days"] for a in up), default=None),
             "gap": (day - dt.date.fromisoformat(max(before))).days if before else None,
