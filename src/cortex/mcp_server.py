@@ -2203,10 +2203,10 @@ class Cortex:
 
     def _log_assessment(self, p: dict, key: str | None) -> str:
         outcome = p.get("outcome")
-        if outcome not in ENUMS[("assessment", "outcome")]:
+        if not isinstance(outcome, str) or outcome not in ENUMS[("assessment", "outcome")]:
             raise invalid("outcome must be pending, pass, fail or unknown.")
         akind = p.get("assessment_kind")
-        if akind is not None and akind not in ASSESSMENT_KINDS:
+        if akind is not None and (not isinstance(akind, str) or akind not in ASSESSMENT_KINDS):
             raise invalid("assessment_kind must be oa, mock, interview or test.")
         aid = p.get("assessment") or slugify(
             "-".join(str(p[k]) for k in ("company", "assessment_kind", "date") if p.get(k)))
@@ -2231,7 +2231,7 @@ class Cortex:
 
     def _log_problem(self, p: dict, key: str | None) -> str:
         pid, status = str(p.get("problem") or ""), p.get("status")
-        if status not in ENUMS[("problem", "status")]:
+        if not isinstance(status, str) or status not in ENUMS[("problem", "status")]:
             raise invalid("status must be todo, attempted or solved.")
         obj = self._problem(pid)
         pl = {"kind": "problem_status", "problem": pid, "status": status}
@@ -2313,7 +2313,8 @@ class Cortex:
             if op == "append_to_section":
                 text = f"{text.rstrip()} (confirmed {local_day(self._now())})"
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
-        if kind == "me" and self.session.exposed and op == "append_to_section" and nid in (
+        if kind == "me" and self.session.exposed and op in (
+                "append_to_section", "revise", "retire") and nid in (
                 "teaching-contract", "profile"):  # B3: no me/ page takes set_field
             raise VaultError("refused_exposed", "This chat has read outside text (a source, a raw "
                              f"file or a past chat), so it cannot change me/{nid}.md.")
@@ -2334,6 +2335,9 @@ class Cortex:
         if (op == "append_to_section" and kind == "me" and not user_confirmed
                 and (nid in CONFIRM_PAGES or (harvesting and claim_page))):
             text = " ".join(text.split()).removeprefix("- ")
+            if (not target.strip() or "\n" in target or "\r" in target
+                    or target.lstrip().startswith("#") or len(target) > 200):
+                raise invalid("target must be a one-line section name.")  # as _ensure_section
             if claim_page and claims.is_not_me(nid, self._raw(f"me/{nid}.md"), text):
                 return {"changed": False, "queued": False,
                         "summary": f"not proposed: me/{nid} lists it under ## Not me",
@@ -2616,7 +2620,7 @@ class Cortex:
                        f"{', '.join(sorted(ADD_FIELDS[kind]))}.")
         for name, value in fields.items():
             allowed = ENUMS.get((kind, name))
-            if allowed and value not in allowed:
+            if allowed and (not isinstance(value, str) or value not in allowed):
                 raise invalid(f"{name} must be one of {', '.join(sorted(allowed))}.")
         if kind == "assessment":
             check_assessment_result(fields.get("score"), fields.get("date"))

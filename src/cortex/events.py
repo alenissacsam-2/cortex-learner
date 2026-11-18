@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Iterator
@@ -101,6 +102,13 @@ def _check_text(name: str, value, limit: int) -> None:
         raise invalid(f"{name} is {len(value)} characters; keep it to {limit} or fewer.")
 
 
+def _what(event: dict) -> tuple:
+    """What an event records, for telling a retry from a different call with the same key."""
+    payload = event.get("payload")
+    return (event.get("kind"), event.get("object"),
+            payload.get("kind") if isinstance(payload, dict) else None)
+
+
 def _check_fields(fields: dict) -> None:
     if not isinstance(fields, dict):
         raise invalid("fields must be an object.")
@@ -113,7 +121,7 @@ def _check_fields(fields: dict) -> None:
         if name in TEXT_LIMITS:
             _check_text(name, value, TEXT_LIMITS[name])
         elif name in FIELD_ENUMS:
-            if value not in FIELD_ENUMS[name]:
+            if not isinstance(value, str) or value not in FIELD_ENUMS[name]:
                 raise invalid(f"{name} must be one of {', '.join(sorted(FIELD_ENUMS[name]))}.")
         elif name in INT_RANGES:
             lo, hi = INT_RANGES[name]
@@ -133,6 +141,11 @@ def _check_fields(fields: dict) -> None:
         elif name == "payload":
             if not isinstance(value, dict):
                 raise invalid("payload must be an object.")
+            try:  # NaN or Infinity would write a line that is not JSON
+                json.dumps(value, allow_nan=False)
+            except (ValueError, TypeError):
+                raise invalid("payload values must be plain JSON (no NaN or Infinity).") \
+                    from None
             for s in _strings(value):
                 _check_text("A payload value", s, TEXT_LIMIT)
 
@@ -255,7 +268,11 @@ class EventLog:
         with self.vault.lock():
             keys = self._key_map()
             if key is not None and key in keys:
-                return dict(keys[key])  # a copy: the cached event is shared
+                old = keys[key]
+                if _what(old) != _what({"kind": kind, **fields}):  # a retry repeats the call
+                    raise invalid("This key is already used by a different call; use a new "
+                                  "key (or none).")
+                return dict(old)  # a copy: the cached event is shared
             eid = self._new_id(now)
             event = {"id": eid, "key": eid if key is None else key,
                      "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "day": local_day(now),
@@ -292,7 +309,8 @@ class EventLog:
 
 
 def check_assessment_result(score, day) -> None:
-    if score is not None and (isinstance(score, bool) or not isinstance(score, (str, int, float))):
+    if score is not None and (isinstance(score, bool) or not isinstance(score, (str, int, float))
+                              or (isinstance(score, float) and not math.isfinite(score))):
         raise invalid("score must be a string or a number.")
     if day is not None:
         check_day("date", day)
@@ -307,27 +325,31 @@ def log_assessment(log: EventLog, *, session: str, source: str, assessment: str,
     `stamp` (mode, grader, now) passes through to EventLog.append.
     """
     check_assessment_result(score, date)  # B10: before the note exists
+    if company is not None and not isinstance(company, str):
+        raise invalid("company must be text.")
+    payload = {"kind": "assessment_result", "assessment": assessment, "outcome": outcome}
+    for name, value in (("score", score), ("company", company), ("assessment_kind", kind),
+                        ("date", date), ("felt_weak", felt_weak)):
+        if value not in (None, "", []):
+            payload[name] = value
+    fields = {"object": f"assessment:{assessment}", "payload": payload}
+    _check_fields(fields)  # too long or odd values are refused before anything is written
     vault = log.vault
     try:
         vault.read("assessment", assessment)
     except VaultError as e:
         if e.code != "unknown_id":
             raise
-        fields = {k: v for k, v in (("company", company), ("kind", kind), ("date", date))
-                  if v is not None}
+        props = {k: v for k, v in (("company", company), ("kind", kind), ("date", date))
+                 if v is not None}
         title = " ".join(filter(None, (company, (kind or "").upper()))) or assessment
-        vault.create_note("assessment", assessment, {**fields, "outcome": outcome},
+        vault.create_note("assessment", assessment, {**props, "outcome": outcome},
                           f"# {title}\n\n## Notes\n")
     vault.set_field("assessment", assessment, "outcome", outcome)
     if score is not None:
         vault.set_field("assessment", assessment, "score", score)
-    payload = {"kind": "assessment_result", "assessment": assessment, "outcome": outcome}
-    for name, value in (("score", score), ("company", company), ("assessment_kind", kind),
-                        ("date", date), ("felt_weak", felt_weak)):
-        if value not in (None, "", []):
-            payload[name] = value
-    return log.append(session=session, kind="log", source=source, key=key,
-                      fields={"object": f"assessment:{assessment}", "payload": payload}, **stamp)
+    return log.append(session=session, kind="log", source=source, key=key, fields=fields,
+                      **stamp)
 
 
 def void_event(log: EventLog, *, session: str, event_id: str, reason: str, source: str,
