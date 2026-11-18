@@ -668,25 +668,44 @@
         d.lms ? null : [ext('https://lmstudio.ai/download', 'Get LM Studio')]),
       row('LM Studio server', d.server_port ? `on, port ${d.server_port}` : 'off', 'Starts by itself when a model loads.'),
       row('Loaded now', d.loaded.length ? d.loaded.join(', ') : 'nothing', 'LM Studio unloads a model after 10 idle minutes.'));
+    // every chat model already installed, in either runner (embedding models left out by the server)
+    const ollama = d.ollama || [];
+    const choices = [...ollama.map((n) => ({ model: n, runner: 'ollama' })), ...d.models.map((m) => ({ model: m.key, runner: 'lmstudio' }))];
+    const opt = (i, text) => h('option', { value: String(i), text });
     const sel = h('select', { id: 'llm-model', 'aria-label': 'Model' },
-      h('option', { value: '', text: d.models.length ? 'Choose a model' : 'No models in LM Studio' }),
-      d.models.map((m) => h('option', { value: m.key, text: [m.name, m.params, gb(m.size)].filter(Boolean).join(' · ') })));
-    sel.value = d.model && d.models.some((m) => m.key === d.model) ? d.model : '';
-    const chosen = () => sel.value;
+      h('option', { value: '', text: choices.length ? 'Choose a model' : 'No models yet' }),
+      ollama.length ? h('optgroup', { label: 'Ollama' }, ollama.map((n, i) => opt(i, n))) : null,
+      d.models.length ? h('optgroup', { label: 'LM Studio' }, d.models.map((m, i) => opt(ollama.length + i, [m.name, m.params, gb(m.size)].filter(Boolean).join(' · ')))) : null);
+    let at = choices.findIndex((c) => c.model === d.model && c.runner === d.runner);
+    if (at < 0) at = choices.findIndex((c) => c.model === d.model);
+    sel.value = at < 0 ? '' : String(at);
+    const chosen = () => (sel.value === '' ? null : choices[Number(sel.value)] || null);
+    const loadBtn = btn('Load', () => job('/api/llm/load', { model: chosen().model }));
+    const sync = () => { const c = chosen(); loadBtn.disabled = !c || c.runner !== 'lmstudio'; };
+    sel.addEventListener('change', sync);
+    sync();
     const enabled = h('input', { type: 'checkbox', id: 'llm-on', checked: d.enabled });
     enabled.addEventListener('change', () => post('/api/llm/settings', { enabled: enabled.checked }, () => { toast(enabled.checked ? 'Local model on.' : 'Local model off.'); load('llm'); }));
+    const save = () => { const c = chosen(); post('/api/llm/settings', c ? { model: c.model, runner: c.runner } : { model: null }, () => { toast('Saved.'); load('llm'); }); };
     const model = board('Model', { note: d.model ? `chosen: ${d.model}` : 'none chosen' },
       d.error ? note(`Not used: ${d.error}`) : null,
-      h('div', { class: 'field' }, h('label', { for: 'llm-model', text: 'Model (from LM Studio)' }),
-        h('div', { class: 'inline' }, sel,
-          btn('Save choice', () => post('/api/llm/settings', { model: chosen() || null }, () => { toast('Saved.'); load('llm'); })),
-          btn('Load', () => (chosen() ? job('/api/llm/load', { model: chosen() }) : toast('Choose a model first.'))),
-          btn('Test', () => job('/api/llm/test', {}))),
-        h('p', { class: 'help' }, 'Load starts LM Studio and loads the model (nothing is downloaded). Test sends one made-up sentence and shows the answer and time. ',
-          ext('https://lmstudio.ai/models', 'Get models'), ' in LM Studio; Qwen 3.5 2B is a good small choice.')),
+      h('div', { class: 'field' }, h('label', { for: 'llm-model', text: 'Model (installed in Ollama or LM Studio)' }),
+        h('div', { class: 'inline' }, sel, btn('Save choice', save), loadBtn, btn('Test', () => job('/api/llm/test', {}))),
+        h('p', { class: 'help' }, 'Load is for LM Studio models: it starts LM Studio and loads the model. Ollama loads its models by itself. Test sends one made-up sentence and shows the answer and time. ',
+          ext('https://lmstudio.ai/models', 'Get models'), ' in LM Studio, or download an Ollama model below.')),
       h('div', { class: 'field' }, h('label', { class: 'check' }, enabled, h('span', { text: 'Use the local model' })),
         h('p', { class: 'help', text: 'On: the browse import asks it for short summaries of your private pages. Off: Cortex uses rules and the search model only.' })));
-    put('llm', runner, model);
+    // download another Ollama model by name; the list above reloads when the job ends
+    const name = h('input', { type: 'text', id: 'llm-pull', placeholder: 'qwen3.5:4b', spellcheck: 'false', autocomplete: 'off' });
+    const pull = () => { const v = name.value.trim(); if (v) job('/api/llm/pull', { name: v }); else toast('Type a model name first.'); };
+    const rec = d.recommend, hw = d.hardware;
+    const download = board('Download an Ollama model', {},
+      hw && rec ? row('This computer', `${hw.label} → ${rec.label} suits it`, null,
+        [btn(`Use ${rec.ollama}`, () => { name.value = rec.ollama; name.focus(); })]) : null,
+      h('div', { class: 'field' }, h('label', { for: 'llm-pull', text: 'Model name' }),
+        h('div', { class: 'inline' }, name, btn('Download', pull)),
+        h('p', { class: 'help' }, 'A name from ', ext('https://ollama.com/library', 'ollama.com/library'), ', like qwen3.5:4b. Ollama must be running. Cloud models are refused.')));
+    put('llm', runner, model, download);
   }
 
   /* Past history: one list for the Setup step and the Browsing section */

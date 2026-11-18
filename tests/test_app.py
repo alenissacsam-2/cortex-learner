@@ -638,6 +638,77 @@ def test_vault_actions(app, vault, fakes):
     assert call(app, "POST", "/api/open", {"what": "dashboard"})[0] == 400  # not built
 
 
+def test_llm_page_lists_both_runners_chat_models_and_the_recommendation(app, monkeypatch):
+    """Ollama and LM Studio models, embedding models left out by the chat's rule, and the
+    model Setup would recommend for this computer."""
+    monkeypatch.setattr(status, "ollama_models", lambda: ["nomic-embed-text:latest", "qwen3.5:4b"])
+    monkeypatch.setattr(status, "lms_models", lambda: [
+        {"key": "qwen/qwen3.5-2b", "name": "Qwen", "size": None, "params": ""},
+        {"key": "text-embedding-bge-small", "name": "BGE", "size": None, "params": ""}])
+    monkeypatch.setattr(wizard, "hardware", lambda: {"kind": "gpu", "gb": 8.0, "label": "8 GB"})
+    _, llm, _, _ = call(app, "GET", "/api/llm")
+    assert llm["ollama"] == ["qwen3.5:4b"]
+    assert [m["key"] for m in llm["models"]] == ["qwen/qwen3.5-2b"]
+    assert llm["hardware"]["gb"] == 8.0 and llm["recommend"]["ollama"] == "qwen3.5:4b"
+
+
+def test_llm_settings_store_the_runner(app):
+    from cortex import taint
+
+    def saved():
+        c = taint.config()["localllm"]
+        return c.get("model"), c.get("runner")
+
+    assert call(app, "POST", "/api/llm/settings", {"model": "qwen3.5:4b",
+                                                   "runner": "ollama"})[0] == 200
+    assert saved() == ("qwen3.5:4b", "ollama")
+    assert call(app, "POST", "/api/llm/settings", {"model": "qwen/qwen3.5-2b",
+                                                   "runner": "lmstudio"})[0] == 200
+    assert saved() == ("qwen/qwen3.5-2b", "lmstudio")
+    call(app, "POST", "/api/llm/settings", {"model": "qwen3.5:4b", "runner": "ollama"})
+    assert call(app, "POST", "/api/llm/settings", {"model": "gemma3:2b"})[0] == 200
+    assert saved() == ("gemma3:2b", "lmstudio")  # no runner: an LM Studio choice, as before
+    for bad in ({"model": "gemma3:2b", "runner": "openai"}, {"model": "x", "runner": None},
+                {"model": "bad name", "runner": "ollama"}):
+        assert call(app, "POST", "/api/llm/settings", bad)[0] == 400, bad
+    assert saved() == ("gemma3:2b", "lmstudio")
+
+
+@pytest.mark.parametrize("name", ["qwen3.5:4b", "gemma3:2b", "library/qwen3:8b",
+                                  "someone/my-model:q4_k_m", "llama3.2", "a" * 100])
+def test_pull_name_accepted(name):
+    assert wizard.ollama_name(name) == name
+
+
+@pytest.mark.parametrize("name", [
+    "qwen3.5 4b", " qwen3.5:4b", "qwen3.5:4b\n", "https://ollama.com/library/qwen3",
+    "ollama.com/qwen3", "a/b/c", "-flag", "--insecure", "Qwen3.5:4b", "qwen3:Q4_K_M",
+    "qwen;rm", "qwen&x", 'q"x', "a" * 101, "", None, 5, "gpt-oss:120b-cloud",
+    "deepseek-v3.1:671b-cloud", "qwen3:cloud"])
+def test_pull_name_refused(name):
+    with pytest.raises(ValueError):
+        wizard.ollama_name(name)
+
+
+def test_llm_pull_runs_ollama_pull_with_the_name(app, monkeypatch):
+    started = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (
+        started.append(args), FakeProc(b"pulling 50%\rsuccess\n"))[1])
+    assert call(app, "POST", "/api/llm/pull", {"name": "-x"})[0] == 400
+    assert call(app, "POST", "/api/llm/pull", {"name": "gpt-oss:20b-cloud"})[0] == 400
+    call(app, "POST", "/api/llm/pull", {"name": "gemma3:2b"})  # not installed
+    assert "not installed" in wait_job(app)["error"] and started == []
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\o\\ollama.exe" if c == "ollama"
+                        else None)
+    call(app, "POST", "/api/llm/pull", {"name": "gemma3:2b"})  # installed, not answering
+    assert wizard.STOPPED.format("Ollama") in wait_job(app)["error"] and started == []
+    monkeypatch.setattr(status, "ollama_models", lambda: [])
+    call(app, "POST", "/api/llm/pull", {"name": "gemma3:2b"})
+    job = wait_job(app)
+    assert started == [["C:\\o\\ollama.exe", "pull", "gemma3:2b"]]
+    assert job["section"] == "llm" and job["cancellable"] and job["result"]["ok"]
+
+
 def test_one_job_at_a_time(app):
     gate = threading.Event()
     app.jobs.start("slow", "vault", lambda job: gate.wait(5))

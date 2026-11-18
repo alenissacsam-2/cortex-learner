@@ -234,7 +234,7 @@ class App:
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
-            "/api/llm/test": self.llm_test,
+            "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
             "/api/browse/settings": self.browse_settings, "/api/browse/cloud": self.cloud,
             "/api/browse/receiver": self.receive, "/api/chat": None,  # do_POST streams it
             "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
@@ -284,7 +284,16 @@ class App:
                 "skill_url": skill_url()}
 
     def llm(self) -> dict:
-        return {**status.llm(), "models": status.lms_models()}
+        """The Local model page: both runners' chat models (embedding models left out by the
+        chat's own name rule) and the model sized to this computer."""
+        from cortex import localllm
+        d, hw = status.llm(), wizard.hardware()
+
+        def chats(names):
+            return [n for n in names if not localllm._NOT_CHAT.search(n)]
+        return {**d, "ollama": None if d["ollama"] is None else chats(d["ollama"]),
+                "models": [m for m in status.lms_models() if chats([m["key"]])],
+                "hardware": hw, "recommend": wizard.model(wizard.recommend(hw["gb"], hw["kind"]))}
 
     def browse(self) -> dict:
         b = status.browse(self.root if self.entry() else None, self.receiver.status())
@@ -369,9 +378,12 @@ class App:
             if m is not None and (not isinstance(m, str) or len(m) > 200
                                   or not all(c.isalnum() or c in "._:@/-" for c in m)):
                 raise ValueError("not a model name")
+            r = body.get("runner", "lmstudio")  # no runner: an LM Studio choice, as before
+            if r not in wizard.RUNNERS:
+                raise ValueError("runner must be ollama or lmstudio")
             new["model"] = m
             if m:
-                new["runner"] = "lmstudio"
+                new["runner"] = r
         cli._write_config(localllm=new)
         return {"ok": True}
 
@@ -380,6 +392,11 @@ class App:
         if not isinstance(m, str) or not m:
             raise ValueError("choose a model first")
         return self.jobs.start(f"Loading {m}", "llm", lambda job: actions.llm_load(job, m))
+
+    def llm_pull(self, body: dict) -> dict:
+        name = wizard.ollama_name(body.get("name"))
+        return self.jobs.start(f"Downloading {name}", "llm",
+                               lambda job: wizard.pull_ollama(job, name), cancellable=True)
 
     def llm_test(self, body: dict) -> dict:
         # a test may start LM Studio and load the chosen model, as `enabled: true` would
