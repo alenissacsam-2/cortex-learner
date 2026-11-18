@@ -24,6 +24,7 @@ from cortex import dashboard as dashboard_mod
 from cortex import doctor as doctor_mod
 from cortex import levels, planner, render, taint
 from cortex import session as session_mod
+from cortex._proc import NO_WINDOW
 from cortex.catalog import Catalog, resolve_or_inbox
 from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
@@ -329,11 +330,24 @@ def _report(did: list[str], skipped: list[str], warned: list[str] = ()) -> None:
         typer.echo(f"warning  {line}")
 
 
+INSTALL_MARKER = "cortex-install.txt"  # installer/setup_app.py drops it in the install folder
+
+
+def install_folder(p: Path) -> Path | None:
+    """The CortexSetup.exe install folder `p` is in (or is), else None."""
+    p = Path(p).resolve()
+    return next((d for d in (p, *p.parents) if (d / INSTALL_MARKER).is_file()), None)
+
+
 def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list[str]]:
     """The work of `cortex init`: (created, skipped, warnings). The ~/.cortex pointer moves
     only when it names no vault yet or `default` is set (every chat's hook and server read it)."""
     if root.exists() and not root.is_dir():
         raise VaultError("invalid_argument", f"{root} is a file; pick a folder.")
+    if inst := install_folder(root):
+        raise VaultError("invalid_argument", f"{root} is inside the folder Cortex is installed "
+                         f"in ({inst}); uninstalling Cortex empties that folder. Pick another "
+                         "folder for your notes.")
     root.mkdir(parents=True, exist_ok=True)
     vault = Vault(root)
     did, skipped = [], []
@@ -416,8 +430,10 @@ def doctor(vault: VaultOpt = None) -> None:
                     doctor_mod.check_kill(root), doctor_mod.check_me_pages(root),
                     doctor_mod.check_private_browse_git(root)]
     except VaultError as e:
-        results.append(("FAIL", "Vault", str(e), "Run `cortex app` (or `cortex setup` in a "
-                        "terminal) to set Cortex up, or pass --vault."))
+        results.append(("FAIL", "Vault", str(e), "Open Cortex from the Start menu and set "
+                        "up a vault under Setup." if doctor_mod.installer() else
+                        "Run `cortex app` (or `cortex setup` in a terminal) to set Cortex up, "
+                        "or pass --vault."))
     for status, name, detail, fix in results:
         typer.echo(f"{status:<4}  {name}: {detail}")
         if fix:
@@ -511,6 +527,9 @@ def setup(
     root = vault.expanduser().resolve()
     if root.exists() and not root.is_dir():
         raise VaultError("invalid_argument", f"{root} is a file; pick a folder.")
+    if inst := install_folder(root):  # before the sample pages land there
+        raise VaultError("invalid_argument", f"{root} is inside the folder Cortex is installed "
+                         f"in ({inst}); pick another folder for your notes.")
     sync = doctor_mod.check_onedrive(root)
     if sync[0] != "PASS":
         typer.echo(f"WARN  {sync[2]}: {sync[3]}")
@@ -609,7 +628,8 @@ def _setup_code(ask) -> None:
     # runs `claude` itself only once a published repo is chosen; a checkout path is printed
     if claude and "<" not in REPO and ask("Install the Claude Code plugin with `claude`?"):
         for c in cmds:
-            r = subprocess.run([claude, *c], capture_output=True, text=True)
+            r = subprocess.run([claude, *c], capture_output=True, text=True,
+                               creationflags=NO_WINDOW)
             ok = r.returncode == 0
             typer.echo(f"{'ran     ' if ok else 'warning '} claude {' '.join(c)}"
                        + ("" if ok else f": {(r.stderr or r.stdout).strip()[:200]}"))
@@ -653,10 +673,26 @@ def _setup_desktop(configs: list[Path], entry: dict, ask) -> None:
     src = _marketplace()
     zip_from = (f"{CHECKOUT / 'dist'} (build it with `uv run python scripts/build_skills.py` "
                 f"in {CHECKOUT})" if src == str(CHECKOUT)
-                else RELEASES if src else "a Cortex release")
+                else f"{RELEASES}/latest/download/cortex-skill.zip")
     typer.echo("Fully quit Claude desktop (tray or menu bar > Quit) and open it again. For "
                f"/cortex in Chat, upload cortex-skill.zip from {zip_from} under Settings > "
                "Capabilities > Skills.")
+
+
+@app.command(hidden=True)  # the uninstaller's step; people use Connect AI apps in the app
+def disconnect() -> None:
+    """Remove Cortex from every AI app it is connected to, as Connect AI apps does (backups
+    beside each file). The Windows uninstaller runs it when asked."""
+    from cortex.app import targets
+
+    rows = targets.apply_all({t.id: False for t in targets.targets()}, None, typer.echo)
+    for r in rows:
+        typer.echo(f"{r['change']:<8} {r['label']}: {r.get('file') or ''} {r.get('detail') or ''}"
+                   .rstrip())
+    if not rows:
+        typer.echo("No AI app had Cortex.")
+    if any(r["change"] == "error" for r in rows):
+        raise typer.Exit(1)
 
 
 sample_app = typer.Typer(no_args_is_help=True, help="The sample vault (a made-up learner).")
@@ -1608,10 +1644,12 @@ def model_download(vault: VaultOpt = None) -> None:
     from cortex import semantic
 
     d = semantic.models_dir()
+    (d / doctor_mod.MODEL_READY).unlink(missing_ok=True)  # back only once this run finishes
     typer.echo(f"model {semantic.MODEL}: downloading if missing into {d} ...")
     embed = semantic.load_embedder(download=True)
     typer.echo(f"reranker {semantic.RERANK_MODEL}: downloading if missing ...")
     semantic.load_reranker(download=True)
+    (d / doctor_mod.MODEL_READY).write_text("downloaded\n", encoding="utf-8")
     typer.echo(f"model ready: {_dir_mb(d):.0f} MB in {d}")
     try:
         v = _vault(vault)

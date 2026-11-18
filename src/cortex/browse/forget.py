@@ -21,6 +21,7 @@ from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from cortex._proc import NO_WINDOW
 from cortex.browse import privacy, sites
 from cortex.browse.privacy import Settings
 from cortex.vault import Vault, VaultError
@@ -330,7 +331,7 @@ def _git_env(top: str, *args: str, env: dict | None = None) -> subprocess.Comple
     try:
         return subprocess.run(["git", "--literal-pathspecs", "-C", top, *args],
                               capture_output=True, encoding="utf-8", env=env,
-                              timeout=GIT_TIMEOUT_S)
+                              timeout=GIT_TIMEOUT_S, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 1, "", "timeout")
 

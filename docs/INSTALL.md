@@ -13,15 +13,15 @@ In paths below, `~` means your home folder: `C:\Users\<you>` on Windows, `/Users
 On Windows you can skip sections 3 and 4: one program installs everything.
 
 1. Download `CortexSetup.exe` from the repository's **Releases** page on GitHub.
-2. Double-click it. The file is not signed, so Windows SmartScreen may say it "protected your PC": click **More info**, then **Run anyway**.
+2. Double-click it. The file is not signed, so Windows SmartScreen may say it "protected your PC": click **More info**, then **Run anyway**. Some antivirus programs (Microsoft Defender included) can flag or quarantine a new unsigned installer: if the file disappears or setup stops with an access error, check the antivirus's protection history and allow `CortexSetup.exe`. Download it only from the repository's Releases page.
 3. Click **Install**. It needs an internet connection this once: it downloads Python and Cortex's parts (a few minutes). It needs no admin rights and installs for you only.
 4. Click **Open Cortex**. The app's **Setup** screen walks you through the rest: your vault, connecting your AI apps, the search model, a local model and imports. Later, open it with the **Cortex** shortcut on your desktop or in the Start menu.
 
 What it installs, all in `%LOCALAPPDATA%\Programs\Cortex`: Cortex itself (the `cortex` command, the app, the dashboard and the MCP server), its own copy of Python and uv, the **Cortex** shortcuts, and an entry in **Settings > Apps > Installed apps**. It adds the `cortex` command to your PATH, so new terminals know it. To update, see **Updating** below.
 
-To uninstall, close Cortex (Quit on its page), then remove **Cortex** under **Settings > Apps > Installed apps**. This removes the program, shortcuts and PATH entry. Your vault and your settings in `~/.cortex` are kept; delete them yourself if you want them gone. If you connected AI apps or turned on **Start at login**, undo those in the app first (steps 1, 2 and 4 of section 11).
+To uninstall, close Cortex (Quit on its page), then remove **Cortex** under **Settings > Apps > Installed apps**. It asks whether to also remove Cortex from Claude and your other AI apps (the default is yes). It then removes the **Start at login** entry, the program, shortcuts and PATH entry. It deletes only the files setup made: anything else you put in the install folder stays, and the folder stays with it. Your vault and your settings in `~/.cortex` are kept; delete them yourself if you want them gone. Restart your AI apps afterwards.
 
-For scripts: `CortexSetup.exe --quiet [--dir PATH] [--no-shortcuts] [--no-path] [--no-registry] [--uninstall]`. `--update` updates the existing install without questions and then opens the app (the app's **Update now** runs it). With `--quiet`, setup stops with an error instead of closing programs that are still running from the install folder. It is a windowed program, so in PowerShell run it with `Start-Process -Wait -PassThru` to get its exit code. The log is `%TEMP%\cortex-setup.log`. Developers build it with `uv run python installer/build.py` (Windows only; the exe lands in `dist/`, which is never committed).
+For scripts: `CortexSetup.exe --quiet [--dir PATH] [--no-shortcuts] [--no-path] [--no-registry] [--uninstall [--keep-ai-apps]]`. `--keep-ai-apps` leaves Cortex in your AI apps' settings on uninstall. `--update` updates the existing install without questions and then opens the app (the app's **Update now** runs it). With `--quiet`, setup stops with an error instead of closing programs that are still running from the install folder. It is a windowed program, so in PowerShell run it with `Start-Process -Wait -PassThru` to get its exit code. The log is `%TEMP%\cortex-setup.log`. Developers build it with `uv run python installer/build.py` (Windows only; the exe lands in `dist/`, which is never committed).
 
 ### Updating
 
@@ -184,7 +184,7 @@ The setup adds the entry for you when it finds the app's config folder. To do it
    If it already has `"mcpServers"`, add only the `"cortex": { ... }` part inside it, with a comma between it and the entry before it. Keep the rest of the file as it is.
 3. Fully quit Claude (tray icon or menu bar > **Quit**, not just closing the window) and open it again.
 4. In **Settings > Developer**, check that `cortex` shows as **running**.
-5. For the `/cortex` study skill, use `dist/cortex-skill.zip` in your Cortex-app folder (if it is missing, run `uv run python scripts/build_skills.py` there to build it), then upload it under **Settings > Capabilities > Skills**. Skills need **Code execution and file creation** turned on, on the same page. Upload the zip as it is; do not unpack it.
+5. For the `/cortex` study skill, use `cortex-skill.zip`: with the Windows installer, download it from the release (the app's **Connect** page links it); from a source checkout, use `dist/cortex-skill.zip` in your Cortex-app folder (if it is missing, run `uv run python scripts/build_skills.py` there to build it). Upload it under **Settings > Capabilities > Skills**. Skills need **Code execution and file creation** turned on, on the same page. Upload the zip as it is; do not unpack it.
 
 The Chat tab has no hooks. Instead, Cortex asks Claude to call `cortex_prime` with your first message of each chat, which loads the same short context as the Claude Code hook.
 
@@ -228,7 +228,7 @@ To remove Cortex completely:
 1. In Claude Code, run `/plugin uninstall cortex@cortex`.
 2. Remove the `cortex` entry from `claude_desktop_config.json`.
 3. Run `uv tool uninstall cortex-learner`.
-4. If you turned on **Start at login** under Browsing, turn it off there first (Windows: a Task Scheduler entry; macOS: `~/Library/LaunchAgents/cortex-browse-receiver.plist`; Linux: `~/.config/systemd/user/cortex-browse-receiver.service`, or `~/.config/autostart/cortex-browse-receiver.desktop` without systemd).
+4. If you turned on **Start at login** under Browsing, turn it off there first (Windows: a "Cortex browse receiver" value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; the installer's uninstall removes it; macOS: `~/Library/LaunchAgents/cortex-browse-receiver.plist`; Linux: `~/.config/systemd/user/cortex-browse-receiver.service`, or `~/.config/autostart/cortex-browse-receiver.desktop` without systemd).
 5. Delete the `~/.cortex` folder (the vault pointer, settings and the search model).
 6. Delete the Cortex-app folder.
 

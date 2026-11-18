@@ -14,6 +14,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from cortex._proc import NO_WINDOW
 from cortex.app import status
 
 TEST_TEXT = "Dijkstra shortest path tutorial"  # synthetic: never the owner's data
@@ -66,7 +67,7 @@ def run_proc(job, args: list[str]) -> dict:
     job.say("running: " + subprocess.list2cmdline(args))
     try:
         p = _popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                   stdin=subprocess.DEVNULL)
+                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except OSError as e:
         raise ValueError(f"could not start {args[0]}: {e}") from None
     job.proc = p
@@ -289,6 +290,15 @@ def sweep_uploads(max_age_s: float = 24 * 3600) -> None:
                 p.unlink()
 
 
+def sweep_updates(keep: Path | None = None) -> None:
+    """Delete downloaded installers (~/.cortex/tmp/update-*) except `keep`; one still running
+    is locked and goes next time."""
+    import shutil
+    for p in tmp_dir().glob("update-*"):
+        if p != keep:
+            shutil.rmtree(p, ignore_errors=True)
+
+
 # importers.detect's kind -> how the page names it, and the card that imports it
 KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity card"),
         "takeout": ("Google activity (My Activity)", "the Google activity card"),
@@ -485,18 +495,38 @@ class Receiver:
         srv.server_close()
 
 
+def drop_old_task() -> bool:
+    """Delete the Task Scheduler entry older versions made (Windows); True when one was there."""
+    from cortex.app import targets
+    return targets._run(["schtasks", "/Delete", "/F", "/TN", status.LOGIN_TASK], timeout=30)[0]
+
+
+def migrate_login(root: Path | None) -> None:
+    """At app start (Windows): an old Task Scheduler entry becomes the Run value, for this
+    app's vault (shortcut: assumes the task served the default vault, as the app made it)."""
+    if root is None or status.login_file() is not None or status.run_get() is not None:
+        return
+    if drop_old_task():
+        status.run_set(status.login_command(root))
+
+
 def login(job, root: Path, on: bool) -> dict:
-    """Create or delete what starts the receiver at login: the Task Scheduler entry on Windows,
-    else `status.login_file()` with its launchctl or systemctl commands."""
+    """Create or delete what starts the receiver at login: a Run value on Windows (and any old
+    Task Scheduler entry goes), else `status.login_file()` with its launchctl or systemctl
+    commands."""
     from cortex.app import targets
     if (f := status.login_file()) is None:
-        args = status.login_command(root) if on else \
-            ["schtasks", "/Delete", "/F", "/TN", status.LOGIN_TASK]
-        job.say("running: " + subprocess.list2cmdline(args))
-        ok, out = targets._run(args, timeout=30)
-        if not ok:
-            raise ValueError(f"schtasks failed: {out[-300:]}")
-        return {"ok": True, "lines": [out[-300:]]}
+        if on:
+            value = status.login_command(root)
+            status.run_set(value)
+            job.say(f"added the Run value: {value}")
+        else:
+            status.run_delete()
+            job.say("removed the Run value")
+        if drop_old_task():
+            job.say("removed the old Task Scheduler entry")
+        return {"ok": True, "lines": [("Starts at login: " + value) if on
+                                      else "No longer starts at login."]}
     if on:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(status.login_text(root), encoding="utf-8", newline="\n")

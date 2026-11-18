@@ -3,7 +3,10 @@ and the `cortex-app` launcher."""
 
 import importlib.util
 import os
+import shutil
+import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +17,17 @@ setup_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup_app)
 
 BIN = r"C:\Users\x\AppData\Local\Programs\Cortex\bin"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_system(monkeypatch):
+    """Nothing here may touch this computer's registry, PATH, shortcuts, scheduled tasks or
+    processes; a test that needs one of them fakes it (the `calls` fixture records them)."""
+    def refuse(*a, **k):
+        pytest.fail("a test touched the real system")
+    for name in ("set_user_path", "register", "unregister", "make_shortcuts", "drop_login",
+                 "terminate", "remove_later", "start_app"):
+        monkeypatch.setattr(setup_app, name, refuse)
 
 
 def test_merge_path_appends_once():
@@ -76,6 +90,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(setup_app, "make_shortcuts", lambda t, say: seen.append(("lnk", t)))
     monkeypatch.setattr(setup_app, "register", lambda d, v: seen.append(("reg", v)))
     monkeypatch.setattr(setup_app, "unregister", lambda: seen.append(("unreg",)))
+    monkeypatch.setattr(setup_app, "drop_login", lambda: seen.append(("login",)))
     monkeypatch.setattr(setup_app, "shortcut_paths", lambda: [])
     monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: [])
     return seen
@@ -129,11 +144,131 @@ def test_uninstall_keeps_user_data(tmp_path, calls):
     (d / "bin" / "cortex.exe").write_bytes(b"x")
     (d / setup_app.MARKER).write_text("x")
     said = []
-    setup_app.uninstall(d, setup_app.parse_args(["--uninstall", "--dir", str(d)]), said.append)
-    assert not d.exists()
+    later = setup_app.uninstall(d, setup_app.parse_args(["--uninstall", "--dir", str(d)]),
+                                said.append)
+    assert not d.exists() and later is False
     assert (home / ".cortex" / "config.yaml").read_text() == "vault: v\n"
     assert (vault / "notes" / "a.md").read_text() == "mine"
-    assert [c[0] for c in calls] == ["path", "unreg"] and "kept" in said[-1]
+    # the AI apps first (the installed cortex.exe), then files, then the entries pointing at them
+    assert [c[0] for c in calls] == ["run", "path", "login", "unreg"] and "kept" in said[-1]
+    assert [str(a) for a in calls[0][1]] == [str(d / "bin" / "cortex.exe"), "disconnect"]
+
+
+def _install_tree(d: Path) -> None:
+    for sub in ("bin", "tools/cortex-learner/Lib", "python/cpython-3.12", "cache"):
+        (d / sub).mkdir(parents=True)
+    for name in ("uv.exe", "constraints.txt", "CortexSetup.exe",
+                 "cortex_learner-0.2.0-py3-none-any.whl", setup_app.MARKER):
+        (d / name).write_bytes(b"x")
+
+
+def test_uninstall_deletes_only_what_setup_made(tmp_path, calls):
+    """A3: a vault (or anything else) the student put in the install folder survives."""
+    d = tmp_path / "Cortex"
+    _install_tree(d)
+    (d / "notes").mkdir()
+    (d / "notes" / "a.md").write_text("mine")
+    (d / ".cortex").mkdir()
+    (d / "thesis.docx").write_bytes(b"mine")
+    said = []
+    opts = setup_app.parse_args(["--uninstall", "--keep-ai-apps", "--dir", str(d)])
+    assert setup_app.uninstall(d, opts, said.append) is False
+    assert sorted(p.name for p in d.iterdir()) == [".cortex", "notes", "thesis.docx"]
+    assert (d / "notes" / "a.md").read_text() == "mine"
+    assert any("Cortex did not make" in s for s in said)
+    assert [c[0] for c in calls] == ["path", "login", "unreg"]  # --keep-ai-apps: no disconnect
+
+
+def test_uninstall_deletes_files_first_and_says_how_to_retry(tmp_path, calls, monkeypatch):
+    """A7: a locked file stops it before the shortcuts, PATH and Apps & Features entry go."""
+    d = tmp_path / "Cortex"
+    _install_tree(d)
+    real = setup_app.shutil.rmtree
+
+    def locked(p, **k):
+        if Path(p).name == "tools":
+            raise PermissionError(13, "in use", str(p / "x.dll"))
+        real(p, **k)
+    monkeypatch.setattr(setup_app.shutil, "rmtree", locked)
+    opts = setup_app.parse_args(["--uninstall", "--keep-ai-apps", "--dir", str(d)])
+    with pytest.raises(setup_app.SetupError, match=r"x\.dll.*uninstall again from Installed apps"):
+        setup_app.uninstall(d, opts, lambda s: None)
+    assert calls == [] and (d / setup_app.MARKER).is_file()
+
+
+def test_uninstall_refuses_while_cortex_runs(tmp_path, calls, monkeypatch):
+    d = tmp_path / "Cortex"
+    _install_tree(d)
+    monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: [(7, str(d / "bin" / "x"))])
+    opts = setup_app.parse_args(["--uninstall", "--keep-ai-apps", "--dir", str(d)])
+    with pytest.raises(setup_app.SetupError, match="by 1 program"):
+        setup_app.uninstall(d, opts, lambda s: None)
+    assert calls == [] and (d / "bin").is_dir()
+
+
+def test_a_failed_disconnect_is_only_a_warning(tmp_path, calls, monkeypatch):
+    d = tmp_path / "Cortex"
+    _install_tree(d)
+    (d / "bin" / "cortex.exe").write_bytes(b"x")
+
+    def fail(args, env, say):
+        raise setup_app.SetupError("cortex.exe stopped with exit code 1.")
+    monkeypatch.setattr(setup_app, "run", fail)
+    said = []
+    setup_app.uninstall(d, setup_app.parse_args(["--uninstall", "--dir", str(d)]), said.append)
+    assert not d.exists() and any(s.startswith("warning: some AI apps") for s in said)
+
+
+def test_uninstall_running_from_the_folder_leaves_the_exe_to_cmd(tmp_path, calls, monkeypatch):
+    """A8: the running CortexSetup.exe stays for remove_later, which deletes only it."""
+    d = tmp_path / "Cortex"
+    _install_tree(d)
+    monkeypatch.setattr(setup_app.sys, "executable", str(d / "CortexSetup.exe"))
+    opts = setup_app.parse_args(["--uninstall", "--keep-ai-apps", "--dir", str(d)])
+    assert setup_app.uninstall(d, opts, lambda s: None) is True
+    assert [p.name for p in d.iterdir()] == ["CortexSetup.exe"]
+    seen = []
+    monkeypatch.setattr(setup_app.subprocess, "Popen", lambda cmd, **k: seen.append(cmd))
+    monkeypatch.setattr(setup_app, "remove_later", _real_remove_later)
+    setup_app.remove_later(d)
+    assert f'del /f /q "{d / "CortexSetup.exe"}"' in seen[0] and f'rmdir "{d}"' in seen[0]
+    assert "/s" not in seen[0].split("rmdir", 1)[1]  # never the folder's other files
+
+
+_real_remove_later = setup_app.remove_later
+
+
+def test_check_dir(tmp_path):
+    d = tmp_path / "c"
+    setup_app.check_dir(d)  # missing: fine
+    d.mkdir()
+    (d / "CortexSetup.exe").write_bytes(b"x")  # what an uninstall left behind: fine
+    setup_app.check_dir(d)
+    (d / ".cortex").mkdir()  # a vault: never, marker or not
+    (d / setup_app.MARKER).write_text("x")
+    with pytest.raises(setup_app.SetupError, match="is a Cortex vault"):
+        setup_app.check_dir(d)
+
+
+def test_install_pins_dependencies_and_survives_a_shortcut_failure(tmp_path, payload, calls,
+                                                                   monkeypatch):
+    """A9: constraints.txt from uv.lock goes to `uv tool install -c`; A18: no shortcut is a
+    warning, and Apps & Features still gets its entry."""
+    (payload / "constraints.txt").write_text("numpy==2.0.0\n")
+
+    def blocked(target, say):
+        raise setup_app.SetupError("powershell.exe stopped with exit code 1.")
+    monkeypatch.setattr(setup_app, "make_shortcuts", blocked)
+    d = tmp_path / "Cortex"
+    said = []
+    setup_app.install(d, setup_app.parse_args(["--dir", str(d)]), said.append, src=payload)
+    args = [str(a) for a in calls[0][1]]
+    assert args[args.index("-c") + 1] == str(d / "constraints.txt")
+    assert (d / "constraints.txt").read_text() == "numpy==2.0.0\n"
+    assert any(s.startswith("warning: no Start menu shortcut") for s in said)
+    assert [c[0] for c in calls] == ["run", "path", "reg"] and said[-1] == "Cortex is installed."
+    env = calls[0][2]
+    assert env["UV_NATIVE_TLS"] == "1" and env["UV_COMPILE_BYTECODE"] == "1"
 
 
 def test_uninstall_refuses_a_folder_without_the_marker(tmp_path, calls):
@@ -216,6 +351,23 @@ def test_quiet_update_waits_for_the_app_then_reopens_it(tmp_path, monkeypatch):
     d = tmp_path / "Cortex"
     assert setup_app.main(["--quiet", "--update", "--wait-pid", "9", "--dir", str(d)]) == 0
     assert seen == [("wait", 9), ("install", True), ("open", d.resolve())]
+
+
+@pytest.mark.slow
+def test_the_wheel_ships_the_extension_and_the_receiver(tmp_path):
+    """A2: an installer install (the wheel) has the browser extension as package data; A10:
+    and the no-console receiver entry point."""
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH")
+    subprocess.run([uv, "build", "--wheel", "-o", str(tmp_path)], cwd=ROOT, check=True,
+                   capture_output=True)
+    z = zipfile.ZipFile(next(tmp_path.glob("cortex_learner-*.whl")))
+    names = set(z.namelist())
+    for f in (ROOT / "extension").iterdir():
+        assert f"cortex/assets/extension/{f.name}" in names, f.name
+    ep = next(n for n in names if n.endswith(".dist-info/entry_points.txt"))
+    assert "cortex-receiver = cortex.app.launch:receiver" in z.read(ep).decode()
 
 
 def test_launcher_logs_without_a_console(monkeypatch):

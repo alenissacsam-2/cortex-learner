@@ -34,6 +34,8 @@ ORDER = ("vault", "connect", "embed", "history", "llm")
 OLLAMA_PAGE = "https://ollama.com/download"
 LMSTUDIO_PAGE = "https://lmstudio.ai/download"
 OLLAMA_SIZE = "about 1 GB"
+GIT_PAGE = "https://git-scm.com/downloads"
+GIT_SIZE = "about 70 MB"
 LINUX_INSTALL = "curl -fsSL https://ollama.com/install.sh | sh"
 RUNNERS = {"ollama": "Ollama", "lmstudio": "LM Studio"}  # Ollama is the recommended one
 STOPPED = "{} is installed but not running: click Start (or run `cortex llm start`)."
@@ -212,7 +214,10 @@ def state(root: Path | None, scanned: dict | None = None) -> dict:
     from cortex import cli
     o_state, l_state = _ollama_state(ollama), _lms_state(lms_exe)
     return {
-        "vault": {"done": v["ok"], "path": v["path"], "default": str(cli._default_vault())},
+        # moved: the config names a folder that is gone; Setup asks instead of recreating it
+        "vault": {"done": v["ok"], "path": v["path"], "default": str(cli._default_vault()),
+                  "moved": bool(v["path"]) and not v.get("exists")},
+        "git": {"found": targets._which("git") is not None, "install": git_plan()},
         "embed": {"done": e["downloaded"], "indexed": e.get("indexed"), **EMBED},
         "runner": {"done": "running" in (o_state, l_state), "recommend": "ollama",
                    "ollama": {"found": ollama_exe() is not None, "serving": ollama is not None,
@@ -246,6 +251,9 @@ def make_vault(job, path: str) -> tuple[Path, dict]:
         raise ValueError(f"{root} is a file; pick a folder.")
     job.say(f"setting up {root}")
     did, skipped, warned = cli._init(root, default=True)
+    from cortex import doctor
+    if (sync := doctor.check_onedrive(root))[0] != "PASS":
+        warned.append(f"{sync[2]}: {sync[3]}")
     for line in [*did, *warned]:
         job.say(str(line))
     return root, {"ok": True, "lines": [str(x) for x in [*did, *warned]][-100:]}
@@ -264,6 +272,24 @@ def embed(job, root: Path | None) -> dict:
 
 def index(job, root: Path) -> dict:
     return actions.run_proc(job, [_cortex(), "model", "build", "--vault", str(root)])
+
+
+def git_plan() -> dict:
+    """How to get git (the vault's history and undo): winget on Windows, else its page."""
+    run = (["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]
+           if sys.platform == "win32" and targets._which("winget") else None)
+    return {"run": run, "source": "winget, from git-scm.com", "size": GIT_SIZE, "page": GIT_PAGE}
+
+
+def install_git(job) -> dict:
+    plan = git_plan()
+    if not plan["run"]:
+        raise ValueError(f"Install git yourself from {plan['page']}")
+    out = actions.run_proc(job, plan["run"])
+    if out["ok"]:
+        out["lines"].append("Git is installed. Quit Cortex and open it again, then click Use "
+                            "this folder under Vault to start your vault's history.")
+    return out
 
 
 def install_ollama(job) -> dict:

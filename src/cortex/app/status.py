@@ -12,7 +12,6 @@ import os
 import plistlib
 import re
 import shlex
-import subprocess
 import sys
 from dataclasses import replace
 from datetime import datetime
@@ -74,9 +73,9 @@ def vault(root: Path | None) -> dict:
 
 
 def embedding(root: Path | None = None) -> dict:
-    from cortex import semantic
+    from cortex import doctor, semantic
     d = semantic.models_dir()
-    out = {"downloaded": d.is_dir() and any(d.iterdir()), "dir": str(d)}
+    out = {"downloaded": doctor.search_model_ready(), "dir": str(d)}
     if root is not None:
         out["indexed"] = when(root / semantic.CACHE)
     return out
@@ -275,19 +274,57 @@ def imports() -> dict:
 
 
 def login_task() -> dict:
-    """The entry that starts the receiver at login: a Windows Task Scheduler entry, else the
-    file `login_file()` names."""
+    """The entry that starts the receiver at login: a value under HKCU's Run key on Windows,
+    else the file `login_file()` names."""
     if (f := login_file()) is not None:
         return {"supported": True, "exists": f.is_file()}
-    from cortex.app import targets
-    ok, _ = targets._run(["schtasks", "/Query", "/TN", LOGIN_TASK], timeout=10)
-    return {"supported": True, "exists": ok}
+    return {"supported": True, "exists": run_get() is not None}
 
 
-def login_command(root: Path) -> list[str]:
+# Windows: HKCU ...\Run starts the no-console `cortex-receiver` at login. It replaced a Task
+# Scheduler entry (LOGIN_TASK) that opened a console and stopped on battery; `actions.login`
+# and the uninstaller delete that old task.
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def run_get() -> str | None:  # tests replace run_get/run_set/run_delete (conftest)
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, LOGIN_TASK)[0]
+    except OSError:
+        return None
+
+
+def run_set(value: str) -> None:
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+        winreg.SetValueEx(k, LOGIN_TASK, 0, winreg.REG_SZ, value)
+
+
+def run_delete() -> None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.DeleteValue(k, LOGIN_TASK)
+    except FileNotFoundError:
+        pass
+
+
+def receiver_exe() -> str:
+    """`cortex-receiver.exe` (no console) beside `cortex.exe`; the console `cortex` when it is
+    missing (shortcut: a dev venv without the gui script; reinstall the tool to get it)."""
     from cortex import clients
-    return ["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", LOGIN_TASK,
-            "/TR", f'"{clients.cortex_command()}" browse serve --vault "{root}"']
+    cortex = Path(clients.cortex_command())
+    gui = cortex.with_name("cortex-receiver" + cortex.suffix)
+    return str(gui) if gui.is_file() else str(cortex)
+
+
+def login_command(root: Path) -> str:
+    """The Run value: the receiver for `root`, as `cortex browse serve --vault <root>` runs."""
+    exe = receiver_exe()
+    serve = "" if Path(exe).stem == "cortex-receiver" else " browse serve"
+    return f'"{exe}"{serve} --vault "{root}"'
 
 
 def _systemd() -> bool:  # tests replace this; sd_booted()'s own test
@@ -342,7 +379,7 @@ def login_commands(on: bool) -> list[list[str]]:
 def login_shown(root: Path) -> str:
     """The exact command, or the file and its commands, the page shows before the click."""
     if (f := login_file()) is None:
-        return subprocess.list2cmdline(login_command(root))
+        return f'Adds "{LOGIN_TASK}" under HKCU\\{RUN_KEY}:\n{login_command(root)}'
     try:
         text = login_text(root)
     except ValueError as e:

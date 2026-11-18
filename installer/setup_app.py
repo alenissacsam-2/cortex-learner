@@ -2,8 +2,10 @@
 
 Stdlib only. The exe bundles `payload/uv.exe` and `payload/cortex_learner-*.whl`
 (installer/build.py); `uv tool install` then fetches Python 3.12 and the dependencies into the
-install folder. `--uninstall` removes the install folder, shortcuts, PATH entry and registry
-key, and never the vault or ~/.cortex. `--update` (the app's Update now) updates the existing
+install folder (pinned to uv.lock by `payload/constraints.txt`). `--uninstall` first takes
+Cortex out of the AI apps (`cortex disconnect`, unless --keep-ai-apps), then deletes only what
+install made, then the shortcuts, PATH entry, Start at login and registry key; never the vault
+or ~/.cortex. `--update` (the app's Update now) updates the existing
 install without questions, after `--wait-pid` (the app) exits, then reopens the app.
 """
 
@@ -69,6 +71,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-path", action="store_true")
     p.add_argument("--no-registry", action="store_true")
     p.add_argument("--uninstall", action="store_true")
+    p.add_argument("--keep-ai-apps", action="store_true",
+                   help="Uninstall without removing Cortex from Claude and other AI apps.")
     p.add_argument("--update", action="store_true",
                    help="Update the existing install without questions, then open the app.")
     p.add_argument("--wait-pid", type=int, default=None,
@@ -96,7 +100,11 @@ def uv_env(d: Path, base: dict | None = None) -> dict:
     env = dict(os.environ if base is None else base)
     env.update(UV_TOOL_DIR=str(d / "tools"), UV_TOOL_BIN_DIR=str(d / "bin"),
                UV_PYTHON_INSTALL_DIR=str(d / "python"), UV_CACHE_DIR=str(d / "cache"),
-               UV_PYTHON_PREFERENCE="only-managed")
+               UV_PYTHON_PREFERENCE="only-managed",
+               # the Windows certificate store: school networks that inspect TLS still work
+               UV_NATIVE_TLS="1",
+               # compiled at install, so the first start (and Claude's first `cortex mcp`) is fast
+               UV_COMPILE_BYTECODE="1")
     return env
 
 
@@ -291,9 +299,23 @@ def run(args: list, env: dict, say) -> None:
 
 
 def check_dir(d: Path) -> None:
-    if d.is_dir() and any(d.iterdir()) and not (d / MARKER).is_file():
+    if (d / ".cortex").is_dir():
+        raise SetupError(f"{d} is a Cortex vault (your notes). Pick another folder for the "
+                         "program.")
+    # a folder holding only CortexSetup.exe is what an uninstall left while its window was open
+    others = [p for p in d.iterdir() if p.name != EXE] if d.is_dir() else []
+    if others and not (d / MARKER).is_file():
         raise SetupError(f"{d} already holds other files. Pick an empty folder, or the "
                          "folder Cortex was installed in before.")
+
+
+INSTALLED = ("bin", "tools", "python", "cache", "uv.exe", "constraints.txt", EXE)
+
+
+def installed_items(d: Path) -> list[Path]:
+    """What install() put in `d` (uninstall deletes these and nothing else), marker aside."""
+    return [p for p in d.iterdir() if p.name in INSTALLED
+            or (p.name.startswith("cortex_learner-") and p.suffix == ".whl")]
 
 
 def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> None:
@@ -313,13 +335,19 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
             old.unlink()
     shutil.copy2(src / "uv.exe", d / "uv.exe")
     shutil.copy2(wheel, d / wheel.name)
+    # uv.lock's versions (installer/build.py): the same exe installs the same packages every day
+    pins = []
+    if (src / "constraints.txt").is_file():
+        shutil.copy2(src / "constraints.txt", d / "constraints.txt")
+        pins = ["-c", d / "constraints.txt"]
     say(f"Installing Cortex {version_of(wheel)} into {d} (downloads Python and packages)...")
     try:
         run([d / "uv.exe", "tool", "install", "--force", "--reinstall-package", "cortex-learner",
-             "--python", "3.12", d / wheel.name], uv_env(d), say)
+             "--python", "3.12", *pins, d / wheel.name], uv_env(d), say)
     except SetupError as e:
-        raise SetupError(f"{e} Check your internet connection. If Cortex is open, close it "
-                         "(Quit on its page) and run setup again.") from None
+        raise SetupError(f"{e} Check your internet connection; a school or work network may "
+                         "block the download, so another Wi-Fi can help. If Cortex is open, "
+                         "close it (Quit on its page) and run setup again.") from None
     shutil.rmtree(d / "cache", ignore_errors=True)
     me = Path(sys.executable).resolve()
     if getattr(sys, "frozen", False) and me != (d / EXE).resolve():
@@ -328,7 +356,11 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
         set_user_path(merge_path(get_user_path(), str(d / "bin")))
         say(f"added to your PATH: {d / 'bin'} (new terminals know `cortex`)")
     if not opts.no_shortcuts:
-        make_shortcuts(d / "bin" / "cortex-app.exe", say)
+        try:  # a managed PC can block PowerShell's shortcut object: Cortex is installed anyway
+            make_shortcuts(d / "bin" / "cortex-app.exe", say)
+        except (SetupError, OSError) as e:
+            say(f"warning: no Start menu shortcut ({e}). Open Cortex with "
+                f"{d / 'bin' / 'cortex-app.exe'}.")
     if not opts.no_registry:
         register(d, version_of(wheel))
         say("added to Apps & Features (uninstall from there)")
@@ -341,33 +373,85 @@ def _force(func, path, _exc):  # uv's Python ships read-only files
     func(path)
 
 
-def uninstall(d: Path, opts: argparse.Namespace, say) -> None:
+LOGIN_NAME = "Cortex browse receiver"  # the Run value (and the older scheduled task) the app adds
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def drop_login() -> None:
+    """Remove Start at login: the app's HKCU Run value and the scheduled task older versions
+    made (it would fail at every login once the files are gone)."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.DeleteValue(k, LOGIN_NAME)
+    except FileNotFoundError:
+        pass
+    subprocess.run(["schtasks", "/Delete", "/F", "/TN", LOGIN_NAME], capture_output=True,
+                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+
+
+def disconnect_apps(d: Path, say) -> None:
+    """`cortex disconnect`: the installed program takes Cortex out of every AI app it was added
+    to (as Connect AI apps does), so they do not fail on Cortex at each start. A failure is a
+    warning: the files still go."""
+    exe = d / "bin" / "cortex.exe"
+    if not exe.is_file():
+        return
+    say("removing Cortex from your AI apps (Claude and others)")
+    try:
+        run([exe, "disconnect"], child_env(), say)
+    except (SetupError, OSError) as e:
+        say(f"warning: some AI apps still list Cortex ({e}); remove it there by hand.")
+
+
+def uninstall(d: Path, opts: argparse.Namespace, say) -> bool:
+    """Remove what install() made, files first; True when this exe runs from `d` and the
+    caller must `remove_later(d)` once it has said goodbye."""
     marker = d / MARKER
     if not marker.is_file():
         raise SetupError(f"{d} is not a Cortex install folder (no {MARKER}); nothing was removed.")
+    if not opts.keep_ai_apps:
+        disconnect_apps(d, say)
+    retry = (f"then uninstall again from Installed apps (or run {EXE} --uninstall in {d}). "
+             "Nothing else was removed.")
+    if busy := in_use(d):
+        raise SetupError(in_use_text(busy) + " Close them, " + retry + " Still running: "
+                         + "; ".join(f"{path} (process {pid})" for pid, path in busy))
+    me = Path(sys.executable).resolve()
+    try:  # only the names install() creates: never a vault or other files kept here
+        for p in installed_items(d):
+            if p != me:
+                shutil.rmtree(p, onexc=_force) if p.is_dir() else p.unlink()
+    except OSError as e:
+        raise SetupError(f"Could not remove {e.filename}: a program still uses it. Close "
+                         "it, " + retry) from None
+    # the files are gone: now the entries that point at them (kept until here, for a retry)
     if not opts.no_shortcuts:
         for lnk in shortcut_paths():
             lnk.unlink(missing_ok=True)
     if not opts.no_path:
         set_user_path(drop_path(get_user_path(), str(d / "bin")))
     if not opts.no_registry:
+        drop_login()
         unregister()
-    me = Path(sys.executable).resolve()
-    try:
-        for p in d.iterdir():
-            if p in (me, marker):
-                continue
-            shutil.rmtree(p, onexc=_force) if p.is_dir() else p.unlink()
-    except OSError as e:
-        raise SetupError(f"Could not remove {e.filename}. If Cortex is open, close it (Quit on "
-                         "its page) and uninstall again.") from None
     marker.unlink()
-    if me.parent == d:  # a running exe cannot delete itself: cmd removes the folder after we exit
-        subprocess.Popen(f'cmd /c ping -n 4 127.0.0.1 >nul & rmdir /s /q "{d}"',
-                         creationflags=DETACHED | NO_WINDOW)
-    else:
-        d.rmdir()
+    later = me.parent == d
+    if not later:
+        try:
+            d.rmdir()
+        except OSError:  # files Cortex did not make stay where they are
+            say(f"{d} still holds files Cortex did not make; they were kept.")
     say(f"Cortex was removed from {d}. {KEPT}")
+    return later
+
+
+def remove_later(d: Path) -> None:
+    """A running exe cannot delete itself: cmd retries for 30 s after we exit, deleting only
+    CortexSetup.exe and then the folder if it is empty (never anything else in it)."""
+    exe = d / EXE
+    subprocess.Popen(f'cmd /c for /l %i in (1,1,30) do @(ping -n 2 127.0.0.1 >nul & '
+                     f'del /f /q "{exe}" 2>nul & if not exist "{exe}" (rmdir "{d}" 2>nul & '
+                     f'exit))', creationflags=DETACHED | NO_WINDOW)
 
 
 # ---- the window -----------------------------------------------------------------------------
@@ -382,6 +466,30 @@ def start_app(d: Path) -> None:
                      creationflags=DETACHED)
 
 
+def ask_close(root, title: str, busy: list, verb: str) -> bool:
+    """Ask before ending the programs that hold the folder; OK ends exactly those."""
+    import tkinter as tk
+    from tkinter import ttk
+
+    dlg, ok = tk.Toplevel(root), []
+    dlg.title(title)
+    dlg.transient(root)
+    f = ttk.Frame(dlg, padding=16)
+    f.pack(fill="both", expand=True)
+    ttk.Label(f, text=in_use_text(busy) + f" Close them and {verb}?", wraplength=420,
+              justify="left").pack(anchor="w")
+    row = ttk.Frame(f)
+    row.pack(anchor="e", pady=(12, 0))
+    ttk.Button(row, text=f"Close them and {verb}",
+               command=lambda: (ok.append(1), dlg.destroy())).pack(side="left")
+    ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+    dlg.grab_set()
+    root.wait_window(dlg)
+    if ok:
+        terminate([pid for pid, _ in busy])  # install() and uninstall() check again
+    return bool(ok)
+
+
 def window(opts: argparse.Namespace, say_file) -> int:
     import tkinter as tk
     from tkinter import messagebox, scrolledtext, ttk
@@ -389,17 +497,26 @@ def window(opts: argparse.Namespace, say_file) -> int:
     root = tk.Tk()
     if opts.uninstall:
         root.withdraw()
-        if not messagebox.askyesno("Uninstall Cortex", f"Remove Cortex from {opts.dir}?\n\n"
+        t = "Uninstall Cortex"
+        if not messagebox.askyesno(t, f"Remove Cortex from {opts.dir}?\n\n"
                                    "Your vault (your notes) and your settings in ~/.cortex "
                                    "are kept."):
             return 1
+        if not opts.keep_ai_apps:
+            opts.keep_ai_apps = not messagebox.askyesno(
+                t, "Also remove Cortex from Claude and other AI apps?\n\nYes is best: without "
+                "Cortex installed, they would show a Cortex error each time they start.")
         try:
-            uninstall(opts.dir, opts, say_file)
+            if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall"):
+                return 1
+            later = uninstall(opts.dir, opts, say_file)
         except Exception as e:  # noqa: BLE001
             say_file(traceback.format_exc())
-            messagebox.showerror("Uninstall Cortex", f"{e}\n\nThe full log is at {LOG}")
+            messagebox.showerror(t, f"{e}\n\nThe full log is at {LOG}")
             return 1
-        messagebox.showinfo("Uninstall Cortex", f"Cortex was removed.\n\n{KEPT}")
+        messagebox.showinfo(t, f"Cortex was removed.\n\n{KEPT}")
+        if later:  # after the message: this exe exits right away, so cmd can delete it
+            remove_later(opts.dir)
         return 0
 
     title, verb = ("Updating Cortex", "updated") if opts.update else ("Install Cortex", "installed")
@@ -461,30 +578,10 @@ def window(opts: argparse.Namespace, say_file) -> int:
             err = f"Something went wrong: {e}"
         root.after(0, done, err)
 
-    def close_them(busy: list) -> bool:
-        """Ask before ending the programs that hold the folder; OK ends exactly those."""
-        dlg, ok = tk.Toplevel(root), []
-        dlg.title(title)
-        dlg.transient(root)
-        f = ttk.Frame(dlg, padding=16)
-        f.pack(fill="both", expand=True)
-        ttk.Label(f, text=in_use_text(busy) + " Close them and update?", wraplength=420,
-                  justify="left").pack(anchor="w")
-        row = ttk.Frame(f)
-        row.pack(anchor="e", pady=(12, 0))
-        ttk.Button(row, text="Close them and update",
-                   command=lambda: (ok.append(1), dlg.destroy())).pack(side="left")
-        ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
-        dlg.grab_set()
-        root.wait_window(dlg)
-        if ok:
-            terminate([pid for pid, _ in busy])  # install() checks again and names any left
-        return bool(ok)
-
     def start() -> None:
         if not opts.update:
             opts.dir = Path(folder.get()).expanduser().resolve()
-        if (busy := in_use(opts.dir)) and not close_them(busy):
+        if (busy := in_use(opts.dir)) and not ask_close(root, title, busy, "update"):
             status.configure(text=f"Cortex was not {verb}.")
             return
         install_btn.configure(state="disabled")
@@ -527,7 +624,11 @@ def main(argv: list[str] | None = None) -> int:
     if not opts.quiet:
         return window(opts, say_file)
     try:
-        (uninstall if opts.uninstall else install)(opts.dir, opts, say_file)
+        if opts.uninstall:
+            if uninstall(opts.dir, opts, say_file):
+                remove_later(opts.dir)
+            return 0
+        install(opts.dir, opts, say_file)
         if opts.update:
             start_app(opts.dir)
         return 0

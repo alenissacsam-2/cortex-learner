@@ -50,6 +50,7 @@ def fakes(monkeypatch):
     monkeypatch.setattr(targets, "_run", run)
     monkeypatch.setattr(actions, "_popen", popen)
     monkeypatch.setattr(server, "_open", lambda url: calls.append(["open", url]))
+    monkeypatch.setattr(server, "_obsidian", lambda: True)  # never this computer's registry
     monkeypatch.setattr(localllm, "_request", no_runner)
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())  # never the owner's receiver
@@ -171,7 +172,7 @@ def test_get_never_changes_anything(app, vault, home, fakes):
         assert code in (200, 405), path
     assert snapshot(home, vault) == before
     assert app.jobs.cur is None and not app.stop.is_set()
-    assert not [c for c in fakes if c and c[0] != "schtasks"]  # only the read-only query
+    assert fakes == []  # A1/A10: no page load runs a program (no schtasks query any more)
 
 
 # ---- status --------------------------------------------------------------------------------
@@ -1644,3 +1645,266 @@ def test_update_apply_when_already_latest_or_cancelled(app, github, monkeypatch)
     call(app, "POST", "/api/update/apply", {})
     assert wait_job(app)["result"]["launched"] is False
     assert github == [] and not app.stop.is_set()
+
+
+# ---- v7 review A: install, app manager, first run --------------------------------------------
+
+
+def test_update_check_sweeps_old_installers(app, github):
+    tmp = Path.home() / ".cortex" / "tmp"
+    for name in ("update-0.0.9", "update-9.0.0"):
+        (tmp / name).mkdir(parents=True)
+        (tmp / name / "CortexSetup.exe").write_bytes(b"MZ")
+    call(app, "POST", "/api/update/check", {})
+    assert wait_job(app)["result"]["newer"] is True
+    assert sorted(p.name for p in tmp.iterdir()) == ["update-9.0.0"]  # the one it may launch
+    server.make_server(None)[0].server_close()  # a launch sweeps the rest
+    assert list(tmp.iterdir()) == []
+
+
+def test_quit_cancels_the_running_job(app):
+    """A13: Quit says running jobs are cancelled; a download's process is ended too."""
+    ended = threading.Event()
+
+    class Proc:
+        def terminate(self):
+            ended.set()
+
+    def run(job):
+        job.proc = Proc()
+        job.cancelled.wait(5)
+        return {"ok": False, "cancelled": job.cancelled.is_set()}
+    app.jobs.start("Downloading", "setup", run, cancellable=True)
+    assert call(app, "POST", "/api/quit", {})[0] == 200
+    assert ended.is_set() and app.stop.is_set()
+    assert wait_job(app)["result"]["cancelled"] is True
+
+
+def test_open_without_obsidian_uses_the_default_app(app, vault, fakes, monkeypatch):
+    """A14: no obsidian:// handler, so the folder opens with this computer's own app; and a
+    plain Open folder."""
+    monkeypatch.setattr(server, "_obsidian", lambda: False)
+    code, js, _, _ = call(app, "POST", "/api/open", {"what": "vault"})
+    assert code == 200 and js == {"ok": True, "obsidian": False}
+    assert fakes[-1] == ["open", vault.resolve().as_uri()]
+    code, js, _, _ = call(app, "POST", "/api/open", {"what": "folder"})
+    assert code == 200 and fakes[-1] == ["open", vault.resolve().as_uri()]
+    monkeypatch.setattr(server, "_obsidian", lambda: True)
+    assert call(app, "POST", "/api/open", {"what": "vault"})[1]["obsidian"] is True
+    assert fakes[-1][1].startswith("obsidian://open?path=")
+
+
+def test_search_model_counts_only_a_finished_download(home):
+    """A5: a cancelled download (Hugging Face's .incomplete) is not "downloaded"."""
+    from cortex import doctor, semantic
+    d = semantic.models_dir() / "models--BAAI--bge" / "blobs"
+    d.mkdir(parents=True)
+    (d / "abc.incomplete").write_bytes(b"half")
+    assert status.embedding()["downloaded"] is False
+    assert doctor.check_search_model()[0] == "WARN"
+    (semantic.models_dir() / doctor.MODEL_READY).write_text("downloaded\n")
+    assert status.embedding()["downloaded"] is True
+    assert doctor.check_search_model()[0] == "PASS"
+
+
+def test_start_at_login_on_windows_is_a_run_value(monkeypatch, fakes, tmp_path,
+                                                  _no_real_run_key):
+    """A10: Start at login is an HKCU Run value running the no-console receiver (faked
+    registry); the old scheduled task goes on Add, on Remove and at app start."""
+    import sys
+    monkeypatch.setattr(sys, "platform", "win32")
+    exe = tmp_path / "bin" / "cortex.exe"
+    exe.parent.mkdir()
+    (exe.parent / "cortex-receiver.exe").write_bytes(b"MZ")
+    monkeypatch.setattr("cortex.clients.cortex_command", lambda: str(exe))
+    root = Path("C:/Users/me/Vault")
+    want = f'"{exe.with_name("cortex-receiver.exe")}" --vault "{root}"'
+    assert status.login_command(root) == want
+    assert status.login_task() == {"supported": True, "exists": False}
+    assert want in status.login_shown(root) and "HKCU" in status.login_shown(root)
+    job = type("Job", (), {"say": lambda self, s: None})()
+    actions.login(job, root, True)
+    assert _no_real_run_key == {"v": want} and status.login_task()["exists"] is True
+    assert fakes == [["schtasks", "/Delete", "/F", "/TN", status.LOGIN_TASK]]
+    actions.login(job, root, False)
+    assert _no_real_run_key == {} and status.login_task()["exists"] is False
+    # migration: an old task (schtasks /Delete succeeds) becomes the Run value
+    monkeypatch.setattr(targets, "_run", lambda a, timeout=300: (fakes.append(a), (True, ""))[1])
+    actions.migrate_login(root)
+    assert _no_real_run_key == {"v": want}
+    fakes.clear()
+    actions.migrate_login(root)  # a Run value already there: nothing runs
+    assert fakes == []
+
+
+def test_receiver_falls_back_to_the_console_cortex(monkeypatch, tmp_path):
+    exe = tmp_path / "cortex.exe"
+    monkeypatch.setattr("cortex.clients.cortex_command", lambda: str(exe))
+    assert status.login_command(Path("C:/V")) == f'"{exe}" browse serve --vault "{Path("C:/V")}"'
+
+
+def test_vault_refused_inside_the_install_folder(app, tmp_path):
+    """A3: a vault inside the folder Cortex is installed in (uninstall empties it) is refused,
+    by the app's Setup and by `cortex init`."""
+    from test_cli import run
+    inst = tmp_path / "Cortex"
+    inst.mkdir()
+    (inst / "cortex-install.txt").write_text("x")
+    for target in (inst, inst / "notes"):
+        call(app, "POST", "/api/setup/vault", {"path": str(target)})
+        assert "installed in" in wait_job(app)["error"]
+        r = run("init", str(target), ok=False)
+        assert r.exit_code == 1 and "installed in" in r.output
+    assert sorted(p.name for p in inst.iterdir()) == ["cortex-install.txt"]
+
+
+def test_setup_vault_step_warns_onedrive_and_asks_about_a_moved_vault(app, tmp_path,
+                                                                     monkeypatch):
+    """A15: the OneDrive warning is in the job lines; a vault folder that is gone is a
+    question ("moved"), not a silently new vault."""
+    monkeypatch.setenv("OneDrive", str(tmp_path / "OneDrive"))
+    call(app, "POST", "/api/setup/vault", {"path": str(tmp_path / "OneDrive" / "Cortex")})
+    job = wait_job(app)
+    assert job["error"] is None and any("inside OneDrive" in x for x in job["result"]["lines"])
+    gone = server.App(tmp_path / "moved-away").setup()["vault"]
+    assert gone["moved"] is True and gone["done"] is False
+    assert server.App(app.root).setup()["vault"]["moved"] is False
+
+
+class _Proc:
+    def __init__(self, out: bytes, rc: int = 0):
+        self.stdout, self.rc = io.BytesIO(out), rc
+
+    def wait(self):
+        return self.rc
+
+    def terminate(self):
+        pass
+
+
+def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
+    """A16: without git, doctor WARNs (not FAIL) and Setup offers winget's Git."""
+    import shutil
+    import sys
+
+    from cortex import doctor
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
+    g = server.App(vault).setup()["git"]
+    assert g["found"] is False
+    assert g["install"]["run"] == ["winget", "install", "--id", "Git.Git", "-e", "--source",
+                                   "winget"]
+    started = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (
+        started.append((args, k)), _Proc(b"Successfully installed\n"))[1])
+    call(app, "POST", "/api/setup/git", {})
+    job = wait_job(app)
+    assert job["result"]["ok"] and "Quit Cortex and open it again" in job["result"]["lines"][-1]
+    assert started[0][0] == g["install"]["run"] and "creationflags" in started[0][1]
+    nogit = vault.parent / "nogit"
+    nogit.mkdir()
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
+    st, _, detail, fix = doctor.check_git(nogit)
+    assert st == "WARN" and "not installed" in detail and "Git.Git" in fix
+
+
+def test_installer_wording(app, monkeypatch):
+    """A12: an installer install is told to use the Start menu, never `cortex app` or uv."""
+    import shutil
+
+    from cortex import doctor, update
+    _, _, raw, _ = call(app, "GET", f"/?t={app.token}", token=False)
+    assert b"Run cortex app again to reopen it." in raw and b"{{REOPEN}}" not in raw
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    _, _, raw, _ = call(app, "GET", f"/?t={app.token}", token=False)
+    assert raw.count(b"Open Cortex from the Start menu to reopen it.") == 2
+    assert b"Start menu" in call(app, "GET", "/?t=wrong", token=False)[2]
+    for check in (doctor.check_search_model, doctor.check_ai_apps):
+        assert "Start menu" in check()[3] and "cortex app" not in check()[3]
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
+    assert "uv tool" not in doctor.check_on_path()[3]
+
+
+def test_extension_and_skill_paths(app):
+    """A2: the extension resolves to the package copy, else the checkout's; the Chat skill
+    links to the latest release when no local zip exists."""
+    root = Path(__file__).resolve().parents[1]
+    assert server.extension_dir() == root / "extension"  # an editable (dev) install
+    js = call(app, "GET", "/api/connect")[1]
+    assert js["skill_url"].startswith("https://github.com/")
+    assert js["skill_url"].endswith("/releases/latest/download/cortex-skill.zip")
+
+
+def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
+    """A11: ~/.cortex/app.json names the running app; a stale file is ignored."""
+    from cortex.app import launch
+    lines: list[str] = []
+    t = threading.Thread(target=server.run, args=(vault,),
+                         kwargs={"open_browser": False, "echo": lines.append}, daemon=True)
+    t.start()
+    for _ in range(100):
+        if lines:
+            break
+        time.sleep(0.05)
+    url = lines[0].split(": ", 1)[1]
+    assert server.running_url() == url
+    opened = []
+    monkeypatch.setattr(launch.webbrowser, "open", opened.append)
+    monkeypatch.setattr(server, "run", lambda *a, **k: pytest.fail("started a second app"))
+    launch.main()
+    assert opened == [url]
+    port, token = int(url.split(":")[2].split("/")[0]), url.split("?t=")[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST", "/api/quit", body=b"{}", headers={
+        "Host": f"127.0.0.1:{port}", "X-Cortex-Token": token,
+        "Content-Type": "application/json"})
+    assert c.getresponse().status == 200
+    t.join(15)
+    assert not server.state_file().exists() and server.running_url() is None
+    server.state_file().write_text(json.dumps({"port": port, "token": token, "pid": 1}))
+    assert server.running_url() is None  # stale: nothing answers there
+    server.state_file().write_text("not json")
+    assert server.running_url() is None
+
+
+def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
+    import sys
+
+    from cortex.app import launch
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    said = []
+    monkeypatch.setattr(launch, "_alert", said.append)
+
+    def broken(*a, **k):
+        raise ImportError("half-done upgrade")
+    monkeypatch.setattr(server, "run", broken)
+    with pytest.raises(SystemExit):
+        launch.main()
+    log = Path.home() / ".cortex" / "logs" / "app.log"
+    sys.stdout.close()
+    assert said and str(log) in said[0] and "half-done upgrade" in log.read_text()
+
+
+def test_receiver_entry_runs_browse_serve(monkeypatch, vault):
+    import sys
+
+    from cortex import browse_serve
+    from cortex.app import launch
+    got = {}
+    monkeypatch.setattr(sys, "argv", ["cortex-receiver.exe", "--vault", str(vault)])
+    monkeypatch.setattr(browse_serve, "serve", lambda v, port: got.update(root=v.root, port=port))
+    with pytest.raises(SystemExit) as e:
+        launch.receiver()
+    assert e.value.code == 0 and got == {"root": vault.resolve(), "port": 8799}
+
+
+def test_disconnect_removes_cortex_from_every_app(home):
+    from test_cli import run
+    p = home / ".cursor" / "mcp.json"
+    p.parent.mkdir()
+    p.write_text(json.dumps({"mcpServers": {"cortex": ENTRY, "other": {"command": "x"}}}))
+    out = run("disconnect").output
+    assert "remove" in out and "Cursor" in out
+    assert json.loads(p.read_text()) == {"mcpServers": {"other": {"command": "x"}}}
+    assert "No AI app had Cortex." in run("disconnect").output
