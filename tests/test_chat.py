@@ -455,6 +455,29 @@ def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, mo
     assert len(chat.load(vault, cid)) == 4
 
 
+def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    cid, _ = _turn(vault, None, "car motor", s.runner())
+    asked = []
+    real = ask._passages
+    monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
+                                                                                      **kw))
+    _turn(vault, cid, "what do I know about Dijkstra's algorithm?", s.runner())
+    _turn(vault, cid, "which sites did I visit yesterday?", s.runner())
+    assert asked == ["what do I know about Dijkstra's algorithm?",
+                     "which sites did I visit yesterday?"]
+
+
+@pytest.mark.parametrize("text, want", [
+    ("and its running time?", True), ("why?", True), ("explain that again", True),
+    ("what about heaps", True), ("But how is it proved?", True), ("tell me more", True),
+    ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
+    ("which sites did I visit yesterday?", False),
+])
+def test_follow_up(text, want):
+    assert chat.follow_up(text, chat._when(text, TODAY)) is want
+
+
 def test_cancel_keeps_the_partial_answer(vault, stream):
     s = stream("ollama", [f"w{i} " for i in range(30)], delay=0.03)
     cancel = threading.Event()

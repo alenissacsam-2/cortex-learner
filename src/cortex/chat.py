@@ -187,6 +187,21 @@ def topic(text: str, span: tuple[int, int]) -> str:
                     if w not in _GENERIC and w not in STOPWORDS)
 
 
+_POINTS_BACK = frozenset(
+    "it its it's that this these those they them their he she him his her same also else "
+    "more".split())
+_OPENS_FOLLOW_UP = re.compile(r"\s*(?:and|but|so|also|what\s+about|how\s+about)\b", re.I)
+
+
+def follow_up(text: str, got=None) -> bool:
+    """Whether `text` leans on the previous question ("and its running time?", "why?", "what
+    about heaps"): then both are searched together. A question that names its own topic is
+    searched alone, so a new subject is not mixed with the last one. `got`: its date phrase."""
+    if _OPENS_FOLLOW_UP.match(text) or _POINTS_BACK & set(re.findall(r"[\w']+", text.lower())):
+        return True
+    return not got and not topic(text, (0, 0))  # nothing of its own to search for
+
+
 # ---- storage ---------------------------------------------------------------------------------
 
 def _path(vault: Vault, id: str):
@@ -340,7 +355,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": runner.model})
     got = _when(text, today)
-    found = ask._passages(vault, f"{text.strip()}\n{prev}".strip(), s["passages"],
+    query = f"{text.strip()}\n{prev}".strip() if follow_up(text, got) else text.strip()
+    found = ask._passages(vault, query, s["passages"],
                           between=got and (got[0].isoformat(), got[1].isoformat()),
                           sources=s["sources"], topic=topic(text, got[2]) if got else "")
     parts: list = []
