@@ -230,6 +230,22 @@ def void(ev, e, now=NOON + timedelta(days=1)):
                              now=now)
 
 
+def test_void_checks_already_voided_under_the_lock(ev, monkeypatch):
+    """B11: the 'already voided' read ran outside the lock, so two voids could both pass it."""
+    e = problem_status(ev, "lc-167", "solved", NOON)
+    real, depths = EventLog.iter_events, []
+
+    def seen(self, *a, **k):
+        depths.append(self.vault._depth)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(EventLog, "iter_events", seen)
+    void(ev, e)
+    assert depths and depths[0] > 0
+    with pytest.raises(VaultError, match="already voided"):
+        void(ev, e)
+
+
 def test_void_solve_resets_problem_to_todo(ev):
     e = problem_status(ev, "lc-167", "solved", NOON)
     void(ev, e)

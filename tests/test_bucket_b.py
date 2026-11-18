@@ -111,7 +111,8 @@ def test_event_budget_hint_once(root, monkeypatch):
     run(root, body)
 
 
-def test_open_event_lets_sweep_close_and_commit_a_patch_only_session(root):
+def test_open_event_lets_sweep_close_and_commit_a_patch_only_session(root, monkeypatch):
+    monkeypatch.setattr(session_mod, "_pid_alive", lambda pid: False)  # B2: its server is gone
     clock = SimpleNamespace(t=T0)
     mgr = session_mod.SessionManager(Vault(root), clock=lambda: clock.t)
     s = mgr.start("learn")

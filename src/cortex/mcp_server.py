@@ -236,6 +236,8 @@ SWEEP_NEXT = "Explain each miss in 2-3 lines, log it as taught, then cortex_end.
 ASK_NEXT = "Show the question; when the learner answers, call cortex_grade with item_id."
 ASK_TRAPS = 2  # linked mistake notes an ask names: a stale note re-tests a fixed weakness
 MORE_NEXT = "Continue, or call cortex_end with a short summary when done."
+# B11: cortex_log kinds that write files, not keyed events; their key goes on a `keyed` marker
+FILE_LOG_KINDS = frozenset({"journal", "capture", "letter", "voice_sample", "draft", "sent"})
 SPLITS_MAX = 2  # REVIEW-1005 §6.2: split proposals per cortex_reflect, to bound CPU
 CHECK_SENTENCES, CHECK_CHARS = 20, 4000  # PHASE2.md G1: one recall per sentence
 CHECK_MIN = 0.5  # a weaker or keyword-only hit ("I like hiking" -> SQL LIKE) is no claim
@@ -490,7 +492,14 @@ class Cortex:
                     self._reset()
                 self.session = s
             self.catalog = Catalog.load(self.vault)
+            marked = key is not None and (name in ("cortex_patch", "cortex_add") or (
+                name == "cortex_log" and kwargs.get("kind") in FILE_LOG_KINDS))
+            if marked and (done := self._keyed(key, label)) is not None:
+                return done
             out = fn(**kwargs)
+            if marked and "error" not in out:  # B11: the key outlives a restart
+                self._append("change", {"payload": {"note": "keyed", "tool": label, **{
+                    k: out[k] for k in ("id", "path") if isinstance(out.get(k), str)}}}, key)
             if ((name, kwargs.get("kind")) == ("cortex_log", "capture")
                     or (name == "cortex_add" and kwargs.get("raw_text"))):
                 self.sessions.expose()  # v5 F3: a capture brought external text in
@@ -512,6 +521,25 @@ class Cortex:
         if key is not None:
             self._done[(perm, key)] = (out, self.log.has_key(key))
         return out
+
+    def _keyed(self, key: str, label: str) -> dict | None:
+        """B11: the result of a file-writing call whose `key` an earlier process already logged
+        (its `keyed` change event), else None. Checked under the vault lock; two processes
+        sending the same key at the same moment can still both write (retries come in turn)."""
+        with self.vault.lock():
+            ev = self.log._key_map().get(key)
+        p = ev.get("payload") if ev and ev.get("kind") == "change" else None
+        if not isinstance(p, dict) or p.get("note") != "keyed" or p.get("tool") != label:
+            return None
+        said = "Already done (same key): nothing was written again."
+        if label.startswith("cortex_log"):
+            out = {"recorded": 0, "display_line": said}
+        elif label == "cortex_patch":
+            out = {"changed": False, "summary": said}
+        else:
+            out = {}
+        return {**out, **{k: p[k] for k in ("id", "path") if k in p}, "duplicate": True,
+                "next": self._next(MORE_NEXT)}
 
     def _gate(self, name: str, kwargs: dict) -> dict | None:
         """V5 roles and the kill switch: a refusal result, or None to run the tool."""
@@ -1380,7 +1408,8 @@ class Cortex:
         events = self._events()
         p = levels.predicted_p(events, cid, self._now(), self._pc)
         ev = self._append("grade", fields, key, predicted_p=p)
-        before, after = self._fold(events), self._fold([*events, ev])
+        prior = [e for e in events if e["id"] != ev["id"]]  # B11: a retry's grade is in events
+        before, after = self._fold(prior), self._fold([*prior, ev])
         hint = self.sessions.note("graded", cid)
         self.pending.discard(item_id)
         self.taught.pop(cid, None)
@@ -1456,7 +1485,6 @@ class Cortex:
             _check_fields(fields)  # the whole batch is valid before anything is written
             batch.append(fields)
         events = self._events()
-        before = self._fold(events)
         new = []
         now = self._now()
         with self.vault.lock():
@@ -1464,7 +1492,9 @@ class Cortex:
                 p = levels.predicted_p(events, fields["object"].split(":", 1)[1], now, self._pc)
                 new.append(self._append("grade", fields,
                                         None if key is None else f"{key}:{i}", predicted_p=p))
-        after = self._fold([*events, *new])
+        ids = {e["id"] for e in new}
+        prior = [e for e in events if e["id"] not in ids]  # B11: a retry's grades are in events
+        before, after = self._fold(prior), self._fold([*prior, *new])
         cids = list(dict.fromkeys(f["object"].split(":", 1)[1] for f in batch))
         hint = ""
         for f in batch:

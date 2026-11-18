@@ -336,17 +336,18 @@ def void_event(log: EventLog, *, session: str, event_id: str, reason: str, sourc
     Returns (void event, target event); `stamp` (mode, grader, now) goes to EventLog.append."""
     if not isinstance(reason, str) or not reason.strip():
         raise invalid("reason is required.")
-    events = list(log.iter_events())
-    target = next((e for e in events if e["id"] == event_id), None)
-    if target is None:
-        raise VaultError("unknown_id", f"No event '{event_id}' in the log.")
-    if target.get("kind") == "void":
-        raise invalid("A void cannot be voided.")
-    if any(e.get("kind") == "void" and e.get("ref") == event_id for e in events):
-        raise invalid(f"Event '{event_id}' is already voided.")
-    ev = log.append(session=session, kind="void", source=source, **stamp,
-                    fields={"ref": event_id, "payload": {"reason": reason.strip()}})
-    _restore_note(log, target)
+    with log.vault.lock():  # B11: two voids of one event must not both pass the check
+        events = list(log.iter_events())
+        target = next((e for e in events if e["id"] == event_id), None)
+        if target is None:
+            raise VaultError("unknown_id", f"No event '{event_id}' in the log.")
+        if target.get("kind") == "void":
+            raise invalid("A void cannot be voided.")
+        if any(e.get("kind") == "void" and e.get("ref") == event_id for e in events):
+            raise invalid(f"Event '{event_id}' is already voided.")
+        ev = log.append(session=session, kind="void", source=source, **stamp,
+                        fields={"ref": event_id, "payload": {"reason": reason.strip()}})
+        _restore_note(log, target)
     return ev, target
 
 
