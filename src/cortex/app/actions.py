@@ -106,7 +106,7 @@ def doctor(job, root: Path | None) -> dict:
     for line in out["lines"]:
         if not line.startswith(" "):  # "WARN  Search model: ..." names the check
             name = line[6:].split(":", 1)[0]
-        elif name in APP_FIX and ("cortex app" in line or "Start menu" in line):
+        elif name in APP_FIX and "fix:" in line and ("cortex app" in line or "Start menu" in line):
             line = line[:line.index("fix:")] + "fix: in this app, " + APP_FIX[name]
         lines.append(line)
     return {**out, "lines": lines}
