@@ -300,6 +300,25 @@ def test_a_range_keeps_only_pages_dated_inside_it(vault):
         _paths(ask._passages(vault, "car motor", 8)))
 
 
+def test_an_undated_note_counts_on_the_day_its_file_changed(vault):
+    # cortex_add writes notes without a date; "what did I note on 15 Nov" still finds them
+    import os
+    from datetime import datetime
+    note(vault.root, "notes/gearbox.md", "kind: note\ntitle: Gearbox\n",
+         "# Gearbox\n\nCar motor gears.")
+    note(vault.root, "concepts/torque.md", "kind: concept\ntitle: Torque\n",
+         "# Torque\n\nCar motor torque.")  # concepts stay undated: tools rewrite them
+    t = datetime(2026, 11, 15, 12).timestamp()
+    for p in ("notes/gearbox.md", "concepts/torque.md", "notes/engines.md"):
+        os.utime(vault.root / p, (t, t))
+    found = ask._passages(vault, "car motor", 8, between=("2026-11-15", "2026-11-15"),
+                          topic="car motor")
+    assert "notes/gearbox.md" in _paths(found)
+    assert "concepts/torque.md" not in _paths(found)
+    assert "notes/engines.md" not in _paths(found)  # no kind: not a note page
+    assert next(p for p in found if p["path"] == "notes/gearbox.md")["day"] == "2026-11-15"
+
+
 def test_no_topic_lists_the_days_newest_first(vault):
     found = ask._passages(vault, "which sites did I visit", 8,
                           between=("2026-11-14", "2026-11-15"), topic="")

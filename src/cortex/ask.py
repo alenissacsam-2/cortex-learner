@@ -5,6 +5,7 @@ include local-only browsing. Passages are untrusted page text, wrapped as data."
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from itertools import chain, zip_longest
 from pathlib import PurePosixPath
 
@@ -46,6 +47,20 @@ def _browse_day(path: str) -> str:
     return page_date(PurePosixPath(path).stem, {}, "")
 
 
+def _note_day(vault: Vault, id: str, n: dict, path: str) -> str:
+    """`page_date`, else for a note or resource with none (what cortex_add writes) the local day
+    its file last changed, as the dashboard's Recent ideas shows it. Other kinds stay undated:
+    tool-owned properties rewrite concept and mistake files."""
+    if d := page_date(id, n["fields"], n["body"]):
+        return d
+    if n["fields"].get("kind") not in ("note", "resource"):
+        return ""
+    try:
+        return datetime.fromtimestamp((vault.root / path).stat().st_mtime).date().isoformat()
+    except OSError:
+        return ""
+
+
 def _dated(vault: Vault, idx: Index, between: tuple[str, str], topic: str) -> list[dict]:
     """Every page dated inside `between`: browse day pages and notes, the closest to `topic`
     first, or the newest first when there is no topic (\"which sites did I visit yesterday\")."""
@@ -53,7 +68,7 @@ def _dated(vault: Vault, idx: Index, between: tuple[str, str], topic: str) -> li
     days = {p: d for p in vectors._read(vault) if lo <= (d := _browse_day(p)) <= hi}
     paths = {i: v[0] for i, v in semantic._pages(idx).items()}
     notes = {i: d for i, n in idx._notes.items() if i in paths
-             and lo <= (d := page_date(i, n["fields"], n["body"])) <= hi}
+             and lo <= (d := _note_day(vault, i, n, paths[i])) <= hi}
     score: dict[str, float] = {}
     embed = semantic.load_embedder() if topic.strip() else None
     if embed is not None and (days or notes):
@@ -107,7 +122,7 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
                       "text": semantic._chunk_text(n, h.get("at", 0)),
                       "kind": "browse" if p.startswith("browse/") else
                       "chat" if semantic.is_chat(n) else "note",
-                      "day": page_date(h["id"], n["fields"], n["body"])})
+                      "day": _note_day(vault, h["id"], n, p)})
     found = chain.from_iterable(zip_longest(browse, notes))
     if between is not None:
         def listed():  # read only when the search left room
