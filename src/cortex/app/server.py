@@ -1033,7 +1033,8 @@ def make_server(root: Path | None, port: int = 0) -> tuple[ThreadingHTTPServer, 
     app = App(root)
     actions.sweep_uploads()  # left by an app that was killed before its `finally` ran
     actions.sweep_updates()  # installers an update already ran
-    srv = ThreadingHTTPServer((HOST, port), _handler(app))
+    from cortex.browse_serve import _Server  # no port sharing: Windows binds a used port
+    srv = _Server((HOST, port), _handler(app))  # and the token would go to its owner
     srv.daemon_threads = True
     app.port = srv.server_address[1]
     return srv, app
@@ -1084,7 +1085,13 @@ def running_url() -> str | None:
 
 def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=print) -> None:
     """Serve until Quit, Ctrl+C or 30 minutes with no request and no job."""
-    srv, app = make_server(root, port)
+    try:
+        srv, app = make_server(root, port)
+    except OSError as e:
+        if not port:
+            raise
+        raise SystemExit(f"Port {port} is in use or not allowed ({e.strerror or e}). Pick "
+                         "another, or leave --port out for a free one.") from None
     url = f"http://{HOST}:{app.port}/?t={app.token}"
     try:
         _save_state(app)

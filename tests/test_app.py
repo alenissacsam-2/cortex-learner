@@ -2006,3 +2006,20 @@ def test_disconnect_removes_cortex_from_every_app(home):
     assert "remove" in out and "Cursor" in out
     assert json.loads(p.read_text()) == {"mcpServers": {"other": {"command": "x"}}}
     assert "No AI app had Cortex." in run("disconnect").output
+
+
+def test_a_busy_port_is_refused_not_shared(vault):
+    """Windows lets a second server bind a used port; the app would then print its token for a
+    server that is not Cortex. An explicit --port that is taken fails with a plain message."""
+    other = socket.socket()  # as http.server and most dev servers do
+    other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    other.bind(("127.0.0.1", 0))
+    other.listen()
+    try:
+        busy = other.getsockname()[1]
+        with pytest.raises(OSError):
+            server.make_server(vault, busy)
+        with pytest.raises(SystemExit, match=f"Port {busy} is in use"):
+            server.run(vault, open_browser=False, port=busy, echo=lambda *a: None)
+    finally:
+        other.close()
