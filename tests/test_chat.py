@@ -495,6 +495,9 @@ def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
     ("can a list be one?", True), ("which one is faster for lookups?", True),
     ("explain dijkstra", False), ("what is one-hot encoding?", False),
     ("one thing I learned about graphs", False),
+    ("what did I learn this month?", False),
+    ("what are the sorting algorithms that I know?", False),
+    ("is that one faster?", True), ("what did that note say last week?", True),
     ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
     ("which sites did I visit yesterday?", False),
 ])

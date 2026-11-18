@@ -196,14 +196,19 @@ _OPENS_FOLLOW_UP = re.compile(r"\s*(?:and|but|so|also|what\s+about|how\s+about)\
 # elsewhere is too common: "one-hot encoding")
 _PICKS_ONE = re.compile(
     r"\b(?:first|second|third|last|other|previous|which)\s+ones?\b|\bones?\W*$", re.I)
+# "the algorithms that I know": a relative clause, not "that" pointing back
+_RELATIVE_THAT = re.compile(r"\bthat\s+(?:i|you|we|they|he|she|my|your|our|their)\b", re.I)
 
 
 def follow_up(text: str, got=None) -> bool:
     """Whether `text` leans on the previous question ("and its running time?", "why?", "what
     about heaps"): then both are searched together. A question that names its own topic is
-    searched alone, so a new subject is not mixed with the last one. `got`: its date phrase."""
-    if _OPENS_FOLLOW_UP.match(text) or _PICKS_ONE.search(text) \
-            or _POINTS_BACK & set(re.findall(r"[\w']+", text.lower())):
+    searched alone, so a new subject is not mixed with the last one. `got`: its date phrase,
+    whose words ("this month") never point back."""
+    own = text[:got[2][0]] + " " + text[got[2][1]:] if got else text
+    own = _RELATIVE_THAT.sub(" ", own)
+    if _OPENS_FOLLOW_UP.match(text) or _PICKS_ONE.search(own) \
+            or _POINTS_BACK & set(re.findall(r"[\w']+", own.lower())):
         return True
     return not got and not topic(text, (0, 0))  # nothing of its own to search for
 
