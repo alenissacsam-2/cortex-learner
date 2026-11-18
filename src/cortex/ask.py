@@ -1,4 +1,4 @@
-"""Ask your archive (docs/design/data-access.md §4): retrieve passages from the private browse
+"""Retrieval and answers for `cortex ask` and the app's Chat: passages from the private browse
 search and the main recall, and answer with a local model only. Never cloudllm: the passages
 include local-only browsing. Passages are untrusted page text, wrapped as data."""
 
