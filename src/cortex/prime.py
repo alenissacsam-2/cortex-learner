@@ -90,10 +90,11 @@ def me(vault: Vault, id: str):
         raise
 
 
-def profile_summary(vault: Vault, today: str) -> str:
+def profile_summary(vault: Vault, today: str, served: dict | None = None) -> str:
     """The `summary:` of me/profile.md, else its first paragraph, without lines past their
     `(until …)` day on local day `today` (agenda 4); "" when absent. The init template's
-    summary carries no fact, so its live claim lines stand in for it."""
+    summary carries no fact, so its live claim lines stand in for it. A claim line gets its
+    `served` label (B3: an agent or exposed line is ` (ask)`, as in claim_items)."""
     profile = me(vault, "profile")
     summary = str(profile.fields.get("summary") or "").strip() if profile else ""
     if summary == PROFILE_TEMPLATE:
@@ -102,7 +103,14 @@ def profile_summary(vault: Vault, today: str) -> str:
                          for ln in sec.splitlines()[1:] if ln.startswith("- "))
     else:
         text = summary or (_first_paragraph(profile.body) if profile else "")
-    return "\n".join(ln for ln in text.splitlines() if not claims.expired(ln, today)).strip()
+    labels = {t: lab for (p, _, t), (lab, _) in (served or {}).items() if p == "profile" and lab}
+
+    def label(ln: str) -> str:
+        lab = labels.get(claims.strip_id(ln)[2:].strip()) if ln.startswith("- ") else None
+        return claims.strip_id(ln) + lab if lab else ln
+
+    return "\n".join(label(ln) for ln in text.splitlines()
+                     if not claims.expired(ln, today)).strip()
 
 
 def contract(vault: Vault, domains: set) -> str:
@@ -258,9 +266,10 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     parts: list[str] = []
     left = [PRIME_MAX]
     put = putter(parts, left)
-    if "profile" not in withheld and (summary := profile_summary(vault, local_day(now))):
-        put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
     served, pull = served_claims(vault, events, now)
+    summary = "" if "profile" in withheld else profile_summary(vault, local_day(now), served)
+    if summary:
+        put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
     words = re.findall(r"\w+", prompt.lower())
     terms = {t for t in words if len(t) > 2 and t not in STOPWORDS and t not in TASK_WORDS}
     terms |= {x for w in words for x in ABBREVIATIONS.get(w, ())}
@@ -281,7 +290,7 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     # room than this one, so it serves a prefix of these lines
     asks = {r[3] for r in rows if r[4]}
     shown = fit([r[3] for r in rows], "me", PRIME_CAPS["preferences"], left[0])
-    note = ([LEGEND] if asks.intersection(shown) else []) + [
+    note = ([LEGEND] if asks.intersection(shown) or " (ask)" in summary else []) + [
         PULL_LINE.format(area=a) for a in pull]
     if note:
         put("How to read the claims", "\n".join(note))

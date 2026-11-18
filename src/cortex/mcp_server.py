@@ -280,7 +280,8 @@ EXTERNAL_SOURCE = re.compile(r"^(https?://|raw/)", re.I)  # v5 F3: a body from o
 SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learning": "Learning",
                   "projects": "Projects", "environment": "Environment", "career": "Career",
                   "personal": "Personal"}
-CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice")  # SPEC §0 U6, U7; V2
+# SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
+CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract")
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
@@ -1046,7 +1047,9 @@ class Cortex:
         left = [CONTEXT_MAX]
         put = prime.putter(parts, left)
         hide = "profile" in self._withheld()
-        summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()))
+        claims_served = self._served_claims()
+        summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()),
+                                                        claims_served[0])
         put("Profile", summary or (WITHHELD.format(n=1) if hide
                                    else f"me/profile.md: {NOT_RECORDED}"),
             "me/profile" if summary else None, CONTEXT_CAPS["profile"])
@@ -1087,7 +1090,7 @@ class Cortex:
                      if n.fields.get("status") == "active" and not is_private(n)]
             put("Active projects", "\n".join(lines) or "none", "projects" if lines else None,
                 CONTEXT_CAPS["projects"])
-        self._personality_prefs(scope, put)
+        self._personality_prefs(scope, put, served=claims_served, asks=" (ask)" in summary)
         return {"context": "\n\n".join(parts), "next": self._next(
             "Use this to tailor your answer; save durable new facts with cortex_patch."
             + (self._offer([h["id"] for h in concepts]) if topic else ""))}
@@ -1157,11 +1160,13 @@ class Cortex:
             + "Record other durable things at once; ask yes/no before writing a preference "
               "or personality line, then cortex_patch it with user_confirmed=true." + offer)}
 
-    def _personality_prefs(self, scope: str, put, nag: bool = False) -> None:
+    def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
+                           asks: bool = False) -> None:
         """The Personality, Goals (scope all) and Preferences blocks of cortex_context; `nag`
-        (only /cortex home) says when the preferences are not recorded."""
+        (only /cortex home) says when the preferences are not recorded. `served`: a
+        `_served_claims()` result to reuse; `asks`: an (ask) line was served already (B3)."""
         heads = PERSONALITY_HEADINGS.get(scope, ())
-        served, pull = self._served_claims()
+        served, pull = served or self._served_claims()
         want = None if scope == "all" else SCOPE_HEADINGS[scope]
         keeps = {"personality": (lambda h: h in heads) if heads else None,
                  "goals": (lambda h: h == "now") if scope == "all" else None,
@@ -1169,7 +1174,7 @@ class Cortex:
         withheld = self._withheld()
         got = {p: self._claim_sections(p, k, served) if k and p not in withheld else ("", False)
                for p, k in keeps.items()}
-        note = ([LEGEND] if any(lab for _, lab in got.values()) else []) + [
+        note = ([LEGEND] if asks or any(lab for _, lab in got.values()) else []) + [
             PULL_LINE.format(area=a) for a in pull]
         if note:  # server text, so outside the untrusted wrap; first, so caps never trim it
             put("How to read the claims", "\n".join(note))
@@ -2271,9 +2276,8 @@ class Cortex:
             if op == "append_to_section":
                 text = f"{text.rstrip()} (confirmed {local_day(self._now())})"
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
-        if kind == "me" and self.session.exposed and (
-                (nid, op) == ("teaching-contract", "append_to_section")
-                or (nid, op, target) == ("profile", "set_field", "summary")):
+        if kind == "me" and self.session.exposed and op == "append_to_section" and nid in (
+                "teaching-contract", "profile"):  # B3: no me/ page takes set_field
             raise VaultError("refused_exposed", "This chat has read outside text (a source, a raw "
                              f"file or a past chat), so it cannot change me/{nid}.md.")
         claim_page = kind == "me" and nid in claims.PAGES
@@ -2767,7 +2771,8 @@ DESCRIPTIONS = {
     "cortex_patch": "Edit a note (any, including me/*): append under a heading, set a "
                     "whitelisted field, or tick a checklist item in a section. me/personality and "
                     "me/preferences, me/portrait, me/voice (one ## <audience> section each, "
-                    "plus ## Everyone): user_confirmed=true only after the user agrees; "
+                    "plus ## Everyone), me/teaching-contract: user_confirmed=true only after "
+                    "the user agrees; "
                     "otherwise "
                     "the line waits in inbox.md. me/delegation (## Alone, ## Ask first, "
                     "## Never): user_confirmed=true required, refused after reading outside "
