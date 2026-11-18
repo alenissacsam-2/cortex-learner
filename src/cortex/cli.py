@@ -1790,8 +1790,9 @@ def recall_cmd(query: str,
 @app.command("ask")
 @_errors
 def ask_cmd(question: str, vault: VaultOpt = None) -> None:
-    """Answer a question from your notes and browsing, private pages included, with the local
-    model only (Ollama or LM Studio); never a cloud model. Prints the cited sources."""
+    """Answer a question from your notes, saved AI chats and browsing, private pages included,
+    with the local model only (Ollama or LM Studio); never a cloud model. Prints the cited
+    sources."""
     from cortex import ask
 
     try:
