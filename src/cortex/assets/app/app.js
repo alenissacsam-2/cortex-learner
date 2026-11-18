@@ -365,13 +365,17 @@
     const n = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
     return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 ? `${n} days ago` : d.toISOString().slice(0, 10);
   }
-  function sourceRow(sources) {
+  function sourceRow(sources, searched) {
+    if ((!sources || !sources.length) && searched && searched.length)  // the model cited nothing
+      return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Searched, not cited' }),
+        searched.map((s) => h('button', { class: 'chip', type: 'button', title: 'Open in Obsidian', onclick: () => post('/api/open', { what: 'page', path: s.path }) },
+          h('span', { class: 'ct', text: s.title || s.path }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }))));
     if (!sources || !sources.length) return null;
     return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Sources' }),
       sources.map((s) => h('button', { class: 'chip', type: 'button', 'data-n': s.n, title: 'Open in Obsidian', onclick: () => post('/api/open', { what: 'page', path: s.path }) },
         h('span', { class: 'ct', text: `${s.n} · ${s.title || s.path}` }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }))));
   }
-  function botMsg(m) {  // {text, sources, model, stopped}; returns the element and its updater
+  function botMsg(m) {  // {text, sources, searched, model, stopped}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     const cite = (n) => {
       const chip = [...el.querySelectorAll('.chip')].find((c) => c.getAttribute('data-n') === String(n));
@@ -391,7 +395,7 @@
         if (!at || at.tagName === 'SPAN') at = body;
         at.append(h('span', { class: 'caret', 'aria-hidden': 'true' }));
       }
-      el.replaceChildren(who, body, sourceRow(m.sources) || '',
+      el.replaceChildren(who, body, sourceRow(m.sources, m.searched) || '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
@@ -571,7 +575,7 @@
           if (ev.t === 'start') m.model = ev.model;
           else if (ev.t === 'think') m.thinking = true;
           else if (ev.t === 'tok') m.text += ev.s;
-          else if (ev.t === 'src') m.sources = ev.sources;
+          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') bot.draw(ev.t !== 'done');
         }

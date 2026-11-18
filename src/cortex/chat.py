@@ -28,6 +28,7 @@ LENGTH = {"short": 300, "normal": 700, "long": 1500}  # answer length -> max_tok
 DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 8,
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
+SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
 SYSTEM = ask.SYSTEM + (" Earlier messages are the conversation so far: use them to understand a "
                        "follow-up question, but answer only from the passages in the latest "
@@ -360,10 +361,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     cited = ask.cites(answer)
     sources = [{"n": n, "path": p["path"], "title": p["title"], "kind": p["kind"]}
                for n, p in enumerate(found, 1) if n in cited]
+    # a small model often cites nothing: then show what it read, marked as not cited
+    searched = [] if sources else [{"path": p["path"], "title": p["title"], "kind": p["kind"]}
+                                   for p in found[:SEARCHED]]
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
+                 **({"searched": searched} if searched else {}),
                  "model": runner.model, **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
-    emit({"t": "src", "sources": sources})
+    emit({"t": "src", "sources": sources, "searched": searched})
     emit({"t": "done", "id": convo_id, "model": runner.model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1)})
     return convo_id

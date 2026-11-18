@@ -401,6 +401,16 @@ def test_reply_streams_cites_and_saves(vault, stream):
     assert [m["role"] for m in saved] == ["user", "assistant"]
     assert saved[1]["sources"] == src and saved[1]["model"] == "gemma3:2b"
     assert ev[-1]["id"] == cid and ev[-1]["stopped"] is False
+    assert ev[-2]["searched"] == [] and "searched" not in saved[1]
+
+
+def test_an_answer_citing_nothing_lists_the_pages_searched(vault, stream):
+    s = stream("ollama", ["Your forum page says so."])
+    cid, ev = _turn(vault, None, "car motor", s.runner())
+    src = ev[-2]
+    assert src["sources"] == [] and 1 <= len(src["searched"]) <= chat.SEARCHED
+    assert all(set(p) == {"path", "title", "kind"} for p in src["searched"])
+    assert chat.load(vault, cid)[1]["searched"] == src["searched"]
 
 
 def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, monkeypatch):
