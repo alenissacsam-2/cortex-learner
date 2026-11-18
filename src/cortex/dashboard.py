@@ -69,11 +69,6 @@ def _title(note) -> str:
     return plain(note.fields.get("title") or note.id) or note.id
 
 
-def _share(ready) -> float | None:
-    """planner.readiness's weighted share: a float, or a dict with `weighted` (or `share`)."""
-    return ready.get("weighted", ready.get("share")) if isinstance(ready, dict) else ready
-
-
 def _sprint(track) -> dict | None:
     if track is None:
         return None
@@ -134,14 +129,14 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
               "state": i["state"], "why": plain(i["why"])} for i in items]
 
     scores = {n.id: n.fields.get("score") for n in notes["assessment"]}
-    pairs = learning_eval.history_pairs(events, pc, learning_eval.MIN_PAIRS)
-    calibrated = pairs >= learning_eval.MIN_PAIRS
+    pairs, calibrated = learning_eval.calibrated(events, pc)
 
     def assessment(a):
         d = planner._day(a["date"]) if a["date"] else None
         tested = [c for c in planner._weights(catalog, a["tests"]) if c in visible]
         doms = {catalog.entries[c].domain for c in tested}
         score = scores.get(a["id"])
+        share = planner.readiness(vault, catalog, states, a)
         return {"id": a["id"], "company": plain(a["company"] or "") or None,
                 "kind": plain(a["kind"] or "") or None, "date": d.isoformat() if d else None,
                 "days_left": (d - today_d).days if d else None,
@@ -149,7 +144,9 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
                 "score": plain(str(score)) if score is not None else None,
                 "readiness": {"solid": sum(state(c) == "solid" for c in tested),
                               "total": len(tested),
-                              "share": _share(planner.readiness(vault, catalog, states, a)),
+                              # `weighted` names the weighted share; `share` stays for
+                              # old readers
+                              "share": share, "weighted": share,
                               # a forecast beside the Solid share, only for a day still ahead
                               # and once calibrated, as on the home card; until then, why not
                               "forecast": planner.recall_on_day(vault, catalog, states, a, now)

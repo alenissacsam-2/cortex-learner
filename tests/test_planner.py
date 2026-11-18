@@ -393,13 +393,30 @@ def test_ready_to_learn_needs_solid_prereqs_and_prefers_topic(v):
     assert new(solid) == ["hash-maps", "sorting"]
 
 
+@pytest.mark.parametrize("mode", ["learn", "review"])
+def test_a_named_topic_ranks_its_due_items_first(v, mode):
+    """Missing/better: "/cortex learn sorting" refreshes sorting before riskier other topics."""
+    no_exam(v)
+    catalog = cat(v, ("Sorting", []))
+    states = {"risky": due("risky", 0.1), "sorting": due("sorting", 0.6)}
+
+    def refresh(topic=None):
+        return [i["id"] for i in plan(v, states, catalog, mode=mode, topic=topic)
+                if i["kind"] == "refresh"]
+
+    assert refresh() == ["risky", "sorting"]
+    assert refresh("Sorting") == ["sorting", "risky"]
+
+
 # ---- readiness and week ---------------------------------------------------------------------
 
 def test_readiness(v):
     catalog = Catalog.load(v)
     states = {"two-pointers": ConceptState("two-pointers", "solid")}
-    # weights: arrays-basics 0.6, secret-diary 0.6, two-pointers 0.6 + 0.4
-    assert readiness(v, catalog, states, "acme-oa-2026") == pytest.approx(1.0 / 2.2)
+    # weights: arrays-basics 0.6, two-pointers 0.6 + 0.4; D3: private secret-diary 0.6 is out
+    assert readiness(v, catalog, states, "acme-oa-2026") == pytest.approx(1.0 / 1.6)
+    assert planner.readiness_parts(v, catalog, states, "acme-oa-2026") == {
+        "solid": 1, "total": 2, "weighted": pytest.approx(1.0 / 1.6)}
     assert readiness(v, catalog, {}, planner.assessments(v)[0]) == 0.0
     assert readiness(v, catalog, {}, {"id": "x", "tests": {}}) is None
     neg = {"id": "x", "tests": {"two-pointers": 1, "arrays-basics": -1, "hash-maps": 0}}
@@ -473,6 +490,27 @@ def test_week_summary_counts(v):
     assert w["mistakes_opened"] == ["dsa.off-by-one"] and w["mistakes_resolved"] == []
     assert [(a["id"], a["days"], a["readiness"]) for a in w["upcoming"]] == [
         ("acme-oa-2026", 5, 0.0)]
+
+
+def test_week_summary_skips_voids_and_counts_a_flip_once(v):
+    """B8: a voided grade no longer counts, and a spot-check flip (void + regrade) is one
+    grade with its new verdict."""
+    log = EventLog(v)
+    one = {"object": "concept:two-pointers"}
+    log.append(session="cli", kind="grade", source="tutor", now=at(10),
+               fields={**one, "verdict": "correct"})
+    gone = log.append(session="cli", kind="grade", source="tutor", now=at(11),
+                      fields={**one, "verdict": "correct"})
+    wrong = log.append(session="cli", kind="grade", source="tutor", now=at(12),
+                       fields={**one, "verdict": "wrong"})
+    for g in (gone, wrong):
+        log.append(session="cli", kind="void", source="tutor", now=at(13),
+                   fields={"ref": g["id"], "payload": {"reason": "x"}})
+    log.append(session="cli", kind="log", source="self", now=at(14),
+               fields={**one, "payload": {"kind": "self_report", "concept": "two-pointers",
+                                          "verdict": "correct", "regrade_of": wrong["id"]}})
+    w = week_summary(v, Catalog.load(v), now=NOW)
+    assert (w["grades"], w["correct"]) == (2, 2)
 
 
 def test_last_night_failure_outranks_older_due(tmp_path):
@@ -632,3 +670,46 @@ def test_past_question_cue_is_escaped(v):
     assert len(line) < 260
     assert "Past question" not in today_md(today=items, sprint_day=None, assessments=[],
                                            as_of="2026-11-15")
+
+
+def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
+    """D1: a `private: true` track (title, unlinked items, the owed pointer, its sprint day)
+    and a private open mistake never reach the plan, `cortex today`, Today.md, the start card
+    or the dashboard blob."""
+    import json
+
+    from conftest import run
+    from typer.testing import CliRunner
+
+    from cortex import dashboard
+    from cortex.cli import app
+
+    owed = "".join(f"- [ ] SECRET-OWED {i}\n" for i in range(8))
+    (root / "tracks" / "secret.md").write_text(
+        '---\nid: "secret"\ntitle: "SECRET-TRACK-TITLE"\nprivate: true\ncurrent_day: 9\n---\n'
+        f"# SECRET-TRACK-TITLE\n\n## Day 9\n- [ ] SECRET-ITEM read the diary\n\n## Owed\n{owed}",
+        encoding="utf-8")
+    (root / "mistakes" / "dsa.hush.md").write_text(
+        '---\nid: "dsa.hush"\ntitle: "SECRET-MISTAKE"\nprivate: true\n'
+        'concepts: ["[[two-pointers]]"]\n---\n# SECRET-MISTAKE\n', encoding="utf-8")
+    v, now = Vault(root), datetime.now(UTC)
+    EventLog(v).append(session="cli", kind="grade", source="tutor", now=now,
+                       fields={"object": "concept:two-pointers", "verdict": "wrong",
+                               "mistakes": ["dsa.hush", "dsa.off-by-one"]})
+    catalog = Catalog.load(v)
+    states, _ = planner.current_states(v, events.local_day(now), catalog)
+    seen = [json.dumps(today(v, catalog, states, now=now)), str(planner.sprint_day(v))]
+    r = CliRunner().invoke(app, ["today", "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    seen += [r.output, (root / "Today.md").read_text(encoding="utf-8")]
+
+    async def body(call):
+        seen.append(json.dumps(await call("cortex_start", {"mode": "learn"})))
+
+    run(root, body)
+    seen.append(json.dumps(dashboard.build_data(v, now=now), default=str))
+    assert "Test sprint" in seen[2] + seen[3] or "Drill set" in seen[0]  # the public track shows
+    assert "DSA: off-by-one" in seen[4]  # and the public mistake
+    for text in seen:
+        assert "SECRET-" not in text
+    assert planner.sprint_day(v) == 2

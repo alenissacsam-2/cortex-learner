@@ -230,6 +230,22 @@ def void(ev, e, now=NOON + timedelta(days=1)):
                              now=now)
 
 
+def test_void_checks_already_voided_under_the_lock(ev, monkeypatch):
+    """B11: the 'already voided' read ran outside the lock, so two voids could both pass it."""
+    e = problem_status(ev, "lc-167", "solved", NOON)
+    real, depths = EventLog.iter_events, []
+
+    def seen(self, *a, **k):
+        depths.append(self.vault._depth)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(EventLog, "iter_events", seen)
+    void(ev, e)
+    assert depths and depths[0] > 0
+    with pytest.raises(VaultError, match="already voided"):
+        void(ev, e)
+
+
 def test_void_solve_resets_problem_to_todo(ev):
     e = problem_status(ev, "lc-167", "solved", NOON)
     void(ev, e)
@@ -250,6 +266,16 @@ def test_void_solve_keeps_a_later_hand_edit(ev):
     ev.vault.set_field("problem", "lc-167", "status", "attempted")  # the owner's hand edit
     void(ev, e)
     assert ev.vault.read("problem", "lc-167").fields["status"] == "attempted"
+
+
+@pytest.mark.parametrize("bad", [{"score": [90]}, {"score": True}, {"date": "soon"}])
+def test_a_bad_assessment_result_writes_nothing(ev, bad):
+    """B10: a bad score failed after the note was created, leaving a partial write."""
+    with pytest.raises(VaultError):
+        events.log_assessment(ev, session="cli", source="self", assessment="new-oa",
+                              outcome="pass", now=NOON, **bad)
+    assert not ev.vault.path_for("assessment", "new-oa").exists()
+    assert not list(ev.iter_events())
 
 
 def test_void_assessment_result_resets_outcome(ev):

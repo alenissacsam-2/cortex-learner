@@ -27,6 +27,17 @@ def test_folds_latest_wins_and_voids_skip():
     assert surprisal.generic(evs) == {"c-bbbbb": 0.9}
 
 
+def test_hand_edited_baselines_are_skipped():
+    """B14: a baseline without claim or p0 (or p0 = 0) used to crash every prime."""
+    evs = [_ev("e1", {"kind": "baseline", "claim": "c-aaaaa"}),
+           _ev("e2", {"kind": "baseline", "p0": 0.5}),
+           _ev("e3", {"kind": "baseline", "claim": "c-bbbbb", "p0": 0}),
+           _ev("e4", {"kind": "baseline", "claim": ["c-ccccc"], "p0": 0.5}),
+           _ev("e5", {"kind": "baseline", "claim": "c-ddddd", "p0": "high"}),
+           _ev("e6", {"kind": "baseline", "claim": "c-eeeee", "p0": 0.5})]
+    assert surprisal.bits(evs) == {"c-eeeee": 1.0}
+
+
 def test_baseline_log_and_reflect_pack(root):
     (root / "me/preferences.md").write_bytes(PREFS.encode())
 

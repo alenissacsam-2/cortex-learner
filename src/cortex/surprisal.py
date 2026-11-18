@@ -18,8 +18,10 @@ PRICED_PAGES = ("personality", "preferences")  # profile facts (name, time zone)
 def p0s(events) -> dict[str, float]:
     out = {}
     for e in probes._live(events):
-        if e["payload"].get("kind") == "baseline":
-            out[e["payload"]["claim"]] = e["payload"]["p0"]
+        c, p0 = e["payload"].get("claim"), e["payload"].get("p0")
+        if (e["payload"].get("kind") == "baseline" and isinstance(c, str)  # skip hand edits
+                and isinstance(p0, (int, float)) and not isinstance(p0, bool) and 0 < p0 <= 1):
+            out[c] = p0
     return out
 
 

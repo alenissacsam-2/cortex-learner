@@ -174,6 +174,35 @@ def test_find_and_read(root):
     run(root, body)
 
 
+@pytest.mark.parametrize("args", [
+    {"kind": "self_report", "payload": {"concept": "two-pointers", "verdict": "correct",
+                                        "hints": True}},
+    {"kind": "problem_status", "payload": {"problem": "lc-167", "status": "solved",
+                                           "hints": False}}])
+def test_hints_refuse_a_bool(root, args):
+    """B18: True passed isinstance(int) and folded as one hint."""
+    async def body(call):
+        out = await call("cortex_log", args)
+        assert out["error"] == "invalid_argument" and "hints" in out["message"], out
+
+    run(root, body)
+    assert not [e for e in events(root) if "hints" in e.get("payload", {})]
+
+
+def test_read_recent_skips_voided_evidence(root):
+    """B16: cortex_read listed a voided grade (and the void itself) as recent evidence."""
+    async def body(call):
+        await call("cortex_start")
+        await call("cortex_log", {"kind": "self_report",
+                                  "payload": {"concept": "two-pointers", "verdict": "wrong"}})
+        bad = next(e["id"] for e in events(root) if e.get("object") == "concept:two-pointers")
+        await call("cortex_log", {"kind": "void",
+                                  "payload": {"event_id": bad, "reason": "misheard"}})
+        assert (await call("cortex_read", {"id": "two-pointers"}))["recent"] == []
+
+    run(root, body)
+
+
 def test_restart_needed_when_code_is_newer_than_the_server(root, monkeypatch):
     async def body(call):
         assert "restart_needed" not in await call("cortex_context", {})  # CODE_MTIME = inf
@@ -276,6 +305,75 @@ def test_quiz_result_moves_concept(root):
     assert all(e["predicted_p"] == 0.5 for e in grades)  # computed from events before the batch
 
 
+def test_a_retried_grade_after_a_restart_shows_the_state_before_it(root):
+    """B11: a retry built `before` from events that already held the grade, so the display
+    read as if the grade had changed nothing."""
+    items = [{"question": f"q{i}", "answer": "a", "correct": i != 4} for i in range(5)]
+    quiz = {"concept": "two pointers", "items": items, "key": "quiz1"}
+    got = []
+
+    async def body(call):
+        got.append(await call("cortex_grade", quiz))
+
+    run(root, body)
+    run(root, body)  # a fresh server: the in-memory replay cache is gone
+    assert got[1]["per_concept"] == got[0]["per_concept"] == [
+        {"id": "two-pointers", "state_before": "not_started", "state_after": "learning"}]
+    assert len([e for e in events(root) if e["kind"] == "grade"]) == 5
+
+    one = {"concept": "arrays basics", "question": "Q", "learner_answer": "a",
+           "verdict": "correct", "key": "g1"}
+    got.clear()
+    run(root, lambda call: _grade_twice(call, one, got))
+    run(root, lambda call: _grade_twice(call, one, got))
+    assert got[1]["state_before"] == got[0]["state_before"] == "not_started"
+
+
+async def _grade_twice(call, args, got):
+    got.append(await call("cortex_grade", args))
+
+
+def test_a_retry_after_a_restart_writes_nothing_twice(root):
+    """B11: journal, letter, voice, patch and add deduped `key` only in memory, so a retry
+    after a server restart wrote again."""
+    (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
+    calls = [
+        ("cortex_log", {"kind": "journal", "payload": {"text": "Did BFS today"}, "key": "j1"}),
+        ("cortex_log", {"kind": "letter", "payload": {"text": "Keep going.", "when": "late"},
+                        "key": "l1"}),
+        ("cortex_log", {"kind": "voice_sample", "payload": {
+            "text": "Hey, quick one: can we move the call?", "audience": "professor",
+            "act": "request", "channel": "email"},
+            "key": "v1"}),
+        ("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+                          "target": "Coding", "text": "- Tabs", "user_confirmed": True,
+                          "key": "p1"}),
+        ("cortex_add", {"kind": "note", "title": "Graph search", "fields": {"summary": "x"},
+                        "key": "a1"})]
+    outs = []
+
+    async def body(call):
+        for name, args in calls:
+            outs.append(await call(name, args))
+
+    run(root, body)
+    first = [dict(o) for o in outs]
+    assert all("error" not in o for o in first), first
+    outs.clear()
+    run(root, body)
+    assert all("error" not in o for o in outs), outs
+    assert outs[1]["id"] == first[1]["id"] and outs[2]["id"] == first[2]["id"]
+    assert outs[4]["id"] == first[4]["id"] == "graph-search"
+    journal = "".join(p.read_text("utf-8") for p in (root / "journal").rglob("*.md"))
+    assert journal.count("Did BFS today") == 1
+    assert (root / "me" / "letters.md").read_text("utf-8").count("Keep going.") == 1
+    assert (root / "me" / "preferences.md").read_text("utf-8").count("- Tabs") == 1
+    assert not (root / "notes" / "graph-search-2.md").exists()
+    voice_text = "".join(p.read_text("utf-8") for p in (root / "voice").rglob("*")
+                         if p.is_file())
+    assert voice_text.count("can we move the call") == 1
+
+
 def test_unknown_concept_did_you_mean(root):
     async def body(call):
         await call("cortex_start")
@@ -323,6 +421,50 @@ def test_log_assessment_and_taught(root):
     assert note.is_file() and 'outcome: "pending"' in note.read_text(encoding="utf-8")
     ev = next(e for e in events(root) if e.get("object") == "assessment:globex-oa-2026-11-25")
     assert ev["payload"]["felt_weak"] == ["dsa"]
+
+
+def test_proposals_and_new_sections_keep_an_obsidian_edit_made_meanwhile(root, monkeypatch):
+    """B13: inbox.md and me/ pages were read, changed and rewritten with no check, so a line
+    the owner typed in Obsidian at that moment was lost."""
+    from test_vault import racer
+    (root / "inbox.md").write_bytes(b"# Inbox\n")
+    (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n- Tabs\n")
+
+    async def body(call):
+        racer(monkeypatch, "inbox.md", b"- typed in Obsidian\n")
+        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+                                          "target": "Coding", "text": "- Short answers"})
+        assert out["queued"] is True
+        racer(monkeypatch, "preferences.md", b"- Spaces now\n")
+        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+                                          "target": "Food", "text": "- Tea",
+                                          "user_confirmed": True})
+        assert out["changed"] is True
+
+    run(root, body)
+    inbox = (root / "inbox.md").read_text("utf-8")
+    assert "- typed in Obsidian" in inbox and "Short answers" in inbox
+    prefs = (root / "me" / "preferences.md").read_text("utf-8")
+    assert "- Spaces now" in prefs and "## Food" in prefs and "- Tea (confirmed" in prefs
+
+
+def test_a_bad_assessment_date_is_refused_before_any_write(root):
+    """B10: at add and at assessment_result; no note, no event, no inbox line."""
+    inbox = (root / "inbox.md").read_bytes() if (root / "inbox.md").exists() else None
+
+    async def body(call):
+        out = await call("cortex_add", {"kind": "assessment", "title": "Globex OA",
+                                        "fields": {"date": "next week", "summary": "x"}})
+        assert out["error"] == "invalid_argument" and "date" in out["message"], out
+        out = await call("cortex_log", {"kind": "assessment_result", "payload": {
+            "assessment": "globex-oa", "date": "25/11/2026", "outcome": "pending",
+            "felt_weak": ["Brand new topic"]}})
+        assert out["error"] == "invalid_argument" and "date" in out["message"], out
+
+    run(root, body)
+    assert not (root / "assessments/globex-oa.md").exists()
+    assert ((root / "inbox.md").read_bytes() if (root / "inbox.md").exists() else None) == inbox
+    assert not [e for e in events(root) if e.get("object") == "assessment:globex-oa"]
 
 
 def test_felt_weak_as_a_string_is_one_name_and_none_is_nothing(root):
@@ -378,6 +520,23 @@ def test_add_duplicate_and_force(root):
 
     run(root, body)
     assert "Two pointer" in (root / "catalog.yaml").read_text(encoding="utf-8")
+
+
+def test_a_problems_concepts_resolve_at_add(root):
+    """B9: a concept name or an unknown slug was stored as given, so every result on that
+    problem folded into no concept or a phantom one."""
+    async def body(call):
+        bad = await call("cortex_add", {"kind": "problem", "title": "Three Sum",
+                                        "fields": {"concepts": ["Two pointerz"]}})
+        assert bad["error"] == "unknown_concept" and "two-pointers" in bad["did_you_mean"]
+        assert not (root / "problems/three-sum.md").exists()
+        ok = await call("cortex_add", {"kind": "problem", "title": "Three Sum", "fields": {
+            "concepts": ["Two Pointers", "[[arrays-basics]]"]}})
+        assert ok["id"] == "three-sum"
+
+    run(root, body)
+    text = (root / "problems/three-sum.md").read_text(encoding="utf-8")
+    assert "[[two-pointers]]" in text and "[[arrays-basics]]" in text and "Two Pointers" not in text
 
 
 def test_add_duplicate_matches_titles_and_aliases_not_bodies(root):

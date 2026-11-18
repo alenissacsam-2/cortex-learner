@@ -516,19 +516,21 @@ def inbox_add(vault: Vault, name: str, context: str = "") -> str:
     context = " ".join(str(context).split())
     today = local_day(dt.datetime.now(dt.UTC))  # the 04:00 rollover, like the journal
     line = f"- [ ] {name} ({context}, {today})" if context else f"- [ ] {name} ({today})"
-    path = vault.root / INBOX
-    with vault.lock():
-        text = path.read_bytes().decode("utf-8") if path.is_file() else "# Inbox\n"
+
+    def add(text: str) -> str:  # B13: reruns on the reread page if the owner edited it
         lines = text.rstrip("\n").split("\n")
-        if not any(ln.startswith(f"- [ ] {name} (") for ln in lines):
-            # above the first `## ` section: lines appended at the end landed under
-            # `## About me (unconfirmed)` and read as claims waiting for the user's yes
-            cut = next((i for i, ln in enumerate(lines) if ln.startswith("## ")), len(lines))
-            head, tail = lines[:cut], lines[cut:]
-            while len(head) > 1 and not head[-1].strip():
-                head.pop()
-            head += ([] if head[-1].startswith("- [") else [""]) + [line]  # blank after prose
-            vault.write_text(path, "\n".join(head + ([""] + tail if tail else [])) + "\n")
+        if any(ln.startswith(f"- [ ] {name} (") for ln in lines):
+            return text
+        # above the first `## ` section: lines appended at the end landed under
+        # `## About me (unconfirmed)` and read as claims waiting for the user's yes
+        cut = next((i for i, ln in enumerate(lines) if ln.startswith("## ")), len(lines))
+        head, tail = lines[:cut], lines[cut:]
+        while len(head) > 1 and not head[-1].strip():
+            head.pop()
+        head += ([] if head[-1].startswith("- [") else [""]) + [line]  # blank after prose
+        return "\n".join(head + ([""] + tail if tail else [])) + "\n"
+
+    vault.update_text(vault.root / INBOX, add, "# Inbox\n")
     return f"inbox:{slug}"
 
 

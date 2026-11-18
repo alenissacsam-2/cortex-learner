@@ -94,10 +94,28 @@ def _prefixed(value, prefix: str) -> str | None:
     return value if ":" in value else f"{prefix}:{value}"
 
 
+def placed(events: Iterable[dict]) -> list[dict]:
+    """The live events in (ts, id) order, each regrade (a self_report whose payload
+    `regrade_of` names a voided grade: a spot-check flip, written by the server) moved to that
+    grade's day, ts and place, so a verdict fixed later rates the day it was answered (B4)."""
+    raw = sorted(events, key=lambda e: (e["ts"], e["id"]))
+    voided = {e.get("ref") for e in raw if e.get("kind") == "void"}
+    grades = {e["id"]: e for e in raw if e.get("kind") == "grade" and e["id"] in voided}
+    out = []
+    for e in _events.live(raw):
+        pl = e.get("payload")
+        r = pl.get("regrade_of") if e.get("kind") == "log" and isinstance(pl, dict) \
+            and pl.get("kind") == "self_report" else None
+        o = grades.get(r) if isinstance(r, str) else None
+        out.append(((o or e)["ts"], (o or e)["id"],
+                    {**e, "day": o["day"], "ts": o["ts"]} if o else e))
+    return [e for *_, e in sorted(out, key=lambda t: t[:2])]
+
+
 def _items(events: Iterable[dict], problem_concepts: dict[str, str | list[str]] | None,
            ) -> Iterator[_Item]:
-    """Apply void and remap, resolve each event's concept, and pull out its verdict."""
-    evs = _events.live(sorted(events, key=lambda e: (e["ts"], e["id"])))
+    """Apply void, regrade and remap, resolve each event's concept, and pull out its verdict."""
+    evs = placed(events)
     remap = {e["ref"]: e["object"] for e in evs
              if e.get("kind") == "remap" and e.get("ref") and e.get("object")}
     asks = {e["id"]: e for e in evs if e.get("kind") == "ask"}
@@ -323,20 +341,20 @@ def fold(events: Iterable[dict], today: str,
 
     Concepts in `high_retention` (tested by an exam soon) are scheduled at 0.90, others 0.85.
     """
+    events = list(events)
     concepts: dict[str, ConceptState] = {}
     mistakes: dict[str, MistakeState] = {}
     days: dict[str, dict[str, list[_Item]]] = {}  # concept -> day -> verdict/credit items
     evidence: set[str] = set()
     last_taught: dict[str, int] = {}
     last_verdict: dict[str, int] = {}
-    graded_asks: set[str] = set()
+    # a voided grade still settles its ask (B1): a void or a flip must not reopen it for good
+    graded_asks = {e.get("ref") for e in events if e.get("kind") == "grade"}
     asks: list[_Item] = []
 
     for n, it in enumerate(_items(events, problem_concepts)):
         ev, c = it.ev, it.concept
         kind, day = ev.get("kind"), ev.get("day")
-        if kind == "grade" and ev.get("ref"):
-            graded_asks.add(ev["ref"])
         if c is None:
             st = None
         else:
@@ -483,9 +501,10 @@ def calibration(events: Iterable[dict],
         if it.verdict is not None and it.concept and it.ev.get("kind") != "ask":
             first.setdefault(it.ev["day"], {}).setdefault(it.concept, it)
     out = {s: (0, 0) for s in STATES}
-    for day in sorted(first):  # voids and remaps apply whenever they were logged
-        before, _ = fold([e for e in events if (e.get("day") or "") < day
-                          or e.get("kind") in ("void", "remap")], day, problem_concepts)
+    evs = placed(events)  # voids and remaps apply whenever they were logged
+    for day in sorted(first):
+        before, _ = fold([e for e in evs if (e.get("day") or "") < day
+                          or e.get("kind") == "remap"], day, problem_concepts)
         for c, it in first[day].items():
             s = before[c].state if c in before else "not_started"
             n, ok = out[s]

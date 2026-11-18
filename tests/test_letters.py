@@ -55,6 +55,13 @@ def test_facts_read_journal_exams_gap_and_grades(tmp_path):
     f = letters.facts(v, evs, datetime(2026, 11, 14, 23, 30).astimezone(), "2026-11-14", "s_now")
     assert f == {"hour": 23, "energy": [1, 2], "exam_days": 6, "gap": 13,
                  "verdicts": ["wrong"]}
+    # B7: today's sweep closing an old session, or a topic touch, is no study: the gap stays
+    evs += [{"id": "c", "ts": "2026-11-14T09:00:00Z", "day": "2026-11-14", "session": "s_old",
+             "kind": "close"},
+            {"id": "d", "ts": "2026-11-14T09:01:00Z", "day": "2026-11-14", "session": "s_x",
+             "kind": "log", "payload": {"kind": "touch", "ids": ["two-pointers"]}}]
+    f = letters.facts(v, evs, datetime(2026, 11, 14, 23, 30).astimezone(), "2026-11-14", "s_now")
+    assert f["gap"] == 13
 
 
 def _page(*rows):
@@ -93,6 +100,20 @@ def test_effect_counts_shown_feedback_and_followed():
             "payload": {"kind": "letter_feedback", "letter": "l-aaaaa", "verdict": "retire"}}]
     assert letters.effect(evs) == [{"id": "l-aaaaa", "shown": 2, "helped": 1, "not": 0,
                                     "followed": 1}]
+
+
+def test_write_and_retire_keep_an_obsidian_edit_made_meanwhile(tmp_path, monkeypatch):
+    """B13: a line the owner typed while the letter was being written survives."""
+    from test_vault import racer
+    v = Vault(shutil.copytree(FIXTURES / "vault_mini", tmp_path / "v"))
+    lid = letters.write(v, "Keep going, one step.", "late", "2026-03-05")
+    racer(monkeypatch, "letters.md", b"\n- my own line\n")
+    letters.write(v, "Sleep first, then code.", "late", "2026-03-06")
+    racer(monkeypatch, "letters.md", b"- another line\n")
+    letters.retire(v, lid, "2026-03-07")
+    page = letters.read(v)
+    assert "- my own line" in page and "- another line" in page and "Sleep first" in page
+    assert [r["live"] for r in letters.parse(page)] == [True, False]
 
 
 def test_write_show_feedback_retire_over_mcp(root, monkeypatch):

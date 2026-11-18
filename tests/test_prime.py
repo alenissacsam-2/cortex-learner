@@ -155,6 +155,27 @@ def test_template_profile_summary_gives_way_to_claim_lines(vault):
     assert "Who I am" not in profile and "chemist" not in profile and "^c-abcde" not in profile
 
 
+def test_a_profile_line_the_model_wrote_is_served_ask(vault):
+    """B3: a profile claim line of tier agent (or exposed) used to reach every prime and
+    context plain, as a fact; it is labelled (ask) like claim_items, with the legend."""
+    from cortex.cli import ME_PAGES
+
+    page = ME_PAGES["me/profile.md"].replace("## Background\n", "## Background\n- CS student.\n")
+    (vault / "me/profile.md").write_text(page, encoding="utf-8")
+
+    async def body(call):
+        out = await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+                                          "target": "Background", "text": "Studies at X"})
+        assert out["changed"] is True
+        for ctx in ((await call("cortex_prime", {"prompt": "hello there"}))["context"],
+                    (await call("cortex_context", {}))["context"]):
+            profile = ctx.split("## Profile\n", 1)[1].split("\n## ", 1)[0]
+            assert "- CS student.\n" in profile and "- Studies at X (ask)" in profile
+            assert prime.LEGEND in ctx
+
+    run(vault, body)
+
+
 def test_first_prime_does_not_wait_on_the_model_load(vault, monkeypatch):
     """dogfood r4 #14: the server loads the embedder on its own thread once the client's
     handshake is done, so the first prime finds it loaded."""

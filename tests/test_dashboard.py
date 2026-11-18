@@ -86,6 +86,7 @@ def test_blob_schema_and_counts(root):
     assert a["id"] == "acme-oa-2026" and a["days_left"] == 7
     assert a["readiness"]["total"] == 2
     assert 0.0 <= a["readiness"]["share"] <= 1.0  # weighted planner.readiness
+    assert a["readiness"]["weighted"] == a["readiness"]["share"]  # D3
     assert d["mistakes"][0]["id"] == "dsa.off-by-one" and d["mistakes"][0]["count"] == 1
     weeks = d["history"]["weeks"]
     assert len(weeks) == 8 and sum(w["answers"] for w in weeks) == 3
@@ -472,15 +473,17 @@ def test_forecast_waits_for_calibration(root):
     log = EventLog(Vault(root))
 
     def stamped(n, start=0):  # two-pointers already has graded history, so each one counts
-        for i in range(start, start + n):
-            log.append(session="cli", kind="grade", source="tutor", predicted_p=0.7,
-                       now=NOW - timedelta(days=1) + timedelta(minutes=i),
-                       fields={"object": "concept:two-pointers", "verdict": "correct"})
+        for i in range(start, start + n):  # B5: one cold item a day, a forecast with skill
+            ok = i % 4 != 3
+            log.append(session="cli", kind="grade", source="tutor",
+                       predicted_p=0.8 if ok else 0.2, now=NOW - timedelta(days=40 - i),
+                       fields={"object": "concept:two-pointers",
+                               "verdict": "correct" if ok else "wrong"})
 
     stamped(12)
     r = dashboard.build_data(Vault(root), now=NOW)["assessments"][0]["readiness"]
-    assert r["forecast"] is None and r["calibrating"] == {"n": 12, "need": 30}
-    stamped(18, 12)
+    assert r["forecast"] is None and r["calibrating"] == {"n": 11, "need": 30}  # 1st: no history
+    stamped(19, 12)
     r = dashboard.build_data(Vault(root), now=NOW)["assessments"][0]["readiness"]
     assert 0.0 <= r["forecast"] <= 1.0 and r["calibrating"] is None
 

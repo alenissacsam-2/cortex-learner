@@ -227,6 +227,8 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
 
         solved = {n.id for n in vault.iter_notes("problem") if n.fields.get("status") == "solved"}
         for track in vault.iter_notes("track"):
+            if is_private(track) or track.id in private:  # D1: its title and lines too
+                continue
             on_track.update(link_targets(track.body))
             n = track.fields.get("current_day")
             for heading, why in ([(f"Day {n}", f"Sprint plan · Day {n}")] if n is not None
@@ -286,11 +288,12 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
     due = {c for c, st in states.items() if is_due(st, day.isoformat())}
     # only graded concepts; Not started / Unverified exam concepts enter through `new`
     pulled = {c for c in clock if state_of(c) in ("learning", "needs_refresh")}
-    ranked = sorted((c for c in due | pulled if c not in taken), key=lambda c: (-risk(c), c))
+    topic_ids = set(_concepts(catalog, topic)) if topic else set()
+    ranked = sorted((c for c in due | pulled if c not in taken),
+                    key=lambda c: (c not in topic_ids, -risk(c), c))
 
     ready = []
     if mode != "review":
-        topic_ids = set(_concepts(catalog, topic)) if topic else set()
         tested = {c for a in upcoming for c in _weights(catalog, a["tests"])}
         ready = [e.id for e in catalog.entries.values() if e.kind == "concept"
                  and e.id not in taken and is_ready(state_of(e.id), e, states)]
@@ -531,10 +534,17 @@ def readiness(vault, catalog, states, assessment) -> float | None:
 
     `assessment` is an id or a dict from assessments(); None when it tests nothing known.
     """
+    return readiness_parts(vault, catalog, states, assessment)["weighted"]
+
+
+def readiness_parts(vault, catalog, states, assessment) -> dict:
+    """D3: {solid, total, weighted}: the plain count of tested concepts that are Solid, of how
+    many, and readiness's weighted share (None when it tests nothing known), so a view can
+    label each honestly. Hidden concepts count in none of them."""
     _, w, total = _tested(vault, catalog, assessment)
-    if not total:
-        return None
-    return sum(x for c, x in w.items() if getattr(states.get(c), "state", None) == "solid") / total
+    solid = [c for c in w if getattr(states.get(c), "state", None) == "solid"]
+    return {"solid": len(solid), "total": len(w),
+            "weighted": sum(w[c] for c in solid) / total if total else None}
 
 
 def recall_on_day(vault, catalog, states, assessment, now: datetime) -> float | None:
@@ -554,10 +564,13 @@ def recall_on_day(vault, catalog, states, assessment, now: datetime) -> float | 
 
 
 def _tested(vault, catalog, assessment) -> tuple[dict, dict[str, float], float]:
-    """(assessment dict, positive concept weights, their sum); `assessment` is an id or dict."""
+    """(assessment dict, positive weights of its known, non-hidden concepts, their sum);
+    `assessment` is an id or dict."""
     a = assessment if isinstance(assessment, dict) else next(
         (x for x in assessments(vault) if x["id"] == assessment), {})
-    w = {c: x for c, x in _weights(catalog, a.get("tests")).items() if x > 0}  # <=0 breaks 0..1
+    hide = hidden(vault, catalog)
+    w = {c: x for c, x in _weights(catalog, a.get("tests")).items()
+         if x > 0 and c not in hide}  # <=0 breaks 0..1
     return a, w, sum(w.values())
 
 
@@ -568,7 +581,12 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
     cut = (start - timedelta(days=1)).isoformat()  # the state just before the week
     events = list(EventLog(vault).iter_events())
     week = [e for e in events if start.isoformat() <= str(e.get("day", "")) <= to.isoformat()]
-    grades = [e for e in week if e.get("kind") == "grade"]
+    # live grades, and a spot-check flip's regrade as one grade on its original day (B8)
+    verdicts = [e.get("verdict") if e.get("kind") == "grade" else e["payload"].get("verdict")
+                for e in levels.placed(events)
+                if start.isoformat() <= str(e.get("day", "")) <= to.isoformat()
+                and (e.get("kind") == "grade" or isinstance(e.get("payload"), dict)
+                     and "regrade_of" in e["payload"])]
     before, m_before = current_states(vault, cut, catalog,
                                       [e for e in events if str(e.get("day", "")) <= cut])
     after, m_after = current_states(vault, to.isoformat(), catalog, events)
@@ -586,8 +604,8 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
         "from": start.isoformat(), "to": to.isoformat(),
         "sessions": len({e["session"] for e in week if e.get("kind") != "open"
                          and str(e.get("session")).startswith("s_")}),
-        "grades": len(grades),
-        "correct": sum(e.get("verdict") == "correct" for e in grades),
+        "grades": len(verdicts),
+        "correct": verdicts.count("correct"),
         "changed": changed,
         "mistakes_opened": sorted(m for m in m_after if status(m_after, m) == "open"
                                   and status(m_before, m) != "open"),
@@ -601,8 +619,10 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
 
 
 def sprint_day(vault) -> int | None:
-    """The first track's `current_day` (sprint days, not dates), or None."""
+    """The first non-private track's `current_day` (sprint days, not dates), or None."""
     for track in vault.iter_notes("track"):
+        if is_private(track):
+            continue
         day = track.fields.get("current_day")
         if isinstance(day, int) and not isinstance(day, bool):
             return day

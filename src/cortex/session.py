@@ -46,6 +46,7 @@ ALLOWED = {
     "probe": _ALL, "sweep": _ALL, "mock": _ALL,
 }
 IDLE_CLOSE = timedelta(hours=2)
+LIVE_CLOSE = timedelta(hours=24)  # B2: a sweep closes a live server's session only this idle
 RESUME_AFTER = timedelta(minutes=15)
 EVENT_BUDGET, PATCH_BUDGET = 40, 10
 COUNT_KINDS = ("asked", "graded", "logged", "patched", "added")
@@ -170,9 +171,19 @@ class SessionManager:
         s = self.current
         now = self._now()
         if s is not None and now - s.last_activity > IDLE_CLOSE:
-            self.close(summary="auto-closed after 2 h idle")
+            # B15: it ended at its last activity (+1 s: the close sorts after its last event)
+            self.close(summary="auto-closed after 2 h idle",
+                       ended=s.last_activity + timedelta(seconds=1))
             s = None
         self._check_taint()
+        if s is not None and tool in WRITES and any(
+                e.get("kind") == "close" for e in self.log.iter_events(session=s.id)):
+            # B2: another process closed it (a sweep, `cortex session close`); a write there
+            # would miss its commit and `cortex undo`, so it goes to a fresh session
+            self._closed()
+            new = self.start(s.mode, s.topic, s.model)
+            new.exposed = new.exposed or s.exposed  # a reopen never launders exposure
+            s = new
         if s is None:
             if tool in READS:
                 return None
@@ -233,12 +244,14 @@ class SessionManager:
         except VaultError as e:
             log.warning("change event not recorded: %s", e)
 
-    def close(self, summary: str = "") -> dict:
+    def close(self, summary: str = "", ended: datetime | None = None) -> dict:
+        """`ended`: when the session really ended (an idle close: its last activity)."""
         s = self.current
         if s is None:
             raise _no_session()
         return _end(self.vault, self.log, sid=s.id, mode=s.mode, started=s.started,
-                    ended=self._now(), counts=s.counts, touched=s.touched, before=s.before,
+                    ended=ended or self._now(), now=self._now(), counts=s.counts,
+                    touched=s.touched, before=s.before,
                     summary=summary, changes=s.changes, mark=s.mark, ledger=s.ledger,
                     on_closed=self._closed)
 
@@ -467,10 +480,13 @@ def _commit_session(vault: Vault, evlog: EventLog, sid: str, mode: str, mark: in
 
 def _end(vault: Vault, evlog: EventLog, *, sid: str, mode: str, started: datetime,
          ended: datetime, counts: dict, touched: set[str], before: dict, summary: str,
-         changes=(), on_closed=None, mark: int = 0, ledger: int = 0) -> dict:
+         changes=(), on_closed=None, mark: int = 0, ledger: int = 0,
+         now: datetime | None = None) -> dict:
     """`mark`: vault.writes when the session started in this process; files written since
     then belong to it. `ledger`: how many of counts["logged"] were LEDGER_LOG_KINDS; a session
-    with nothing else is quiet."""
+    with nothing else is quiet. `ended` dates the close event, duration and journal line;
+    `now` (default `ended`) the states, tool props and Today.md written at the close (B15)."""
+    now = now or ended
     fields = {"summary": summary[:SUMMARY_MAX]} if summary else {}
     with vault.lock():  # SEC-6: a sweep in another process may have closed it meanwhile
         if any(e.get("kind") == "close" for e in evlog.iter_events(session=sid)):
@@ -484,7 +500,7 @@ def _end(vault: Vault, evlog: EventLog, *, sid: str, mode: str, started: datetim
     if on_closed:
         on_closed()  # the session is closed from here on, whatever fails below
     catalog = Catalog.load(vault)
-    after, _ = planner.current_states(vault, local_day(ended), catalog)
+    after, _ = planner.current_states(vault, local_day(now), catalog)
 
     def title(c):
         e = catalog.entries.get(c)
@@ -492,7 +508,7 @@ def _end(vault: Vault, evlog: EventLog, *, sid: str, mode: str, started: datetim
 
     rows = []
     unchecked = [{"id": c, "title": title(c)} for c in planner.fresh_unchecked(
-        {c: after[c] for c in touched if c in after}, local_day(ended))]
+        {c: after[c] for c in touched if c in after}, local_day(now))]
     for c in sorted(touched):
         b, a = before.get(c), after.get(c)
         rows.append({"id": c, "title": title(c), "before": b.state if b else "not_started",
@@ -504,12 +520,13 @@ def _end(vault: Vault, evlog: EventLog, *, sid: str, mode: str, started: datetim
             if e.code not in ("unknown_id", "invalid_id"):
                 raise
     moved = [r for r in rows if r["before"] != r["after"]]
-    today = planner.today(vault, catalog, after, now=ended)
+    today = planner.today(vault, catalog, after, now=now)
     quiet = not changes and counts.get("logged", 0) == ledger and not any(
         counts.get(k) for k in COUNT_KINDS if k != "logged")
     if not quiet:
         _record(vault, sid=sid, mode=mode, started=started, ended=ended, counts=counts,
-                rows=rows, unchecked=unchecked, summary=summary, changes=changes, today=today)
+                rows=rows, unchecked=unchecked, summary=summary, changes=changes, today=today,
+                as_of=local_day(now))
     withheld: list[str] = []
     commit = _commit_session(vault, evlog, sid, mode, mark, withheld)
     return {"session": sid, "mode": mode, "counts": dict(counts), "moved": moved,
@@ -523,7 +540,7 @@ AUTO_JOURNAL = re.compile(r"session \w+: \d+ changes, \d+ graded")
 
 
 def _record(vault: Vault, *, sid, mode, started, ended, counts, rows, unchecked, summary,
-            changes, today) -> None:
+            changes, today, as_of) -> None:
     """What a non-quiet close writes besides its event and commit: journal line, session
     note, Today.md (one planner pass, ~10 ms at 5k pages) and the log.md line."""
     try:
@@ -540,7 +557,7 @@ def _record(vault: Vault, *, sid, mode, started, ended, counts, rows, unchecked,
                      relink.with_up(text, day) if day else text)  # Obsidian: session -> day
     vault.write_text(vault.root / "Today.md", render.today_md(
         today=today, sprint_day=planner.sprint_day(vault),
-        assessments=planner.assessments(vault), as_of=local_day(ended),
+        assessments=planner.assessments(vault), as_of=as_of,
         cues=planner.last_questions(vault)))
     try:  # log.md is a view too; it must never break close
         vault.append_log(local_day(ended), "session", f"{mode}, {len(changes)} changes")
@@ -566,8 +583,12 @@ def sweep(vault: Vault, clock=datetime.now, *, force: bool = False) -> list[str]
             continue
         pid = next((e["payload"].get("pid") for e in evs if e.get("kind") == "open"
                     and isinstance(e.get("payload"), dict)), None)
-        gone = type(pid) is int and not _pid_alive(pid)
-        if not force and not gone and now - parse_ts(evs[-1]["ts"]) <= IDLE_CLOSE:
+        alive = type(pid) is int and _pid_alive(pid)
+        gone = type(pid) is int and not alive
+        last = parse_ts(evs[-1]["ts"])
+        # B2: a live server's session may be reading for hours without an event; it closes
+        # itself when idle, so a sweep waits a day for it (pid reuse aside)
+        if not force and not gone and now - last <= (LIVE_CLOSE if alive else IDLE_CLOSE):
             continue
         kinds = [e.get("kind") for e in evs]
         counts = dict.fromkeys(COUNT_KINDS, 0)
@@ -594,7 +615,10 @@ def sweep(vault: Vault, clock=datetime.now, *, force: bool = False) -> list[str]
             vault, local_day(now), events=[e for e in events if e.get("session") != sid])
         if any(e.get("kind") == "close" for e in evlog.iter_events(session=sid)):
             continue  # another process closed it since the scan; _end re-checks under the lock
-        res = _end(vault, evlog, sid=sid, mode=mode, started=parse_ts(evs[0]["ts"]), ended=now,
+        # B15: an idle or orphaned session ended at its last event (+1 s, so the close sorts
+        # after it); `force` closes it now
+        res = _end(vault, evlog, sid=sid, mode=mode, started=parse_ts(evs[0]["ts"]),
+                   ended=now if force else min(now, last + timedelta(seconds=1)), now=now,
                    counts=counts, touched=touched, before=before, summary="auto-closed",
                    changes=changes, mark=vault.writes, ledger=ledger)  # another process ran it
         if not res.get("already_closed"):

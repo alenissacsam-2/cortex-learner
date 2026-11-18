@@ -50,6 +50,7 @@ from cortex.events import (
     SESSION_RE,
     STUDY_MODES,
     _check_fields,
+    check_assessment_result,
     live,
     local_day,
     log_assessment,
@@ -62,6 +63,7 @@ from cortex.index import (
     TRUNCATED,
     Index,
     _edge_targets,
+    _target,
     _wrap,
     link_targets,
 )
@@ -234,6 +236,8 @@ SWEEP_NEXT = "Explain each miss in 2-3 lines, log it as taught, then cortex_end.
 ASK_NEXT = "Show the question; when the learner answers, call cortex_grade with item_id."
 ASK_TRAPS = 2  # linked mistake notes an ask names: a stale note re-tests a fixed weakness
 MORE_NEXT = "Continue, or call cortex_end with a short summary when done."
+# B11: cortex_log kinds that write files, not keyed events; their key goes on a `keyed` marker
+FILE_LOG_KINDS = frozenset({"journal", "capture", "letter", "voice_sample", "draft", "sent"})
 SPLITS_MAX = 2  # REVIEW-1005 §6.2: split proposals per cortex_reflect, to bound CPU
 CHECK_SENTENCES, CHECK_CHARS = 20, 4000  # PHASE2.md G1: one recall per sentence
 CHECK_MIN = 0.5  # a weaker or keyword-only hit ("I like hiking" -> SQL LIKE) is no claim
@@ -280,7 +284,8 @@ EXTERNAL_SOURCE = re.compile(r"^(https?://|raw/)", re.I)  # v5 F3: a body from o
 SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learning": "Learning",
                   "projects": "Projects", "environment": "Environment", "career": "Career",
                   "personal": "Personal"}
-CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice")  # SPEC §0 U6, U7; V2
+# SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
+CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract")
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
@@ -487,7 +492,14 @@ class Cortex:
                     self._reset()
                 self.session = s
             self.catalog = Catalog.load(self.vault)
+            marked = key is not None and (name in ("cortex_patch", "cortex_add") or (
+                name == "cortex_log" and kwargs.get("kind") in FILE_LOG_KINDS))
+            if marked and (done := self._keyed(key, label)) is not None:
+                return done
             out = fn(**kwargs)
+            if marked and "error" not in out:  # B11: the key outlives a restart
+                self._append("change", {"payload": {"note": "keyed", "tool": label, **{
+                    k: out[k] for k in ("id", "path") if isinstance(out.get(k), str)}}}, key)
             if ((name, kwargs.get("kind")) == ("cortex_log", "capture")
                     or (name == "cortex_add" and kwargs.get("raw_text"))):
                 self.sessions.expose()  # v5 F3: a capture brought external text in
@@ -509,6 +521,25 @@ class Cortex:
         if key is not None:
             self._done[(perm, key)] = (out, self.log.has_key(key))
         return out
+
+    def _keyed(self, key: str, label: str) -> dict | None:
+        """B11: the result of a file-writing call whose `key` an earlier process already logged
+        (its `keyed` change event), else None. Checked under the vault lock; two processes
+        sending the same key at the same moment can still both write (retries come in turn)."""
+        with self.vault.lock():
+            ev = self.log._key_map().get(key)
+        p = ev.get("payload") if ev and ev.get("kind") == "change" else None
+        if not isinstance(p, dict) or p.get("note") != "keyed" or p.get("tool") != label:
+            return None
+        said = "Already done (same key): nothing was written again."
+        if label.startswith("cortex_log"):
+            out = {"recorded": 0, "display_line": said}
+        elif label == "cortex_patch":
+            out = {"changed": False, "summary": said}
+        else:
+            out = {}
+        return {**out, **{k: p[k] for k in ("id", "path") if k in p}, "duplicate": True,
+                "next": self._next(MORE_NEXT)}
 
     def _gate(self, name: str, kwargs: dict) -> dict | None:
         """V5 roles and the kill switch: a refusal result, or None to run the tool."""
@@ -678,9 +709,10 @@ class Cortex:
                               topic=topic, events=events)
         if minutes and not paper:  # council item 7: the plan's tail that does not fit goes
             today = planner.fit(today, minutes)
-        titles = {n.id: str(n.fields.get("title") or n.id)
-                  for n in self.vault.iter_notes("mistake")}
-        open_m = sorted((m for m in mistakes.values() if m.status == "open"),
+        notes = list(self.vault.iter_notes("mistake"))
+        titles = {n.id: str(n.fields.get("title") or n.id) for n in notes}
+        hush = {n.id for n in notes if is_private(n)}  # D1
+        open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                         key=lambda m: (-m.count, m.id))
         display = render.start_card(
             mode=mode, sprint_day=planner.sprint_day(self.vault), today=today,
@@ -807,10 +839,9 @@ class Cortex:
         if not up:
             return None
         tested = [c for c in planner._weights(self.catalog, up[0]["tests"]) if c not in hide]
-        # v6 item 8: the recall forecast joins the Solid count only once the learning
-        # calibration has MIN_PAIRS forecasts with history to check it against
-        pairs = learning_eval.history_pairs(events, self._pc, learning_eval.MIN_PAIRS)
-        ok = pairs >= learning_eval.MIN_PAIRS
+        # v6 item 8, B5: the recall forecast joins the Solid count only once MIN_PAIRS cold
+        # forecasts with history show it beats the base rate
+        pairs, ok = learning_eval.calibrated(events, self._pc)
         return {**up[0], "total": len(tested), "more": len(up) - 1,
                 "solid": sum(self._state(states, c) == "solid" for c in tested),
                 "forecast": planner.recall_on_day(self.vault, self.catalog, states, up[0], now)
@@ -977,7 +1008,7 @@ class Cortex:
         objs = {f"{k}:{out['id']}" for k in ("concept", "problem", "mistake", "assessment",
                                               "application", "area", "domain")}
         recent = [{k: ev[k] for k in ("day", "kind", "verdict", "item_type") if k in ev}
-                  for ev in self.log.iter_events() if ev.get("object") in objs]
+                  for ev in live(self.log.iter_events()) if ev.get("object") in objs]
         out["recent"] = recent[-5:]
         if out["kind"] in ("resource", "note") and EXTERNAL_SOURCE.match(
                 str(out["fields"].get("source") or "")):
@@ -1046,7 +1077,9 @@ class Cortex:
         left = [CONTEXT_MAX]
         put = prime.putter(parts, left)
         hide = "profile" in self._withheld()
-        summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()))
+        claims_served = self._served_claims()
+        summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()),
+                                                        claims_served[0])
         put("Profile", summary or (WITHHELD.format(n=1) if hide
                                    else f"me/profile.md: {NOT_RECORDED}"),
             "me/profile" if summary else None, CONTEXT_CAPS["profile"])
@@ -1087,7 +1120,7 @@ class Cortex:
                      if n.fields.get("status") == "active" and not is_private(n)]
             put("Active projects", "\n".join(lines) or "none", "projects" if lines else None,
                 CONTEXT_CAPS["projects"])
-        self._personality_prefs(scope, put)
+        self._personality_prefs(scope, put, served=claims_served, asks=" (ask)" in summary)
         return {"context": "\n\n".join(parts), "next": self._next(
             "Use this to tailor your answer; save durable new facts with cortex_patch."
             + (self._offer([h["id"] for h in concepts]) if topic else ""))}
@@ -1157,11 +1190,13 @@ class Cortex:
             + "Record other durable things at once; ask yes/no before writing a preference "
               "or personality line, then cortex_patch it with user_confirmed=true." + offer)}
 
-    def _personality_prefs(self, scope: str, put, nag: bool = False) -> None:
+    def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
+                           asks: bool = False) -> None:
         """The Personality, Goals (scope all) and Preferences blocks of cortex_context; `nag`
-        (only /cortex home) says when the preferences are not recorded."""
+        (only /cortex home) says when the preferences are not recorded. `served`: a
+        `_served_claims()` result to reuse; `asks`: an (ask) line was served already (B3)."""
         heads = PERSONALITY_HEADINGS.get(scope, ())
-        served, pull = self._served_claims()
+        served, pull = served or self._served_claims()
         want = None if scope == "all" else SCOPE_HEADINGS[scope]
         keeps = {"personality": (lambda h: h in heads) if heads else None,
                  "goals": (lambda h: h == "now") if scope == "all" else None,
@@ -1169,7 +1204,7 @@ class Cortex:
         withheld = self._withheld()
         got = {p: self._claim_sections(p, k, served) if k and p not in withheld else ("", False)
                for p, k in keeps.items()}
-        note = ([LEGEND] if any(lab for _, lab in got.values()) else []) + [
+        note = ([LEGEND] if asks or any(lab for _, lab in got.values()) else []) + [
             PULL_LINE.format(area=a) for a in pull]
         if note:  # server text, so outside the untrusted wrap; first, so caps never trim it
             put("How to read the claims", "\n".join(note))
@@ -1373,7 +1408,8 @@ class Cortex:
         events = self._events()
         p = levels.predicted_p(events, cid, self._now(), self._pc)
         ev = self._append("grade", fields, key, predicted_p=p)
-        before, after = self._fold(events), self._fold([*events, ev])
+        prior = [e for e in events if e["id"] != ev["id"]]  # B11: a retry's grade is in events
+        before, after = self._fold(prior), self._fold([*prior, ev])
         hint = self.sessions.note("graded", cid)
         self.pending.discard(item_id)
         self.taught.pop(cid, None)
@@ -1449,7 +1485,6 @@ class Cortex:
             _check_fields(fields)  # the whole batch is valid before anything is written
             batch.append(fields)
         events = self._events()
-        before = self._fold(events)
         new = []
         now = self._now()
         with self.vault.lock():
@@ -1457,7 +1492,9 @@ class Cortex:
                 p = levels.predicted_p(events, fields["object"].split(":", 1)[1], now, self._pc)
                 new.append(self._append("grade", fields,
                                         None if key is None else f"{key}:{i}", predicted_p=p))
-        after = self._fold([*events, *new])
+        ids = {e["id"] for e in new}
+        prior = [e for e in events if e["id"] not in ids]  # B11: a retry's grades are in events
+        before, after = self._fold(prior), self._fold([*prior, *new])
         cids = list(dict.fromkeys(f["object"].split(":", 1)[1] for f in batch))
         hint = ""
         for f in batch:
@@ -1697,7 +1734,8 @@ class Cortex:
             for name in ("hints", "note"):
                 if p.get(name) is not None:
                     pl[name] = p[name]
-            if "hints" in pl and (not isinstance(pl["hints"], int) or not 0 <= pl["hints"] <= 3):
+            h = pl.get("hints", 0)
+            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
                 raise invalid("hints must be a whole number from 0 to 3.")
             cid = obj.split(":", 1)[1] if obj.startswith("concept:") else None
             sp = None
@@ -1897,12 +1935,13 @@ class Cortex:
                       "verdict": verdict}
                 if isinstance(target.get("hints"), int):
                     pl["hints"] = target["hints"]
-                pl["note"] = "spot-check flip"
+                # B4: server-written, never tool input; levels fold it on the grade's own day
+                pl["note"], pl["regrade_of"] = "spot-check flip", eid
                 # review r4 L4, G1: keep the item's splits and links, so eval and levels see the ask
                 ask = next((e for e in self.log.iter_events() if e["kind"] == "ask"
                             and e["id"] == target.get("ref")), {}) if target.get("ref") else {}
                 same = {k: v for k in ("item_type", "confidence", "question", "problem",
-                                       "also", "targets_mistakes")
+                                       "also", "targets_mistakes", "ref")
                         if (v := target.get(k, ask.get(k))) is not None}
                 self._append("log", {"object": target["object"], **same, "payload": pl},
                              source="self")
@@ -2172,6 +2211,7 @@ class Cortex:
             "-".join(str(p[k]) for k in ("company", "assessment_kind", "date") if p.get(k)))
         if not aid or not ID_RE.fullmatch(str(aid)):
             raise invalid("Pass payload.assessment (an id), or company, assessment_kind and date.")
+        check_assessment_result(p.get("score"), p.get("date"))  # before felt_weak hits the inbox
         weak = []
         felt = p.get("felt_weak") or []
         # a bare string ("None", "DP") was iterated letter by letter into the inbox
@@ -2195,7 +2235,8 @@ class Cortex:
         obj = self._problem(pid)
         pl = {"kind": "problem_status", "problem": pid, "status": status}
         if p.get("hints") is not None:
-            if not isinstance(p["hints"], int) or not 0 <= p["hints"] <= 3:
+            h = p["hints"]
+            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
                 raise invalid("hints must be a whole number from 0 to 3.")
             pl["hints"] = p["hints"]
         self._append("log", {"object": obj, "payload": pl}, key)
@@ -2225,10 +2266,9 @@ class Cortex:
         """Append one line under `heading` (default `## About me (unconfirmed)`) in inbox.md
         (created if missing)."""
         scan_secrets(text)
-        path = self.vault.root / "inbox.md"
-        with self.vault.lock():
-            lines = (path.read_bytes().decode("utf-8") if path.is_file()
-                     else "# Inbox\n").rstrip("\n").split("\n")
+
+        def add(page: str) -> str:  # B13: reruns on the reread page if the owner edited it
+            lines = page.rstrip("\n").split("\n")
             if heading not in lines:
                 lines += ["", heading]
             at = lines.index(heading) + 1
@@ -2237,7 +2277,9 @@ class Cortex:
             while lines[at - 1].strip() == "" and lines[at - 1] != heading:
                 at -= 1  # keep the blank line before the next heading
             lines.insert(at, text)
-            self.vault.write_text(path, "\n".join(lines) + "\n")
+            return "\n".join(lines) + "\n"
+
+        self.vault.update_text(self.vault.root / "inbox.md", add, "# Inbox\n")
 
     def cortex_patch(self, id: str, op: Literal["append_to_section", "set_field", "check_item",
                                                 "revise", "retire", "reject", "set_topics"],
@@ -2270,9 +2312,8 @@ class Cortex:
             if op == "append_to_section":
                 text = f"{text.rstrip()} (confirmed {local_day(self._now())})"
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
-        if kind == "me" and self.session.exposed and (
-                (nid, op) == ("teaching-contract", "append_to_section")
-                or (nid, op, target) == ("profile", "set_field", "summary")):
+        if kind == "me" and self.session.exposed and op == "append_to_section" and nid in (
+                "teaching-contract", "profile"):  # B3: no me/ page takes set_field
             raise VaultError("refused_exposed", "This chat has read outside text (a source, a raw "
                              f"file or a past chat), so it cannot change me/{nid}.md.")
         claim_page = kind == "me" and nid in claims.PAGES
@@ -2415,11 +2456,10 @@ class Cortex:
         """me/portrait.md gets its `## YYYY-MM` heading on first use (no other page does this)."""
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
             raise invalid("A portrait section is named YYYY-MM, e.g. 2026-11.")
-        path = self.vault.root / "me" / "portrait.md"
-        with self.vault.lock():
-            text = path.read_bytes().decode("utf-8") if path.is_file() else "# Portrait\n"
-            if f"## {month}" not in text.splitlines():
-                self.vault.write_text(path, text.rstrip("\n") + f"\n\n## {month}\n")
+        def add(t: str) -> str:  # B13: an owner's edit made meanwhile is reread, not lost
+            return t if f"## {month}" in t.splitlines() else t.rstrip("\n") + f"\n\n## {month}\n"
+
+        self.vault.update_text(self.vault.root / "me" / "portrait.md", add, "# Portrait\n")
 
     def _voice_section(self, audience: str) -> None:
         """V2: me/voice.md gets its `## <audience>` heading on first use, before `## Past`."""
@@ -2462,18 +2502,20 @@ class Cortex:
         if not heading.strip() or "\n" in heading or heading.startswith("#"):
             raise invalid("target must be a one-line section name.")
         heading = heading.strip()
-        path = self.vault.path_for(kind, page)
-        with self.vault.lock():
-            text = path.read_bytes().decode("utf-8") if path.is_file() else new
+
+        def add(text: str) -> str:  # B13: reruns on the reread page if the owner edited it
             nl = "\r\n" if "\r\n" in text else "\n"
             lines = text.replace("\r\n", "\n").rstrip("\n").split("\n")
-            if f"## {heading}" not in lines:
-                at = next((i for i, ln in enumerate(lines) if ln in before), None)
-                if at is None:
-                    lines += ["", f"## {heading}"]
-                else:
-                    lines[at:at] = [f"## {heading}", ""]
-                self.vault.write_text(path, nl.join(lines) + nl)
+            if f"## {heading}" in lines:
+                return text
+            at = next((i for i, ln in enumerate(lines) if ln in before), None)
+            if at is None:
+                lines += ["", f"## {heading}"]
+            else:
+                lines[at:at] = [f"## {heading}", ""]
+            return nl.join(lines) + nl
+
+        self.vault.update_text(self.vault.path_for(kind, page), add, new)
 
     def cortex_add(self, kind: Literal["domain", "area", "concept", "problem", "assessment",
                                        "application", "mistake", "resource", "note", "project",
@@ -2575,8 +2617,14 @@ class Cortex:
             allowed = ENUMS.get((kind, name))
             if allowed and value not in allowed:
                 raise invalid(f"{name} must be one of {', '.join(sorted(allowed))}.")
+        if kind == "assessment":
+            check_assessment_result(fields.get("score"), fields.get("date"))
         if kind in WIKI_DEFAULTS:
             fields = self._wiki_fields(kind, fields, raw_text)
+        if kind == "problem" and fields.get("concepts") is not None:  # B9: unknown -> did_you_mean
+            v = fields["concepts"]
+            fields = {**fields, "concepts": [f"[[{self._concept(_target(n) or str(n))}]]"
+                                             for n in (v if isinstance(v, list) else [v])]}
         slug = slugify(title)
         if not slug:
             raise invalid("The title needs at least one letter or digit.")
@@ -2766,7 +2814,8 @@ DESCRIPTIONS = {
     "cortex_patch": "Edit a note (any, including me/*): append under a heading, set a "
                     "whitelisted field, or tick a checklist item in a section. me/personality and "
                     "me/preferences, me/portrait, me/voice (one ## <audience> section each, "
-                    "plus ## Everyone): user_confirmed=true only after the user agrees; "
+                    "plus ## Everyone), me/teaching-contract: user_confirmed=true only after "
+                    "the user agrees; "
                     "otherwise "
                     "the line waits in inbox.md. me/delegation (## Alone, ## Ask first, "
                     "## Never): user_confirmed=true required, refused after reading outside "

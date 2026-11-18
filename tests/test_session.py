@@ -240,11 +240,12 @@ def _touch(mgr, s):
 
 
 @pytest.mark.parametrize("swept", [False, True])
-def test_a_touch_only_session_closes_quietly(mgr, clock, root, swept):
+def test_a_touch_only_session_closes_quietly(mgr, clock, root, swept, monkeypatch):
     s = mgr.start("ambient")
     _touch(mgr, s)
     if swept:  # its server died: the SessionEnd sweep closes it from the events alone
         mgr.current = None
+        monkeypatch.setattr(sm_mod, "_pid_alive", lambda pid: False)
         clock.tick(hours=3)
         assert sweep(Vault(root), clock) == [s.id]
         commit = git(root, "rev-parse", "HEAD").strip()
@@ -419,13 +420,14 @@ def test_exam_retention_agrees_across_start_close_and_replay(mgr, root, monkeypa
 
 # ---- sweep keeps Changed: and closes sessions of exited servers (§15.2 N2, N3) ------------
 
-def test_sweep_close_rebuilds_changed_counts_and_journal(mgr, clock, root):
+def test_sweep_close_rebuilds_changed_counts_and_journal(mgr, clock, root, monkeypatch):
     s = mgr.start("ambient")
     mgr.note("patched", change={"tool": "patch", "id": "profile", "kind": "me",
                                 "op": "append_to_section", "target": "Brief"})
     mgr.note("added", "two-pointers", change={"tool": "add", "id": "two-pointers",
                                               "kind": "concept", "op": "create", "target": None})
     mgr.current = None  # the process dies; no close
+    monkeypatch.setattr(sm_mod, "_pid_alive", lambda pid: False)
     clock.tick(hours=3)
     assert sweep(Vault(root), clock) == [s.id]
     text = next((root / "sessions").glob(f"*-{s.id[-8:].lower()}.md")).read_text(
@@ -464,6 +466,50 @@ def test_sweep_closes_a_session_at_once_when_its_server_has_exited(mgr, clock, r
     clock.tick(minutes=5)  # far from the 2 h idle close
     assert sweep(Vault(root), clock) == [gone.id]  # the live server's session stays open
     assert kinds(root, live.id) == ["open"]
+
+
+def test_a_live_servers_reading_session_survives_another_servers_sweep(root, clock):
+    """B2: Desktop reads for hours (reads write no events); a new server's start-up sweep
+    used to close its session, and Desktop's next write landed in a closed session."""
+    desk = SessionManager(Vault(root), clock=clock)
+    s = desk.require("log")  # a write opens ambient; its `open` holds this live pid
+    for _ in range(15):
+        clock.tick(minutes=10)  # under RESUME_AFTER: no resume event either
+        assert desk.require("find") is s  # reads only
+    assert kinds(root, s.id) == ["open"]
+    assert sweep(Vault(root), clock) == []  # 2.5 h after its last event, but its pid lives
+    assert desk.require("log") is s
+    clock.tick(hours=25)
+    desk.current = None  # forget it in memory; a day-old session is closed even if alive
+    assert sweep(Vault(root), clock) == [s.id]
+
+
+def test_a_write_after_another_process_closed_the_session_opens_a_fresh_one(root, clock):
+    """B2: `require` on a write sees a close written by another process and starts anew,
+    so the write is not appended to (and lost from the commit of) a closed session."""
+    desk = SessionManager(Vault(root), clock=clock)
+    s = desk.start("learn", topic="graphs")
+    desk.expose()
+    assert sweep(Vault(root), clock, force=True) == [s.id]  # e.g. `cortex session close`
+    assert desk.require("find") is s  # a read writes nothing: no need to reopen
+    new = desk.require("grade")
+    assert new is not s and desk.current is new
+    assert (new.mode, new.topic, new.exposed) == ("learn", "graphs", True)
+    assert kinds(root, s.id).count("close") == 1 and kinds(root, new.id) == ["open"]
+
+
+def test_a_sweep_dates_an_idle_close_at_the_last_event(root, clock):
+    """B15: an orphan swept days later closes at its last event: its journal line lands on
+    its own day and its duration is real, while Today.md is as of now."""
+    sid = _orphan(root, T0 - timedelta(days=3))
+    assert sweep(Vault(root), clock) == [sid]
+    close = list(EventLog(Vault(root)).iter_events(sid))[-1]
+    assert close["kind"] == "close" and close["ts"] == "2026-11-10T12:00:01Z"
+    assert "session review" in (root / "journal/2026-11-10.md").read_text(encoding="utf-8")
+    assert not (root / "journal/2026-11-13.md").exists()
+    note = next((root / "sessions").glob(f"*-{sid[-8:].lower()}.md")).read_text("utf-8")
+    assert "- Duration: 0 min" in note
+    assert "# Today · 2026-11-13" in (root / "Today.md").read_text(encoding="utf-8")
 
 
 # ---- per-session commits (outside review: undo isolation) --------------------------------

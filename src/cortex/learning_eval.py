@@ -123,29 +123,32 @@ def _stamped(p) -> bool:
     return not isinstance(p, bool) and isinstance(p, (int, float)) and 0 <= p <= 1
 
 
-def history_pairs(events: Iterable[dict], problem_concepts: dict | None = None,
-                  cap: int | None = None) -> int:
-    """How many pairs `report`'s splits.prior.history has (graded items with a `predicted_p`
-    on a concept already graded or credited), without the report's splits; stops at `cap`."""
-    n, seen = 0, set()
+def cold_pairs(events: Iterable[dict], problem_concepts: dict | None = None,
+               ) -> list[tuple[float, int, float]]:
+    """The pairs that check the exam-day forecast (B5): stamped graded items on a concept
+    already graded or credited, cold (the first on the concept that local day; a warm re-test
+    after teaching passes almost surely, so it says nothing about recall across a gap)."""
+    pairs, seen = [], set()
     for it in levels._items(events, problem_concepts):
         if it.verdict is None or it.concept is None or it.ev.get("kind") == "ask":
             continue
-        n += it.concept in seen and _stamped(it.ev.get("predicted_p"))
-        if cap is not None and n >= cap:
-            return n
+        p = it.ev.get("predicted_p")
+        if it.concept in seen and not it.warm and _stamped(p):
+            pairs.append((float(p), int(it.verdict == "correct" and it.hints <= 1),
+                          levels._score(it)))
         seen.add(it.concept)
         if it.verdict == "correct":
             seen.update(it.also)
-    return n
+    return pairs
 
 
-def calibrated(events: Iterable[dict], problem_concepts: dict | None = None) -> bool:
-    """Whether `history_pairs` reaches MIN_PAIRS: the exam-day forecast gate."""
-    events = list(events)
-    if sum(_stamped(e.get("predicted_p")) for e in events) < MIN_PAIRS:
-        return False  # too few stamps to ever reach it: skip the item pass
-    return history_pairs(events, problem_concepts, MIN_PAIRS) >= MIN_PAIRS
+def calibrated(events: Iterable[dict], problem_concepts: dict | None = None,
+               ) -> tuple[int, bool]:
+    """The exam-day forecast gate: (cold pairs, open). Open needs MIN_PAIRS cold pairs whose
+    forecasts beat always forecasting the base rate (Brier skill > 0)."""
+    pairs = cold_pairs(events, problem_concepts)
+    skill = _headline(pairs).get("skill")
+    return len(pairs), len(pairs) >= MIN_PAIRS and skill is not None and skill > 0
 
 
 def report(events: Iterable[dict], problem_concepts: dict | None = None,

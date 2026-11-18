@@ -75,6 +75,47 @@ def test_set_field_keeps_other_bytes(v):
     assert after == before.replace(b'outcome: "pending"', b'outcome: "pass"')
 
 
+@pytest.mark.parametrize("bad", ["next friday", "20261130", "2026-11-31", "2026-11-30x"])
+def test_set_field_refuses_a_bad_assessment_date(v, bad):
+    """B10: an unreadable date silently dropped the test off the exam clock."""
+    before = v.path_for("assessment", "acme-oa-2026").read_bytes()
+    with pytest.raises(VaultError, match="date"):
+        v.set_field("assessment", "acme-oa-2026", "date", bad)
+    assert v.path_for("assessment", "acme-oa-2026").read_bytes() == before
+    v.set_field("assessment", "acme-oa-2026", "date", "2026-11-30")
+
+
+def racer(monkeypatch, name: str, line: bytes) -> None:
+    """The next write to `name` finds `line` appended by another editor (Obsidian) first."""
+    real, fired = Vault._atomic_write, []
+
+    def edit_first(self, path, text, expect=None):
+        if Path(path).name == name and not fired:
+            fired.append(1)
+            with open(path, "ab") as f:
+                f.write(line)
+        return real(self, path, text, expect)
+
+    monkeypatch.setattr(Vault, "_atomic_write", edit_first)
+
+
+def test_update_text_keeps_an_edit_made_meanwhile(v, monkeypatch):
+    """B13: read-modify-write of a page Obsidian may edit rereads instead of overwriting."""
+    page = v.root / "inbox.md"
+    page.write_bytes(b"# Inbox\n")
+    racer(monkeypatch, "inbox.md", b"- typed in Obsidian\n")
+    assert v.update_text(page, lambda t: t + "- mine\n") is True
+    assert page.read_bytes() == b"# Inbox\n- typed in Obsidian\n- mine\n"
+    new = v.root / "me" / "fresh.md"
+    assert v.update_text(new, lambda t: t + "## A\n", default="# Fresh\n") is True
+    assert new.read_bytes() == b"# Fresh\n## A\n"
+    assert v.update_text(new, lambda t: t) is False
+    with pytest.raises(VaultError, match="key or token"):
+        v.update_text(page, lambda t: t + "- sk-ant-api03-" + "x" * 90 + "\n")
+    with pytest.raises(VaultError):
+        v.update_text(v.root / ".." / "out.md", lambda t: "x")
+
+
 def test_set_field_crlf_body_identical(v):
     path = v.path_for("problem", "lc-1")
     crlf = path.read_bytes().replace(b"\n", b"\r\n")

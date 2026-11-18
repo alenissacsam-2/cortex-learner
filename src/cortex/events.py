@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cortex.vault import ID_RE, Vault, VaultError, invalid, scan_secrets
+from cortex.vault import ID_RE, Vault, VaultError, check_day, invalid, scan_secrets
 
 if TYPE_CHECKING:
     from ulid import ULID
@@ -291,6 +291,13 @@ class EventLog:
         self.vault._track(path)
 
 
+def check_assessment_result(score, day) -> None:
+    if score is not None and (isinstance(score, bool) or not isinstance(score, (str, int, float))):
+        raise invalid("score must be a string or a number.")
+    if day is not None:
+        check_day("date", day)
+
+
 def log_assessment(log: EventLog, *, session: str, source: str, assessment: str, outcome: str,
                    score=None, company: str | None = None, kind: str | None = None,
                    date: str | None = None, felt_weak: list[str] | None = None,
@@ -299,6 +306,7 @@ def log_assessment(log: EventLog, *, session: str, source: str, assessment: str,
 
     `stamp` (mode, grader, now) passes through to EventLog.append.
     """
+    check_assessment_result(score, date)  # B10: before the note exists
     vault = log.vault
     try:
         vault.read("assessment", assessment)
@@ -328,17 +336,18 @@ def void_event(log: EventLog, *, session: str, event_id: str, reason: str, sourc
     Returns (void event, target event); `stamp` (mode, grader, now) goes to EventLog.append."""
     if not isinstance(reason, str) or not reason.strip():
         raise invalid("reason is required.")
-    events = list(log.iter_events())
-    target = next((e for e in events if e["id"] == event_id), None)
-    if target is None:
-        raise VaultError("unknown_id", f"No event '{event_id}' in the log.")
-    if target.get("kind") == "void":
-        raise invalid("A void cannot be voided.")
-    if any(e.get("kind") == "void" and e.get("ref") == event_id for e in events):
-        raise invalid(f"Event '{event_id}' is already voided.")
-    ev = log.append(session=session, kind="void", source=source, **stamp,
-                    fields={"ref": event_id, "payload": {"reason": reason.strip()}})
-    _restore_note(log, target)
+    with log.vault.lock():  # B11: two voids of one event must not both pass the check
+        events = list(log.iter_events())
+        target = next((e for e in events if e["id"] == event_id), None)
+        if target is None:
+            raise VaultError("unknown_id", f"No event '{event_id}' in the log.")
+        if target.get("kind") == "void":
+            raise invalid("A void cannot be voided.")
+        if any(e.get("kind") == "void" and e.get("ref") == event_id for e in events):
+            raise invalid(f"Event '{event_id}' is already voided.")
+        ev = log.append(session=session, kind="void", source=source, **stamp,
+                        fields={"ref": event_id, "payload": {"reason": reason.strip()}})
+        _restore_note(log, target)
     return ev, target
 
 

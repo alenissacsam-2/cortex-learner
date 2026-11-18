@@ -162,7 +162,8 @@ def calibration(events: Iterable[dict]) -> dict:
     pairs = [(fp["predicted_p"], probes.HITS[s["payload"]["twin_hit"]])
              for fid, s in settles.items() if fid in forecasts
              and (fp := forecasts[fid]["payload"]).get("claims")
-             and isinstance(fp.get("predicted_p"), (int, float))]
+             and isinstance(fp.get("predicted_p"), (int, float))
+             and not isinstance(fp["predicted_p"], bool) and 0 <= fp["predicted_p"] <= 1]
     bins = [{"lo": i / 5, "hi": (i + 1) / 5, "n": 0, "p": 0.0, "hit": 0.0} for i in range(5)]
     for p, y in pairs:
         row = bins[min(int(p * 5), 4)]
