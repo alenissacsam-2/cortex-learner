@@ -678,9 +678,10 @@ class Cortex:
                               topic=topic, events=events)
         if minutes and not paper:  # council item 7: the plan's tail that does not fit goes
             today = planner.fit(today, minutes)
-        titles = {n.id: str(n.fields.get("title") or n.id)
-                  for n in self.vault.iter_notes("mistake")}
-        open_m = sorted((m for m in mistakes.values() if m.status == "open"),
+        notes = list(self.vault.iter_notes("mistake"))
+        titles = {n.id: str(n.fields.get("title") or n.id) for n in notes}
+        hush = {n.id for n in notes if is_private(n)}  # D1
+        open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                         key=lambda m: (-m.count, m.id))
         display = render.start_card(
             mode=mode, sprint_day=planner.sprint_day(self.vault), today=today,

@@ -130,6 +130,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         tested = [c for c in planner._weights(catalog, a["tests"]) if c in visible]
         doms = {catalog.entries[c].domain for c in tested}
         score = scores.get(a["id"])
+        share = planner.readiness(vault, catalog, states, a)
         return {"id": a["id"], "company": plain(a["company"] or "") or None,
                 "kind": plain(a["kind"] or "") or None, "date": d.isoformat() if d else None,
                 "days_left": (d - today_d).days if d else None,
@@ -137,7 +138,9 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
                 "score": plain(str(score)) if score is not None else None,
                 "readiness": {"solid": sum(state(c) == "solid" for c in tested),
                               "total": len(tested),
-                              "share": planner.readiness(vault, catalog, states, a),
+                              # D3: `weighted` names the weighted share; `share` stays for
+                              # old readers
+                              "share": share, "weighted": share,
                               # a forecast beside the Solid share, only for a day still ahead
                               # and once calibrated, as on the home card; until then, why not
                               "forecast": planner.recall_on_day(vault, catalog, states, a, now)

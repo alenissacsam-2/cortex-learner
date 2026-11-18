@@ -79,6 +79,7 @@ def test_blob_schema_and_counts(root):
     assert a["id"] == "acme-oa-2026" and a["days_left"] == 7
     assert a["readiness"]["total"] == 2
     assert 0.0 <= a["readiness"]["share"] <= 1.0  # weighted planner.readiness
+    assert a["readiness"]["weighted"] == a["readiness"]["share"]  # D3
     assert d["mistakes"][0]["id"] == "dsa.off-by-one" and d["mistakes"][0]["count"] == 1
     weeks = d["history"]["weeks"]
     assert len(weeks) == 8 and sum(w["answers"] for w in weeks) == 3

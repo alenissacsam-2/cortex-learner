@@ -413,8 +413,10 @@ def test_a_named_topic_ranks_its_due_items_first(v, mode):
 def test_readiness(v):
     catalog = Catalog.load(v)
     states = {"two-pointers": ConceptState("two-pointers", "solid")}
-    # weights: arrays-basics 0.6, secret-diary 0.6, two-pointers 0.6 + 0.4
-    assert readiness(v, catalog, states, "acme-oa-2026") == pytest.approx(1.0 / 2.2)
+    # weights: arrays-basics 0.6, two-pointers 0.6 + 0.4; D3: private secret-diary 0.6 is out
+    assert readiness(v, catalog, states, "acme-oa-2026") == pytest.approx(1.0 / 1.6)
+    assert planner.readiness_parts(v, catalog, states, "acme-oa-2026") == {
+        "solid": 1, "total": 2, "weighted": pytest.approx(1.0 / 1.6)}
     assert readiness(v, catalog, {}, planner.assessments(v)[0]) == 0.0
     assert readiness(v, catalog, {}, {"id": "x", "tests": {}}) is None
     neg = {"id": "x", "tests": {"two-pointers": 1, "arrays-basics": -1, "hash-maps": 0}}
@@ -668,3 +670,46 @@ def test_past_question_cue_is_escaped(v):
     assert len(line) < 260
     assert "Past question" not in today_md(today=items, sprint_day=None, assessments=[],
                                            as_of="2026-11-15")
+
+
+def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
+    """D1: a `private: true` track (title, unlinked items, the owed pointer, its sprint day)
+    and a private open mistake never reach the plan, `cortex today`, Today.md, the start card
+    or the dashboard blob."""
+    import json
+
+    from conftest import run
+    from typer.testing import CliRunner
+
+    from cortex import dashboard
+    from cortex.cli import app
+
+    owed = "".join(f"- [ ] SECRET-OWED {i}\n" for i in range(8))
+    (root / "tracks" / "secret.md").write_text(
+        '---\nid: "secret"\ntitle: "SECRET-TRACK-TITLE"\nprivate: true\ncurrent_day: 9\n---\n'
+        f"# SECRET-TRACK-TITLE\n\n## Day 9\n- [ ] SECRET-ITEM read the diary\n\n## Owed\n{owed}",
+        encoding="utf-8")
+    (root / "mistakes" / "dsa.hush.md").write_text(
+        '---\nid: "dsa.hush"\ntitle: "SECRET-MISTAKE"\nprivate: true\n'
+        'concepts: ["[[two-pointers]]"]\n---\n# SECRET-MISTAKE\n', encoding="utf-8")
+    v, now = Vault(root), datetime.now(UTC)
+    EventLog(v).append(session="cli", kind="grade", source="tutor", now=now,
+                       fields={"object": "concept:two-pointers", "verdict": "wrong",
+                               "mistakes": ["dsa.hush", "dsa.off-by-one"]})
+    catalog = Catalog.load(v)
+    states, _ = planner.current_states(v, events.local_day(now), catalog)
+    seen = [json.dumps(today(v, catalog, states, now=now)), str(planner.sprint_day(v))]
+    r = CliRunner().invoke(app, ["today", "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    seen += [r.output, (root / "Today.md").read_text(encoding="utf-8")]
+
+    async def body(call):
+        seen.append(json.dumps(await call("cortex_start", {"mode": "learn"})))
+
+    run(root, body)
+    seen.append(json.dumps(dashboard.build_data(v, now=now), default=str))
+    assert "Test sprint" in seen[2] + seen[3] or "Drill set" in seen[0]  # the public track shows
+    assert "DSA: off-by-one" in seen[4]  # and the public mistake
+    for text in seen:
+        assert "SECRET-" not in text
+    assert planner.sprint_day(v) == 2
