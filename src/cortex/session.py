@@ -402,8 +402,14 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
         if top.returncode:
             return None
         top = top.stdout.strip()
+        from cortex.browse.forget import PRIVATE_IGNORE
+
         status = _gitz(top, "status", "--porcelain", "-z", "--untracked-files=all")
-        changed = _status_paths(status.stdout)
+        pre = _gitz(vault.root, "rev-parse", "--show-prefix").stdout.strip()
+        # C3: a private browse page still in the index (staged, or tracked before the ignore
+        # line) is never committed; `untrack_private` takes it out of the index
+        changed = [c for c in _status_paths(status.stdout)
+                   if not c.startswith(pre + PRIVATE_IGNORE)]
         if status.returncode or not changed:
             return None
         if busy := git_busy(vault.root):
@@ -411,7 +417,6 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
             return None
         ours, other = changed, []
         if mine is not None:
-            pre = _gitz(vault.root, "rev-parse", "--show-prefix").stdout.strip()
             keys = {pre + r for r in _rel(vault, mine)}
             skip = {pre + r for r in _rel(vault, exclude)}
             ours = [c for c in changed if c in keys]
