@@ -11,7 +11,7 @@
   history.replaceState(null, '', '/' + location.hash);
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const SECTIONS = ['setup', 'ask', 'status', 'connect', 'llm', 'browse', 'vault'];
+  const SECTIONS = ['setup', 'chat', 'status', 'connect', 'llm', 'browse', 'vault'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---- DOM helpers ---- */
@@ -201,8 +201,7 @@
       if (w === 'preview' && j.error) Object.assign(guide, { error: j.error, upload: null });
       else if (w === 'preview') guide.preview = j.result;
       else Object.assign(guide, { done: j, upload: j.result && j.result.need ? guide.upload : null });
-    } else if (j.section === 'ask') asked = j;  // shown in the Ask board itself
-    else outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error };
+    } else outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error };
     hideTimer = setTimeout(idle, 8000);
     if (current) load(current);
   }
@@ -286,49 +285,282 @@
     put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] }, ...rows));
   }
 
-  /* Ask your archive: the local model answers from your notes and browsing; never a cloud model */
-  let question = '', asked = null;
+  /* Chat: a model on this computer answers from your notes, saved chats and browsing; never a
+     cloud model. The answer streams as NDJSON from POST /api/chat and is rendered by a tiny
+     safe renderer (textContent only: paragraphs, lists, bold, code, [n] citations). */
   const MISSING = {  // [title, value, why, button]
     embed: ['Search model', 'not downloaded', 'Finds the notes and pages that answer your question. A one-time download.', 'Set up the search model'],
     llm: ['Local model', 'not running', 'Writes the answer on this computer, never in the cloud. Start Ollama or LM Studio, or set one up (a download of a few GB).', 'Set up a local model'],
   };
-  function renderAsk(d) {
+  const EXAMPLES = ['What did I read about binary search?', 'Which sites did I visit yesterday?', 'What mistakes do I keep making?'];
+  const KIND = { note: 'note', chat: 'chat', browse: 'browsing' };
+  const chatS = { d: null, id: null, msgs: [], draft: '', busy: null, setOpen: false, focus: false };
+  const last = (e) => e.childNodes[e.childNodes.length - 1];
+
+  function inline(text, cite) {  // **bold**, `code` and [n] citations; everything else is text
+    const out = [];
+    for (const part of String(text).split(/(\*\*[^*\n]+\*\*|`[^`\n]+`|\[\d+(?:\s*,\s*\d+)*\])/)) {
+      if (!part) continue;
+      if (part.startsWith('**') && part.length > 4) out.push(h('strong', { text: part.slice(2, -2) }));
+      else if (part.startsWith('`') && part.length > 2) out.push(h('code', { text: part.slice(1, -1) }));
+      else if (/^\[\d/.test(part)) {
+        for (const n of part.slice(1, -1).split(',').map((x) => x.trim())) {
+          out.push(h('button', { class: 'cite', type: 'button', text: n, 'aria-label': `Source ${n}`, onclick: () => cite(n) }));
+        }
+      } else out.push(part);
+    }
+    return out;
+  }
+  function md(text, cite) {  // paragraphs, "- " and "1." lists; never HTML, links or images
+    const nodes = [];
+    let cur = null, kind = '';  // the open paragraph or list and its kind: p, ul or ol
+    for (const l of String(text).split('\n')) {
+      const k = !l.trim() ? '' : /^\s*[-*•]\s+/.test(l) ? 'ul' : /^\s*\d+[.)]\s+/.test(l) ? 'ol' : 'p';
+      if (k !== kind || !k) { cur = k ? h(k) : null; kind = k; if (cur) nodes.push(cur); }
+      if (k === 'p') { if (cur.childNodes.length) cur.append(h('br')); cur.append(...inline(l, cite)); }
+      else if (k) cur.append(h('li', {}, inline(l.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, ''), cite)));
+    }
+    return nodes;
+  }
+  function daysAgo(ts) {
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const n = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 ? `${n} days ago` : d.toISOString().slice(0, 10);
+  }
+  function sourceRow(sources) {
+    if (!sources || !sources.length) return null;
+    return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Sources' }),
+      sources.map((s) => h('button', { class: 'chip', type: 'button', 'data-n': s.n, title: 'Open in Obsidian', onclick: () => post('/api/open', { what: 'page', path: s.path }) },
+        h('span', { class: 'ct', text: `${s.n} · ${s.title || s.path}` }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }))));
+  }
+  function botMsg(m) {  // {text, sources, model, stopped}; returns the element and its updater
+    const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
+    const cite = (n) => {
+      const chip = [...el.querySelectorAll('.chip')].find((c) => c.getAttribute('data-n') === String(n));
+      if (!chip) return;
+      chip.scrollIntoView({ block: 'nearest' });
+      chip.focus();
+      chip.classList.add('flash');
+      setTimeout(() => chip.classList.remove('flash'), 1200);
+    };
+    const draw = (streaming) => {
+      who.textContent = 'Cortex' + (m.model ? ` · ${m.model}` : '');
+      if (m.thinking && !m.text) body.replaceChildren(h('span', { class: 'thinking', text: 'thinking…' }));
+      else body.replaceChildren(...md(m.text, cite));
+      if (streaming) {
+        let at = last(body) || body;
+        if (at.tagName === 'UL' || at.tagName === 'OL') at = last(at);
+        if (!at || at.tagName === 'SPAN') at = body;
+        at.append(h('span', { class: 'caret', 'aria-hidden': 'true' }));
+      }
+      el.replaceChildren(who, body, sourceRow(m.sources) || '',
+        m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
+    };
+    draw(false);
+    return { el, draw };
+  }
+  function userMsg(m) {
+    return h('div', { class: 'msg you' }, h('div', { class: 'who', text: 'You' }), h('div', { class: 'md' }, ...md(m.text, () => {})));
+  }
+  function missingRows(keys, why) {
+    return h('div', { class: 'board' }, note(why || 'Chat needs two things on this computer. Still missing:'),
+      keys.map((k) => {
+        const [title, value, help, label] = MISSING[k];
+        return row(title, value, help, [btn(label, () => { opened.add(k); show('setup', true); }, 'btn lit')]);
+      }));
+  }
+
+  async function openChat(id) {
+    if (chatS.busy) return;
+    if (!id) Object.assign(chatS, { id: null, msgs: [] });
+    else {
+      try {
+        const r = await api('/api/chat/get?id=' + encodeURIComponent(id));
+        Object.assign(chatS, { id, msgs: r.messages });
+      } catch (e) { toast(e.message, true); return; }
+    }
+    chatS.focus = true;
+    renderChat(chatS.d);
+  }
+  async function reloadChats() {
+    try { chatS.d.chats = (await api('/api/chat/list')).chats; } catch (e) { /* the page says so */ }
+  }
+  function saveSetting(body) {
+    post('/api/chat/settings', body, (s) => { chatS.d.settings = s; });
+  }
+  function settingsPanel(s) {
+    const length = h('select', { id: 'chat-length' }, ['short', 'normal', 'long'].map((v) => h('option', { value: v, text: v[0].toUpperCase() + v.slice(1) })));
+    length.value = s.length;
+    length.addEventListener('change', () => saveSetting({ length: length.value }));
+    const temp = h('input', { type: 'range', id: 'chat-temp', min: '0', max: '1', step: '0.1', value: String(s.temperature) });
+    temp.addEventListener('change', () => saveSetting({ temperature: Number(temp.value) }));
+    const k = h('select', { id: 'chat-k' }, [4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => h('option', { value: String(n), text: String(n) })));
+    k.value = String(s.passages);
+    k.addEventListener('change', () => saveSetting({ passages: Number(k.value) }));
+    const srcNames = { notes: 'Notes and mistakes', chats: 'Saved AI chats', browsing: 'Browsing', private: 'Private browsing' };
+    const srcs = Object.entries(srcNames).map(([key, label]) => {
+      const cb = h('input', { type: 'checkbox', id: 'chat-src-' + key, checked: s.sources[key] });
+      cb.addEventListener('change', () => saveSetting({ sources: { [key]: cb.checked } }));
+      return h('label', { class: 'check', for: 'chat-src-' + key }, cb, h('span', { text: label }));
+    });
+    const keep = h('input', { type: 'checkbox', id: 'chat-keep', checked: s.history });
+    keep.addEventListener('change', () => saveSetting({ history: keep.checked }));
+    const wipe = () => confirmDialog('Delete all chats?', 'Delete',
+      [h('p', { class: 'ink-2', text: 'Every saved chat is deleted from this computer. This cannot be undone.' })],
+      () => post('/api/chat/delete', { all: true }, (r) => {
+        toast(`Deleted ${r.deleted} chat${r.deleted === 1 ? '' : 's'}.`);
+        Object.assign(chatS, { id: null, msgs: [] });
+        load('chat');
+      }));
+    const det = h('details', { class: 'chat-set', open: chatS.setOpen },
+      h('summary', { text: 'Chat settings' }),
+      h('div', { class: 'set-panel' },
+        h('div', { class: 'field' }, h('label', { for: 'chat-length', text: 'Answer length' }), length),
+        h('div', { class: 'field' }, h('label', { for: 'chat-temp', text: 'Creativity' }), temp,
+          h('p', { class: 'help', text: 'Left: sticks closely to your pages. Right: freer wording.' })),
+        h('div', { class: 'field' }, h('label', { for: 'chat-k', text: 'Pages read per answer' }), k),
+        h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Search in' }), ...srcs),
+        h('div', { class: 'field' }, h('label', { class: 'check', for: 'chat-keep' }, keep, h('span', { text: 'Keep chat history' })),
+          h('p', { class: 'help', text: 'Off: new chats are forgotten when the app stops; nothing is written.' })),
+        h('div', { class: 'field' }, btn('Delete all chats', wipe))));
+    det.addEventListener('toggle', () => { chatS.setOpen = det.open; });
+    return det;
+  }
+
+  function drawSide() {  // the past chats, wide (a list) and narrow (a select); redrawn in place
+    const side = $('chat-side'), pick = $('chat-pick');
+    if (!side || !pick) return;
+    const chats = chatS.d.chats || [];
+    const list = h('ul', { class: 'chat-list', 'aria-label': 'Past chats' }, chats.map((c) => h('li', { class: 'chat-item' + (c.id === chatS.id ? ' on' : '') },
+      h('button', { class: 'chat-open', type: 'button', 'aria-current': c.id === chatS.id ? 'true' : null, onclick: () => openChat(c.id) },
+        h('span', { class: 't', text: c.title }), h('span', { class: 'd', text: daysAgo(c.updated) })),
+      btn('Delete', () => post('/api/chat/delete', { id: c.id }, () => {
+        if (chatS.id === c.id) Object.assign(chatS, { id: null, msgs: [] });
+        load('chat');
+      }), 'chat-del', { 'aria-label': `Delete chat: ${c.title}` }))));
+    side.replaceChildren(btn('New chat', () => openChat(null), 'btn lit chat-new'),
+      chats.length ? list : h('p', { class: 'ink-3 small', text: 'Your chats appear here.' }));
+    pick.replaceChildren(h('option', { value: '', text: 'New chat' }),
+      ...chats.map((c) => h('option', { value: c.id, text: `${c.title} · ${daysAgo(c.updated)}` })));
+    pick.value = chatS.id || '';
+  }
+
+  function renderChat(d) {
+    chatS.d = d;
+    if (chatS.busy) return;  // never rebuild under a streaming answer
     if (!d.vault) {
-      put('ask', board('Ask your archive', {}, row('No vault yet', null, 'Set one up first.', [btn('Open Setup', () => show('setup', true))])));
+      $('chat').replaceChildren(board('Chat', {}, row('No vault yet', null, 'Set one up first.', [btn('Open Setup', () => show('setup', true))])));
       return;
     }
-    const q = h('input', { type: 'text', id: 'ask-q', value: question, spellcheck: 'true', placeholder: 'What did I read about binary search?' });
-    q.addEventListener('input', () => { question = q.value; });
-    const go = () => {
-      if (!q.value.trim()) { toast('Type a question first.'); return; }
-      asked = null;
-      job('/api/ask', { question: q.value });
-    };
-    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-    const parts = [h('div', { class: 'field' }, h('label', { for: 'ask-q', text: 'Your question' }),
-      h('div', { class: 'inline' }, q, btn('Ask', go, 'btn lit')),
-      h('p', { class: 'help', text: 'Answered by the local model on this computer (Ollama or LM Studio) from your notes and browsing, private pages included. Nothing is sent to a cloud model. A small model can take a minute.' }))];
-    const j = asked, r = j && j.result;
-    if (j && j.error) parts.push(row('That did not work', null, j.error, null));
-    else if (r && r.error === 'missing') {  // every missing piece at once, each with its own way to Setup
-      parts.push(note('Ask needs two things on this computer. Still missing:'));
-      for (const k of r.missing) {
-        const [title, value, why, label] = MISSING[k];
-        parts.push(row(title, value, why, [btn(label, () => { opened.add(k); show('setup', true); }, 'btn lit')]));
-      }
-    } else if (r && r.error) {
-      parts.push(row(r.error === 'no_local_model' ? 'No local model is running' : 'Not ready yet', null, r.message,
-        [btn('Open Setup', () => show('setup', true), 'btn lit')]));
-    } else if (r) {
-      parts.push(h('div', { class: 'pad' }, h('strong', { text: 'Answer' }), h('p', { class: 'answer', text: r.answer })));
-      if (r.sources.length) {
-        parts.push(h('div', { class: 'pad' }, h('strong', { text: 'Sources' }),
-          h('ol', { class: 'how' }, r.sources.map((s) => h('li', { value: s.n },
-            btn(s.path, () => post('/api/open', { what: 'page', path: s.path }), 'linkbtn mono', { title: 'Open in Obsidian' }))))));
-      }
-      parts.push(row('Answered by', r.model, `Took ${Math.round(j.seconds)} s.`));
+    const pick = h('select', { class: 'chat-pick', id: 'chat-pick', 'aria-label': 'Chat' });
+    pick.addEventListener('change', () => openChat(pick.value || null));
+    const side = h('div', { class: 'chat-side', id: 'chat-side' });
+
+    const log = h('div', { class: 'chat-log', id: 'chat-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
+    for (const m of chatS.msgs) log.append(m.role === 'user' ? userMsg(m) : botMsg(m).el);
+    if (!chatS.msgs.length) {
+      log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
+        h('div', { class: 'inline' }, EXAMPLES.map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
     }
-    put('ask', board('Ask your archive', { note: d.embed ? 'local model only' : 'search model not downloaded' }, ...parts));
+    const missing = d.missing || [];
+    let foot;
+    if (missing.length) foot = missingRows(missing, d.llm_error ? `The local model is not used: ${d.llm_error}` : null);
+    else {
+      const ta = h('textarea', { id: 'chat-input', rows: '1', value: chatS.draft, placeholder: 'Message Cortex', 'aria-label': 'Message', spellcheck: 'true' });
+      const grow = () => { ta.rows = String(Math.min(6, Math.max(1, ta.value.split('\n').length))); };
+      grow();
+      ta.addEventListener('input', () => { chatS.draft = ta.value; grow(); });
+      const go = h('button', { class: 'btn lit chat-send', type: 'button', id: 'chat-send', text: 'Send' });
+      go.addEventListener('click', () => (chatS.busy ? chatS.busy.ctrl.abort() : send(ta, go, log)));
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!chatS.busy) send(ta, go, log); }
+      });
+      foot = h('div', { class: 'composer' }, h('div', { class: 'crow' }, ta, go),
+        h('p', { class: 'help', text: `Runs on this computer with ${d.model || 'your local model'}. Nothing leaves it.` }));
+    }
+    const main = h('div', { class: 'chat-main' }, h('div', { class: 'chat-bar' }, pick, settingsPanel(d.settings)), log, foot);
+    $('chat').replaceChildren(h('div', { class: 'chat' }, side, main));
+    drawSide();
+    if (chatS.focus && $('chat-input')) $('chat-input').focus();
+    chatS.focus = false;
+  }
+
+  async function send(ta, go, log) {
+    const text = ta.value.trim();
+    if (!text) { toast('Type a message first.'); return; }
+    const ctrl = new AbortController();
+    chatS.busy = { ctrl };
+    const empty = log.querySelector('.chat-empty');
+    if (empty) log.replaceChildren();  // the examples go once a chat starts
+    chatS.msgs.push({ role: 'user', text });
+    log.append(userMsg({ text }));
+    const m = { role: 'assistant', text: '', sources: [], model: chatS.d.model };
+    const bot = botMsg(m);
+    bot.draw(true);
+    log.append(bot.el);
+    log.setAttribute('aria-busy', 'true');  // a screen reader hears the answer once, when it is done
+    bot.el.scrollIntoView({ block: 'end' });
+    ta.value = chatS.draft = '';
+    ta.rows = '1';
+    ta.focus();
+    go.textContent = 'Stop';
+    go.setAttribute('aria-label', 'Stop the answer');
+    let failed = null;
+    try {
+      const r = await fetch('/api/chat', {
+        method: 'POST', headers: { 'X-Cortex-Token': T, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: chatS.id, text }), signal: ctrl.signal,
+      });
+      if (!r.ok) {
+        let data = {};
+        try { data = await r.json(); } catch (e) { /* no body */ }
+        if (r.status === 401) gone('This page lost its key. Open the link that cortex app printed, or run it again.');
+        throw new Error(data.error || `The app answered ${r.status}.`);
+      }
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.id) chatS.id = ev.id;
+          if (ev.t === 'start') m.model = ev.model;
+          else if (ev.t === 'think') m.thinking = true;
+          else if (ev.t === 'tok') m.text += ev.s;
+          else if (ev.t === 'src') m.sources = ev.sources;
+          else if (ev.t === 'err') failed = ev;
+          if (ev.t !== 'err') bot.draw(ev.t !== 'done');
+        }
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') m.stopped = true;
+      else failed = { code: 'app', message: e.name === 'TypeError' ? 'The app is not answering.' : e.message };
+    }
+    chatS.busy = null;
+    log.setAttribute('aria-busy', 'false');
+    go.textContent = 'Send';
+    go.setAttribute('aria-label', 'Send');
+    if (failed) {
+      if (failed.code === 'not_set_up' || failed.code === 'no_local_model') {
+        bot.el.replaceChildren(missingRows([failed.code === 'not_set_up' ? 'embed' : 'llm'], failed.message));
+      } else bot.el.replaceChildren(h('div', { class: 'board' }, row('No answer', null, failed.message, null)));
+      if (['app', 'not_set_up', 'no_local_model'].includes(failed.code)) {  // the question was not kept
+        chatS.msgs.pop();
+        ta.value = chatS.draft = text;
+      }
+      return;
+    }
+    if (m.text || m.stopped) chatS.msgs.push(m);
+    bot.draw(false);
+    await reloadChats();
+    drawSide();
   }
 
   /* Connect AI apps */
@@ -850,7 +1082,7 @@
     put('setup', ...d.order.map((k) => steps[k]), sFinish);
   }
 
-  const RENDER = { setup: renderSetup, ask: renderAsk, status: renderStatus, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
+  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 
   /* ---- header: wordmark, theme, quit, nav ---- */
   $('wordmark').append(dm('CORTEX', 3, 'Cortex'));

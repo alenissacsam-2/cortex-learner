@@ -1,0 +1,369 @@
+"""The app's local chat: multi-turn questions over the archive (notes, saved AI chats, mistakes
+and browsing, private pages included), answered by a LOCAL model only (`localllm`, never
+cloudllm). Each turn retrieves afresh through `ask._passages`, wrapped as untrusted data; the
+earlier turns go to the model as plain text only.
+
+History is kept in `<vault>/.cortex/browse/chat/<ulid>.jsonl`, one JSON line per message. That
+folder is inside the private browse tree on purpose (an answer can quote private browsing):
+never served over MCP, never on the dashboard, never logged."""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from datetime import UTC, date, datetime, timedelta
+
+from cortex import ask, localllm, semantic, taint
+from cortex.index import STOPWORDS
+from cortex.vault import Vault
+
+DIR = ".cortex/browse/chat"
+ID_RE = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")  # a ULID, so a path can never leave DIR
+MAX_TEXT = 4000
+TITLE = 60
+TURNS = 6  # earlier messages the model sees
+HISTORY_BUDGET = 3000  # their characters, on top of ask.BUDGET of passages: a 2B model's context
+LENGTH = {"short": 300, "normal": 700, "long": 1500}  # answer length -> max_tokens
+DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 8,
+            "sources": dict(ask.SOURCES), "history": True}
+NO_ANSWER = "I don't know from your archive."
+CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
+SYSTEM = ask.SYSTEM + (" Earlier messages are the conversation so far: use them to understand a "
+                       "follow-up question, but answer only from the passages in the latest "
+                       "message. Today is {today}.")
+_live: dict[str, list] = {}  # chats of a session with history off: memory only, never written
+
+
+# ---- settings (`chat:` in ~/.cortex/config.yaml) -------------------------------------------
+
+def _valid(key: str, v) -> bool:
+    num = isinstance(v, int | float) and not isinstance(v, bool)
+    return {"length": lambda: v in LENGTH,
+            "temperature": lambda: num and 0 <= v <= 1,
+            "passages": lambda: num and v == int(v) and 4 <= v <= 12,
+            "history": lambda: isinstance(v, bool),
+            "sources": lambda: isinstance(v, dict) and set(v) <= set(ask.SOURCES)
+            and all(isinstance(x, bool) for x in v.values())}.get(key, lambda: False)()
+
+
+def get_settings(config: dict | None = None) -> dict:
+    """The chat settings; a missing or bad value is its default."""
+    cfg = (taint.config() if config is None else config).get("chat")
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out = {k: cfg[k] if k in cfg and _valid(k, cfg[k]) else v for k, v in DEFAULTS.items()}
+    out["sources"] = {**ask.SOURCES, **out["sources"]}
+    out["passages"] = int(out["passages"])
+    return out
+
+
+def save_settings(body: dict) -> dict:
+    """Validate `body` (some of DEFAULTS' keys), merge it into the saved settings and return
+    them; ValueError names the first bad field."""
+    if extra := set(body) - set(DEFAULTS):
+        raise ValueError(f"unknown setting {sorted(extra)[0]!r}")
+    for k, v in body.items():
+        if not _valid(k, v):
+            raise ValueError({"length": "length must be short, normal or long",
+                              "temperature": "temperature must be a number from 0 to 1",
+                              "passages": "passages must be a whole number from 4 to 12",
+                              "history": "history must be true or false",
+                              "sources": "sources must map notes, chats, browsing and private "
+                                         "to true or false"}[k])
+    cur = get_settings()
+    new = {**cur, **body, "sources": {**cur["sources"], **body.get("sources", {})}}
+    old = taint.config().get("chat")
+    taint.write_config({"chat": {**(old if isinstance(old, dict) else {}), **new}})
+    return get_settings()
+
+
+# ---- dates in a question --------------------------------------------------------------------
+
+_M = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_DATE = (rf"(?:\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{_M}"
+         rf"(?:,?\s+\d{{4}})?|{_M}\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}})?)")
+_NUM = (r"(\d{1,3}|an?|one|two|three|four|five|six|seven|eight|nine|ten"
+        r"|(?:a\s+)?couple(?:\s+of)?|(?:a\s+)?few)")
+_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+          "seven": 7, "eight": 8, "nine": 9, "ten": 10, "couple": 2, "few": 3}
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_UNIT = {"day": 1, "week": 7, "month": 30}
+_PAD = {"day": 1, "week": 3, "month": 7}  # "N units ago" is fuzzy: wider for longer units
+
+
+def _n(s: str) -> int:
+    s = s.lower()
+    return int(s) if s.isdigit() else next(_WORDS[w] for w in reversed(s.split()) if w in _WORDS)
+
+
+def _day(s: str, today: date) -> date:
+    """12 Nov, Nov 12, 12th of November 2025, 2026-11-12; a day with no year is the last one
+    on or before `today`."""
+    s = s.lower()
+    if m := re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s):
+        return date(*map(int, m.groups()))
+    mon = next(i for i, name in enumerate(_MONTHS, 1) if re.search(r"\b" + name, s))
+    nums = [int(x) for x in re.findall(r"\d+", s)]
+    d = date(nums[1] if len(nums) > 1 else today.year, mon, nums[0])
+    return d.replace(year=d.year - 1) if len(nums) == 1 and d > today else d
+
+
+def _month(mon: str, year: str | None, today: date) -> tuple[date, date]:
+    m = _MONTHS.index(mon.lower()[:3]) + 1
+    y = int(year) if year else today.year - (m > today.month)
+    nxt = date(y + (m == 12), m % 12 + 1, 1)
+    return date(y, m, 1), nxt - timedelta(days=1)
+
+
+def _ago(m, t: date) -> tuple[date, date]:
+    unit = m[2].lower()
+    mid = t - timedelta(days=_n(m[1]) * _UNIT[unit])
+    return mid - timedelta(days=_PAD[unit]), min(mid + timedelta(days=_PAD[unit]), t)
+
+
+def _monday(t: date) -> date:
+    return t - timedelta(days=t.weekday())
+
+
+_D = timedelta(days=1)
+_RULES = [  # first match wins
+    (rf"\bsince\s+({_DATE})", lambda m, t: (_day(m[1], t), t)),
+    (r"\b(?:the\s+)?day\s+before\s+yesterday\b", lambda m, t: (t - 2 * _D, t - 2 * _D)),
+    (r"\byesterday\b", lambda m, t: (t - _D, t - _D)),
+    (r"\b(?:today|tonight|this\s+morning|this\s+afternoon|this\s+evening)\b",
+     lambda m, t: (t, t)),
+    (rf"\b{_NUM}\s+(day|week|month)s?\s+ago\b", _ago),
+    (rf"\b(?:last|past|previous)\s+{_NUM}\s+(day|week|month)s?\b",
+     lambda m, t: (t - _n(m[1]) * _UNIT[m[2].lower()] * _D, t)),
+    (r"\bpast\s+(week|month)\b", lambda m, t: (t - _UNIT[m[1].lower()] * _D, t)),
+    (r"\bthis\s+week\b", lambda m, t: (_monday(t), t)),
+    (r"\blast\s+week\b", lambda m, t: (_monday(t) - 7 * _D, _monday(t) - _D)),
+    (r"\bthis\s+month\b", lambda m, t: (t.replace(day=1), t)),
+    (r"\blast\s+month\b", lambda m, t: _month(_MONTHS[(t.month - 2) % 12],
+                                              str(t.year - (t.month == 1)), t)),
+    (rf"\bin\s+({_M})(?:\s+(\d{{4}}))?(?![\w-])", lambda m, t: _month(m[1], m[2], t)),
+    (rf"\b(?:on\s+)?({_DATE})", lambda m, t: (_day(m[1], t), _day(m[1], t))),
+]
+_RULES = [(re.compile(p, re.I), f) for p, f in _RULES]
+
+
+def _when(text: str, today: date) -> tuple[date, date, tuple[int, int]] | None:
+    for rx, f in _RULES:
+        if m := rx.search(text or ""):
+            try:
+                lo, hi = f(m, today)
+            except (ValueError, StopIteration):  # 31 Feb and the like: no date
+                return None
+            return lo, hi, m.span()
+    return None
+
+
+def when(text: str, today: date) -> tuple[date, date] | None:
+    """(first day, last day) named in `text` (today, yesterday, 3 days ago, last week, this
+    month, on 12 Nov, in October, since 2026-11-01, ...), or None."""
+    got = _when(text, today)
+    return got[:2] if got else None
+
+
+_GENERIC = frozenset(
+    "which what when where who whom did do does done i me my mine visit visited visiting see "
+    "saw seen look looked looking site sites website websites page pages web read reading "
+    "watched go went browse browsed open opened about on at the a an any anything something "
+    "tell show find found was were have has had in of to for from there that this ago day "
+    "days week weeks month months".split())
+
+
+def topic(text: str, span: tuple[int, int]) -> str:
+    """`text` without the date phrase at `span` and without generic words: '' for "which
+    sites did I visit yesterday?"."""
+    rest = text[:span[0]] + " " + text[span[1]:]
+    return " ".join(w for w in re.findall(r"\w+", rest.lower())
+                    if w not in _GENERIC and w not in STOPWORDS)
+
+
+# ---- storage ---------------------------------------------------------------------------------
+
+def _path(vault: Vault, id: str):
+    if not isinstance(id, str) or not ID_RE.fullmatch(id):
+        raise ValueError("not a chat id")
+    return vault.root / DIR / f"{id}.jsonl"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def new() -> str:
+    from ulid import ULID  # lazy, as in events: its import is slow
+    return str(ULID())
+
+
+def load(vault: Vault, id: str) -> list:
+    """The messages of chat `id` ([] for a new one); torn or odd lines are skipped."""
+    p = _path(vault, id)
+    if id in _live:
+        return [*_live[id]]
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in raw.splitlines():
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant") \
+                and isinstance(m.get("text"), str):
+            out.append(m)
+    return out
+
+
+def _save(vault: Vault, id: str, msgs: list, keep: bool) -> None:
+    if not keep:
+        _live[id] = msgs
+        while len(_live) > 50:
+            _live.pop(next(iter(_live)))
+        return
+    vault.write_text(_path(vault, id), "".join(json.dumps(m, ensure_ascii=False) + "\n"
+                                               for m in msgs))
+
+
+def _summary(id: str, msgs: list) -> dict | None:
+    first = next((m["text"] for m in msgs if m["role"] == "user"), None)
+    if first is None:
+        return None
+    return {"id": id, "title": " ".join(first.split())[:TITLE],
+            "updated": msgs[-1].get("ts", ""), "count": len(msgs)}
+
+
+def list(vault: Vault) -> list:  # shadows the builtin on purpose: chat.list
+    """[{id, title (the first question cut to TITLE characters), updated, count}], newest
+    first."""
+    folder = vault.root / DIR
+    ids = {p.stem for p in folder.glob("*.jsonl") if ID_RE.fullmatch(p.stem)} \
+        if folder.is_dir() else set()
+    out = [s for i in ids | set(_live) if (s := _summary(i, load(vault, i)))]
+    return sorted(out, key=lambda s: (s["updated"], s["id"]), reverse=True)
+
+
+def delete(vault: Vault, id: str) -> bool:
+    p = _path(vault, id)
+    gone = _live.pop(id, None) is not None
+    return vault.remove(p) or gone
+
+
+def delete_all(vault: Vault) -> int:
+    folder = vault.root / DIR
+    n = len(_live)
+    _live.clear()
+    for p in folder.glob("*.jsonl") if folder.is_dir() else ():
+        if ID_RE.fullmatch(p.stem) and vault.remove(p):
+            n += 1
+    return n
+
+
+# ---- a turn ------------------------------------------------------------------------------------
+
+def _local(runner) -> bool:
+    """Only a plain loopback localllm.Runner hears private passages: cloudllm's CloudRunner
+    subclasses Runner, so isinstance would let it through."""
+    if type(runner) is not localllm.Runner:
+        return False
+    try:
+        localllm._check_url(runner.base)
+    except ValueError:
+        return False
+    return True
+
+
+def history(msgs: list) -> list:
+    """The last TURNS messages as plain {role, content}, oldest dropped first to fit
+    HISTORY_BUDGET, same-role neighbours joined (a failed turn leaves two user messages; some
+    chat templates refuse that), starting with a user message."""
+    out, left = [], HISTORY_BUDGET
+    for m in reversed(msgs[-TURNS:]):
+        text = m["text"].strip()
+        if not text:
+            continue
+        if len(text) > left:
+            break
+        left -= len(text)
+        if out and out[-1]["role"] == m["role"]:
+            out[-1]["content"] = text + "\n\n" + out[-1]["content"]
+        else:
+            out.append({"role": m["role"], "content": text})
+    out.reverse()
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
+
+
+def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
+          settings: dict | None = None, today: date | None = None) -> str:
+    """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
+    the answer through `emit`: {"t": "start", id, model}, {"t": "think"} while a reasoning
+    model only thinks, {"t": "tok", "s"} per piece, {"t": "src", sources: [{n, path, title,
+    kind}]} (the passages cited), {"t": "done", id, model, seconds, stopped}; or {"t": "err",
+    code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
+    the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
+    `localllm.Runner` or None; never a cloud one."""
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
+        raise ValueError(f"Type a message (up to {MAX_TEXT:,} characters).")
+    s = settings or get_settings()
+    convo_id = convo_id or new()
+    msgs = load(vault, convo_id)  # validates the id
+    if semantic.load_embedder() is None:
+        emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
+        return convo_id
+    if not _local(runner):
+        emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
+        return convo_id
+    t0, today = time.monotonic(), today or date.today()
+    prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
+    msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
+    _save(vault, convo_id, msgs, s["history"])
+    emit({"t": "start", "id": convo_id, "model": runner.model})
+    got = _when(text, today)
+    found = ask._passages(vault, f"{text.strip()}\n{prev}".strip(), s["passages"],
+                          between=got and (got[0].isoformat(), got[1].isoformat()),
+                          sources=s["sources"], topic=topic(text, got[2]) if got else "")
+    parts: list = []
+    if not found:
+        parts.append(NO_ANSWER)
+        emit({"t": "tok", "s": NO_ANSWER})
+    else:
+        messages = [{"role": "system",
+                     "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}")},
+                    *history(msgs[:-1]),
+                    {"role": "user", "content": ask.prompt(found, text) + CITE}]
+        thought = []
+
+        def thinking():
+            if not thought and not parts:
+                thought.append(1)
+                emit({"t": "think"})
+        try:
+            for piece in runner.stream(messages, temperature=s["temperature"],
+                                       max_tokens=LENGTH[s["length"]], cancel=cancel,
+                                       on_thinking=thinking):
+                parts.append(piece)
+                emit({"t": "tok", "s": piece})
+        except (OSError, ValueError):  # no answer, a timeout, a refused url
+            pass
+    answer = "".join(parts).strip()
+    stopped = cancel is not None and cancel.is_set()
+    if not answer and not stopped:
+        emit({"t": "err", "code": "no_answer", "id": convo_id,
+              "message": f"{runner.describe()} did not answer; try again."})
+        return convo_id
+    cited = ask.cites(answer)
+    sources = [{"n": n, "path": p["path"], "title": p["title"], "kind": p["kind"]}
+               for n, p in enumerate(found, 1) if n in cited]
+    msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
+                 "model": runner.model, **({"stopped": True} if stopped else {})})
+    _save(vault, convo_id, msgs, s["history"])
+    emit({"t": "src", "sources": sources})
+    emit({"t": "done", "id": convo_id, "model": runner.model, "stopped": stopped,
+          "seconds": round(time.monotonic() - t0, 1)})
+    return convo_id

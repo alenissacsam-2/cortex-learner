@@ -114,6 +114,11 @@ Object.assign(globalThis, {
   fetch: async (path, opts) => {
     const o = opts || {};
     fetched.push({ path, method: o.method || 'GET', token: (o.headers || {})['X-Cortex-Token'], body: o.body ? JSON.parse(o.body) : null });
+    if (path === '/api/chat' && o.method === 'POST') {  // the NDJSON stream, in pieces
+      const parts = DATA.stream.slice();
+      return { status: 200, ok: true, body: { getReader: () => ({
+        read: async () => (parts.length ? { value: Buffer.from(parts.shift()), done: false } : { done: true }) }) } };
+    }
     const data = DATA.routes[path] || { job: 'stub', seq: 1 };
     return { status: 200, ok: true, json: async () => JSON.parse(JSON.stringify(data)) };
   },
@@ -132,7 +137,7 @@ const out = {};
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
     await tick();
     out.replaced = replaced;
-    out.hidden = Object.fromEntries(['setup', 'ask', 'status', 'connect', 'llm', 'browse', 'vault'].map((s) => [s, $('s-' + s).hidden]));
+    out.hidden = Object.fromEntries(['setup', 'chat', 'status', 'connect', 'llm', 'browse', 'vault'].map((s) => [s, $('s-' + s).hidden]));
     out.steps = $('setup').querySelectorAll('.step').map((b) => b.querySelector('h2').textContent);
     out.expanded = $('setup').querySelectorAll('.step').filter((b) => !b.className.split(' ').includes('collapsed'))
       .map((b) => b.querySelector('h2').textContent);
@@ -172,16 +177,53 @@ const out = {};
     stepBtn('Open').fire('click');
     await tick();
     out.skips = fetched.filter((f) => f.path === '/api/setup/skip').map((f) => f.body);
-    // Ask with neither the search model nor a local model: both rows, each with its own button
-    DATA.routes['/api/ask'] = { vault: true, embed: false };
-    DATA.routes['/api/job'] = { seq: 2, job: { name: 'Asking your archive', section: 'ask', running: false, cancellable: false, line: '', seconds: 1, error: null, result: { kind: 'ask', error: 'missing', missing: ['embed', 'llm'] } } };
-    nav.querySelectorAll('button').find((b) => b.dataset.s === 'ask').fire('click');
+    // Chat with neither the search model nor a local model: both rows, each with its own button
+    const settings = { length: 'normal', temperature: 0.2, passages: 8, history: true,
+      sources: { notes: true, chats: true, browsing: true, private: true } };
+    DATA.routes['/api/chat'] = { vault: true, missing: ['embed', 'llm'], model: null, settings, chats: [] };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
     await tick();
-    $('ask-q').value = 'binary search';
-    $('ask').querySelectorAll('button').find((b) => b.textContent === 'Ask').fire('click');
-    await tick();
-    out.missing = $('ask').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent, r.querySelector('button').textContent]);
+    out.missing = $('chat').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent, r.querySelector('button').textContent]);
+    out.composer = $('chat-input') !== null;
     out.pushed = replaced.filter((u) => u.startsWith('push '));
+    // with both: an example fills the composer, Enter sends, the answer streams in with sources
+    const chats = [{ id: '01KA0000000000000000000000', title: 'Which sites did I visit yesterday?', updated: new Date().toISOString(), count: 2 }];
+    DATA.routes['/api/chat'] = { vault: true, missing: [], model: 'qwen3.5-2b', settings, chats: [] };
+    DATA.routes['/api/chat/list'] = { chats };
+    const ev = (o) => JSON.stringify(o) + '\n';
+    const line = ev({ t: 'src', sources: [{ n: 1, path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse' }] });
+    DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'think' }),
+      ev({ t: 'tok', s: 'You read **two** pages' }), ev({ t: 'tok', s: ' [1].\n- `heap` notes' }),
+      line.slice(0, 20), line.slice(20) + ev({ t: 'done', id: chats[0].id, model: 'qwen3.5-2b', seconds: 1.2, stopped: false })];
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    out.empty = $('chat').querySelector('.chat-empty').querySelector('p').textContent;
+    $('chat').querySelectorAll('button').find((b) => b.textContent === 'Which sites did I visit yesterday?').fire('click');
+    await tick();
+    out.filled = $('chat-input').value;
+    out.help = $('chat').querySelector('.composer').querySelector('.help').textContent;
+    $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+    await tick();
+    const log = $('chat-log');
+    out.sent = fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body);
+    out.who = log.querySelectorAll('.msg').map((m) => m.querySelector('.who').textContent);
+    const bot = log.querySelectorAll('.msg')[1];
+    out.answer = bot.querySelector('.md').textContent;
+    out.bold = bot.querySelector('strong').textContent;
+    out.code = bot.querySelector('code').textContent;
+    out.items = bot.querySelectorAll('li').map((li) => li.textContent);
+    out.cites = bot.querySelectorAll('.cite').map((b) => b.getAttribute('aria-label'));
+    out.chips = bot.querySelectorAll('.chip').map((c) => c.textContent);
+    out.caret = bot.querySelectorAll('.caret').length;
+    out.busy = log.getAttribute('aria-busy');
+    out.role = [log.getAttribute('role'), log.getAttribute('aria-live')];
+    out.inputAfter = $('chat-input').value;
+    out.list = $('chat-side').querySelectorAll('.chat-open').map((b) => [b.querySelector('.t').textContent, b.querySelector('.d').textContent, b.getAttribute('aria-current')]);
+    bot.querySelector('.cite').fire('click');
+    out.flash = bot.querySelector('.chip').className;
+    bot.querySelector('.chip').fire('click');
+    await tick();
+    out.opened = fetched.filter((f) => f.path === '/api/open').map((f) => f.body);
     // the Local model page says why a refused config is not used
     DATA.routes['/api/llm'] = { available: true, enabled: true, runner: 'auto', model: 'm-cloud', lms: null, server_port: null, loaded: [], ollama: null, models: [], error: 'localllm: a cloud model is refused' };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
@@ -232,7 +274,8 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     data = tmp_path / "data.json"
     data.write_text(json.dumps({"routes": {
         "/api/status": {"first_run": True, "rows": [], "vault": None, "land": "setup"},
-        "/api/setup": setup, "/api/job": {"job": None, "seq": 0}}}), encoding="utf-8")
+        "/api/setup": setup, "/api/job": {"job": None, "seq": 0}}, "stream": []}),
+        encoding="utf-8")
     harness = tmp_path / "harness.cjs"
     harness.write_text(HARNESS, encoding="utf-8")
     r = subprocess.run([node, str(harness), str(APP_JS), str(server.ASSETS / "index.html"),
@@ -269,7 +312,23 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     # R3-2: Ask names both missing pieces at once; a section click is a Back step (R3-10)
     assert out["missing"] == [["Search model", "Set up the search model"],
                               ["Local model", "Set up a local model"]]
-    assert out["pushed"] == ["push #ask"]
+    assert out["composer"] is False and out["pushed"] == ["push #chat"]
+    # Chat: the example fills the composer; Enter sends; the stream renders safely with sources
+    assert out["empty"] == "Ask about anything you've saved or browsed."
+    assert out["filled"] == "Which sites did I visit yesterday?"
+    assert out["help"] == "Runs on this computer with qwen3.5-2b. Nothing leaves it."
+    assert out["sent"] == [{"id": None, "text": "Which sites did I visit yesterday?"}]
+    assert out["who"] == ["You", "Cortex · qwen3.5-2b"]
+    assert out["answer"] == "You read two pages 1.heap notes"
+    assert (out["bold"], out["code"], out["cites"]) == ("two", "heap", ["Source 1"])
+    assert out["items"] == ["heap notes"]  # a list right under a line, no blank line
+    assert out["chips"] == ["1 · Browsing 2026-11-17 (private)browsing"]
+    assert out["caret"] == 0 and out["busy"] == "false" and out["role"] == ["log", "polite"]
+    assert out["inputAfter"] == ""
+    assert out["list"] == [["Which sites did I visit yesterday?", "today", "true"]]
+    assert "flash" in out["flash"]
+    assert out["opened"] == [{"what": "page",
+                              "path": "browse/private/browse-private-2026-11-17.md"}]
     assert out["skipNote"] == "Skipped"
     assert out["skips"] == [{"skipped": True}, {"skipped": False}]
     assert "Not used: localllm: a cloud model is refused" in out["llmText"]
