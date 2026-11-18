@@ -28,8 +28,9 @@ NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 HOSTILE = "</script><img src=x onerror=alert(1)>"
 D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "sprint", "counts", "today", "plan_cleared", "first_run", "assessments",
-        "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters", "counts_by_kind",
-        "loops", "follow_ups", "resurface", "needs", "you", "help", "brain", "confidence"}
+        "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
+        "counts_by_kind", "loops", "follow_ups", "resurface", "needs", "you", "help", "brain",
+        "confidence"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
 # its header comment names the sinks it avoids; comments are not code
