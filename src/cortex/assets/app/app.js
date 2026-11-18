@@ -396,8 +396,11 @@
       setTimeout(() => chip.classList.remove('flash'), 1200);
     };
     const draw = (streaming) => {
-      who.textContent = 'Cortex' + (m.model ? ` · ${m.model}` : '');
-      if (m.thinking && !m.text) body.replaceChildren(h('span', { class: 'thinking', text: 'thinking…' }));
+      who.textContent = 'Cortex' + (m.model ? ` · ${m.model}` : '') + (!streaming && m.seconds ? ` · ${Math.round(m.seconds)} s` : '');
+      if (streaming && !m.text) {  // each stage with a live count, so a slow one never looks frozen
+        const secs = Math.floor((Date.now() - m.t0) / 1000);
+        body.replaceChildren(h('span', { class: 'thinking', text: `${m.thinking ? 'Thinking' : m.step || 'Sending your question'}… ${secs} s` }));
+      } else if (m.thinking && !m.text) body.replaceChildren(h('span', { class: 'thinking', text: 'thinking…' }));
       else body.replaceChildren(...md(m.text, cite));
       if (streaming) {
         let at = last(body) || body;
@@ -546,9 +549,10 @@
     if (empty) log.replaceChildren();  // the examples go once a chat starts
     chatS.msgs.push({ role: 'user', text });
     log.append(userMsg({ text }));
-    const m = { role: 'assistant', text: '', sources: [], model: chatS.d.model };
+    const m = { role: 'assistant', text: '', sources: [], model: chatS.d.model, t0: Date.now() };
     const bot = botMsg(m);
     bot.draw(true);
+    const tick = setInterval(() => { if (!m.text) bot.draw(true); }, 1000);
     log.append(bot.el);
     log.setAttribute('aria-busy', 'true');  // a screen reader hears the answer once, when it is done
     bot.el.scrollIntoView({ block: 'end' });
@@ -584,6 +588,8 @@
           if (ev.t === 'wait') continue;  // the server's keepalive while the model is quiet
           if (ev.id) chatS.id = ev.id;
           if (ev.t === 'start') m.model = ev.model;
+          else if (ev.t === 'step') m.step = ev.s;
+          else if (ev.t === 'done') m.seconds = ev.seconds;
           else if (ev.t === 'think') m.thinking = true;
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; }
@@ -595,6 +601,7 @@
       if (e.name === 'AbortError') m.stopped = true;
       else failed = { code: 'app', message: e.name === 'TypeError' ? 'The app is not answering.' : e.message };
     }
+    clearInterval(tick);
     chatS.busy = null;
     log.setAttribute('aria-busy', 'false');
     go.textContent = 'Send';

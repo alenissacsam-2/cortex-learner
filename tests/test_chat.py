@@ -419,6 +419,10 @@ def test_reply_streams_cites_and_saves(vault, stream):
     kinds = [e["t"] for e in ev]
     assert kinds[0] == "start" and kinds[-2:] == ["src", "done"] and "tok" in kinds
     assert "".join(e["s"] for e in ev if e["t"] == "tok") == "Your forum page says so [1]."
+    steps = [e["s"] for e in ev if e["t"] == "step"]
+    assert steps[0] == "Searching your notes and browsing"
+    assert steps[1].startswith("Reading ") and steps[1].endswith(" with gemma3:2b")
+    assert kinds.index("step") < kinds.index("tok")
     src = ev[-2]["sources"]
     assert [s_["n"] for s_ in src] == [1] and src[0]["kind"] in ("browse", "note")
     system, *rest = s.bodies[0]["messages"]

@@ -306,6 +306,11 @@ def delete_all(vault: Vault) -> int:
 
 # ---- a turn ------------------------------------------------------------------------------------
 
+def _span(a: date, b: date) -> str:
+    """'17 Nov' or '10 Nov to 16 Nov', for the progress line."""
+    return f"{a.day} {a:%b}" if a == b else f"{a.day} {a:%b} to {b.day} {b:%b}"
+
+
 def _local(runner) -> bool:
     """Only a plain loopback localllm.Runner hears private passages: cloudllm's CloudRunner
     subclasses Runner, so isinstance would let it through."""
@@ -343,9 +348,10 @@ def history(msgs: list) -> list:
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None) -> str:
     """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
-    the answer through `emit`: {"t": "start", id, model}, {"t": "think"} while a reasoning
-    model only thinks, {"t": "tok", "s"} per piece, {"t": "src", sources: [{n, path, title,
-    kind}]} (the passages cited), {"t": "done", id, model, seconds, stopped}; or {"t": "err",
+    the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
+    as the model starts reading (the app shows each with a live count), {"t": "think"} while a
+    reasoning model only thinks, {"t": "tok", "s"} per piece, {"t": "src", sources: [{n, path,
+    title, kind}]} (the passages cited), {"t": "done", id, model, seconds, stopped}; or {"t": "err",
     code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
     the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
     `localllm.Runner` or None; never a cloud one."""
@@ -370,6 +376,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
     query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
+    emit({"t": "step", "s": "Searching your notes and browsing"
+          + (f" from {_span(got[0], got[1])}" if got else "")})
     found = ask._passages(vault, query, s["passages"],
                           between=got and (got[0].isoformat(), got[1].isoformat()),
                           sources=s["sources"], topic=topic(said, got[2]) if got else "")
@@ -378,6 +386,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         parts.append(NO_ANSWER)
         emit({"t": "tok", "s": NO_ANSWER})
     else:
+        emit({"t": "step", "s": f"Reading {len(found)} page{'s' * (len(found) != 1)} with "
+                                f"{runner.model}"})
         messages = [{"role": "system",
                      "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}")},
                     *history(msgs[:-1]),
