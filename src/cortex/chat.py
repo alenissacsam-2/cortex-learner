@@ -189,15 +189,18 @@ def topic(text: str, span: tuple[int, int]) -> str:
 
 _POINTS_BACK = frozenset(
     "it its it's that this these those they them their he she him his her same also else "
-    "more".split())
+    "more former latter".split())
 _OPENS_FOLLOW_UP = re.compile(r"\s*(?:and|but|so|also|what\s+about|how\s+about)\b", re.I)
+# "the second one", "the other ones": a pick from the last answer ("one" alone is too common)
+_PICKS_ONE = re.compile(r"\b(?:first|second|third|last|other|previous)\s+ones?\b", re.I)
 
 
 def follow_up(text: str, got=None) -> bool:
     """Whether `text` leans on the previous question ("and its running time?", "why?", "what
     about heaps"): then both are searched together. A question that names its own topic is
     searched alone, so a new subject is not mixed with the last one. `got`: its date phrase."""
-    if _OPENS_FOLLOW_UP.match(text) or _POINTS_BACK & set(re.findall(r"[\w']+", text.lower())):
+    if _OPENS_FOLLOW_UP.match(text) or _PICKS_ONE.search(text) \
+            or _POINTS_BACK & set(re.findall(r"[\w']+", text.lower())):
         return True
     return not got and not topic(text, (0, 0))  # nothing of its own to search for
 

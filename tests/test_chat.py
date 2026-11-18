@@ -471,6 +471,8 @@ def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
 @pytest.mark.parametrize("text, want", [
     ("and its running time?", True), ("why?", True), ("explain that again", True),
     ("what about heaps", True), ("But how is it proved?", True), ("tell me more", True),
+    ("how do I avoid the second one?", True), ("is the latter faster?", True),
+    ("what is one-hot encoding?", False), ("one thing I learned about graphs", False),
     ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
     ("which sites did I visit yesterday?", False),
 ])
