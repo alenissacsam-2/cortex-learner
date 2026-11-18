@@ -176,7 +176,8 @@ _GENERIC = frozenset(
     "saw seen look looked looking site sites website websites page pages web read reading "
     "watched go went browse browsed open opened about on at the a an any anything something "
     "tell show find found was were have has had in of to for from there that this ago day "
-    "days week weeks month months".split())
+    "days week weeks month months give example examples explain elaborate detail details "
+    "please again".split())
 
 
 def topic(text: str, span: tuple[int, int]) -> str:
@@ -357,11 +358,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": runner.model})
-    got = _when(text, today)
-    query = f"{text.strip()}\n{prev}".strip() if follow_up(text, got) else text.strip()
+    got, said = _when(text, today), text
+    leans = follow_up(text, got)
+    if leans and not got and prev and (got_prev := _when(prev, today)):
+        got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
+    query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
     found = ask._passages(vault, query, s["passages"],
                           between=got and (got[0].isoformat(), got[1].isoformat()),
-                          sources=s["sources"], topic=topic(text, got[2]) if got else "")
+                          sources=s["sources"], topic=topic(said, got[2]) if got else "")
     parts: list = []
     if not found:
         parts.append(NO_ANSWER)

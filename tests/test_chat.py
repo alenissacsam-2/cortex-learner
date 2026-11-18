@@ -468,11 +468,32 @@ def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
                      "which sites did I visit yesterday?"]
 
 
+def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = []
+    real = ask._passages
+
+    def passages(v, q, k, **kw):
+        asked.append((q, kw["between"], kw["topic"]))
+        return real(v, q, k, **kw)
+    monkeypatch.setattr(ask, "_passages", passages)
+    cid, _ = _turn(vault, None, "what did I read about car motors yesterday?", s.runner())
+    _turn(vault, cid, "which of those was hardest?", s.runner())
+    _turn(vault, cid, "give me an example", s.runner())
+    day = ("2026-11-17", "2026-11-17")
+    assert asked[0][1:] == (day, "car motors")
+    assert asked[1] == ("which of those was hardest?\nwhat did I read about car motors yesterday?",
+                        day, "car motors")
+    assert asked[2] == ("give me an example\nwhich of those was hardest?", None, "")
+
+
 @pytest.mark.parametrize("text, want", [
     ("and its running time?", True), ("why?", True), ("explain that again", True),
     ("what about heaps", True), ("But how is it proved?", True), ("tell me more", True),
     ("how do I avoid the second one?", True), ("is the latter faster?", True),
-    ("what is one-hot encoding?", False), ("one thing I learned about graphs", False),
+    ("give me an example", True), ("explain it again please", True),
+    ("explain dijkstra", False), ("what is one-hot encoding?", False),
+    ("one thing I learned about graphs", False),
     ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
     ("which sites did I visit yesterday?", False),
 ])
