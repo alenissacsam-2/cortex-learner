@@ -245,6 +245,9 @@ def test_lms_is_not_asked_when_ollama_answers(stream, monkeypatch):
     ("since 2026-11-10", "2026-11-10", "2026-11-18"),
     ("in the last 3 days", "2026-11-15", "2026-11-18"),
     ("past week", "2026-11-11", "2026-11-18"),
+    ("Sept 3", "2026-09-03", "2026-09-03"),
+    ("on 5 Nov. 2026", "2026-11-05", "2026-11-05"),
+    ("my marks 90 on 12 Nov", "2026-11-12", "2026-11-12"),  # a bad first match, then a real one
 ])
 def test_when(text, lo, hi):
     got = chat.when(text, TODAY)
@@ -252,7 +255,11 @@ def test_when(text, lo, hi):
 
 
 @pytest.mark.parametrize("text", ["what did I learn about Dijkstra?", "31 Feb", "",
-                                  "and its running time?", "may I ask about heaps"])
+                                  "and its running time?", "may I ask about heaps",
+                                  # words that start like a month are not months
+                                  "what did I learn in market research?",
+                                  "summarize my 3 decisions", "the novel 2 chapters",
+                                  "in decent shape", "2 junior roles", "4 octaves", "8 augments"])
 def test_when_none(text):
     assert chat.when(text, TODAY) is None
 

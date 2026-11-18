@@ -7,6 +7,7 @@ its source; each download runs as a cancellable process. `cortex.localllm` never
 from __future__ import annotations
 
 import ctypes
+import functools
 import os
 import re
 import subprocess
@@ -75,6 +76,7 @@ def _ram_gb() -> float | None:
         return None
 
 
+@functools.cache  # nvidia-smi or a RAM query: the machine does not change while the app runs
 def hardware() -> dict:
     if (gb := _vram_gb()) is not None:
         return {"kind": "gpu", "gb": gb, "label": f"{gb:g} GB of graphics memory (NVIDIA)"}

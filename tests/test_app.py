@@ -727,10 +727,14 @@ def test_recommendation_by_memory(monkeypatch):
         ["2b", "2b", "2b", "2b", "4b", "4b", "4b", "9b", "9b"]
     monkeypatch.setattr(targets, "_which", lambda c: "nvidia-smi")
     monkeypatch.setattr(targets, "_run", lambda a, timeout=0: (True, "8192\n6144\n"))
+    wizard.hardware.cache_clear()  # probed once per app run
     assert wizard.hardware() == {"kind": "gpu", "gb": 8.0,
                                  "label": "8 GB of graphics memory (NVIDIA)"}
     monkeypatch.setattr(targets, "_which", lambda c: None)
+    assert wizard.hardware()["kind"] == "gpu"  # cached
+    wizard.hardware.cache_clear()
     assert wizard.hardware()["kind"] == "ram"
+    wizard.hardware.cache_clear()
 
 
 class FakeProc:

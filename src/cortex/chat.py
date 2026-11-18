@@ -83,7 +83,9 @@ def save_settings(body: dict) -> dict:
 
 # ---- dates in a question --------------------------------------------------------------------
 
-_M = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+# whole month names or their short forms only: "market", "decisions" or "novel" are not months
+_M = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+      r"|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?")
 _DATE = (rf"(?:\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{_M}"
          rf"(?:,?\s+\d{{4}})?|{_M}\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}})?)")
 _NUM = (r"(\d{1,3}|an?|one|two|three|four|five|six|seven|eight|nine|ten"
@@ -156,8 +158,8 @@ def _when(text: str, today: date) -> tuple[date, date, tuple[int, int]] | None:
         if m := rx.search(text or ""):
             try:
                 lo, hi = f(m, today)
-            except (ValueError, StopIteration):  # 31 Feb and the like: no date
-                return None
+            except (ValueError, StopIteration):  # 31 Feb and the like: try the next rule
+                continue
             return lo, hi, m.span()
     return None
 
