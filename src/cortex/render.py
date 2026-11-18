@@ -1,4 +1,4 @@
-"""Rendering of the brief, chat cards and Today.md (SPEC §10). Pure text in, text out."""
+"""Rendering of the brief, chat cards and Today.md. Pure text in, text out."""
 
 from __future__ import annotations
 
@@ -300,7 +300,7 @@ def end_card(*, counts: dict, moved: list[dict], unchecked: list[str], new_mista
     if types:
         lines.append(f"**New notes this session:** {sum(types.values())} ("
                      + ", ".join(f"{n} {esc(t)}" for t, n in sorted(types.items())) + ")")
-    # review r4 L5: the pattern holds no ": " (vault.SECRET_RES), so the path is what precedes it
+    # the pattern holds no ": " (vault.SECRET_RES), so the path is what precedes it
     lines += [f"Not committed: {esc(w.rpartition(': ')[0] or w)} (looks like a key)"
               for w in not_committed]
     if next_items:
@@ -326,10 +326,10 @@ def today_md(*, today: list[dict], sprint_day: int | None, assessments: list[dic
         title = f"More owed items are in [[{esc(i['more'])}]]" if i.get("more") \
             else esc(i["title"])
         lines.append(f"- {mark} · {title}" + (f" · {why}" if why else ""))
-        if i.get("model"):  # ideas-r2 #5: a vault id, ID_RE-safe like `more`
+        if i.get("model"):  # a vault id, ID_RE-safe like `more`
             lines.append(f"  - Re-derive [[{esc(i['model'])}]]: approach and complexity in "
                          "2 minutes, no code")
-        if i["kind"] in CUE_KINDS and cues.get(i["id"]):  # ideas-r2 #13
+        if i["kind"] in CUE_KINDS and cues.get(i["id"]):
             lines.append("  - Past question (answer in your own words first): "
                          + esc(cues[i["id"]], CUE_CHARS))
     if not today:
@@ -352,7 +352,7 @@ INDEX_JOURNAL = 30  # latest journal pages listed, newest first
 
 
 def index_md(notes: list, entries: Mapping, states: Mapping[str, str]) -> str:
-    """index.md (phase4-wiki.md §4): non-private notes by kind, concepts domain > area.
+    """index.md: non-private notes by kind, concepts domain > area.
 
     `entries` is Catalog.entries (for titles and grouping), `states` maps concept id to state.
     """

@@ -1,5 +1,4 @@
-"""Brain v3, the neural network look: geometry and page layout (docs/design/brain-v3.md §2;
-brain-v2.md §3-§4 and §7 for what still holds).
+"""Brain v3, the neural network look: geometry and page layout.
 
 Python owns the geometry and the layout; `assets/brain3d.js` only draws them. One implicit
 brain volume (`inside`): a smooth union of two overlapping hemispheres, a temporal lobe per
@@ -706,7 +705,7 @@ def _r(v, nd=4) -> list[float]:
 # ---- the blob ------------------------------------------------------------------------------
 
 def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False) -> dict:
-    """The dashboard's `brain` key (brain-v3.md §2, brain-v2.md §4) for build_data's pages and
+    """The dashboard's `brain` key for build_data's pages and
     lobes; reads and, when it changed, rewrites `.cortex/brain-layout.json`."""
     root, n, nl = vault.root, len(pages), len(clusters)
     ids = [p["id"] for p in pages]
@@ -1006,7 +1005,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
 
 def preservation(xyz: np.ndarray, vec: np.ndarray, has: np.ndarray, lobe: np.ndarray,
                  skip=(), sample: int = 50, k3: int = 5, kv: int = 20) -> float:
-    """§7's in-lobe check: for `sample` pages (seeded), the share of their k3 nearest same-lobe
+    """The in-lobe check: for `sample` pages (seeded), the share of their k3 nearest same-lobe
     points in 3D that are among their kv nearest same-lobe pages by vector."""
     rows = [r for r in range(len(xyz)) if has[r] and lobe[r] not in skip
             and (has & (lobe == lobe[r])).sum() > kv]

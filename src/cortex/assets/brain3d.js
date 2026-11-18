@@ -1,6 +1,6 @@
-/* Cortex brain: the renderer for the precomputed brain atlas. A v3 blob (docs/design/brain-v3.md §3)
-   draws as a coloured neural network inside one brain, styled by a plain style object (brain-v4.md
-   §1: CortexBrain.STYLE_SCHEMA, PRESETS, api.setStyle); a v2 blob (brain-v2.md §5) draws as before.
+/* Cortex brain: the renderer for the precomputed brain atlas. A v3 blob
+   draws as a coloured neural network inside one brain, styled by a plain style object
+   (CortexBrain.STYLE_SCHEMA, PRESETS, api.setStyle); a v2 blob draws as before.
    Python owns layout; this file only draws and handles input. WebGL2 first; a Canvas 2D path takes
    over with no WebGL2, on context loss, or with ?canvas in the URL. Vanilla JS with nothing a strict
    CSP blocks (no eval, fetch, workers or HTML parsing): text goes in through textContent and SVG
@@ -30,7 +30,7 @@
   const STATE_PI = { solid: 2, learning: 3, needs_refresh: 4 };  // palette: node, grey, solid, learning, refresh
   const SVGNS = ['http:', '', 'www.w3.org', '2000', 'svg'].join('/');  // in parts: the page test bans URL text
 
-  /* ---------------- style: every look decision is a key (brain-v4.md §1) ---------------- */
+  /* ---------------- style: every look decision is a key ---------------- */
   const onOff = (key, label, group, help) => ({ key, label, group, type: 'toggle', help });
   const range = (key, label, group, min, max, step, help) => ({ key, label, group, type: 'range', min, max, step, help });
   const choice = (key, label, group, options, help) => ({ key, label, group, type: 'choice', options, help });
@@ -133,7 +133,7 @@
       vignette: 0, alive: true, aliveRate: 1, spinSpeed: 0.1, labels: 'atlas' },
     { azimuth: 141.6, elevation: 31.5, fill: 0, nudge: 0 }),
   ];
-  const DEFAULT_PRESET = 'tractogram2';  // the arena's winner (brain-v4.md §6, round 2), shown as 'Cortex (default)'
+  const DEFAULT_PRESET = 'tractogram2';  // the arena's winner, shown as 'Cortex (default)'
   const DEFAULT_STYLE = Object.freeze(Object.assign({}, PRESETS.find((p) => p.id === DEFAULT_PRESET).style));
   for (const p of PRESETS) { Object.freeze(p.style); Object.freeze(p.camera); Object.freeze(p); }
   // A partial style merged onto `base`: unknown keys and bad values are ignored, numbers clamped.
@@ -317,7 +317,7 @@ void main() {
 precision highp float;
 in float vA; uniform vec3 uTintC; out vec4 o;
 void main() { vec2 d = gl_PointCoord * 2.0 - 1.0; float r = dot(d, d); if (r > 1.0) discard; o = vec4(uTintC * vA * (1.0 - r), 0.0); }`;
-  // Arrangement on the GPU (brain-v4.md §1): a page moves with its lobe, p' = p·s + o, where the lobe's
+  // Arrangement on the GPU: a page moves with its lobe, p' = p·s + o, where the lobe's
   // centre goes out by `spread` from the brain centre and s = 1 - tightness pulls pages toward it.
   // uLobeC holds each lobe's centre (w = 1 when it has one); other lobes and no lobe stay put.
   const ARR = `
@@ -523,7 +523,7 @@ void main() {
   float ring = hollow ? exp(-pow((d - 1.0) / 0.22, 2.0)) : 0.0;
   float corona = exp(-d * 2.2) * (hollow ? 0.12 : uCorona * uGlow) + vHub * exp(-d * 1.4) * 0.12 * uGlow;
   // a recent page or a search match: v3 drew a ring at 2.1x; v4 draws a soft glow (no hollow rings in the
-  // overview, brain-v4.md); v2 keeps the ring
+  // overview); v2 keeps the ring
   float halo = vFx.x <= 0.0 ? 0.0 : uCoreW > 0.4 ? exp(-d * 1.6) * uHalo * 0.6 * vPulse * (1.0 - vCoc)
     : exp(-pow((d - 2.1) / 0.3, 2.0)) * uHalo * vPulse;
   float cell = vHub * exp(-pow((d - 1.7) / 0.16, 2.0)) * 0.3 * (1.0 - 0.7 * vBig);
@@ -1803,7 +1803,7 @@ void main() {
       for (const l of leads) l.lk = -1;
     }
 
-    /* ---- style (brain-v4.md §1): `style` is the chosen object; SV holds the numbers the frame draws
+    /* ---- style: `style` is the chosen object; SV holds the numbers the frame draws
        with, cross-faded toward the style's over 300 ms ---- */
     const presetOf = (s) => PRESETS.find((p) => STYLE_SCHEMA.every((d) => mergeStyle(DEFAULT_STYLE, p.style)[d.key] === s[d.key]));
     let style = mergeStyle(DEFAULT_STYLE, opts.style);
@@ -2561,7 +2561,7 @@ void main() {
       invalidate();
     }
 
-    /* ---- v4 effects (brain-v4.md §2): comets along fibres, the chosen page's glimmer, arrival blinks,
+    /* ---- v4 effects: comets along fibres, the chosen page's glimmer, arrival blinks,
        region breathing and nebulae. A comet runs along fibre f away from page `from`: a white head 2.2x
        the fibre's width and a tail 22 % of its length that fades and turns the far end's
        colour over its first 40 % (v4 arena: fading as (1 - s)^1.4, as ^2.2 hid the trails at overview
@@ -3268,12 +3268,12 @@ void main() {
         setHover(hoverCand, false);
       },
       resize,
-      // v4 style (brain-v4.md §1): a copy of the current style; setStyle merges a partial one
+      // v4 style: a copy of the current style; setStyle merges a partial one
       get style() { return Object.assign({}, style); },
       setStyle,
       // a preset by id: its style and its overview camera (the view re-frames at the overview)
       applyPreset,
-      // v4 navigation (brain-v4.md §3)
+      // v4 navigation
       back,
       overview,
       frame: frameView,

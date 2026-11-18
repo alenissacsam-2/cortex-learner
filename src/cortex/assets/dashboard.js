@@ -1,4 +1,4 @@
-/* Cortex dashboard, Night Platform (docs/design/dashboard-v2.md). Every note-derived string goes
+/* Cortex dashboard, Night Platform. Every note-derived string goes
    in with textContent (or d3 .text); nothing here parses HTML. */
 (() => {
   'use strict';
@@ -875,7 +875,7 @@
   if (!brainFailed) $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'));
   else noBrain();
 
-  /* ---- Look: the brain's style, generated from the renderer's schema (brain-v4.md §5) ---- */
+  /* ---- Look: the brain's style, generated from the renderer's schema ---- */
   const CB = window.CortexBrain || {};
   // an older brain3d.js has no schema: no Look button, nothing else changes
   const HAS_STYLE = !brainFailed && Array.isArray(CB.STYLE_SCHEMA) && Array.isArray(CB.PRESETS);
@@ -2027,7 +2027,7 @@
       b.append(dm(String(D.history.mistakes[k]), 4), el('span', 'muted', word));
       ms.append(b);
     }
-    // council item 6: display-only; a band under its minimum shows its count, not a share
+    // display-only; a band under its minimum shows its count, not a share
     const mir = $('mirror'), C = D.confidence || [];
     if (!C.some((r) => r.n)) mir.append(el('p', 'empty', 'No answers with a "how sure" (1-4) yet.'));
     else {
@@ -2653,7 +2653,7 @@
       };
     }
 
-    // Wiki kinds (phase4-wiki §5): project rounded square, resource diamond, decision triangle;
+    // Wiki kinds: project rounded square, resource diamond, decision triangle;
     // a note stays a small dot (a circle, so no path).
     function shapePath(n) {
       const r = n.r;

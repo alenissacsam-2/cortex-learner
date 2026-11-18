@@ -57,7 +57,7 @@ GROUP_TITLES = {"journal": "Journal", "you": "About you", "sessions": "Study ses
                 "media": "YouTube and NotebookLM", "chats": "Unsorted chats",
                 "browsing": "Browsing"}
 GROUPS = {"journal": "journal", "me": "you", "session": "sessions",  # page kind -> group lobe
-          "browse": "browsing",  # browse-brain.md §4; private browse pages are never read
+          "browse": "browsing",  # private browse pages are never read
           **dict.fromkeys(("assessment", "application", "track"), "placements")}
 NO_HUB = {"project": "projects", "decision": "projects", "loop": "projects", "person": "people"}
 MEDIA, CHATS = {"youtube", "notebooklm"}, {"claude", "gemini", "perplexity"}
@@ -105,7 +105,7 @@ def _sprint(track) -> dict | None:
 
 
 def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
-    """The dashboard blob (docs/design/dashboard.md "Data blob"); private notes never enter it.
+    """The dashboard blob; private notes never enter it.
     `relayout` lays the brain out from scratch (brainmap)."""
     catalog = Catalog.load(vault)
     day = local_day(now)
@@ -280,7 +280,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         "details": details,
         "history": {"weeks": weeks, "assessments": rows,
                     "mistakes": {"opened": moved("open"), "resolved": moved("resolved")}},
-        # council item 6: how often each stated confidence (1-4) was right; display-only
+        # how often each stated confidence (1-4) was right; display-only
         "confidence": learning_eval.confidence_mirror(events, pc, hidden),
         "owner": {"name": name} if name else None,
         "clusters": clusters,
@@ -410,7 +410,7 @@ def _prop(v):
 
 def _pages(vault: Vault, notes: dict, hidden: set, catalog: Catalog, pc: dict
            ) -> tuple[list[dict], list[dict]]:
-    """Every non-private note for the reader view (phase4-wiki §8; `raw/` is not a kind), and
+    """Every non-private note for the reader view (`raw/` is not a kind), and
     the brain lobes (`_lobes`)."""
     keep = {}
     for ns in notes.values():

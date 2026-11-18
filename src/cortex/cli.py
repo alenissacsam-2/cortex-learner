@@ -1,4 +1,4 @@
-"""The `cortex` command-line interface (SPEC §7, §15a.18). Logic lives in the core modules."""
+"""The `cortex` command-line interface. Logic lives in the core modules."""
 
 from __future__ import annotations
 
@@ -183,8 +183,8 @@ def _vault(path: Path | Vault | None) -> Vault:
 
 
 def _refuse_excluded(action: str) -> None:
-    """Commands that print me/ text refuse inside an `exclude:` folder, as the server does
-    (review r4 L7): an agent there could otherwise read the user's lines through Bash."""
+    """Commands that print me/ text refuse inside an `exclude:` folder, as the server does:
+    an agent there could otherwise read the user's lines through Bash."""
     if folder := taint.excluded(*taint.session_dirs()):
         raise VaultError("invalid_argument", f"{folder} is excluded; refusing to {action}.")
 
@@ -970,7 +970,7 @@ def claims_cmd(tier: Annotated[str | None, typer.Option(
             for b in cal["bins"] if b["n"]))
 
 
-@app.command("saved", hidden=True)  # review r4 S1: now `claims --unasked`
+@app.command("saved", hidden=True)  # now `claims --unasked`
 @_errors
 def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
     """What was saved about you without your say: claim lines an assistant wrote unasked or
@@ -999,7 +999,7 @@ def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
         typer.echo("To keep an unasked line, say yes in a /cortex reflect with no outside reads.")
 
 
-@app.command("know", hidden=True)  # review r4 S1: now `claims --summary`
+@app.command("know", hidden=True)  # now `claims --summary`
 @_errors
 def know_cmd(vault: VaultOpt = None) -> None:
     """How well Cortex knows you: per me/ page, live claims by tier and bet state, calibration
@@ -1218,7 +1218,7 @@ def log_solved(problem: str, hints: Annotated[int, typer.Option(help="Hints you 
     EventLog(v).append(session="cli", kind="log", source="external", fields={
         "object": f"problem:{problem}", "payload": {
             "kind": "problem_status", "problem": problem, "status": "solved", "hints": hints}})
-    v.set_field("problem", problem, "status", "solved")  # the planner reads the note (SPEC §5)
+    v.set_field("problem", problem, "status", "solved")  # the planner reads the note
     v.set_field("problem", problem, "solved_on", local_day(datetime.now(UTC)))
     typer.echo(f"logged solved on problem:{problem}")
 
@@ -1625,7 +1625,7 @@ def access_cmd(days: Annotated[int, typer.Option(help="How many days back to lis
         typer.echo(f"no access in the last {days} days")
 
 
-# ---- semantic recall (SPEC §0 U7) ------------------------------------------------
+# ---- semantic recall ------------------------------------------------
 
 
 def _dir_mb(d: Path) -> float:
@@ -1784,7 +1784,7 @@ def _parts(p: dict) -> str:
 
 @eval_app.callback(invoke_without_command=True)
 def eval_main(ctx: typer.Context, k: int = 8, vault: VaultOpt = None) -> None:
-    """Measure ranking on logged usage; bare `cortex eval` runs `all` (review r4 S2)."""
+    """Measure ranking on logged usage; bare `cortex eval` runs `all`."""
     if ctx.invoked_subcommand is None:
         eval_all(k, vault)
     elif vault is not None or k != 8:  # the subcommand has its own options; never drop them
@@ -2041,7 +2041,7 @@ app.add_typer(harvest_app, name="harvest")
 
 
 @harvest_app.command("status")
-@eval_app.command("harvest", hidden=True)  # review r4 S3: now `harvest status`
+@eval_app.command("harvest", hidden=True)  # now `harvest status`
 @_errors
 def harvest_status(since: Annotated[str | None, typer.Option(
                      help="Only harvests on or after this local day (YYYY-MM-DD).")] = None,
@@ -2129,7 +2129,7 @@ def export_context_cmd(out: Annotated[Path | None, typer.Argument(
                    "/cortex reflect to export them.", err=True)
 
 
-# ---- the Cortex app (docs/design/cortex-app.md) ----------------------------------------------
+# ---- the Cortex app ----------------------------------------------
 
 @app.command("app")
 def app_cmd(vault: VaultOpt = None,
@@ -2145,7 +2145,7 @@ def app_cmd(vault: VaultOpt = None,
                echo=typer.echo)
 
 
-# ---- browse brain (docs/design/browse-brain.md): browsing, processed on this machine only ----
+# ---- browse brain: browsing, processed on this machine only ----
 
 browse_app = typer.Typer(no_args_is_help=True, help="Your browser history as Cortex pages, "
                          "read and filtered on this machine only.")
