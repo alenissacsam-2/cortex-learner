@@ -224,6 +224,15 @@ const out = {};
     bot.querySelector('.chip').fire('click');
     await tick();
     out.opened = fetched.filter((f) => f.path === '/api/open').map((f) => f.body);
+    // a second answer that cites nothing lists the pages searched, marked as not cited
+    DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'tok', s: 'Probably heaps.' })
+      + ev({ t: 'src', sources: [], searched: [{ path: 'notes/heap.md', title: 'Heap notes', kind: 'note' }] })
+      + ev({ t: 'done', id: chats[0].id, model: 'qwen3.5-2b', seconds: 0.5, stopped: false })];
+    $('chat-input').value = 'and the second one?';
+    $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+    await tick();
+    const msgs2 = log.querySelectorAll('.msg'), bot2 = msgs2[msgs2.length - 1];
+    out.searched = [bot2.querySelector('.chat-src').querySelector('span').textContent, bot2.querySelectorAll('.chip').map((c) => c.textContent)];
     // the Local model page says why a refused config is not used
     DATA.routes['/api/llm'] = { available: true, enabled: true, runner: 'auto', model: 'm-cloud', lms: null, server_port: null, loaded: [], ollama: null, models: [], error: 'localllm: a cloud model is refused' };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
@@ -346,6 +355,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert (out["bold"], out["code"], out["cites"]) == ("two", "heap", ["Source 1"])
     assert out["items"] == ["heap notes"]  # a list right under a line, no blank line
     assert out["chips"] == ["1 · Browsing 2026-11-17 (private)browsing"]
+    assert out["searched"] == ["Searched, not cited", ["Heap notesnote"]]
     assert out["caret"] == 0 and out["busy"] == "false" and out["role"] == ["log", "polite"]
     assert out["inputAfter"] == ""
     assert out["list"] == [["Which sites did I visit yesterday?", "today", "true"]]
