@@ -60,7 +60,8 @@ SECTIONS = ("me", "tracks", "concepts", "areas", "domains", "mistakes", "problem
             "projects", "decisions", "loops", "raw")
 PRE_PUSH = "#!/bin/sh\necho 'cortex: this vault is local only; push refused.' >&2\nexit 1\n"
 WORKSPACE_IGNORE = ".obsidian/workspace*.json"
-GITIGNORE = f".cortex/*\n!.cortex/config.yaml\n{WORKSPACE_IGNORE}\n"
+PRIVATE_BROWSE_IGNORE = "browse/private/"  # v7 C3: private browsing never enters git
+GITIGNORE = f".cortex/*\n!.cortex/config.yaml\n{WORKSPACE_IGNORE}\n{PRIVATE_BROWSE_IGNORE}\n"
 SESSION_ID_RE = re.compile(r"^s_[0-9A-HJKMNP-TV-Z]{26}$")
 OLD_COLOR_GROUPS = [("[cortex_status:solid]", "1D9E75"), ("[cortex_status:learning]", "BA7517"),
                     ("[cortex_status:needs_refresh]", "993556"), ("path:domains", "7F77DD"),
@@ -348,10 +349,11 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
             did.append(rel)
     ignore = root / ".gitignore"
     old = ignore.read_text(encoding="utf-8")
-    if WORKSPACE_IGNORE not in old.splitlines():  # older vaults: append only if missing
-        vault.write_text(ignore, old + ("" if old.endswith("\n") or not old else "\n")
-                         + WORKSPACE_IGNORE + "\n")
-        did.append(".gitignore line")
+    for line in (WORKSPACE_IGNORE, PRIVATE_BROWSE_IGNORE):  # older vaults: append if missing
+        if line not in old.splitlines():
+            old += ("" if old.endswith("\n") or not old else "\n") + line + "\n"
+            vault.write_text(ignore, old)
+            did.append(".gitignore line")
     _obsidian(vault, did, skipped)
     for rel, text in ME_PAGES.items():
         if (root / rel).exists():
@@ -411,7 +413,8 @@ def doctor(vault: VaultOpt = None) -> None:
         results += [doctor_mod.check_onedrive(root), doctor_mod.check_git(root),
                     doctor_mod.check_git_identity(root), doctor_mod.check_id_clashes(root),
                     doctor_mod.check_contract_size(root), doctor_mod.check_claims(root),
-                    doctor_mod.check_kill(root), doctor_mod.check_me_pages(root)]
+                    doctor_mod.check_kill(root), doctor_mod.check_me_pages(root),
+                    doctor_mod.check_private_browse_git(root)]
     except VaultError as e:
         results.append(("FAIL", "Vault", str(e), "Run `cortex app` (or `cortex setup` in a "
                         "terminal) to set Cortex up, or pass --vault."))
@@ -796,11 +799,13 @@ def import_chats_cmd(export: Annotated[Path, typer.Argument(
     """Import conversations from a claude.ai, ChatGPT, Gemini or Perplexity export so /cortex can
     learn from them like Claude Code chats. The service is detected from the file. Secrets are
     redacted; re-importing a newer export updates them."""
-    from cortex import chats
+    from cortex import chats, importers
 
-    source, n = chats.import_export(export, source)
+    got = chats.import_export(export, source)
+    source, n = got
     typer.echo(f"Imported {n} {chats.GUIDES[source]['name']} conversation{'s' * (n != 1)} "
                f"into {chats.export_root()}. Run /cortex to learn from them.")
+    typer.echo(importers.report_line(chats.GUIDES[source]["name"], got.report()))
 
 
 @app.command("digest")
@@ -904,9 +909,7 @@ def import_cmd(path: Annotated[Path, typer.Argument(
             typer.echo(f"{name}: {got[1]} new conversations, {got[2]} already imported{dry}"
                        if dry_run else f"{name}: {got[1]} conversations imported into "
                        f"{chats.export_root()}. Run /cortex to learn from them.")
-            if got.skipped:
-                typer.echo(f"{name}: {got.skipped} row{'s' * (got.skipped != 1)} skipped "
-                           "(unreadable date)")
+            typer.echo(importers.report_line(name, got.report()))
         elif kind == "takeout":  # also reads the browsers, as `browse import --takeout` does
             browse_import(since=None, browser=None, profile=None, dry_run=dry_run,
                           takeout=path, vault=vault)
@@ -916,10 +919,12 @@ def import_cmd(path: Annotated[Path, typer.Argument(
             typer.echo(f"{importers.LABELS[r['source']]}: {r['new']} new notes, {r['same']} "
                        f"already imported, {r['skipped']} skipped (hidden, not text or over "
                        f"5 MB){dry}")
+            typer.echo(importers.report_line(importers.LABELS[r["source"]], r))
         else:
             r = importers.import_calendar(_vault(vault), path, dry_run, private)
             typer.echo(f"calendar: {r['events']} events in {r['months']} months, {r['new']} "
                        f"new events{dry}")
+            typer.echo(importers.report_line("calendar", r))
 
 
 @app.command("claims")
@@ -2135,7 +2140,8 @@ def _local_llm(config: dict | None = None):
 NEXT_SCAN = ("next: `cortex browse selftest` to see the import work on made-up data, then "
              "`cortex browse import --dry-run`, then `cortex browse import`")
 NO_BROWSERS = ("no browser history found (looked for Chrome, Edge, Brave and Comet under "
-               "%LOCALAPPDATA% and Firefox under %APPDATA%)")
+               "%LOCALAPPDATA% and Firefox under %APPDATA%; on macOS and Linux for Chrome, "
+               "Edge, Brave and Firefox in their usual folders)")
 NO_MODEL = ("embedding model not downloaded: every page goes to the private page under "
             "\"Other\" sections, none under your topic hubs. To fix: cortex model download")
 
@@ -2310,6 +2316,46 @@ def browse_status(vault: VaultOpt = None) -> None:
 
     for line in build.status(_vault(vault), visible=load_settings().visible_to_claude):
         typer.echo(line)
+
+
+@browse_app.command("forget")
+@_errors
+def browse_forget(site: Annotated[str | None, typer.Option(
+                      "--site", help="A domain, such as example.com (its subdomains too).")]
+                  = None,
+                  category: Annotated[str | None, typer.Option(
+                      "--category", help="A category, such as health or shopping.")] = None,
+                  vault: VaultOpt = None) -> None:
+    """Remove everything stored about one site or one category: the private day page lines,
+    the site counts and pages, the extension inbox and its archive, the local model's site
+    notes and the search vectors. Prints counts only. Your browsers still hold recent visits:
+    add the site to deny_domains (or skip the category) so the next import leaves them out.
+    Old versions in the vault's git history stay (see `cortex doctor`)."""
+    from cortex.browse import forget, sites
+
+    if (site is None) == (category is None):
+        raise VaultError("invalid_argument", "give exactly one of --site or --category.")
+    if category is not None:
+        category = category.strip().lower()
+        if category not in sites.LABELS:
+            raise VaultError("invalid_argument",
+                             f"--category must be one of {', '.join(sites.LABELS)}.")
+        rule, what = forget.Rule(cats=frozenset({category})), f"category {category}"
+    else:
+        host = (site or "").strip().lower().removeprefix("https://").removeprefix("http://")
+        host = host.split("/", 1)[0].removeprefix("www.").rstrip(".")
+        if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", host):
+            raise VaultError("invalid_argument", "--site must be a domain like example.com.")
+        rule, what = forget.Rule(hosts=(host,)), host
+    v = _vault(vault)
+    c = forget.purge(v, rule)
+    typer.echo(f"forgot {what}: {c['day_lines']} lines on {c['day_pages']} private day pages, "
+               f"{c['site_keys']} site counts and {c['site_rows']} titles or searches, "
+               f"{c['sites_removed']} site pages, {c['inbox_records']} extension records, "
+               f"{c['cache_sites'] + c['cache_descriptions']} local-model notes, "
+               f"{c['vectors']} search vectors")
+    typer.echo("next: add it to browse.deny_domains (or set the category to skip) so the next "
+               "import does not bring back what your browsers still hold")
 
 
 def _receiver():

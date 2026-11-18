@@ -112,7 +112,9 @@ Run these in a terminal from the Cortex folder, always as `uv run cortex …`.
 
 Get the export from the service, then run `uv run cortex import <the .zip, folder or file>`. It takes chat exports (claude.ai, ChatGPT, Gemini, Perplexity), notes (Obsidian, Notion, any folder of .md or .txt), a calendar (.ics) and Google activity (Takeout), and works out which one it got. If it can't, add `--source` with `claude`, `chatgpt`, `gemini`, `perplexity`, `google-activity`, `obsidian`, `notion`, `notes` or `calendar`. `--dry-run` prints the counts and writes nothing; `--private` makes the imported notes or calendar pages private.
 
-Secrets are redacted on import. Importing a newer chat export again replaces the older copy instead of adding a duplicate; notes and events already imported are skipped. Then run `/cortex` to learn from the chats. Imported notes and calendar months become pages in `resources/` that Claude can read, unless a note says `private: true` or you used `--private` ([PRIVACY.md](PRIVACY.md)). `uv run cortex import-chats` still imports chat exports only.
+Secrets are redacted on import. Importing a newer chat export again replaces the older copy instead of adding a duplicate; notes and events already imported are skipped. A large ChatGPT or claude.ai export split into several `conversations*.json` files is read whole; a conversation in two of them is kept once, its newest copy. Then run `/cortex` to learn from the chats. Imported notes and calendar months become pages in `resources/` that Claude can read, unless a note's frontmatter marks it private (`private: true`, `yes` or `on`, or a `private` tag) or you used `--private` ([PRIVACY.md](PRIVACY.md)). `uv run cortex import-chats` still imports chat exports only.
+
+Every import ends with a report line, for example `Obsidian: read 10, imported 6, private 3, duplicate 0, skipped 4 (3 not a note, 1 over 5 MB)`: the items read, imported, made private, already imported (or twice in the export), and skipped, with the reason.
 
 To turn imported chats into context, run `uv run cortex digest` when you want to. It lists each chat imported since your last digest with up to 3 topics from your catalog that it seems to be about (local search, no AI model; private topics are never proposed), and asks about each one. A yes records a topic touch: context for your plan, never a grade, so a topic's level moves only after a real check. The listed chats are not shown again. `--dry-run` only lists, `--yes` accepts every topic shown, and `--since DATE` and `--limit N` (default 10) narrow the list. Claude Code chats are left out: a connected Claude records topics as you talk.
 
@@ -205,8 +207,10 @@ Cortex can turn your browser history into pages, so it knows what you have been 
 - By default nothing from your browsing is visible to Claude. Cortex writes only private pages, and you can see everything in Obsidian.
 - It reads your browser history on this laptop only. It never sends it anywhere, unless you turn on `cloud_processing` (see Settings), and even then never a hidden category.
 - Sign-in, payment and bank pages are dropped. They are never stored.
-- Only if you turn on `visible_to_claude` can Claude see your browsing, and then only the categories you have not hidden (`hidden_from_claude`). Hidden ones stay on private pages, which you see only in Obsidian, never in the dashboard, search or any chat. For the categories that are not hidden, the site pages hold page titles, search terms and site names, and cloud AI apps can read them.
-- By default every sensitive category (health, money, betting, dating, sexuality, drugs, self-harm and adult) is hidden, and adult is not saved at all.
+- Only if you turn on `visible_to_claude` can Claude see your browsing, and then only ordinary sites and the sensitive categories you allow (`cloud_categories`). The rest stays on private pages, which you see only in Obsidian, never in the dashboard, search or any chat. For what Claude may see, the site pages hold page titles, search terms and site names, and cloud AI apps can read them.
+- When unsure, it stays private: a search term reaches a page Claude can read only after your local AI has judged it ordinary (without a local AI, search terms stay private), and a title the built-in word lists cannot place needs that judgement too.
+- By default every sensitive category (health, money, betting, dating, sexuality, drugs, self-harm and adult) is private, and adult is not saved at all.
+- It reads Chrome, Edge, Brave and Firefox on Windows, macOS and Linux (and Comet on Windows).
 
 **Steps** (from the Cortex folder)
 1. `uv run cortex browse selftest` runs the whole import on made-up history in a temp folder, never your vault or your browsers. Each check prints PASS or FAIL; the last line says whether all passed.
@@ -217,6 +221,7 @@ Cortex can turn your browser history into pages, so it knows what you have been 
    - If it says the embedding model isn't downloaded, every page lands under "Other" on the private page. Run `uv run cortex model download`, then import again with `--since` to redo old days.
 5. `uv run cortex browse status` shows the mode, the last run, and the last read per browser.
 6. `uv run cortex browse deepen` gives your local AI time with your sites (see below).
+7. `uv run cortex browse forget --site <domain>` (or `--category <name>`, for example `--category health`) removes that site or category from everything Cortex stored: day and site pages (private ones too), visit counts, search vectors, site summaries and the extension's archive. It prints what it removed. Add the site to `deny_domains` as well, or the next import reads it again from your browser.
 
 **One page per website.** Each import also writes a page per site you visited, in a folder per category: `browse/sites/<category>/` for what Claude may see, and the private folder for hidden categories. A site with some hidden visits (a video site, say) gets both: the visible page never counts or names the hidden ones. Each page has the visits, first and last seen, top pages, the searches that led there, related sites and links to your topics. `browse/browse-profile.md` sums it up: when you browse (by hour and weekday), top categories and sites, interests and months. The private profile adds the hidden categories, with their top sites and searches. `browse/sites.csv` lists the sites for a spreadsheet.
 
@@ -245,8 +250,8 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 3. Keep `uv run cortex browse serve` running while you browse.
 
 **Settings** (in `~/.cortex/config.yaml`, under `browse:`)
-- `visible_to_claude: false` or `true`. The default is `false`: only private pages, and no journal lines, topic touches or dashboard pages from browsing. With `true`, the day pages (your topics, time and counts only), the site pages and profile of every category you have not hidden, journal lines and topic touches are written too. Switching back to `false`, or hiding one more category, removes what is no longer allowed on the next import, older pages included.
-- `hidden_from_claude`: the categories kept on private pages only, for example `[adult]`. The default is every sensitive category.
+- `visible_to_claude: false` or `true`. The default is `false`: only private pages, and no journal lines, topic touches or dashboard pages from browsing. With `true`, the day pages (your topics, time and counts only), the site pages and profile of ordinary sites and of every sensitive category in `cloud_categories`, journal lines and topic touches are written too. Switching back to `false`, hiding or skipping one more category, or denying a site, removes what is no longer allowed on the next import, from older pages, visit counts and search vectors too.
+- `cloud_categories`: the sensitive categories Claude and other cloud AI apps may read, for example `[money]`. The default is none: every sensitive category stays on private pages, and so does any category a later release adds until you list it. An older config's `hidden_from_claude` (the categories kept private) still works.
 - `skip_categories`: the categories never saved at all. The default is `[adult]` (from the older `adult: skip`).
 - `adult: skip` or `private`, and `sensitive: private` or `skip`: the older settings; they only set the default of `skip_categories`.
 - `browsers`: which browsers to read, for example `[comet]`. Leave it out to read every browser found.

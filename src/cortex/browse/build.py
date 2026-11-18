@@ -32,13 +32,13 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
 import numpy as np
 
 from cortex import topics
-from cortex.browse import privacy, sites, sources
+from cortex.browse import forget, lists, privacy, sites, sources
 from cortex.browse.privacy import Kept, Settings
 from cortex.events import EventLog, live, local_day, void_event
 from cortex.render import esc, plain
@@ -121,10 +121,16 @@ def _inbox_time(v) -> datetime | None:
     return None
 
 
-def read_inbox(vault: Vault) -> tuple[list[sources.Visit], dict[str, list[int]]]:
-    """The receiver's records as visits (secs = active time), and each file's [size, mtime]."""
+ARCHIVE = ".cortex/browse/inbox-archive"  # consumed inbox files, filtered (review C5)
+ARCHIVE_DAYS = 90  # with no browser History to set the horizon: Chrome keeps about this long
+
+
+def read_inbox(vault: Vault, folder: str = ".cortex/browse"
+               ) -> tuple[list[sources.Visit], dict[str, list[int]]]:
+    """The receiver's records as visits (secs = active time), and each file's [size, mtime].
+    `folder=ARCHIVE` reads the archive of consumed files instead."""
     out, stats = [], {}
-    for p in sorted((vault.root / ".cortex" / "browse").glob("inbox-*.jsonl")):
+    for p in sorted((vault.root / folder).glob("inbox-*.jsonl")):
         try:
             st = p.stat()
             lines = p.read_bytes().decode("utf-8", "replace").splitlines()
@@ -188,6 +194,73 @@ def _items(visits: list[sources.Visit], inbox: list[sources.Visit], settings: Se
         at.setdefault(key, it)
     items.sort(key=lambda i: (i.start, i.k.url))
     return items, c
+
+
+# ---- the local model's verdict (C1) -------------------------------------------------------
+
+VET_LABELS = (*lists.CATEGORIES, "ordinary")
+
+
+def local_only(runner):
+    """`runner` when it is the loopback local model, else None: never cloudllm's CloudRunner
+    (a Runner subclass, so `isinstance` would pass it) nor a stand-in. The app's Cancel
+    wrapper (`_inner`) is looked through."""
+    from cortex import localllm
+
+    inner = getattr(runner, "_inner", runner)
+    if type(inner) is not localllm.Runner:
+        return None
+    try:
+        localllm._check_url(inner.base)
+    except ValueError:
+        return None
+    return runner
+
+
+def vet(vault: Vault, items: list[Item], settings: Settings, runner, budget, *,
+        ask: bool = True, save: bool = True) -> tuple[list[Item], Counter]:
+    """C1, before any page is written: an uncategorised record's title or search term goes
+    to the local model (`local_only(runner)`; only when `ask`), and its label is cached by
+    text hash in sites.VERDICTS. A sensitive label makes it that category (skip drops it, a
+    hidden one makes it private); "ordinary" clears it. With a local model and no verdict
+    (budget spent, no answer) a title stays local (`Kept.local`); without one, a title is
+    judged by the word lists only. A search term is never shown on a visible page without an
+    "ordinary" verdict (`sites._shown`). Counts only."""
+    local = local_only(runner)
+    verdicts = sites.load_verdicts(vault)
+    had = dict(verdicts)
+    c: Counter = Counter()
+    tried: set[str] = set()
+    out = []
+    for it in items:
+        k = it.k
+        text = k.search or (k.title if k.title != k.host else "")
+        if k.category is not None or k.private or not text:
+            out.append(it)
+            continue
+        h = privacy.text_key(text)
+        v = verdicts.get(h)
+        if (v is None and local is not None and ask and h not in tried
+                and (budget is None or budget.ok())):
+            tried.add(h)
+            c["vet_asked"] += 1
+            got = local.classify(text, list(VET_LABELS), budget=budget)
+            if got:
+                v = verdicts[h] = got[0]
+        if v in lists.CATEGORIES:
+            k = privacy.apply(replace(k, category=v, maybe=True), settings=settings)
+            c["vet_sensitive"] += 1
+            if k is None:
+                c["dropped"] += 1
+                continue
+        elif v != "ordinary" and local is not None and not k.search:
+            k = replace(k, private=True, local=True)
+            c["vet_unsure"] += 1
+        it.k = k
+        out.append(it)
+    if save and verdicts != had:
+        sites._save(vault, sites.VERDICTS, verdicts)
+    return out, c
 
 
 # ---- topics -------------------------------------------------------------------------------
@@ -687,6 +760,17 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     tell = say or (lambda s: None)  # counts-only progress, so a long run is never silent
     state = load_state(vault)
     report: Counter = Counter()
+    fp = fingerprint(settings)
+    # who may see what changed (visibility, hidden or skipped categories, the domain lists,
+    # the filter's own rules): every day still held is redone below, and first everything
+    # stored is filtered again (C2), the days the browsers forgot included
+    reset = state.get("settings") != fp
+    if reset and not dry_run:
+        tell("settings changed: filtering what is stored again")
+        report.update({f"refiltered_{k}": n for k, n in forget.purge(
+            vault, forget.Rule.of(settings), write=False).items()})
+    if not dry_run:
+        forget.untrack_private(vault)
     visits, cursors, first = [], {}, None
     for s in srcs:
         tell(f"{s.key}: reading its history")
@@ -719,6 +803,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if isinstance(pending, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", pending):
         first = pending if first is None or pending < first else first
     inbox, inbox_stats = read_inbox(vault)
+    history = list(visits)  # the browsers' own visits set the archive's horizon
+    inbox = read_inbox(vault, ARCHIVE)[0] + inbox  # C5: consumed records still count
     if takeout:
         # R2-8: only the days a browser or the inbox holds are cut, never a day no source has
         have = {local_day(v.start, tz) for v in visits + inbox}
@@ -737,10 +823,6 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     # only) keeps its pages and counts
     held = {local_day(v.start, tz) for v in visits + inbox}
     oldest = min(held, default=None)
-    fp = fingerprint(settings)
-    # who may see what changed (visibility, hidden or skipped categories, the domain lists):
-    # every day still held is redone, and a public day page that cannot be redone goes
-    reset = state.get("settings") != fp
     start = since or first
     if reset and oldest is not None and (start is None or oldest < start):
         start = oldest
@@ -755,6 +837,11 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         start = _monday(start)
         tell(f"filtering {len(visits) + len(inbox)} visits from {start} on")
         items, c = _items(visits, inbox, settings, tz, start, tell)
+        report.update(c)
+        if local_only(runner) is not None and vis and not dry_run:
+            tell(f"local model: checking the titles and searches of {len(items)} visits")
+        items, c = vet(vault, items, settings, runner, budget, ask=vis and not dry_run,
+                       save=not dry_run)
         report.update(c)
         if embed is not None:
             tell("topics: reading the topic hubs")
@@ -794,13 +881,19 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         tell(f"sites: counting {len(items)} visits by site")
         days, bad = sites.load_days(vault)
         days = sites.record(vault, items, where, settings, tz, start, held, days)
-        inbox_stats = _drop_consumed(vault, inbox_stats, start)
     elif dry_run:
         return {**report, "visible_to_claude": vis, "dry_run": True}
     else:
         days, bad = sites.load_days(vault)
+    inbox_stats = _archive_consumed(vault, inbox_stats, settings)
+    if not report["sources_failed"]:  # a failed source would move the horizon up
+        horizon = (local_day(min(v.start for v in history), tz) if history
+                   else (now - timedelta(days=ARCHIVE_DAYS)).date().isoformat())
+        report["archive_pruned"] = _prune_archive(vault, horizon)
     # every run, so a settings change (a category hidden since) reaches the site pages
     report.update(sites.write(vault, settings, tz, say=say, days=days, bad=bad))
+    if reset:
+        report["refiltered_vectors"] = forget.prune_vectors(vault)["vectors"]
     vault.write_text(vault.root / STATE, json.dumps({
         "pending": (start or pending) if report["sources_failed"] else None,
         "last_run": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -811,10 +904,13 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     return {**report, "visible_to_claude": vis}
 
 
+FILTER_VERSION = 2  # bump when the filter's rules change, so stored browsing is re-filtered
+
+
 def fingerprint(settings: Settings) -> str:
-    """A hash of the settings that decide what a public page may hold."""
+    """A hash of the settings (and FILTER_VERSION) that decide what a public page may hold."""
     return hashlib.sha256(json.dumps([
-        settings.visible_to_claude, sorted(settings.hidden_from_claude),
+        FILTER_VERSION, settings.visible_to_claude, sorted(settings.hidden_from_claude),
         sorted(settings.skip_categories), settings.private, settings.deny, settings.allow
     ]).encode()).hexdigest()[:16]
 
@@ -846,24 +942,56 @@ def _drop_public(vault: Vault, held: set[str] | str | None) -> int:
     return gone
 
 
-def _drop_consumed(vault: Vault, stats: dict[str, list[int]], start: str
-                   ) -> dict[str, list[int]]:
-    """Delete each inbox file this run consumed whole (named for a day after `start`, a day of
-    zone slack) and unchanged since it was read; the stats of the files that stay."""
+def _archive_consumed(vault: Vault, stats: dict[str, list[int]], settings: Settings
+                      ) -> dict[str, list[int]]:
+    """Move each inbox file this run read whole and that is unchanged since, whatever its
+    date (C16), into ARCHIVE (C5), so a later rebuild of its day still has the visits only
+    the extension saw. Its records are filtered again on the way (the settings of now): a
+    dropped one goes, a private one keeps no excerpt. The stats of the files that stay."""
     left = dict(stats)
     with vault.lock():  # the receiver appends under the same lock
         for name, st in stats.items():
-            m = re.search(r"\d{4}-\d{2}-\d{2}", name)
             p = vault.root / ".cortex" / "browse" / name
             try:
                 same = [p.stat().st_size, p.stat().st_mtime_ns] == st
+                lines = p.read_bytes().decode("utf-8", "replace").splitlines()
             except OSError:
-                same = False
-            if m and same and (date.fromisoformat(m.group(0))
-                               - timedelta(days=1)).isoformat() >= start:
-                vault.remove(p)
-                del left[name]
+                continue
+            if not same:
+                continue
+            keep = []
+            for line in lines:
+                try:
+                    r = json.loads(line)
+                    k = privacy.filter_record(str(r["url"]), str(r.get("title") or ""),
+                                              settings=settings,
+                                              channel=str(r.get("channel") or ""))
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if k is None:
+                    continue
+                if k.private and r.get("excerpt"):
+                    r["excerpt"] = ""
+                keep.append(json.dumps(r, ensure_ascii=False))
+            if keep:
+                a = vault.root / ARCHIVE / name
+                old = a.read_bytes().decode("utf-8", "replace") if a.is_file() else ""
+                vault.write_text(a, old + "".join(f"{ln}\n" for ln in keep))
+            vault.remove(p)
+            del left[name]
     return left
+
+
+def _prune_archive(vault: Vault, horizon: str) -> int:
+    """Delete the archived inbox files of days before `horizon` (the oldest day the browsers'
+    History holds, a day of zone slack): those days are never rebuilt again. How many went."""
+    cut = (date.fromisoformat(horizon) - timedelta(days=1)).isoformat()
+    gone = 0
+    for p in sorted((vault.root / ARCHIVE).glob("inbox-*.jsonl")):
+        m = re.search(r"\d{4}-\d{2}-\d{2}", p.name)
+        if m and m.group(0) < cut:
+            gone += vault.remove(p)
+    return gone
 
 
 def status(vault: Vault, tz: tzinfo | None = None, *, visible: bool = False) -> list[str]:

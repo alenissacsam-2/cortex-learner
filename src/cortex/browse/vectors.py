@@ -76,6 +76,31 @@ def _files(vault: Vault, say=None) -> dict[str, tuple[str, str]]:
     return out
 
 
+def signature(vault: Vault) -> str:
+    """A cheap fingerprint of the browse pages (path, size and mtime of each; no read, no
+    hash), stored with the vectors so a search re-reads the pages only when it changed
+    (review C12)."""
+    top = vault.root / "browse"
+    rows = []
+    for p in sorted(top.rglob("*.md")) if top.is_dir() else []:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        rows.append((p.relative_to(vault.root).as_posix(), st.st_size, st.st_mtime_ns))
+    return hashlib.sha256(json.dumps(rows).encode("utf-8")).hexdigest()[:20]
+
+
+def _stored_signature(vault: Vault) -> str | None:
+    try:
+        with np.load(vault.root / CACHE, allow_pickle=False) as z:
+            meta = json.loads(z["meta"].item())
+    except (OSError, ValueError, KeyError):
+        return None
+    ok = [meta.get("model"), meta.get("version")] == [semantic.MODEL, VERSION]
+    return meta.get("sig") if ok else None
+
+
 def _read(vault: Vault, dim: int | None = None) -> dict:
     """{rel path: (hash, starts, unit vectors)}, or {} when missing or built otherwise."""
     try:
@@ -95,7 +120,7 @@ def _read(vault: Vault, dim: int | None = None) -> dict:
     return {}
 
 
-def _write(vault: Vault, cache: dict, dim: int) -> None:
+def _write(vault: Vault, cache: dict, dim: int, sig: str | None = None) -> None:
     paths = list(cache)
     rows = [cache[p] for p in paths]
     buf = io.BytesIO()
@@ -104,7 +129,7 @@ def _write(vault: Vault, cache: dict, dim: int) -> None:
              start=np.concatenate([e[1] for e in rows] or [np.zeros(0, np.int32)]),
              vecs=np.concatenate([e[2] for e in rows] or [np.zeros((0, dim))]).astype(np.float16),
              meta=np.array(json.dumps({"model": semantic.MODEL, "version": VERSION, "dim": dim,
-                                       "hashes": [e[0] for e in rows]})))
+                                       "hashes": [e[0] for e in rows], "sig": sig})))
     with vault.lock():  # the lock creates .cortex/
         (vault.root / CACHE).parent.mkdir(parents=True, exist_ok=True)
         vault._atomic_write(vault.root / CACHE, buf.getvalue())
@@ -120,6 +145,7 @@ def update(vault: Vault, progress=None) -> dict:
     say = progress or (lambda s: None)
     say("private search: reading the browse pages")
     dim = semantic._embed(embed, ["cortex"]).shape[1]  # a cache from another embedder is redone
+    sig = signature(vault)  # before reading: a page changed meanwhile is read again next time
     files = _files(vault, say)
     old = _read(vault, dim)
     keep = {p: e for p, e in old.items() if p in files and files[p][0] == e[0]}
@@ -140,25 +166,43 @@ def update(vault: Vault, progress=None) -> dict:
     for p, starts, ts in plan:  # every page has at least one chunk
         cache[p] = (files[p][0], np.array(starts, dtype=np.int32), vecs[at:at + len(ts)])
         at += len(ts)
-    if todo or removed or not (vault.root / CACHE).is_file():
-        _write(vault, cache, dim)
+    if todo or removed or not (vault.root / CACHE).is_file() or _stored_signature(vault) != sig:
+        _write(vault, cache, dim, sig)
     out = {"pages": len(files), "embedded": len(todo), "removed": removed,
            "chunks": sum(len(e[1]) for e in cache.values())}
     say(f"done: {out['pages']} pages, {out['chunks']} chunks")
     return out
 
 
+def prune(vault: Vault) -> int:
+    """Drop the rows of pages that went or changed, with no model needed (a forget or a
+    settings change must not leave a page's vectors and path behind). Rows dropped."""
+    cache = _read(vault)
+    if not cache:
+        return 0
+    files = _files(vault)
+    keep = {p: e for p, e in cache.items() if p in files and files[p][0] == e[0]}
+    if len(keep) < len(cache):
+        dim = next(iter(cache.values()))[2].shape[1]
+        _write(vault, keep, dim)
+    return len(cache) - len(keep)
+
+
 def search(vault: Vault, query: str, k: int = 8) -> list[dict]:
     """Top `k` browse pages for `query`: [{path, title, score, snippet, text}], best first;
-    `text` is the best chunk (CHUNK_CHARS). Updates the vectors first. Title, snippet and text
-    are untrusted page text: wrap them before a model reads them."""
+    `text` is the best chunk (CHUNK_CHARS). Updates the vectors first when the pages'
+    signature changed. Title, snippet and text are untrusted page text: wrap them before a
+    model reads them."""
     if not isinstance(query, str) or not query.strip():
         return []
-    update(vault)
+    if _stored_signature(vault) != signature(vault):
+        update(vault)
     cache = _read(vault)
     if not cache:
         return []
     embed = semantic.load_embedder()
+    if embed is None:
+        raise VaultError("not_set_up", semantic.NOT_SET_UP)
     q = semantic._embed(embed, [semantic.QUERY_PREFIX + query.strip()])[0]
     scored = []
     for p, (_, starts, vecs) in cache.items():

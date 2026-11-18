@@ -82,7 +82,8 @@ def test_a_hidden_category_never_reaches_a_visible_file(vault, hist):
     yt = v["browse/sites/video/browse-youtube.com.md"].decode()
     assert "Chess endgame" in yt and "visits: 1\n" in yt  # the hidden video is not counted
     cc = v["browse/sites/gaming/browse-chess.com.md"].decode()
-    assert "## Searches that led here\n- chess tactics · 1" in cc
+    # v7 C1: a search term is local until a local model's verdict clears it (test_browse_v7)
+    assert "## Searches that led here" not in cc and "chess tactics ·" not in cc
     assert "browse/sites/health/browse-webmd.com.md" in v  # health is not hidden for the owner
     profile = v["browse/browse-profile.md"].decode()
     assert "## Top sites" in profile and "adult" not in profile

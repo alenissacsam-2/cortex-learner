@@ -961,7 +961,9 @@ def test_browsing_privacy_defaults_and_categories(app, home):
     c = taint.config()
     assert c["vault"] == "V" and c["rerank"] is False and c["browse"]["browsers"] == ["chrome"]
     b = c["browse"]
-    assert b["hidden_from_claude"] == ["adult", "health"] and b["private_mcp"] is True
+    assert "hidden_from_claude" not in b and b["private_mcp"] is True  # C9: the allowlist
+    assert b["cloud_categories"] == [x for x in lists.CATEGORIES
+                                     if x not in ("adult", "health")]
     assert b["skip_categories"] == ["adult", "betting"]
     assert (b["adult"], b["sensitive"]) == ("skip", "private")  # legacy pair kept in step
     s = call(app, "GET", "/api/browse")[1]["settings"]
@@ -1201,8 +1203,9 @@ def test_audience_control_round_trip(app, home):
     b = c["browse"]
     assert c["vault"] == "V" and b["browsers"] == ["chrome"] and b["cloud_processing"] is True
     assert b["skip_categories"] == ["adult", "betting"]
-    assert b["hidden_from_claude"] == [x for x in lists.CATEGORIES
-                                       if x not in ("adult", "betting", "money")]
+    assert b["cloud_categories"] == [x for x in lists.CATEGORIES  # skip still wins
+                                     if x in ("adult", "betting", "money")]
+    assert "hidden_from_claude" not in b
     s = load_settings()
     assert {x: privacy.audience(x, s) for x in lists.CATEGORIES} == want
     got = call(app, "GET", "/api/browse")[1]["settings"]["audience"]

@@ -114,8 +114,40 @@ GUIDES = {
 
 
 class Got(tuple):
-    """import_export's result; `skipped` counts Takeout HTML rows whose date was unreadable."""
-    skipped = 0
+    """import_export's result; `skipped` counts Takeout HTML rows whose date was unreadable.
+    The import report (importers.report_line): `files` read, conversations `read`,
+    `duplicate` (one id twice in the export: the latest kept) and `empty` (no text or id)."""
+    skipped = files = read = duplicate = empty = 0
+
+    def report(self) -> dict:
+        n = self[1] if len(self) == 2 else self[1] + self[2]
+        return {"read": self.read, "imported": n, "private": 0, "duplicate": self.duplicate,
+                "reasons": {"no text or no id": self.empty,
+                            "unreadable date": self.skipped}, "files": self.files}
+
+
+def _stamp(t) -> float:
+    """A conversation's update time as a number, for picking the latest copy (0 if unreadable)."""
+    try:
+        return float(t) if isinstance(t, int | float) else \
+            datetime.fromisoformat(str(t).replace("Z", "+00:00")).timestamp()
+    except (ValueError, OverflowError, TypeError):
+        return 0.0
+
+
+def _latest(convs, got: Got) -> list:
+    """C6: one copy per conversation id (a split export may hold one twice): the most recently
+    updated, in first-seen order. Counts `read` and `duplicate` on `got`."""
+    best: dict = {}
+    for cid, updated, turns in convs:
+        got.read += 1
+        k = cid if isinstance(cid, str) else ("", got.read)  # no id: kept, _save skips it
+        if k in best:
+            got.duplicate += 1
+            if _stamp(updated) <= _stamp(best[k][1]):
+                continue
+        best[k] = (cid, updated, turns)
+    return list(best.values())
 
 
 def import_export(src: Path, source: str | None = None, dry_run: bool = False) -> tuple:
@@ -136,24 +168,31 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
         raise VaultError("invalid_argument", f"Found no chat export in {src.name}. {EXPECTED}")
     js = [f for f in files if not f[0].lower().endswith(".md")]
     pplx = not js or (source == "perplexity" and len(js) < len(files))  # Markdown threads
-    name, *_, read = (src.name, None) if pplx else js[0]  # only the one JSON file to parse
-    skipped = 0
+    name = src.name if pplx or len(js) > 1 else js[0][0]
+    skipped, data, got = 0, [], Got()
     try:
         if pplx:
             mds = [(n, read().decode("utf-8"), mtime) for n, _, mtime, read in files
                    if n.lower().endswith(".md")]
-        else:
+        # C6: every JSON (or Takeout HTML) file of the export, not only the first one
+        for name, _, _, read in [] if pplx else js:
             html_file = name.lower().endswith((".html", ".htm"))  # Takeout's HTML Gemini rows
-            data, skipped = takeout.html_rows(read(), name) if html_file else \
-                (json.loads(read()), 0)
+            part, n = takeout.html_rows(read(), name) if html_file else (json.loads(read()), 0)
+            skipped += n
+            if isinstance(part, dict) and isinstance(part.get("conversations"), list):
+                part = part["conversations"]  # Perplexity's account export wraps its threads
+            if not isinstance(part, list):
+                raise VaultError("invalid_argument", f"{name} should hold a list. {EXPECTED}")
+            data += part
+            got.files += 1
     except (OSError, ValueError, zipfile.BadZipFile) as e:
         raise VaultError("invalid_argument", f"Cannot read {name}: {e}") from None
+    name = name if len(js) == 1 else src.name
     if pplx:
-        return Got(_save("perplexity", _perplexity(mds), dry_run))
-    if isinstance(data, dict) and isinstance(data.get("conversations"), list):
-        data = data["conversations"]  # Perplexity's account export wraps its threads
-    if not isinstance(data, list):
-        raise VaultError("invalid_argument", f"{name} should hold a list. {EXPECTED}")
+        got.files = len(mds)
+        out = Got(_save("perplexity", _latest(_perplexity(mds), got), dry_run, got))
+        out.__dict__.update(got.__dict__)
+        return out
     source = source or _detect(data)
     if source is None:
         raise VaultError("invalid_argument", f"Cannot tell which service {name} comes from "
@@ -162,10 +201,11 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
         raise VaultError("invalid_argument", f"{name} holds no Gemini Apps activity (Search, "
                          "YouTube or Chrome rows are browsing, not chats); import it as "
                          "google-activity instead.")
-    got = Got(_save(source, {"claude": _claude, "chatgpt": _chatgpt, "gemini": _gemini,
-                             "perplexity": _perplexity_json}[source](data), dry_run))
-    got.skipped = skipped
-    return got
+    convs = {"claude": _claude, "chatgpt": _chatgpt, "gemini": _gemini,
+             "perplexity": _perplexity_json}[source](data)
+    out = Got(_save(source, _latest(convs, got), dry_run, got))
+    out.__dict__.update(got.__dict__, skipped=skipped)
+    return out
 
 
 def _wanted(name: str) -> bool:
@@ -347,7 +387,7 @@ def _pplx_key(turns) -> str | None:
     return "\0".join([a, *qs]) if qs and qs[0] else None
 
 
-def _save(source: str, convs, dry_run: bool = False) -> tuple:
+def _save(source: str, convs, dry_run: bool = False, got: Got | None = None) -> tuple:
     out = export_root() / EXPORT_DIRS[source][0]
     if not dry_run:
         out.mkdir(parents=True, exist_ok=True)
@@ -369,6 +409,8 @@ def _save(source: str, convs, dry_run: bool = False) -> tuple:
                 cid = had
                 del known[key]  # a stored thread takes at most one incoming thread
         if not isinstance(cid, str) or not _UUID.match(cid) or not lines or cid in seen:
+            if got is not None:
+                got.empty += not (isinstance(cid, str) and cid in seen)
             continue
         seen.add(cid)
         p = out / f"{cid}.jsonl"

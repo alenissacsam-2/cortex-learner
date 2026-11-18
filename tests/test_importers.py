@@ -31,6 +31,14 @@ def _folder_zip(src: Path, dest: Path) -> Path:
                        for p in sorted(src.rglob("*")) if p.is_file()})
 
 
+REPORT = ("read", "imported", "private", "duplicate", "reasons")
+
+
+def _counts(r: dict) -> dict:
+    """The importer's own counts, without the shared import-report keys."""
+    return {k: v for k, v in r.items() if k not in REPORT}
+
+
 def _notion_zip(tmp_path) -> Path:
     """Notion's export: an outer zip holding one zip per part."""
     part = _folder_zip(EXPORTS / "notion", tmp_path / "Export-abc-Part-1.zip")
@@ -53,7 +61,7 @@ def _tree(root: Path) -> dict[str, bytes]:
 def test_notion_zip_strips_id_suffixes_and_skips_csv(root_plain, tmp_path):
     v = Vault(root_plain)
     r = importers.import_notes(v, _notion_zip(tmp_path))
-    assert r == {"source": "notion", "new": 2, "same": 0, "skipped": 1}
+    assert _counts(r) == {"source": "notion", "new": 2, "same": 0, "skipped": 1}
     work = v.read("resource", "notion-work")
     trip = v.read("resource", "notion-trip-plan")
     assert work.fields["title"] == "Work" and trip.fields["status"] == "reference"
@@ -67,7 +75,7 @@ def test_obsidian_folder_skips_hidden_binary_and_big_and_keeps_private(root_plai
     v = Vault(root_plain)
     r = importers.import_notes(v, _obsidian(tmp_path))
     # .obsidian/app.json, .trash/old.md, pic.png and huge.md are skipped
-    assert r == {"source": "obsidian", "new": 4, "same": 0, "skipped": 4}
+    assert _counts(r) == {"source": "obsidian", "new": 4, "same": 0, "skipped": 4}
     ids = sorted(p.stem for p in (root_plain / "resources").glob("obsidian-*.md"))
     assert ids == ["obsidian-daily", "obsidian-diary", "obsidian-graph-theory", "obsidian-reading"]
     assert v.read("resource", "obsidian-diary").fields["private"] is True
@@ -85,11 +93,11 @@ def test_reimport_dedupes_by_content(root_plain, tmp_path):
     src = _obsidian(tmp_path)
     importers.import_notes(v, src)
     before = _tree(root_plain)
-    assert importers.import_notes(v, src) == {"source": "obsidian", "new": 0, "same": 4,
-                                              "skipped": 4}
+    assert _counts(importers.import_notes(v, src)) == {"source": "obsidian", "new": 0,
+                                                       "same": 4, "skipped": 4}
     assert importers.import_calendar(v, EXPORTS / "calendar.ics")["new"] == 3
     after_cal = _tree(root_plain)
-    assert importers.import_calendar(v, EXPORTS / "calendar.ics") == \
+    assert _counts(importers.import_calendar(v, EXPORTS / "calendar.ics")) == \
         {"events": 3, "months": 2, "new": 0}
     assert _tree(root_plain) == after_cal and set(before) < set(after_cal)
     (src / "Daily.md").write_text("Revised Prim too.\n", "utf-8")  # edited: a new page
@@ -98,7 +106,7 @@ def test_reimport_dedupes_by_content(root_plain, tmp_path):
 
 def test_calendar_month_pages_without_attendees(root_plain):
     v = Vault(root_plain)
-    assert importers.import_calendar(v, EXPORTS / "calendar.ics") == \
+    assert _counts(importers.import_calendar(v, EXPORTS / "calendar.ics")) == \
         {"events": 3, "months": 2, "new": 3}
     nov = v.read("resource", "calendar-2026-11")
     assert "private" not in nov.fields  # visible unless the user chooses private
@@ -281,3 +289,39 @@ def test_detect_takeout_in_another_language(tmp_path):
     assert importers.detect(de) == ["chats", "takeout"]
     ru = _zip(tmp_path / "ru.zip", {"Takeout/Мои действия/Поиск/МоиДействия.json": search})
     assert "takeout" not in importers.detect(ru)
+
+
+@pytest.mark.parametrize("front", [
+    "private: true", "private: True", 'private: "true"', "private: yes", "private: on",
+    "private: 1", "tags: [study, private]", "tags:\n  - private", "tags: '#private'",
+    "tags: study, private", "tag: private", "title: [unclosed", "- just\n- a list",
+    "private: true # trailing comment", "a: 1\na: 2"])
+def test_frontmatter_private_in_any_truthy_form_or_tag_or_broken_is_private(front):
+    """C4: the old regex only knew `private: true|yes` alone on a line."""
+    assert importers._is_private(front)
+
+
+@pytest.mark.parametrize("front", [
+    "", "private: false", "private: no", "private: 0", "title: Graphs",
+    "tags: [study, privateer]", "summary: kept private for now"])
+def test_frontmatter_without_a_private_mark_is_public(front):
+    assert not importers._is_private(front)
+
+
+def test_notes_import_ends_with_the_import_report(root_plain, tmp_path):
+    """Every import ends with read / imported / private / duplicate / skipped (+ reason)."""
+    src = _obsidian(tmp_path)
+    (src / "Quoted.md").write_text('---\nprivate: "true"\n---\nquoted private\n', "utf-8")
+    (src / "Tagged.md").write_text("---\ntags: [private]\n---\ntagged private\n", "utf-8")
+    v = Vault(root_plain)
+    r = importers.import_notes(v, src)
+    assert v.read("resource", "obsidian-quoted").fields["private"] is True
+    assert v.read("resource", "obsidian-tagged").fields["private"] is True
+    assert importers.report_line("Obsidian", r) == (
+        "Obsidian: read 10, imported 6, private 3, duplicate 0, skipped 4 "
+        "(3 not a note, 1 over 5 MB)")
+    out = runner.invoke(app, ["import", str(src), "--vault", str(root_plain)]).output
+    assert "Obsidian: read 10, imported 0, private 0, duplicate 6, skipped 4" in out
+    out = runner.invoke(app, ["import", str(EXPORTS / "calendar.ics"), "--private",
+                              "--vault", str(root_plain)]).output
+    assert "calendar: read 3, imported 3, private 3, duplicate 0, skipped 0" in out

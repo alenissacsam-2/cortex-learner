@@ -115,35 +115,64 @@ CATEGORY_WORDS = {
                          "rehab", "overdose", "erectile", "dysmorphia", "bulimia", "anorexia",
                          "dyslexia", "adderall", "accutane", "propranolol", "ozempic",
                          "steroid", "steroids", "testosterone", "gynecomastia", "insomnia",
-                         "concussion", "disability"}),
-    "money": frozenset({"demat", "netbanking", "cibil"}),
+                         "concussion", "disability",
+                         # C1 (v7 review): wider, but never a plain study word
+                         "pcos", "pcod", "endometriosis", "miscarriage", "infertility", "ivf",
+                         "vaginal", "vagina", "penis", "impotence", "hemorrhoids", "diabetes",
+                         "diabetic", "epilepsy", "autism", "autistic", "dementia", "alzheimers",
+                         "chemotherapy", "chemo", "eczema", "psoriasis", "uti", "psychosis",
+                         "psychotic", "addiction", "addicted", "sobriety", "dysphoria",
+                         "thyroid", "hypothyroidism", "migraine", "acne", "hairfall"}),
+    "money": frozenset({"demat", "netbanking", "cibil", "bankruptcy", "bankrupt", "payday",
+                        "foreclosure", "overdraft", "repossession", "emis"}),
     "betting": frozenset({"betting", "casino", "rummy", "jackpot", "sportsbook", "patti",
                           "gambling", "satta", "matka", "1xbet"}),
     "dating": frozenset({"dating", "matrimony", "matrimonial", "hookup", "tinder", "grindr",
                          "sugardaddy"}),
     "sexuality": frozenset({"gay", "lesbian", "bisexual", "queer", "transgender", "lgbt",
                             "lgbtq", "lgbtqia", "sexuality", "homosexual", "asexual", "pansexual",
-                            "nonbinary"}),
+                            "nonbinary", "intersex", "genderqueer", "genderfluid", "aromantic",
+                            "demisexual", "polyamory", "polyamorous"}),
     "drugs": frozenset({"weed", "cocaine", "lsd", "mdma", "marijuana", "cannabis", "ganja",
                         "charas", "heroin", "meth", "ketamine", "shrooms", "psilocybin",
-                        "opium", "vape", "vaping", "stoned"}),
-    "selfharm": frozenset({"selfharm", "self-harm", "suicide", "suicidal"}),
+                        "opium", "vape", "vaping", "stoned", "xanax", "valium", "codeine",
+                        "tramadol", "oxycodone", "fentanyl", "percocet", "benzos", "dmt",
+                        "ayahuasca", "kratom", "edibles", "thc"}),
+    "selfharm": frozenset({"selfharm", "self-harm", "suicide", "suicidal", "unalive",
+                           "self-injury"}),
 }
 STEMS = {
     "adult": ("porn", "sex", "masturbat", "nofap", "onlyfans", "xvideo", "xhamster"),
-    "health": ("pregnan", "contracepti", "gonorrh", "antidepress", "psychiatr", "schizo"),
+    "health": ("pregnan", "contracepti", "gonorrh", "antidepress", "psychiatr", "schizo",
+               "gynec", "gynaec", "obstetric", "oncolog", "infertil", "endometrio", "miscarr",
+               "chemotherap", "dementi", "alzheimer"),
     "betting": ("gambl",),
     "selfharm": ("suicid",),
 }
 PHRASES = {
     "adult": ("only fans",),
-    "health": ("morning after pill", "panic attack", "panic attacks", "mental illness",
-               "sexual health", "period late", "periods late", "missed period"),
-    "money": ("credit score", "loan default", "salary slip"),
+    "money": ("credit score", "loan default", "salary slip", "loan emi", "emi calculator",
+              "personal loan", "home loan", "education loan", "car loan", "gold loan",
+              "loan app", "instant loan", "payday loan", "debt collector", "debt relief",
+              "debt consolidation", "in debt", "credit card debt", "credit card bill",
+              "loan recovery", "cheque bounce"),
     "betting": ("satta matka", "teen patti"),
     "dating": ("sugar daddy", "dating app"),
+    "sexuality": ("gender identity", "am i trans", "gender dysphoria"),
+    "drugs": ("acid trip", "magic mushrooms", "drug test", "pass a drug test"),
     "selfharm": ("self harm", "kill myself", "killing myself", "end my life", "want to die",
-                 "how to die", "cut myself", "cutting myself", "hurt myself"),
+                 "how to die", "cut myself", "cutting myself", "hurt myself",
+                 # C1: the review's "ways to stop existing" and its kind
+                 "stop existing", "don t want to live", "dont want to live",
+                 "do not want to live", "no reason to live", "better off dead", "end it all",
+                 "painless death", "wish i was dead", "wish i were dead", "wanna die",
+                 "slit my wrists", "hang myself", "self injury", "not want to be alive",
+                 "dont want to be alive", "don t want to be alive"),
+    "health": ("morning after pill", "panic attack", "panic attacks", "mental illness",
+               "sexual health", "period late", "periods late", "missed period",
+               "eating disorder", "binge eating", "birth control", "yeast infection",
+               "period pain", "mental health", "hair loss", "weight loss pills",
+               "parkinson s disease", "parkinsons disease"),
 }
 # "sexuality" before the adult stem "sex": an exact word anywhere wins over a stem
 STEM_ORDER = ("selfharm", "health", "betting", "adult")
@@ -155,6 +184,10 @@ ADULT_BRANDS = ("porn", "xvideos", "xhamster", "xnxx", "redtube", "youporn", "on
                 "fansly", "chaturbate", "stripchat", "livejasmin", "spankbang", "eporner",
                 "brazzers", "nhentai", "tnaflix", "thumbzilla")
 CATEGORIES = tuple(CATEGORY_HOSTS)  # adult first: it wins a tie
+# the categories of v0.1.0, when configs stored `hidden_from_claude`: any category added since
+# is local for such a config (C9: the cloud allowlist `cloud_categories` replaced it)
+CATEGORIES_V1 = ("adult", "health", "money", "betting", "dating", "sexuality", "drugs",
+                 "selfharm")
 STRONG_STEMS = ("porn", "onlyfans", "xvideo", "xhamster")  # a word starting so is a sure adult hit
 # Normalisation for matching only: look-alike letters and common leetspeak
 CONFUSABLES = str.maketrans({
