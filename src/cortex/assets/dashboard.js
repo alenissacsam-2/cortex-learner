@@ -1956,7 +1956,9 @@
           const day = new Date(a.date + 'T12:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
           c.append(el('div', 'small muted', `Forecast recall on ${day}: ${Math.round(100 * r.forecast)}%`));
         } else if (r.calibrating) {  // too few checked forecasts to trust a number yet
-          c.append(el('div', 'small muted', `Forecast after ${r.calibrating.need} checked reviews (${r.calibrating.n} so far)`));
+          const { n, need } = r.calibrating;  // enough reviews but no skill yet: say so, like render.py
+          c.append(el('div', 'small muted', n < need ? `Forecast after ${need} checked reviews (${n} so far)`
+            : 'Forecast still calibrating: not yet better than a guess'));
         }
       } else c.append(el('div', 'small muted', 'No tested topics recorded'));
       if (a.domains.length) {
