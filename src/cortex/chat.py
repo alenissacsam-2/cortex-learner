@@ -192,8 +192,10 @@ _POINTS_BACK = frozenset(
     "it its it's that this these those they them their he she him his her same also else "
     "more former latter".split())
 _OPENS_FOLLOW_UP = re.compile(r"\s*(?:and|but|so|also|what\s+about|how\s+about)\b", re.I)
-# "the second one", "the other ones": a pick from the last answer ("one" alone is too common)
-_PICKS_ONE = re.compile(r"\b(?:first|second|third|last|other|previous)\s+ones?\b", re.I)
+# "the second one", "which one", "can a list be one?": a pick from the last answer ("one"
+# elsewhere is too common: "one-hot encoding")
+_PICKS_ONE = re.compile(
+    r"\b(?:first|second|third|last|other|previous|which)\s+ones?\b|\bones?\W*$", re.I)
 
 
 def follow_up(text: str, got=None) -> bool:

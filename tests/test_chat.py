@@ -492,6 +492,7 @@ def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
     ("what about heaps", True), ("But how is it proved?", True), ("tell me more", True),
     ("how do I avoid the second one?", True), ("is the latter faster?", True),
     ("give me an example", True), ("explain it again please", True),
+    ("can a list be one?", True), ("which one is faster for lookups?", True),
     ("explain dijkstra", False), ("what is one-hot encoding?", False),
     ("one thing I learned about graphs", False),
     ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
