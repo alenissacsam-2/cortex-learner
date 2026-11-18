@@ -13,7 +13,7 @@ import subprocess
 import pytest
 
 from cortex import localllm
-from cortex.app import actions, server, status, targets
+from cortex.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
 APP_JS = server.ASSETS / "app.js"
@@ -238,6 +238,30 @@ const out = {};
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
     await tick();
     out.llmText = $('llm').textContent;
+    // models from both runners (the server's own answer, an embedding model in each list)
+    DATA.routes['/api/llm'] = DATA.llm;
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
+    await tick();
+    const L = $('llm'), llmBtn = (text) => L.querySelectorAll('button').find((b) => b.textContent.startsWith(text));
+    out.groups = L.querySelectorAll('optgroup').map((g) => [g.getAttribute('label'), g.querySelectorAll('option').map((o) => o.textContent)]);
+    const sel = $('llm-model');
+    out.chosen = sel.value;
+    out.loadOff = [llmBtn('Load').disabled];
+    sel.value = '1';
+    sel.fire('change');
+    out.loadOff.push(llmBtn('Load').disabled);
+    const hwRow = L.querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'This computer');
+    out.hwLine = hwRow.querySelector('.val').textContent;
+    llmBtn('Use ').fire('click');
+    out.pullName = $('llm-pull').value;
+    llmBtn('Download').fire('click');
+    await tick();
+    out.pulls = fetched.filter((f) => f.path === '/api/llm/pull').map((f) => f.body);
+    sel.value = '0';
+    sel.fire('change');
+    llmBtn('Save choice').fire('click');
+    await tick();
+    out.llmSaved = fetched.filter((f) => f.path === '/api/llm/settings').map((f) => f.body);
     // Status → Updates: Check asks GitHub only on the click; Update now asks first, then the
     // page says Cortex is closing to install it
     DATA.routes['/api/status'] = { first_run: false, rows: [], vault: 'V', land: 'status', update: { current: '0.1.0', mode: 'installer' } };
@@ -302,11 +326,20 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("started a process"))
     monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     (root_committed / ".cortex").mkdir(exist_ok=True)
-    setup = server.App(root_committed).setup()  # the server's own shape, not a hand-made one
+    app = server.App(root_committed)
+    setup = app.setup()  # the server's own shape, not a hand-made one
+    monkeypatch.setattr(status, "ollama_models", lambda: ["nomic-embed-text:latest", "qwen3.5:4b"])
+    monkeypatch.setattr(status, "lms_models", lambda: [
+        {"key": "qwen/qwen3.5-2b", "name": "Qwen 3.5 2B", "size": 2 * 10**9, "params": "2B"},
+        {"key": "text-embedding-nomic-embed-text-v1.5", "name": "Nomic Embed", "size": None,
+         "params": ""}])
+    monkeypatch.setattr(wizard, "hardware", lambda: {
+        "kind": "gpu", "gb": 8.0, "label": "8 GB of graphics memory (NVIDIA)"})
+    llm = {**app.llm(), "model": "qwen3.5:4b", "runner": "ollama"}
     data = tmp_path / "data.json"
     data.write_text(json.dumps({"routes": {
         "/api/status": {"first_run": True, "rows": [], "vault": None, "land": "setup"},
-        "/api/setup": setup, "/api/job": {"job": None, "seq": 0}}, "stream": []}),
+        "/api/setup": setup, "/api/job": {"job": None, "seq": 0}}, "stream": [], "llm": llm}),
         encoding="utf-8")
     harness = tmp_path / "harness.cjs"
     harness.write_text(HARNESS, encoding="utf-8")
@@ -365,6 +398,14 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["skipNote"] == "Skipped"
     assert out["skips"] == [{"skipped": True}, {"skipped": False}]
     assert "Not used: localllm: a cloud model is refused" in out["llmText"]
+    # Local model: both runners' models, embedding models left out; the saved choice is
+    # preselected; Load is for LM Studio only; the recommendation fills the download field
+    assert out["groups"] == [["Ollama", ["qwen3.5:4b"]],
+                             ["LM Studio", ["Qwen 3.5 2B · 2B · 2.0 GB"]]]
+    assert out["chosen"] == "0" and out["loadOff"] == [True, False]
+    assert out["hwLine"] == "8 GB of graphics memory (NVIDIA) → Qwen 3.5 4B suits it"
+    assert out["pullName"] == "qwen3.5:4b" and out["pulls"] == [{"name": "qwen3.5:4b"}]
+    assert out["llmSaved"] == [{"model": "qwen3.5:4b", "runner": "ollama"}]
     assert out["updBefore"] == {"rows": ["Cortex 0.1.0"], "asked": False}
     assert out["avail"] == {"rows": ["Cortex 0.1.0", "Cortex 0.2.0 is available"],
                             "link": ["https://github.com/o/r/releases/tag/v0.2.0",

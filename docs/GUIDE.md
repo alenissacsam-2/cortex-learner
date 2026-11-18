@@ -232,6 +232,8 @@ Cortex can turn your browser history into pages, so it knows what you have been 
 **Optional: a local AI for summaries and `deepen`**
 Run `cortex app` → Setup. It finds or installs a runner (Ollama is recommended; LM Studio is the alternative), suggests a model that fits this computer, downloads it, tests it with a made-up sentence and turns it on.
 
+Later, `cortex app` → **Local model** lets you switch: the model list shows every chat model already installed in Ollama or LM Studio (embedding models are left out). Pick one and click **Save choice**. To get another Ollama model, type its name from ollama.com/library (for example `gemma3:4b`) and click **Download**; Ollama must be running, and cloud models are refused. The page also says which size suits this computer, with a button that fills in its name.
+
 Without the app: install Ollama, run `ollama pull qwen3.5:4b` (`qwen3.5:2b` with under 6 GB of graphics memory or RAM, `qwen3.5:9b` with 10 GB or more), then add `localllm: {enabled: true}` to `~/.cortex/config.yaml` (for LM Studio, `localllm: {enabled: true, runner: lmstudio}`). `cortex llm status` checks it.
 
 It only talks to your own machine. For a public day page it hears your topic names only; for a site, that site's page titles. It can move a site into a sensitive category, never out of one. Without it, the summary line lists your top topics and unknown sites stay under `other`.

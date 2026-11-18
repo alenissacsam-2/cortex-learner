@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import time
@@ -300,14 +301,33 @@ def install_ollama(job) -> dict:
     return actions.run_proc(job, plan["run"])
 
 
+# an Ollama registry name: name[:tag] or namespace/name[:tag], lowercase; never a URL or option
+_OLLAMA_NAME = re.compile(r"(?:[a-z0-9][a-z0-9_-]*/)?[a-z0-9][a-z0-9._-]*"
+                          r"(?::[a-z0-9][a-z0-9._-]*)?")
+
+
+def ollama_name(name) -> str:
+    """`name` when it is a local Ollama model name to download; ValueError otherwise."""
+    from cortex import localllm
+    if not isinstance(name, str) or len(name) > 100 or not _OLLAMA_NAME.fullmatch(name):
+        raise ValueError("Not an Ollama model name: use one like qwen3.5:4b.")
+    if localllm._cloud(name):
+        raise ValueError("That is a cloud model; Cortex downloads local models only.")
+    return name
+
+
+def pull_ollama(job, name: str) -> dict:
+    if (exe := ollama_exe()) is None:
+        raise ValueError("Ollama is not installed yet: install it under Setup → Local model.")
+    if status.ollama_models() is None:  # `ollama pull` needs the server
+        raise ValueError(STOPPED.format("Ollama"))
+    return actions.run_proc(job, [exe, "pull", name])
+
+
 def pull(job, id: str, runner: str) -> dict:
     m = model(id)
     if runner == "ollama":
-        if (exe := ollama_exe()) is None:
-            raise ValueError("Ollama is not installed yet (step 3).")
-        if status.ollama_models() is None:  # `ollama pull` needs the server
-            raise ValueError(STOPPED.format("Ollama"))
-        return actions.run_proc(job, [exe, "pull", m["ollama"]])
+        return pull_ollama(job, m["ollama"])
     if runner == "lmstudio":
         if (exe := status.lms_path()) is None:
             raise ValueError("LM Studio's `lms` was not found (step 3).")
