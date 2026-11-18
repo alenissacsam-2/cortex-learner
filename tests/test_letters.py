@@ -102,6 +102,20 @@ def test_effect_counts_shown_feedback_and_followed():
                                     "followed": 1}]
 
 
+def test_write_and_retire_keep_an_obsidian_edit_made_meanwhile(tmp_path, monkeypatch):
+    """B13: a line the owner typed while the letter was being written survives."""
+    from test_vault import racer
+    v = Vault(shutil.copytree(FIXTURES / "vault_mini", tmp_path / "v"))
+    lid = letters.write(v, "Keep going, one step.", "late", "2026-03-05")
+    racer(monkeypatch, "letters.md", b"\n- my own line\n")
+    letters.write(v, "Sleep first, then code.", "late", "2026-03-06")
+    racer(monkeypatch, "letters.md", b"- another line\n")
+    letters.retire(v, lid, "2026-03-07")
+    page = letters.read(v)
+    assert "- my own line" in page and "- another line" in page and "Sleep first" in page
+    assert [r["live"] for r in letters.parse(page)] == [True, False]
+
+
 def test_write_show_feedback_retire_over_mcp(root, monkeypatch):
     now = datetime(2026, 3, 5, 23, 30).astimezone()
     monkeypatch.setattr(session_mod.SessionManager, "_now", lambda self: now.astimezone(UTC))

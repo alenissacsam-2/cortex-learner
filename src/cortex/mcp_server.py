@@ -50,6 +50,7 @@ from cortex.events import (
     SESSION_RE,
     STUDY_MODES,
     _check_fields,
+    check_assessment_result,
     live,
     local_day,
     log_assessment,
@@ -62,6 +63,7 @@ from cortex.index import (
     TRUNCATED,
     Index,
     _edge_targets,
+    _target,
     _wrap,
     link_targets,
 )
@@ -978,7 +980,7 @@ class Cortex:
         objs = {f"{k}:{out['id']}" for k in ("concept", "problem", "mistake", "assessment",
                                               "application", "area", "domain")}
         recent = [{k: ev[k] for k in ("day", "kind", "verdict", "item_type") if k in ev}
-                  for ev in self.log.iter_events() if ev.get("object") in objs]
+                  for ev in live(self.log.iter_events()) if ev.get("object") in objs]
         out["recent"] = recent[-5:]
         if out["kind"] in ("resource", "note") and EXTERNAL_SOURCE.match(
                 str(out["fields"].get("source") or "")):
@@ -1702,7 +1704,8 @@ class Cortex:
             for name in ("hints", "note"):
                 if p.get(name) is not None:
                     pl[name] = p[name]
-            if "hints" in pl and (not isinstance(pl["hints"], int) or not 0 <= pl["hints"] <= 3):
+            h = pl.get("hints", 0)
+            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
                 raise invalid("hints must be a whole number from 0 to 3.")
             cid = obj.split(":", 1)[1] if obj.startswith("concept:") else None
             sp = None
@@ -2178,6 +2181,7 @@ class Cortex:
             "-".join(str(p[k]) for k in ("company", "assessment_kind", "date") if p.get(k)))
         if not aid or not ID_RE.fullmatch(str(aid)):
             raise invalid("Pass payload.assessment (an id), or company, assessment_kind and date.")
+        check_assessment_result(p.get("score"), p.get("date"))  # before felt_weak hits the inbox
         weak = []
         felt = p.get("felt_weak") or []
         # a bare string ("None", "DP") was iterated letter by letter into the inbox
@@ -2201,7 +2205,8 @@ class Cortex:
         obj = self._problem(pid)
         pl = {"kind": "problem_status", "problem": pid, "status": status}
         if p.get("hints") is not None:
-            if not isinstance(p["hints"], int) or not 0 <= p["hints"] <= 3:
+            h = p["hints"]
+            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
                 raise invalid("hints must be a whole number from 0 to 3.")
             pl["hints"] = p["hints"]
         self._append("log", {"object": obj, "payload": pl}, key)
@@ -2231,10 +2236,9 @@ class Cortex:
         """Append one line under `heading` (default `## About me (unconfirmed)`) in inbox.md
         (created if missing)."""
         scan_secrets(text)
-        path = self.vault.root / "inbox.md"
-        with self.vault.lock():
-            lines = (path.read_bytes().decode("utf-8") if path.is_file()
-                     else "# Inbox\n").rstrip("\n").split("\n")
+
+        def add(page: str) -> str:  # B13: reruns on the reread page if the owner edited it
+            lines = page.rstrip("\n").split("\n")
             if heading not in lines:
                 lines += ["", heading]
             at = lines.index(heading) + 1
@@ -2243,7 +2247,9 @@ class Cortex:
             while lines[at - 1].strip() == "" and lines[at - 1] != heading:
                 at -= 1  # keep the blank line before the next heading
             lines.insert(at, text)
-            self.vault.write_text(path, "\n".join(lines) + "\n")
+            return "\n".join(lines) + "\n"
+
+        self.vault.update_text(self.vault.root / "inbox.md", add, "# Inbox\n")
 
     def cortex_patch(self, id: str, op: Literal["append_to_section", "set_field", "check_item",
                                                 "revise", "retire", "reject", "set_topics"],
@@ -2420,11 +2426,10 @@ class Cortex:
         """me/portrait.md gets its `## YYYY-MM` heading on first use (no other page does this)."""
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
             raise invalid("A portrait section is named YYYY-MM, e.g. 2026-11.")
-        path = self.vault.root / "me" / "portrait.md"
-        with self.vault.lock():
-            text = path.read_bytes().decode("utf-8") if path.is_file() else "# Portrait\n"
-            if f"## {month}" not in text.splitlines():
-                self.vault.write_text(path, text.rstrip("\n") + f"\n\n## {month}\n")
+        def add(t: str) -> str:  # B13: an owner's edit made meanwhile is reread, not lost
+            return t if f"## {month}" in t.splitlines() else t.rstrip("\n") + f"\n\n## {month}\n"
+
+        self.vault.update_text(self.vault.root / "me" / "portrait.md", add, "# Portrait\n")
 
     def _voice_section(self, audience: str) -> None:
         """V2: me/voice.md gets its `## <audience>` heading on first use, before `## Past`."""
@@ -2467,18 +2472,20 @@ class Cortex:
         if not heading.strip() or "\n" in heading or heading.startswith("#"):
             raise invalid("target must be a one-line section name.")
         heading = heading.strip()
-        path = self.vault.path_for(kind, page)
-        with self.vault.lock():
-            text = path.read_bytes().decode("utf-8") if path.is_file() else new
+
+        def add(text: str) -> str:  # B13: reruns on the reread page if the owner edited it
             nl = "\r\n" if "\r\n" in text else "\n"
             lines = text.replace("\r\n", "\n").rstrip("\n").split("\n")
-            if f"## {heading}" not in lines:
-                at = next((i for i, ln in enumerate(lines) if ln in before), None)
-                if at is None:
-                    lines += ["", f"## {heading}"]
-                else:
-                    lines[at:at] = [f"## {heading}", ""]
-                self.vault.write_text(path, nl.join(lines) + nl)
+            if f"## {heading}" in lines:
+                return text
+            at = next((i for i, ln in enumerate(lines) if ln in before), None)
+            if at is None:
+                lines += ["", f"## {heading}"]
+            else:
+                lines[at:at] = [f"## {heading}", ""]
+            return nl.join(lines) + nl
+
+        self.vault.update_text(self.vault.path_for(kind, page), add, new)
 
     def cortex_add(self, kind: Literal["domain", "area", "concept", "problem", "assessment",
                                        "application", "mistake", "resource", "note", "project",
@@ -2580,8 +2587,14 @@ class Cortex:
             allowed = ENUMS.get((kind, name))
             if allowed and value not in allowed:
                 raise invalid(f"{name} must be one of {', '.join(sorted(allowed))}.")
+        if kind == "assessment":
+            check_assessment_result(fields.get("score"), fields.get("date"))
         if kind in WIKI_DEFAULTS:
             fields = self._wiki_fields(kind, fields, raw_text)
+        if kind == "problem" and fields.get("concepts") is not None:  # B9: unknown -> did_you_mean
+            v = fields["concepts"]
+            fields = {**fields, "concepts": [f"[[{self._concept(_target(n) or str(n))}]]"
+                                             for n in (v if isinstance(v, list) else [v])]}
         slug = slugify(title)
         if not slug:
             raise invalid("The title needs at least one letter or digit.")

@@ -252,6 +252,16 @@ def test_void_solve_keeps_a_later_hand_edit(ev):
     assert ev.vault.read("problem", "lc-167").fields["status"] == "attempted"
 
 
+@pytest.mark.parametrize("bad", [{"score": [90]}, {"score": True}, {"date": "soon"}])
+def test_a_bad_assessment_result_writes_nothing(ev, bad):
+    """B10: a bad score failed after the note was created, leaving a partial write."""
+    with pytest.raises(VaultError):
+        events.log_assessment(ev, session="cli", source="self", assessment="new-oa",
+                              outcome="pass", now=NOON, **bad)
+    assert not ev.vault.path_for("assessment", "new-oa").exists()
+    assert not list(ev.iter_events())
+
+
 def test_void_assessment_result_resets_outcome(ev):
     e = events.log_assessment(ev, session="cli", source="self", assessment="acme-oa-2026",
                               outcome="pass", now=NOON)

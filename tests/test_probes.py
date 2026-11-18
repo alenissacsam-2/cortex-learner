@@ -115,6 +115,19 @@ def test_summary_counts_partly_as_half_and_skips_voids():
     assert probes.summary([]) == {"overall": {"n": 0}, "areas": {}, "open": 0, "taps": 0}
 
 
+def test_a_hand_edited_settle_is_skipped_not_fatal():
+    """B14: a settle with a missing or unknown twin_hit raised KeyError in every prime."""
+    evs = [_ev("f1", {"kind": "forecast", "area": "taste"}),
+           _ev("f2", {"kind": "forecast", "area": "taste"}),
+           _ev("s1", {"kind": "settle", "forecast": "f1"}),
+           _ev("s2", {"kind": "settle", "forecast": "f2", "twin_hit": "maybe"}),
+           _ev("s3", {"kind": "settle", "forecast": "f2", "twin_hit": "yes",
+                      "stranger_hit": "yes"})]
+    out = probes.summary(evs)
+    assert out["overall"] == {"n": 1, "twin": 1.0, "paired": 1, "stranger": 1.0, "uplift": 0.0}
+    assert out["open"] == 1  # f1 has no readable settle
+
+
 def test_summary_pairs_stranger_and_counts_taps():
     """G2: twin over all settles; stranger and uplift over the paired ones only."""
     evs = [_ev("f1", {"kind": "forecast", "area": "taste", "stranger": "x"}),

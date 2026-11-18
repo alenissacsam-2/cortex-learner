@@ -165,6 +165,16 @@ def test_inbox_add(vault):
     assert (vault.root / "inbox.md").read_text().endswith(f"- [ ] Tries ({today})\n")
 
 
+def test_inbox_add_keeps_an_obsidian_edit_made_meanwhile(vault, monkeypatch):
+    """B13: the same unchecked read-modify-write of inbox.md as the server's proposals."""
+    from test_vault import racer
+    inbox_add(vault, "Tries")
+    racer(monkeypatch, "inbox.md", b"\n## Mine\n- typed in Obsidian\n")
+    inbox_add(vault, "Heaps")
+    text = (vault.root / "inbox.md").read_text()
+    assert "- typed in Obsidian" in text and text.index("Heaps") < text.index("## Mine")
+
+
 @pytest.mark.parametrize("title,slug", [
     ("Two Pointers", "two-pointers"), ("  Kadane's algorithm ", "kadane-s-algorithm"),
     ("C++", "c-plus-plus"), ("C#", "c-sharp"), ("Node.js", "node-js"),

@@ -71,20 +71,24 @@ def write(vault: Vault, text, when, day: str) -> str:
     if not TEXT_MIN <= len(text) <= TEXT_MAX:
         raise invalid(f"letter text must be {TEXT_MIN} to {TEXT_MAX} characters.")
     when = "+".join(n if v is None else f"{n}:{v}" for n, v in parse_when(when))
-    with vault.lock():
-        page = read(vault) or NEW_PAGE
+    got = []
+
+    def add(page: str) -> str:  # B13: reruns on the reread page if the owner edited it
+        page = page or NEW_PAGE
         nl = "\r\n" if "\r\n" in page else "\n"
-        lid = claims.make_id("letters", text, day, {r["id"] for r in parse(page)}, prefix="l")
+        got[:] = [claims.make_id("letters", text, day, {r["id"] for r in parse(page)}, prefix="l")]
         lines = page.splitlines(keepends=True)
-        claims._append_under(lines, LIVE, f'- "{text}" | when: {when} | written {day} ^{lid}', nl)
-        vault.write_text(vault.root / REL, "".join(lines))
-    return lid
+        claims._append_under(lines, LIVE, f'- "{text}" | when: {when} | written {day} ^{got[0]}',
+                             nl)
+        return "".join(lines)
+
+    vault.update_text(vault.root / REL, add)
+    return got[0]
 
 
 def retire(vault: Vault, lid: str, day: str) -> None:
     """Move a live letter to ## Past with ` (retired <day>)`; its id is kept."""
-    with vault.lock():
-        page = read(vault)
+    def move(page: str) -> str:
         row = next((r for r in parse(page) if r["id"] == lid and r["live"]), None)
         if row is None:
             raise invalid(f"No live letter ^{lid} in {REL}.")
@@ -92,7 +96,9 @@ def retire(vault: Vault, lid: str, day: str) -> None:
         lines = page.splitlines(keepends=True)
         old = re.sub(r"\s+\^l-[a-z2-7]{5}\s*$", "", lines.pop(row["line_no"]).rstrip("\r\n"))
         claims._append_under(lines, PAST, f"{old} (retired {day}) ^{lid}", nl)
-        vault.write_text(vault.root / REL, "".join(lines))
+        return "".join(lines)
+
+    vault.update_text(vault.root / REL, move)
 
 
 def _log(e: dict, kind: str) -> dict | None:

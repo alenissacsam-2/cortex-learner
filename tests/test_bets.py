@@ -159,6 +159,17 @@ def test_calibration_bins_and_log_loss():
                                     "bins": bets.calibration([])["bins"]}
 
 
+def test_calibration_skips_hand_edited_rows():
+    """B14: a bad twin_hit or an out-of-range predicted_p no longer crashes the fold."""
+    evs = []
+    for p, hit in ((0.9, "yes"), (0.9, None), (0.9, "maybe"), (-3, "no"), (True, "no")):
+        f = ev(0, {"kind": "forecast", "claims": [C], "predicted_p": p})
+        evs += [f, ev(0, {"kind": "settle", "forecast": f["id"],
+                          **({"twin_hit": hit} if hit else {})})]
+    assert bets.calibration(evs)["n"] == 1
+    assert set(bets.fold(evs, D(0))) == {C}
+
+
 @pytest.fixture
 def vault(tmp_path):
     r = tmp_path / "vault"

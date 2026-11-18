@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -99,6 +100,17 @@ class VaultError(Exception):
 
 def invalid(msg: str) -> VaultError:
     return VaultError("invalid_argument", msg)
+
+
+def check_day(name: str, value) -> None:
+    """B10: YYYY-MM-DD and a real day, or the exam clock silently skips the note."""
+    try:
+        ok = bool(isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                  and date.fromisoformat(value))
+    except ValueError:
+        ok = False
+    if not ok:
+        raise invalid(f"{name} must be a date like 2026-11-30.")
 
 
 @dataclass
@@ -565,6 +577,8 @@ class Vault:
         if allowed_values and value not in allowed_values:
             raise VaultError("invalid_argument", f"{field} must be one of "
                              f"{', '.join(sorted(allowed_values))}.")
+        if (kind, field) == ("assessment", "date"):
+            check_day(field, value)
         scan_secrets(str(value))
         self._edit_fields(kind, id, {field: value})
 
@@ -696,6 +710,28 @@ class Vault:
                                          "program; try again.") from None
                     time.sleep(0.05 * 2**attempt)
         return False  # unreachable
+
+    def update_text(self, path: Path, change: Callable[[str], str], default: str = "") -> bool:
+        """Read-modify-write a page the owner may edit at the same time (B13): `change` (which
+        may run more than once) gets the text, or `default` if the file is missing, and an
+        outside edit made meanwhile is reread instead of overwritten. False: nothing changed."""
+        p = self._contained(path)
+
+        def scanned(text: str) -> str:
+            new = change(text)
+            if new != text:
+                scan_secrets(new)
+            return new
+
+        with self.lock():
+            if p.is_file():
+                return self._mutate(p, scanned)
+            new = scanned(default)
+            if new == default:
+                return False
+            p.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(p, new)
+            return True
 
     def write_text(self, path: Path, text: str) -> Path:
         """Atomic write for generated files (Today.md, session notes, dashboard). Files under

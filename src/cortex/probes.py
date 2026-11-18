@@ -18,13 +18,17 @@ def _live(events: Iterable[dict]) -> list[dict]:
 
 
 def state(events: Iterable[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
-    """(live forecast events by id, live settle events by the forecast id they settle)."""
+    """(live forecast events by id, live settle events by the forecast id they settle).
+    A settle with no readable `twin_hit` (a hand edit) is skipped, so every fold may index
+    HITS with it."""
     live = _live(events)
     forecasts = {e["id"]: e for e in live if e["payload"].get("kind") == "forecast"}
     settles: dict[str, dict] = {}
     for e in live:
-        if e["payload"].get("kind") == "settle":
-            settles.setdefault(e["payload"].get("forecast"), e)
+        p = e["payload"]
+        if (p.get("kind") == "settle" and isinstance(p.get("forecast"), str)
+                and p.get("twin_hit") in HITS):
+            settles.setdefault(p["forecast"], e)
     return forecasts, settles
 
 

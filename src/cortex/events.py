@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from cortex.vault import ID_RE, Vault, VaultError, invalid, scan_secrets
+from cortex.vault import ID_RE, Vault, VaultError, check_day, invalid, scan_secrets
 
 if TYPE_CHECKING:
     from ulid import ULID
@@ -291,6 +291,13 @@ class EventLog:
         self.vault._track(path)
 
 
+def check_assessment_result(score, day) -> None:
+    if score is not None and (isinstance(score, bool) or not isinstance(score, (str, int, float))):
+        raise invalid("score must be a string or a number.")
+    if day is not None:
+        check_day("date", day)
+
+
 def log_assessment(log: EventLog, *, session: str, source: str, assessment: str, outcome: str,
                    score=None, company: str | None = None, kind: str | None = None,
                    date: str | None = None, felt_weak: list[str] | None = None,
@@ -299,6 +306,7 @@ def log_assessment(log: EventLog, *, session: str, source: str, assessment: str,
 
     `stamp` (mode, grader, now) passes through to EventLog.append.
     """
+    check_assessment_result(score, date)  # B10: before the note exists
     vault = log.vault
     try:
         vault.read("assessment", assessment)
