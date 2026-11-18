@@ -61,7 +61,14 @@ MEDIA, CHATS = {"youtube", "notebooklm"}, {"claude", "gemini", "perplexity"}
 
 
 def _title(note) -> str:
+    if note.kind == "me" and not note.fields.get("title"):  # me/teaching-contract -> words
+        return note.id.replace("-", " ").capitalize()
     return plain(note.fields.get("title") or note.id) or note.id
+
+
+def _share(ready) -> float | None:
+    """planner.readiness's weighted share: a float, or a dict with `weighted` (or `share`)."""
+    return ready.get("weighted", ready.get("share")) if isinstance(ready, dict) else ready
 
 
 def _sprint(track) -> dict | None:
@@ -139,7 +146,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
                 "score": plain(str(score)) if score is not None else None,
                 "readiness": {"solid": sum(state(c) == "solid" for c in tested),
                               "total": len(tested),
-                              "share": planner.readiness(vault, catalog, states, a),
+                              "share": _share(planner.readiness(vault, catalog, states, a)),
                               # a forecast beside the Solid share, only for a day still ahead
                               # and once calibrated, as on the home card; until then, why not
                               "forecast": planner.recall_on_day(vault, catalog, states, a, now)
@@ -255,10 +262,13 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
 
     return {
         "as_of": now.astimezone().isoformat(timespec="seconds"),
+        "day": day,  # the 04:00 Cortex day, which the calendar date in `as_of` is not
         "sprint": _sprint(next((t for t in notes["track"] if t.id not in private), None)),
         "counts": counts,
         "today": today,
-        "plan_cleared": not today,
+        # an empty plan is "done" only after work today; never graded at all is a first run
+        "plan_cleared": not today and any(e.get("day") == day for e in events),
+        "first_run": not today and not any(e.get("kind") == "grade" for e in events),
         "assessments": coming,
         "mistakes": mistakes,
         "graph": {"nodes": nodes, "links": links},

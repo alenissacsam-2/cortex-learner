@@ -1,9 +1,12 @@
 import base64
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import time
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,11 +21,14 @@ from cortex.session import SessionManager
 from cortex.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# uv's cache and Pythons, read before conftest points these at a temp home (wheel test only)
+UV_ENV = {k: os.environ[k] for k in ("APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR",
+                                     "UV_PYTHON_INSTALL_DIR") if k in os.environ}
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 HOSTILE = "</script><img src=x onerror=alert(1)>"
 D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
-KEYS = {"as_of", "sprint", "counts", "today", "plan_cleared", "assessments", "mistakes", "graph",
-        "details", "history", "vault_name", "pages", "owner", "clusters", "counts_by_kind",
+KEYS = {"as_of", "day", "sprint", "counts", "today", "plan_cleared", "first_run", "assessments",
+        "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters", "counts_by_kind",
         "loops", "follow_ups", "resurface", "needs", "you", "help", "brain", "confidence"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
@@ -489,3 +495,166 @@ def test_confidence_mirror_in_the_blob_skips_private_concepts(root):
     assert rows[3] == {"confidence": 4, "label": "4 (certain)", "n": 3, "right": 3,
                        "share": None}  # under the band minimum; the private 5 not counted
     assert "D.confidence" in JS and "not enough answers yet" in JS
+
+
+# ---- v7 review D: personal data, help in the wheel, honest labels, first run, a11y --------
+
+def _empty_vault(tmp_path) -> Path:
+    r = tmp_path / "empty"
+    r.mkdir()
+    (r / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
+    return r
+
+
+def test_no_owner_data_in_the_page_script():
+    # D5: no one learner's note ids or life events are baked into every vault's dashboard
+    assert "youtube-and-notebooklm-patterns" not in JS and "placements in" not in JS
+    assert "p.tags.includes('patterns')" in JS and "${s.title} in ${plural(n, 'day')}" in JS
+
+
+def test_sprint_banner_title_comes_from_the_track(root):
+    s = dashboard.build_data(Vault(root), now=NOW)["sprint"]
+    assert s["title"] and s["title"] != "Phase 1 placements"
+
+
+@pytest.mark.slow  # builds the wheel, about 7 s
+def test_help_files_ship_in_the_wheel(tmp_path, monkeypatch):
+    # D2: an installed Cortex has no checkout, so the Help tab reads the wheel's copies
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("needs uv")
+    repo = Path(__file__).resolve().parent.parent
+    out = tmp_path / "wheel"
+    r = subprocess.run([uv, "build", "--wheel", "--offline", "--out-dir", str(out)], cwd=repo,
+                       capture_output=True, text=True, env=os.environ | UV_ENV)
+    assert r.returncode == 0, r.stderr
+    [whl] = out.glob("*.whl")
+    assets = tmp_path / "site" / "cortex" / "assets"
+    with zipfile.ZipFile(whl) as z:
+        names = set(z.namelist())
+        assert {"cortex/assets/help/help.md", "cortex/assets/help/GUIDE.md"} <= names
+        z.extractall(tmp_path / "site", [n for n in names if n.startswith("cortex/assets/help/")])
+    monkeypatch.setattr(dashboard, "ASSETS", assets)
+    monkeypatch.setattr(dashboard, "REPO", tmp_path / "not-a-checkout")
+    h = dashboard._help()
+    assert h["commands_md"].startswith("# Help")
+    assert any("**Hub / topic tree**" in r for r in h["glossary_md"].splitlines())
+    monkeypatch.setattr(dashboard, "ASSETS", tmp_path / "nothing")
+    assert dashboard._help() == {"commands_md": None, "glossary_md": None}
+
+
+@pytest.mark.parametrize("shape", ["float", "dict"])
+def test_readiness_share_from_either_planner_shape(root, monkeypatch, shape):
+    # D3: the planner may return the weighted share alone or with plain counts
+    monkeypatch.setattr(planner, "readiness", lambda *a: 0.25 if shape == "float"
+                        else {"weighted": 0.25, "solid": 1, "total": 4})
+    r = dashboard.build_data(Vault(root), now=NOW)["assessments"][0]["readiness"]
+    assert r["share"] == 0.25 and isinstance(r["solid"], int) and isinstance(r["total"], int)
+
+
+def test_readiness_label_names_the_weighted_share():
+    # D3: Home and Study show one metric, called what it is, beside the plain count
+    assert JS.count("= readiness(r") == 2
+    assert "% of the test's weight solid · ${topics}" in JS
+    assert "% ready (" not in JS and "tested topics solid" not in JS
+
+
+def test_empty_vault_is_a_first_run_not_done(tmp_path):
+    # D7: an empty plan on a fresh vault is not "Done for today"
+    d = dashboard.build_data(Vault(_empty_vault(tmp_path)), now=NOW)
+    assert d["today"] == [] and d["first_run"] is True and d["plan_cleared"] is False
+    assert "Start here" in JS and "Add a test date" in JS and "Import your notes or chats" in JS
+
+
+def test_empty_plan_is_done_only_after_work_today(tmp_path):
+    r = _empty_vault(tmp_path)
+    EventLog(Vault(r)).append(session="cli", kind="grade", source="external", now=NOW,
+                              fields={"object": "concept:x", "verdict": "correct"})
+    d = dashboard.build_data(Vault(r), now=NOW)
+    assert d["first_run"] is False and d["plan_cleared"] is True
+    d = dashboard.build_data(Vault(r), now=NOW + timedelta(days=2))
+    assert d["first_run"] is False and d["plan_cleared"] is False
+
+
+def test_day_is_the_cortex_day_not_the_calendar_date(root):
+    # D8: at 01:30 local time it is still yesterday in Cortex (04:00 rollover)
+    late = datetime(2026, 11, 14, 1, 30).astimezone()
+    d = dashboard.build_data(Vault(root), now=late)
+    assert d["as_of"].startswith("2026-11-14") and d["day"] == "2026-11-13"
+    assert "const TODAY = D.day ||" in JS
+
+
+def test_me_pages_get_friendly_titles(root):
+    (root / "me" / "teaching-contract.md").write_text("---\nkind: me\n---\n# x\n",
+                                                       encoding="utf-8")
+    pages = {p["id"]: p for p in dashboard.build_data(Vault(root), now=NOW)["pages"]}
+    assert pages["teaching-contract"]["title"] == "Teaching contract"
+    assert pages["profile"]["title"] == "Profile"  # a title field still wins
+
+
+def test_copy_buttons_copy_ids_never_titles():
+    # D13: a copied prompt is pasted as the user's own words, outside <untrusted_note>
+    copies = (re.findall(r"(?:copyText|copyBtn)\((`[^`]*`)", JS)
+              + re.findall(r"prompt: [^,}]*`[^`]*`", JS) + re.findall(r"return `/cortex[^`]*`", JS))
+    assert copies and not [c for c in copies if re.search(r"\$\{[^}]*(title|company|kind)", c)]
+    assert "const loopPrompt = (id) =>" in JS and "loopPrompt(l.title)" not in JS
+
+
+def test_timeline_days_and_palette_take_the_keyboard():
+    # D14
+    assert "c.setAttribute('tabindex', '0');" in JS
+    assert "svg.addEventListener('keydown', pick);" in JS
+    assert "if (e.key === 'Tab') { e.preventDefault(); pq.focus(); }" in JS
+    css = (ASSETS / "dashboard.css").read_text(encoding="utf-8")
+    assert ".dep-row:focus-within .acts" in css
+
+
+def test_growth_range_ignores_absurd_dates():
+    # D10
+    assert "d >= '1990' && d <= latest" in JS
+
+
+def _js_function(src: str, head: str) -> str:
+    """The source of one function in the page script, by brace matching from `head`."""
+    i = src.index(head)
+    depth = 0
+    for k in range(src.index("{", i), len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[i:k + 1]
+    raise AssertionError(head)
+
+
+def _js_line(src: str, head: str) -> str:
+    i = src.index(head)
+    return src[i:src.index("\n", i)]
+
+
+def test_markdown_quotes_cap_their_depth(tmp_path):
+    # D9: 10,000 nested `>` once blew the stack and left the reader blank
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    start = JS.index("  const INLINE = ")
+    parts = [JS[start:JS.index("\n", JS.index("'g');", start))],
+             _js_line(JS, "  const cells = "), _js_line(JS, "  const QUOTE_DEPTH"),
+             *(_js_function(JS, f"function {f}(") for f in ("el", "button", "wikilink",
+                                                             "inline", "md"))]
+    harness = tmp_path / "md.cjs"
+    harness.write_text("""
+const mk = (tag) => ({ tag, kids: [], className: '',
+  set textContent(t) { this.kids = [String(t)]; },
+  append(...xs) { this.kids.push(...xs); }, appendChild(x) { this.kids.push(x); return x; },
+  setAttribute() {}, addEventListener() {} });
+const document = { createElement: mk, createDocumentFragment: () => mk('#frag') };
+const PAGES = new Map(), openReader = () => {};
+""" + "\n".join(parts) + """
+const depth = (n) => (typeof n === 'string' ? 0
+  : (n.tag === 'blockquote' ? 1 : 0) + Math.max(0, ...n.kids.map(depth)));
+const deep = md('>'.repeat(10000) + ' hi');
+const ok = md('> a\\n>> b');
+console.log(JSON.stringify({ deep: depth(deep), ok: depth(ok) }));
+""", encoding="utf-8")
+    r = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"deep": 21, "ok": 2}
