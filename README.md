@@ -61,7 +61,7 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 **Local model** shows the runner (Ollama or LM Studio) and the chosen model.
 
-![Local model: Ollama with one model, LM Studio not found, the chosen model and the on switch](docs/images/app-local-model.png)
+![Local model: Ollama with two models, LM Studio not found, the chosen model, the on switch and the Download board with the size this computer suits](docs/images/app-local-model.png)
 
 ### The dashboard
 

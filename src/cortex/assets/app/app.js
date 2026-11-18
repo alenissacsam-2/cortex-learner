@@ -694,7 +694,7 @@
         h('p', { class: 'help' }, 'Load is for LM Studio models: it starts LM Studio and loads the model. Ollama loads its models by itself. Test sends one made-up sentence and shows the answer and time. ',
           ext('https://lmstudio.ai/models', 'Get models'), ' in LM Studio, or download an Ollama model below.')),
       h('div', { class: 'field' }, h('label', { class: 'check' }, enabled, h('span', { text: 'Use the local model' })),
-        h('p', { class: 'help', text: 'On: the browse import asks it for short summaries of your private pages. Off: Cortex uses rules and the search model only.' })));
+        h('p', { class: 'help', text: 'On: Cortex may start LM Studio and load the chosen model, and the browse import asks it for short summaries of your private pages. Off: the browse import uses rules and the search model only; Chat still uses a model that is already running.' })));
     // download another Ollama model by name; the list above reloads when the job ends
     const name = h('input', { type: 'text', id: 'llm-pull', placeholder: 'qwen3.5:4b', spellcheck: 'false', autocomplete: 'off' });
     const pull = () => { const v = name.value.trim(); if (v) job('/api/llm/pull', { name: v }); else toast('Type a model name first.'); };
