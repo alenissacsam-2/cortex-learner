@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
+from importlib.metadata import version as _version
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -2898,7 +2899,8 @@ def build_server(vault: Vault, role: str = "owner", excluded: str | None = None,
             logging.getLogger(__name__).warning("catalog sync skipped: %s", e)
     core = Cortex(vault, role)
     core.excluded = excluded
-    server = MCPServer("cortex", instructions=EXCLUDED_INSTRUCTIONS if excluded else INSTRUCTIONS)
+    server = MCPServer("cortex", version=_version("cortex-learner"),
+                       instructions=EXCLUDED_INSTRUCTIONS if excluded else INSTRUCTIONS)
     server.cortex = core  # serve() closes its open session when the client goes
     for name, desc in DESCRIPTIONS.items():
         fn = getattr(core, name)
