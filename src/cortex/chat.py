@@ -10,7 +10,9 @@ never served over MCP, never on the dashboard, never logged."""
 from __future__ import annotations
 
 import json
+import math
 import re
+import threading
 import time
 from datetime import UTC, date, datetime, timedelta
 
@@ -34,12 +36,13 @@ SYSTEM = ask.SYSTEM + (" Earlier messages are the conversation so far: use them 
                        "follow-up question, but answer only from the passages in the latest "
                        "message. Today is {today}.")
 _live: dict[str, list] = {}  # chats of a session with history off: memory only, never written
+_LIVE_LOCK = threading.Lock()  # the stream thread writes _live while the page lists chats
 
 
 # ---- settings (`chat:` in ~/.cortex/config.yaml) -------------------------------------------
 
 def _valid(key: str, v) -> bool:
-    num = isinstance(v, int | float) and not isinstance(v, bool)
+    num = isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
     return {"length": lambda: v in LENGTH,
             "temperature": lambda: num and 0 <= v <= 1,
             "passages": lambda: num and v == int(v) and 4 <= v <= 12,
@@ -202,8 +205,10 @@ def new() -> str:
 def load(vault: Vault, id: str) -> list:
     """The messages of chat `id` ([] for a new one); torn or odd lines are skipped."""
     p = _path(vault, id)
-    if id in _live:
-        return [*_live[id]]
+    with _LIVE_LOCK:
+        live = _live.get(id)
+    if live is not None:
+        return [*live]
     try:
         raw = p.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -221,11 +226,14 @@ def load(vault: Vault, id: str) -> list:
 
 
 def _save(vault: Vault, id: str, msgs: list, keep: bool) -> None:
-    if not keep:
-        _live[id] = msgs
-        while len(_live) > 50:
-            _live.pop(next(iter(_live)))
-        return
+    with _LIVE_LOCK:
+        # a chat touched while history was off stays in memory for the session, even after
+        # history is turned on again: writing it then would save the history-off turns
+        if not keep or id in _live:
+            _live[id] = msgs
+            while len(_live) > 50:
+                _live.pop(next(iter(_live)))
+            return
     vault.write_text(_path(vault, id), "".join(json.dumps(m, ensure_ascii=False) + "\n"
                                                for m in msgs))
 
@@ -244,20 +252,24 @@ def list(vault: Vault) -> list:  # shadows the builtin on purpose: chat.list
     folder = vault.root / DIR
     ids = {p.stem for p in folder.glob("*.jsonl") if ID_RE.fullmatch(p.stem)} \
         if folder.is_dir() else set()
-    out = [s for i in ids | set(_live) if (s := _summary(i, load(vault, i)))]
+    with _LIVE_LOCK:
+        live = set(_live)
+    out = [s for i in ids | live if (s := _summary(i, load(vault, i)))]
     return sorted(out, key=lambda s: (s["updated"], s["id"]), reverse=True)
 
 
 def delete(vault: Vault, id: str) -> bool:
     p = _path(vault, id)
-    gone = _live.pop(id, None) is not None
+    with _LIVE_LOCK:
+        gone = _live.pop(id, None) is not None
     return vault.remove(p) or gone
 
 
 def delete_all(vault: Vault) -> int:
     folder = vault.root / DIR
-    n = len(_live)
-    _live.clear()
+    with _LIVE_LOCK:
+        n = len(_live)
+        _live.clear()
     for p in folder.glob("*.jsonl") if folder.is_dir() else ():
         if ID_RE.fullmatch(p.stem) and vault.remove(p):
             n += 1

@@ -30,6 +30,8 @@ TIMEOUT = 10
 DOWNLOADS = f"https://github.com/{REPO}/releases/download/"
 _VERSION = re.compile(r"v?(\d+(?:\.\d+){1,3})")
 _REDIRECTS = (301, 302, 303, 307, 308)
+# where GitHub sends release downloads (raw.githubusercontent.com serves anyone's files: never)
+_CDN = ("objects.githubusercontent.com", "release-assets.githubusercontent.com")
 
 
 class UpdateError(ValueError):
@@ -113,8 +115,13 @@ def latest(opener=None, api: str = API) -> dict:
     if not exe or not sha:
         raise UpdateError(f"Cortex {tag} has no {EXE} with its .sha256 on GitHub, so it cannot "
                           f"be installed from here. See {notes}")
+    want = f"{DOWNLOADS}{tag}/{EXE}"  # exactly this release's files, no `..` tricks
+    links = (exe.get("browser_download_url"), sha.get("browser_download_url"))
+    if links != (want, want + ".sha256"):
+        raise UpdateError(f"Cortex {tag}'s download links are not this release's files; stopped. "
+                          f"See {notes}")
     return {"tag": tag, "version": ver, "notes_url": notes,
-            "exe_url": exe.get("browser_download_url"), "sha_url": sha.get("browser_download_url"),
+            "exe_url": want, "sha_url": want + ".sha256",
             "exe_size": int(exe.get("size") or 0)}
 
 
@@ -135,7 +142,7 @@ def _fetch(url: str, opener):
                     from None
             url = urljoin(url, e.headers.get("Location") or "")
             p = urlsplit(url)
-            if p.scheme != "https" or not (p.hostname or "").endswith(".githubusercontent.com"):
+            if p.scheme != "https" or (p.hostname or "") not in _CDN:
                 raise UpdateError(f"The download was sent to {p.hostname or url}, which is not "
                                   "GitHub; stopped.") from None
         except (URLError, OSError) as e:

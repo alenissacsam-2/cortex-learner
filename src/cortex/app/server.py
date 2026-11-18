@@ -110,6 +110,8 @@ def _open_note(p: Path) -> dict:
 # ---- jobs -------------------------------------------------------------------------------------
 
 
+KEEPALIVE_S = 3  # seconds between {"t": "wait"} lines while a chat answer is quiet
+
 class Busy(Exception):
     pass
 
@@ -482,6 +484,8 @@ class App:
 
     def chat_delete(self, body: dict) -> dict:
         from cortex import chat
+        if self.chatting.locked():  # the answer's final save would bring the chat back
+            raise Busy("An answer is still being written; press Stop first, then delete.")
         if body.get("all") is True:
             return {"deleted": chat.delete_all(self._vault())}
         return {"deleted": int(chat.delete(self._vault(), body.get("id")))}
@@ -903,20 +907,32 @@ def _handler(app: App):
             except ValueError as e:
                 self._send(400, {"error": str(e)[:500]})
                 return
-            cancel = threading.Event()
+            cancel, ended, wlock = threading.Event(), threading.Event(), threading.Lock()
 
             def emit(ev: dict):
                 if cancel.is_set():
                     return
                 app.touch()
-                try:
-                    self.wfile.write(json.dumps(ev).encode() + b"\n")
-                    self.wfile.flush()
-                except OSError:  # BrokenPipe, ConnectionReset/Aborted: the page stopped
-                    cancel.set()
+                with wlock:  # the keepalive thread writes too
+                    if ended.is_set():
+                        return
+                    try:
+                        self.wfile.write(json.dumps(ev).encode() + b"\n")
+                        self.wfile.flush()
+                    except OSError:  # BrokenPipe, ConnectionReset/Aborted: the page stopped
+                        cancel.set()
+                    if ev.get("t") in ("done", "err"):
+                        ended.set()
+
+            def keepalive():
+                # a closed page shows only on a write: while the model reads or reasons quietly,
+                # write now and then, so Stop ends the turn (and frees the slot) early
+                while not ended.wait(KEEPALIVE_S):
+                    emit({"t": "wait"})
             try:
                 self.close_connection = True  # no length: the end of the answer ends the body
                 self._head(200, "application/x-ndjson", None)
+                threading.Thread(target=keepalive, daemon=True, name="chat-keepalive").start()
                 try:
                     runner = localllm.find()  # local only: never cloudllm
                 except ValueError as e:
@@ -927,6 +943,7 @@ def _handler(app: App):
                 emit({"t": "err", "code": "internal",
                       "message": f"internal error ({type(e).__name__})"})
             finally:
+                ended.set()
                 app.chatting.release()
 
         def _upload(self, ctype: str):

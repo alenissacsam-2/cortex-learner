@@ -571,6 +571,7 @@
           buf = buf.slice(i + 1);
           if (!line) continue;
           const ev = JSON.parse(line);
+          if (ev.t === 'wait') continue;  // the server's keepalive while the model is quiet
           if (ev.id) chatS.id = ev.id;
           if (ev.t === 'start') m.model = ev.model;
           else if (ev.t === 'think') m.thinking = true;

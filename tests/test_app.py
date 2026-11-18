@@ -1230,6 +1230,8 @@ def test_a_second_chat_stream_is_409_and_a_job_does_not_block_chat(app, embed, l
         time.sleep(0.02)
     code, _, js = chat_stream(app, {"text": "again"})
     assert code == 409 and "still being written" in js["error"]
+    # deleting now would be undone by the answer's final save
+    assert call(app, "POST", "/api/chat/delete", {"all": True})[0] == 409
     first.join(10)
     assert not app.chatting.locked()
     hold = threading.Event()
@@ -1263,6 +1265,30 @@ def test_a_closed_page_cancels_and_keeps_the_partial_answer(app, embed, llm, vau
     from cortex.vault import Vault
     last = chat.load(Vault(vault), chat.list(Vault(vault))[0]["id"])[-1]
     assert last["role"] == "assistant" and last["stopped"] is True
+
+
+def test_a_page_closed_while_the_model_reasons_frees_the_slot_early(app, embed, llm,
+                                                                    monkeypatch):
+    # reasoning chunks write nothing to the page; the keepalive notices the closed page
+    import socket as sock
+
+    from cortex.app import server as srv
+    monkeypatch.setattr(srv, "KEEPALIVE_S", 0.05)
+    llm.kind, llm.think, llm.delay, llm.pieces = "openai", 400, 0.01, ["late"]
+    body = json.dumps({"text": "two pointers"}).encode()
+    s = sock.create_connection(("127.0.0.1", app.port))
+    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Cortex-Token: %s\r\n"
+              b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+              % (app.port, app.token.encode(), len(body)) + body)
+    got = b""
+    while b'"think"' not in got:
+        got += s.recv(4096)
+    s.close()
+    for _ in range(300):
+        if not app.chatting.locked():
+            break
+        time.sleep(0.02)
+    assert not app.chatting.locked() and llm.sent < 300  # stopped well before the answer
 
 
 def test_chat_settings_round_trip(app, home):

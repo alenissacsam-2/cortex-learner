@@ -29,7 +29,7 @@ SYSTEM = (
     "passages. If they do not hold the answer, say: I don't know from your archive. Cite the "
     "passages you use by number, as [1], [2]. Be brief.")
 SOURCES = {"notes": True, "chats": True, "browsing": True, "private": True}
-_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+_CITE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")  # 3 digits: int() of a huge one raises
 
 
 def _switch(p: dict) -> str:

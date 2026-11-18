@@ -269,14 +269,25 @@ def in_use(d: Path, procs: list[tuple[int, str]] | None = None) -> list[tuple[in
             if pid not in me and os.path.normcase(path).startswith(root)]
 
 
-def terminate(pids: list[int]) -> None:
+def terminate(pids: list[int], d: Path | None = None) -> None:
+    """End `pids`; with `d`, only a process still running from inside `d`: the list is from
+    before the Close dialog, and a pid freed meanwhile may now belong to another program."""
+    import ctypes
+    from ctypes import wintypes as w
     k = _kernel32()
+    root = os.path.join(os.path.normcase(str(d.resolve())), "") if d else None
     for pid in pids:
-        h = k.OpenProcess(0x00100001, False, pid)  # SYNCHRONIZE | PROCESS_TERMINATE
-        if h:
+        # SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+        h = k.OpenProcess(0x00101001, False, pid)
+        if not h:
+            continue
+        buf, n = ctypes.create_unicode_buffer(32768), w.DWORD(32768)
+        same = root is None or (k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n))
+                                and os.path.normcase(buf.value).startswith(root))
+        if same:
             k.TerminateProcess(h, 1)
             k.WaitForSingleObject(h, 5000)
-            k.CloseHandle(h)
+        k.CloseHandle(h)
 
 
 def in_use_text(procs: list[tuple[int, str]]) -> str:
@@ -466,7 +477,7 @@ def start_app(d: Path) -> None:
                      creationflags=DETACHED)
 
 
-def ask_close(root, title: str, busy: list, verb: str) -> bool:
+def ask_close(root, title: str, busy: list, verb: str, d: Path) -> bool:
     """Ask before ending the programs that hold the folder; OK ends exactly those."""
     import tkinter as tk
     from tkinter import ttk
@@ -486,7 +497,7 @@ def ask_close(root, title: str, busy: list, verb: str) -> bool:
     dlg.grab_set()
     root.wait_window(dlg)
     if ok:
-        terminate([pid for pid, _ in busy])  # install() and uninstall() check again
+        terminate([pid for pid, _ in busy], d)  # install() and uninstall() check again
     return bool(ok)
 
 
@@ -507,7 +518,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
                 t, "Also remove Cortex from Claude and other AI apps?\n\nYes is best: without "
                 "Cortex installed, they would show a Cortex error each time they start.")
         try:
-            if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall"):
+            if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall", opts.dir):
                 return 1
             later = uninstall(opts.dir, opts, say_file)
         except Exception as e:  # noqa: BLE001
@@ -581,7 +592,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
     def start() -> None:
         if not opts.update:
             opts.dir = Path(folder.get()).expanduser().resolve()
-        if (busy := in_use(opts.dir)) and not ask_close(root, title, busy, "update"):
+        if (busy := in_use(opts.dir)) and not ask_close(root, title, busy, "update", opts.dir):
             status.configure(text=f"Cortex was not {verb}.")
             return
         install_btn.configure(state="disabled")

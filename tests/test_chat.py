@@ -360,7 +360,8 @@ def test_settings_validate_and_keep_other_keys(home):
     assert chat.get_settings() == chat.DEFAULTS
     for bad in ({"length": "huge"}, {"temperature": 2}, {"temperature": True},
                 {"passages": 3}, {"passages": 13}, {"passages": 5.5}, {"history": "no"},
-                {"sources": {"web": True}}, {"sources": {"notes": 1}}, {"model": "x"}):
+                {"sources": {"web": True}}, {"sources": {"notes": 1}}, {"model": "x"},
+                {"passages": float("inf")}, {"temperature": float("nan")}):
         with pytest.raises(ValueError):
             chat.save_settings(bad)
     got = chat.save_settings({"length": "long", "passages": 4, "sources": {"private": False}})
@@ -442,6 +443,18 @@ def test_history_off_writes_nothing(vault, stream):
     cid, _ = _turn(vault, None, "car motor", s.runner(), {**chat.get_settings(), "history": False})
     assert not (vault.root / chat.DIR).exists() or not any((vault.root / chat.DIR).iterdir())
     assert len(chat.load(vault, cid)) == 2  # this session still remembers it
+    chat.delete_all(vault)
+
+
+def test_a_chat_from_history_off_stays_in_memory_when_history_comes_back_on(vault, stream):
+    s = stream("ollama", ["ok [1]"])
+    off = {**chat.get_settings(), "history": False}
+    cid, _ = _turn(vault, None, "car motor secret-off", s.runner(), off)
+    _turn(vault, cid, "and the forum?", s.runner(), {**off, "history": True})
+    _turn(vault, cid, "and a third?", s.runner(), {**off, "history": True})
+    assert not (vault.root / chat.DIR).exists() or not any((vault.root / chat.DIR).iterdir())
+    assert [m["text"] for m in chat.load(vault, cid) if m["role"] == "user"] == [
+        "car motor secret-off", "and the forum?", "and a third?"]  # nothing lost either
     chat.delete_all(vault)
 
 

@@ -34,6 +34,12 @@ def release(tag="v0.2.0", assets=("CortexSetup.exe", "CortexSetup.exe.sha256"), 
                        for n in assets]}
 
 
+def moved(base: str) -> dict:
+    """A release whose asset links point under `base` instead of its own tag."""
+    names = ("CortexSetup.exe", "CortexSetup.exe.sha256")
+    return {**release(), "assets": [{"name": n, "browser_download_url": base + n} for n in names]}
+
+
 def fake(routes: dict):
     """An opener over `routes`: bytes, a dict (JSON), an int (an HTTP error) or (code, location)
     (a redirect). It records every request."""
@@ -108,6 +114,9 @@ def test_newer_older_same():
     (release(assets=("CortexSetup.exe",)), r"\.sha256"),
     (release(assets=("CortexSetup.exe.sha256", "other.zip")), "CortexSetup.exe"),
     ([1, 2], "could not read"),
+    # links that are not exactly this release's files (another tag, a `..` path)
+    (moved(DL.replace("v0.2.0", "v0.1.0")), "not this release"),
+    (moved(DL + "../../../x/y/"), "not this release"),
 ])
 def test_latest_refuses_what_cannot_be_installed(data, match):
     with pytest.raises(update.UpdateError, match=match):
@@ -155,8 +164,12 @@ def test_redirects_only_to_githubusercontent_over_https(tmp_path):
     cdn = "https://objects.githubusercontent.com/x/CortexSetup.exe"
     op = fake(files({DL + "CortexSetup.exe": (302, cdn), cdn: EXE}))
     assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE
+    cdn2 = "https://release-assets.githubusercontent.com/y/CortexSetup.exe"
+    op = fake(files({DL + "CortexSetup.exe": (302, cdn2), cdn2: EXE}))
+    assert update.download(info(), tmp_path / "ok2", opener=op).read_bytes() == EXE
     for bad in ("https://evil.example/CortexSetup.exe", "http://objects.githubusercontent.com/x",
-                "https://githubusercontent.com.evil.example/x"):
+                "https://githubusercontent.com.evil.example/x",
+                "https://raw.githubusercontent.com/someone/repo/main/CortexSetup.exe"):
         op = fake(files({DL + "CortexSetup.exe": (302, bad), bad: EXE}))
         with pytest.raises(update.UpdateError, match="not GitHub"):
             update.download(info(), tmp_path / "bad", opener=op)
