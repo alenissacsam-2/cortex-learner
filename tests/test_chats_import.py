@@ -285,7 +285,8 @@ def test_gemini_html_rows_with_an_unreadable_date_are_counted(out, tmp_path):
     r = CliRunner().invoke(app, ["import", str(z)])
     assert r.exit_code == 0, r.output
     assert "Gemini: 3 conversations imported" in r.output
-    assert "1 row skipped (unreadable date)" in r.output
+    assert ("Gemini: read 3, imported 3, private 0, duplicate 0, skipped 1 (1 unreadable date)"
+            in r.output)  # the import report
 
 
 @pytest.mark.parametrize("folder, stem, product, label", [
@@ -325,3 +326,28 @@ def test_gemini_rows_without_a_chat_id_split_at_a_30_minute_gap():
     assert _gem_chats(rows) == {"abc123def456": ["x", "y"], "2026-10-02-1000": ["a", "b"],
                                 "2026-10-02-1100": ["c"]}
     assert list(chats._gemini(rows)) == list(chats._gemini(rows[::-1]))  # stable ids
+
+
+def _claude_conv(uid, updated, text):
+    return {"uuid": uid, "name": "t", "updated_at": updated, "chat_messages": [
+        {"sender": "human", "created_at": updated, "content": [{"type": "text", "text": text}]},
+        {"sender": "assistant", "created_at": updated,
+         "content": [{"type": "text", "text": "ok"}]}]}
+
+
+def test_split_export_reads_every_conversations_file_and_keeps_the_latest_copy(out, tmp_path):
+    """C6: a large export split over conversations-1.json, -2.json... is read whole; one id in
+    two files is one conversation, its most recently updated copy wins."""
+    a = _claude_conv("aaaa-1111", "2026-10-01T09:00:00Z", "old question")
+    a2 = _claude_conv("aaaa-1111", "2026-10-03T09:00:00Z", "newer question")
+    b = _claude_conv("bbbb-2222", "2026-10-02T09:00:00Z", "second file question")
+    z = _zip(tmp_path, {"conversations-1.json": json.dumps([a]),
+                        "conversations-2.json": json.dumps([b, a2]),
+                        "users.json": "[]"})
+    got = chats.import_export(z)
+    assert got == ("claude", 2)
+    assert chats.read_parts("claude-ai/bbbb-2222", "user") == ["User: second file question"]
+    assert chats.read_parts("claude-ai/aaaa-1111", "user") == ["User: newer question"]
+    rep = got.report()
+    assert rep["files"] == 2 and rep["read"] == 3 and rep["duplicate"] == 1
+    assert rep["imported"] == 2

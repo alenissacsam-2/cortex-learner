@@ -407,7 +407,8 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
         return {"ok": True, "kind": "import", "counts": {"notes": r["new"]}, "lines": [
             f"Imported {r['new']:,} {importers.LABELS[r['source']]} note{_s(r['new'])} into "
             f"{root / 'resources'}" + (f"; {r['same']:,} were already in." if r["same"]
-                                       else ".")]}
+                                       else "."),
+            importers.report_line(importers.LABELS[r["source"]], r)]}
     if kind == "calendar":
         job.say("importing the calendar")
         v = _vault(root)
@@ -415,7 +416,7 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
         _commit(v, "calendar")
         return {"ok": True, "kind": "import", "counts": {"events": r["new"]}, "lines": [
             f"Imported {r['new']:,} new event{_s(r['new'])} into the calendar-YYYY-MM month "
-            f"pages in {root / 'resources'}."]}
+            f"pages in {root / 'resources'}.", importers.report_line("Calendar", r)]}
     if kind == "takeout":
         from cortex.browse import load_settings, sources, takeout
         rows = _readable(takeout.records, path)
@@ -429,11 +430,12 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
                             + _skipped_rows(rows), GOOGLE_NOTE]
         return out
     job.say("importing the conversations")
-    got, n = _readable(chats.import_export, path)
+    res = _readable(chats.import_export, path)
+    got, n = res
     where = chats.export_root() / chats.EXPORT_DIRS[got][0]
     return {"ok": True, "kind": "import", "counts": {"conversations": n}, "lines": [
         f"Imported {n:,} {chats.GUIDES[got]['name']} conversation{_s(n)} into {where}. "
-        + _cortex_hint()]}
+        + _cortex_hint(), importers.report_line(chats.GUIDES[got]["name"], res.report())]}
 
 
 def pair(root: Path) -> str:

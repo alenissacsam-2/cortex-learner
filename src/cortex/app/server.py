@@ -371,6 +371,9 @@ class App:
                                              if c != "adult") else "private"
         if "private_mcp" in body:
             new["private_mcp"] = _bool(body, "private_mcp")
+        if "hidden_from_claude" in body:  # C9: stored as the cloud allowlist; new ones stay local
+            hidden = new.pop("hidden_from_claude")
+            new["cloud_categories"] = [c for c in lists.CATEGORIES if c not in hidden]
         cli._write_config(browse=new)
         return {"ok": True}
 

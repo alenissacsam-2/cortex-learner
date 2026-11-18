@@ -624,6 +624,7 @@ def test_default_hides_browsing_from_claude(vault, browsers):
     after = files(vault)
     changed = {p for p in after.keys() | before.keys() if before.get(p) != after.get(p)}
     changed.discard(".cortex/vectors-v3.npz")  # the notes' embedding cache, from the hubs only
+    changed.discard(".gitignore")  # C3: the run adds the private-pages ignore line once
     assert changed and all(p.startswith(("browse/private/", ".cortex/browse/"))
                            for p in changed), changed
     assert rep["visible_to_claude"] is False and rep["signals"] == 0
@@ -891,8 +892,10 @@ def test_m5_consumed_inbox_files_are_deleted_and_backups_skip_them(vault, browse
     assert not (d / "inbox-2026-11-09.jsonl").exists()
     assert json.loads((vault / build.STATE).read_text(encoding="utf-8"))["inbox"] == {}
     (d / "inbox-2026-11-01.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
-    run_import(vault, browsers, since="2026-11-09")  # a file before `since` is not consumed
-    assert (d / "inbox-2026-11-01.jsonl").exists()
+    run_import(vault, browsers, since="2026-11-09")
+    # v7 C16: a file read whole leaves the inbox whatever its date (archived, or pruned when
+    # it is older than the browsers' history; test_browse_v7)
+    assert not (d / "inbox-2026-11-01.jsonl").exists()
     with zipfile.ZipFile(backup.backup(vault, vault.parent / "bk")) as z:
         names = z.namelist()
     assert "browse/browse-2026-11-09.md" in names

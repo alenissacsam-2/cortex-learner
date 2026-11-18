@@ -45,6 +45,7 @@ DIR = "browse"
 HIDDEN = DIR + "/private"  # never read by the index, the dashboard or any chat
 CACHE = ".cortex/browse/sites.json"  # the local LLM's output and the page hashes
 DAYS = ".cortex/browse/site-days.json"  # per day and site key: the counts pages are made of
+VERDICTS = ".cortex/browse/verdicts.json"  # C1: the local model's label per text hash
 SITES_DIR, HIDDEN_SITES_DIR = DIR + "/sites", HIDDEN + "/sites"
 INDEX_ID, HIDDEN_INDEX_ID = "browse-sites", "browse-private-sites"
 PROFILE_ID, HIDDEN_PROFILE_ID = "browse-profile", "browse-private-profile"
@@ -164,6 +165,12 @@ def load_days(vault: Vault) -> tuple[dict, str | None]:
     return {}, bad
 
 
+def load_verdicts(vault: Vault) -> dict[str, str]:
+    """{privacy.text_key(text): label}: the local model's verdicts on titles and search terms
+    (a sensitive category or "ordinary"); hashes only, never the text."""
+    return {k: v for k, v in _load(vault, VERDICTS).items() if isinstance(v, str)}
+
+
 def load_cache(vault: Vault) -> dict:
     c = _load(vault, CACHE)
     return {"llm": c.get("llm") if isinstance(c.get("llm"), dict) else {},
@@ -189,7 +196,9 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
     for it in sorted(items, key=lambda i: (i.start, i.k.url)):
         k = it.k
         site = site_of(k.host, urlsplit(k.url).path)
-        key = _key(site, k.category, privacy.in_domains(k.host, settings.private))
+        # a record kept local for want of a verdict (C1) stays on the hidden side, like a
+        # private domain's
+        key = _key(site, k.category, privacy.in_domains(k.host, settings.private) or k.local)
         ts = int(it.start.timestamp())
         a = days.setdefault(it.day, {}).setdefault(key, {"n": 0, "s": 0, "a": ts, "b": ts})
         a["n"] += 1
@@ -315,11 +324,31 @@ def _sides(settings: Settings, llm: dict, days: dict):
     return side, scat
 
 
+def _shown(settings: Settings, verdicts: dict[str, str]):
+    """`shown(text, search)`: may a visible page show this title or search term (C1)? Not when
+    the word lists (as they are now) or the local model put it in a category that is not
+    cloud; a search term only with the local model's "ordinary" verdict."""
+    seen: dict[tuple[str, bool], bool] = {}
+
+    def shown(text: str, search: bool = False) -> bool:
+        if (text, search) not in seen:
+            cat = privacy.category("", "/", text)[0]
+            v = verdicts.get(privacy.text_key(text))
+            seen[(text, search)] = ((cat is None or privacy.audience(cat, settings) == "cloud")
+                                    and v not in lists.CATEGORIES
+                                    and (not search or v == "ordinary"))
+        return seen[(text, search)]
+    return shown
+
+
 def pages(vault: Vault, settings: Settings, days: dict | None = None,
-          llm: dict | None = None) -> dict[tuple[str, bool], Page]:
-    """Every site page as the settings of now decide it: {(site, hidden): Page}."""
+          llm: dict | None = None, verdicts: dict | None = None
+          ) -> dict[tuple[str, bool], Page]:
+    """Every site page as the settings of now decide it: {(site, hidden): Page}. A visible
+    page holds only the titles and search terms `_shown` allows."""
     days = load_days(vault)[0] if days is None else days
     llm = load_cache(vault)["llm"] if llm is None else llm
+    shown = _shown(settings, load_verdicts(vault) if verdicts is None else verdicts)
     side, scat = _sides(settings, llm, days)
     out: dict[tuple[str, bool], Page] = {}
     for day in sorted(days):
@@ -346,9 +375,13 @@ def pages(vault: Vault, settings: Settings, days: dict | None = None,
             for hr, c in (a.get("hr") or {}).items():
                 p.hours[int(hr)] += c
             for url, (t, c, x) in (a.get("p") or {}).items():
+                if t and not h and not shown(t):
+                    continue
                 row = p.pages.setdefault(url, ["", 0, 0])
                 row[0], row[1], row[2] = t or row[0], row[1] + c, row[2] + x
             for t, c in (a.get("q") or {}).items():
+                if not h and not shown(t, True):
+                    continue
                 p.here[t] += c
                 p.searches.append((cat, t, c))
             for skey, terms in (a.get("r") or {}).items():
@@ -356,7 +389,8 @@ def pages(vault: Vault, settings: Settings, days: dict | None = None,
                 if (sh := side(day, skey)) is None or (sh and not h):
                     continue
                 for t, c in terms.items():
-                    p.led[t] += c
+                    if h or shown(t, True):
+                        p.led[t] += c
             for hub, c in (a.get("t") or {}).items():
                 p.hubs[hub] += c
             for other, c in (a.get("co") or {}).items():

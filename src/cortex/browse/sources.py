@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -24,6 +25,11 @@ from cortex.events import local_day
 CHROMIUM = {"chrome": ("Google", "Chrome"), "edge": ("Microsoft", "Edge"),
             "brave": ("BraveSoftware", "Brave-Browser"),
             "comet": ("Perplexity", "Comet")}  # Perplexity's Chromium browser
+# macOS (~/Library/Application Support) and Linux (~/.config): profiles sit right in the folder
+MAC_CHROMIUM = {"chrome": ("Google", "Chrome"), "edge": ("Microsoft Edge",),
+                "brave": ("BraveSoftware", "Brave-Browser")}
+LINUX_CHROMIUM = {"chrome": ("google-chrome",), "edge": ("microsoft-edge",),
+                  "brave": ("BraveSoftware", "Brave-Browser")}
 BROWSERS = (*CHROMIUM, "firefox")
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 CHROME_OFFSET_US = 11_644_473_600_000_000  # 1601-01-01 to 1970-01-01
@@ -77,10 +83,31 @@ class Visit:
     channel: str = ""  # a video's channel, from the extension's inbox only
 
 
-def discover(local: Path | None = None, roaming: Path | None = None) -> list[Source]:
+def _profiles(browser: str, folder: Path, name: str) -> list[Source]:
+    return [Source(browser, d.name, d / name) for d in sorted(folder.iterdir())
+            if (d / name).is_file()] if folder.is_dir() else []
+
+
+def _discover_unix(home: Path, mac: bool) -> list[Source]:
+    """macOS and Linux (review C14): the same browsers under ~/Library/Application Support or
+    ~/.config, and Firefox under its own profile folder."""
+    base = home / "Library" / "Application Support" if mac else home / ".config"
+    out = []
+    for browser, parts in (MAC_CHROMIUM if mac else LINUX_CHROMIUM).items():
+        out += _profiles(browser, base.joinpath(*parts), "History")
+    ff = base / "Firefox" / "Profiles" if mac else home / ".mozilla" / "firefox"
+    return out + _profiles("firefox", ff, "places.sqlite")
+
+
+def discover(local: Path | None = None, roaming: Path | None = None, *,
+             home: Path | None = None, platform: str | None = None) -> list[Source]:
     """Every Chromium profile folder holding a `History` file under `local` (default
     %LOCALAPPDATA%) and every Firefox profile with `places.sqlite` under `roaming` (default
-    %APPDATA%)."""
+    %APPDATA%). On macOS and Linux (`platform`, default sys.platform), with neither folder
+    given, the browsers' folders under `home` (default ~) instead."""
+    platform = platform or sys.platform
+    if local is None and roaming is None and not platform.startswith("win"):
+        return _discover_unix(home or Path.home(), platform == "darwin")
     if local is None and os.environ.get("LOCALAPPDATA"):
         local = Path(os.environ["LOCALAPPDATA"])
     if roaming is None and os.environ.get("APPDATA"):

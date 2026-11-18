@@ -69,6 +69,35 @@ def check_git(root: Path) -> tuple[str, str, str, str]:
     return "PASS", name, "no remote; pre-push hook present", ""
 
 
+def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
+    """v7 C3: private browse pages must not be in the vault's git. Cortex untracks them on the
+    next browse import, but never rewrites history; this says how."""
+    from cortex.browse import forget
+
+    name = "Private browsing out of git"
+    root = Path(root)
+    if not (root / ".git").exists():
+        return "PASS", name, "no repo (see Vault git)", ""
+    if _git(root, "ls-files", "--", "browse/private").stdout.strip():
+        return ("WARN", name, "browse/private/ is still tracked by git",
+                "Run `cortex browse import` once (it untracks the folder), or run "
+                "`git rm -r --cached browse/private` in the vault and commit.")
+    if _git(root, "check-ignore", "-q", "browse/private/x.md").returncode:
+        return ("WARN", name, "browse/private/ is not in the vault's .gitignore",
+                f"Run `cortex init {root}` or `cortex browse import`; either adds the line.")
+    n = forget.private_in_history(root)
+    if n:
+        return ("WARN", name, f"{n} commit{'s' * (n != 1)} in the vault's git history hold "
+                "private browse pages",
+                "They are no longer committed, but old commits keep them. To remove them, "
+                "back up the vault, then in it run `git filter-repo --path browse/private "
+                "--invert-paths` (or `git filter-branch --index-filter \"git rm -r -q --cached "
+                "--ignore-unmatch browse/private\" -- --all`), then `git reflog expire "
+                "--expire=now --all` and `git gc --prune=now`. Cortex never rewrites history "
+                "itself.")
+    return "PASS", name, "browse/private/ is ignored and in no commit", ""
+
+
 def check_git_identity(root: Path) -> tuple[str, str, str, str]:
     """N11: with no git identity every session commit fails silently, so `cortex undo` has
     nothing to revert."""

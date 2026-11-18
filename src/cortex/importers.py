@@ -69,7 +69,6 @@ _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
 _GEMINI_HEAD = re.compile(rb'(?:"header"\s*:\s*"|--title">)[^"<]*Gemini')
 _HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
 _FRONT = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
-_PRIVATE = re.compile(r"^private:\s*(?:true|yes)\s*$", re.M | re.I)
 _WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _ESC = re.compile(r"\\([\\;,nN])")
@@ -164,6 +163,41 @@ def _is_note(name: str) -> bool:
     return name.lower().endswith(NOTE_SUFFIXES) and not any(p.startswith(".") for p in parts)
 
 
+_TRUE = {"true", "yes", "y", "on", "1"}
+
+
+def _is_private(front: str) -> bool:
+    """C4: a note is private when its frontmatter sets `private` to anything truthy (true,
+    "true", yes, on, 1) or tags it `private`; frontmatter that does not parse is private too,
+    as the note may have meant to be (fail closed)."""
+    from ruamel.yaml import YAML, YAMLError  # cortex.vault loads it anyway
+    try:
+        fm = YAML(typ="safe").load(front)
+    except (YAMLError, ValueError):
+        return True
+    if fm is None:
+        return False
+    if not isinstance(fm, dict):
+        return True
+    flag = fm.get("private")
+    if flag is True or str(flag).strip().casefold() in _TRUE:
+        return True
+    tags = fm.get("tags", fm.get("tag"))
+    tags = tags.replace(",", " ").split() if isinstance(tags, str) else \
+        tags if isinstance(tags, list) else []
+    return any(str(t).strip().lstrip("#").casefold() == "private" for t in tags)
+
+
+def report_line(label: str, r: dict) -> str:
+    """The line every import ends with: counts read, imported, private, duplicate and
+    skipped, with the reason for each skip."""
+    why = {k: n for k, n in r.get("reasons", {}).items() if n}
+    reasons = f" ({', '.join(f'{n:,} {k}' for k, n in why.items())})" if why else ""
+    return (f"{label}: read {r['read']:,}, imported {r['imported']:,}, private "
+            f"{r['private']:,}, duplicate {r['duplicate']:,}, skipped "
+            f"{sum(why.values()):,}{reasons}")
+
+
 def _clean(name: str) -> str:
     """A path without Notion's 32-hex page ids."""
     return "/".join(_NOTION_ID.sub("", p) for p in name.replace("\\", "/").split("/"))
@@ -189,7 +223,8 @@ def _known_hashes(vault: Vault) -> set[str]:
 def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: bool = False,
                  private: bool = False) -> dict:
     """One resource page per .md/.txt note (≤ MAX_BYTES, UTF-8 text, outside hidden folders
-    such as .obsidian). A note whose frontmatter says `private: true` (or every note, with
+    such as .obsidian). A note whose frontmatter marks it private (any truthy `private`, a
+    `private` tag, or frontmatter that does not parse; every note, with
     `private`) is a private page. A note whose text was imported before (same sha256) is
     skipped, so re-importing is safe; an edited note comes in as a new page."""
     files = _files(path)
@@ -199,6 +234,7 @@ def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: b
                         else "notion" if any(_NOTION_ID.search(p) for n in names
                                              for p in n.split("/")) else "notes")
     known, taken, notes, skipped, same = _known_hashes(vault), set(), [], 0, 0
+    why = dict.fromkeys(("not a note", "over 5 MB", "not UTF-8 text"), 0)
     for name, size, mtime, read in files:
         data = read() if _is_note(name) and size <= MAX_BYTES else b"\0"
         try:
@@ -207,6 +243,8 @@ def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: b
             text = None
         if text is None:
             skipped += 1
+            why["not a note" if not _is_note(name) else "over 5 MB" if size > MAX_BYTES
+                else "not UTF-8 text"] += 1
             continue
         h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         if h in known:
@@ -216,7 +254,7 @@ def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: b
         rel = _clean(name)
         title = PurePosixPath(rel).stem
         fm = _FRONT.match(text)
-        hidden = private or bool(fm and _PRIVATE.search(fm.group(1)))
+        hidden = private or bool(fm and _is_private(fm.group(1)))
         nid = _free_id(vault, f"{flavor}-{slugify(title) or 'untitled'}"[:81].rstrip("-."),
                        taken)
         notes.append((nid, title, rel, mtime, h, hidden, text[fm.end():] if fm else text))
@@ -244,7 +282,9 @@ def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: b
             vault.create_note("resource", nid, fields,
                               f"# {fields['title']}\n\nSource: {LABELS[flavor]} · Date: {day} · "
                               f"From: {chats.redact(rel)} · sha: {h}\n\n{body}\n")
-    return {"source": flavor, "new": len(notes), "same": same, "skipped": skipped}
+    return {"source": flavor, "new": len(notes), "same": same, "skipped": skipped,
+            "read": len(files), "imported": len(notes),
+            "private": sum(n[5] for n in notes), "duplicate": same, "reasons": why}
 
 
 def _events(text: str):
@@ -294,11 +334,12 @@ def import_calendar(vault: Vault, path: Path, dry_run: bool = False,
              if n.lower().endswith(".ics")]
     if not texts:
         raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
-    months, events = defaultdict(set), 0
+    months, events, undated = defaultdict(set), 0, 0
     for ev in (e for t in texts for e in _events(t)):
         try:
             day, time = _when(ev["DTSTART"])
         except (KeyError, ValueError):
+            undated += 1
             continue
         rule = ev.get("RRULE")
         line = " · ".join(x for x in (f"{day} {time}", _text(ev.get("SUMMARY")) or "(no title)",
@@ -326,4 +367,6 @@ def import_calendar(vault: Vault, path: Path, dry_run: bool = False,
             fields["private"] = True
         vault.create_note("resource", nid, fields, f"# Calendar {month}\n\nSource: Calendar · "
                           f"Date: {month}-01\n\n## Events\n" + "\n".join(add) + "\n")
-    return {"events": events, "months": len(months), "new": new}
+    return {"events": events, "months": len(months), "new": new, "read": events + undated,
+            "imported": new, "private": new if private else 0, "duplicate": events - new,
+            "reasons": {"no readable start date": undated}}

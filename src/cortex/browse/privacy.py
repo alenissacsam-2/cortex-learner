@@ -3,13 +3,14 @@
 It runs first, before anything is kept: a record it drops is never stored anywhere. Order:
 hard drop (scheme, local hosts, sign-in, payment and bank pages, secret-carrying URLs), URL
 scrubbing (no query or fragment but a search term or a YouTube `v=`), the user's lists, then
-the sensitive categories (`browse.skip_categories` drops, `browse.hidden_from_claude` keeps
-for the private pages; by default adult is skipped and every other category kept private).
+the sensitive categories (`browse.skip_categories` drops; one not in `browse.cloud_categories`
+stays on the private pages; by default adult is skipped and every other category kept private).
 `filter_record` is the whole filter; the receiver (`cortex browse serve`) reuses it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 import unicodedata
@@ -76,8 +77,16 @@ def load_settings(config: dict | None = None) -> Settings:
         return default if v is None else tuple(c for c in lists.CATEGORIES if c in {
             str(x).strip().lower() for x in v})
 
+    # C9: the cloud allowlist is stored, so a category added later is local; a config from
+    # before it (hidden_from_claude) counts every category it could not know of as hidden
+    cloud = cats("cloud_categories", None)
+    legacy = cats("hidden_from_claude", None)
+    hidden = (tuple(c for c in lists.CATEGORIES if c not in cloud) if cloud is not None
+              else lists.CATEGORIES if legacy is None
+              else tuple(c for c in lists.CATEGORIES
+                         if c in legacy or c not in lists.CATEGORIES_V1))
     return Settings(adult=b.get("adult") if b.get("adult") in ADULT else "skip",
-                    hidden_from_claude=cats("hidden_from_claude", lists.CATEGORIES),
+                    hidden_from_claude=hidden,
                     skip_categories=cats("skip_categories", None),
                     private_mcp=b.get("private_mcp") is True,
                     cloud_processing=b.get("cloud_processing") is True,
@@ -106,6 +115,8 @@ class Kept:
     engine: str | None = None
     video: str | None = None  # a YouTube video id
     maybe: bool = False
+    # C1: kept local because its text has no local-model verdict yet (a local model is set up)
+    local: bool = False
 
 
 def in_domains(host: str, domains) -> bool:
@@ -305,6 +316,11 @@ def category(host: str, path: str, title: str, term: str | None = None, channel:
         if any(w.startswith(lists.STEMS[c]) for w in words):
             return c, True
     return None, False
+
+
+def text_key(text: str) -> str:
+    """The key a local-model verdict on `text` is cached under: a hash, never the text."""
+    return hashlib.sha256(" ".join(text.casefold().split()).encode("utf-8")).hexdigest()[:16]
 
 
 def clean_title(title: str) -> str:
