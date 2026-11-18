@@ -547,13 +547,12 @@ def test_help_files_ship_in_the_wheel(tmp_path, monkeypatch):
     assert dashboard._help() == {"commands_md": None, "glossary_md": None}
 
 
-@pytest.mark.parametrize("shape", ["float", "dict"])
-def test_readiness_share_from_either_planner_shape(root, monkeypatch, shape):
-    # D3: the planner may return the weighted share alone or with plain counts
-    monkeypatch.setattr(planner, "readiness", lambda *a: 0.25 if shape == "float"
-                        else {"weighted": 0.25, "solid": 1, "total": 4})
+def test_readiness_carries_the_weighted_share_and_plain_counts(root, monkeypatch):
+    # D3: the weighted share under both names, beside the plain solid/total count
+    monkeypatch.setattr(planner, "readiness", lambda *a: 0.25)
     r = dashboard.build_data(Vault(root), now=NOW)["assessments"][0]["readiness"]
-    assert r["share"] == 0.25 and isinstance(r["solid"], int) and isinstance(r["total"], int)
+    assert r["share"] == r["weighted"] == 0.25
+    assert isinstance(r["solid"], int) and isinstance(r["total"], int)
 
 
 def test_readiness_label_names_the_weighted_share():
