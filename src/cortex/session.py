@@ -617,9 +617,9 @@ def sweep(vault: Vault, clock=datetime.now, *, force: bool = False) -> list[str]
         # B15: an idle or orphaned session ended at its last event (+1 s, so the close sorts
         # after it); `force` closes it now
         res = _end(vault, evlog, sid=sid, mode=mode, started=parse_ts(evs[0]["ts"]),
-                   ended=now if force else min(now, last + timedelta(seconds=1)), now=now, counts=counts, touched=touched,
-                   before=before, summary="auto-closed", changes=changes, mark=vault.writes,
-                   ledger=ledger)  # another process ran it
+                   ended=now if force else min(now, last + timedelta(seconds=1)), now=now,
+                   counts=counts, touched=touched, before=before, summary="auto-closed",
+                   changes=changes, mark=vault.writes, ledger=ledger)  # another process ran it
         if not res.get("already_closed"):
             closed.append(sid)
     return closed
