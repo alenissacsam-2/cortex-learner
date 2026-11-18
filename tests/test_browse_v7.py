@@ -314,6 +314,8 @@ def test_c3_doctor_passes_a_clean_vault(root):
     (root / ".gitignore").write_text(f".cortex/*\n{forget.PRIVATE_IGNORE}\n", encoding="utf-8")
     assert doctor.check_private_browse_git(root)[0] == "PASS"
     (root / ".gitignore").write_text(".cortex/*\n", encoding="utf-8")
+    assert doctor.check_private_browse_git(root)[0] == "PASS"  # an upgraded vault, no pages
+    (root / "browse" / "private").mkdir(parents=True)
     assert doctor.check_private_browse_git(root)[0] == "WARN"
 
 

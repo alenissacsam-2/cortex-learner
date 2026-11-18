@@ -88,6 +88,9 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
                 "Run `cortex browse import` once (it untracks the folder), or run "
                 "`git rm -r --cached browse/private` in the vault and commit.")
     if _git(root, "check-ignore", "-q", "browse/private/x.md").returncode:
+        if not (root / "browse" / "private").exists():  # an older vault, nothing private yet
+            return ("PASS", name, "no private pages yet; the .gitignore line is added before "
+                    "the first one", "")
         return ("WARN", name, "browse/private/ is not in the vault's .gitignore",
                 f"Run `cortex init {root}` or `cortex browse import`; either adds the line.")
     n = forget.private_in_history(root)
