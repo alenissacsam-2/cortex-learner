@@ -5,24 +5,25 @@ Chromium-based; it loads the same way in each). It notes how long you actually
 look at a page, a short readable excerpt of pages you read for 20 seconds or more, and the
 title and channel of YouTube videos. It sends them **only** to the Cortex receiver on your
 own computer (`http://127.0.0.1:<port>`). There is no server, no account and no remote code.
-The design is in `docs/design/browse-brain.md` (sections 2 and 6).
 
 ## Install (Load unpacked)
 
 1. Open `comet://extensions` in Comet (`chrome://extensions` works there too; Chrome:
    `chrome://extensions`, Edge: `edge://extensions`, Brave: `brave://extensions`).
 2. Turn on **Developer mode**.
-3. Click **Load unpacked** and choose this `extension/` folder.
+3. Click **Load unpacked** and choose the extension folder. If you installed Cortex with the
+   installer, the Cortex app's Browsing section opens the extension folder for you; from a
+   source checkout, it is this `extension/` folder.
 4. Pin "Cortex capture" to the toolbar so you can open its popup.
 
 The extension is set to `"incognito": "not_allowed"`, so it can never run in private windows.
 
 ## Pair it with Cortex
 
-1. In a terminal, run `uv run cortex browse pair`. It prints a token and saves it in your
-   vault at `.cortex/browse/token` (git-ignored). Running it again makes a new token and the
+1. In a terminal, run `cortex browse pair` (from a source checkout, prefix `uv run`). It
+   prints a token and saves it in your vault at `.cortex/browse/token` (git-ignored). Running it again makes a new token and the
    old one stops working.
-2. Start the receiver: `uv run cortex browse serve` (port 8799 unless you pass another). It
+2. Start the receiver: `cortex browse serve` (port 8799 unless you pass another). It
    listens on 127.0.0.1 only and refuses any other address. It must be running for anything
    to be stored or processed; see "Run the receiver at login" below.
 3. Open the popup, enter the port and paste the token, then press **Save and test**. The top
@@ -107,18 +108,22 @@ The receiver checks the token and drops any request from a web page (only
 filter again before storing anything: dropped records are never written. Kept ones go to
 `.cortex/browse/inbox-YYYY-MM-DD.jsonl` in your vault (git-ignored), with sensitive
 categories (health, money, betting, dating, sexuality, drugs, self-harm and, if you allow it,
-adult) and your `private_domains` marked private and their text cleared. Page titles,
-searches and sites only ever reach your private browse pages; the public ones show your
-topics and time. The receiver never logs URLs or titles.
+adult) and your `private_domains` marked private and their text cleared. For the categories
+that cloud AI apps can read (after you turn on `browse.visible_to_claude`), the site pages include the page titles, the search terms and the
+site names, not only your topics and time; hidden categories stay on your private browse
+pages. The receiver never logs URLs or titles.
 
 ## Run the receiver at login (optional)
 
 To have the receiver start whenever you sign in to Windows, create a Task Scheduler task
-once, yourself, in a terminal (find your `uv` path with `where uv`):
+once, yourself, in a terminal (find the `cortex` path with `where cortex`):
 
 ```
-schtasks /Create /SC ONLOGON /TN CortexBrowse /TR "\"C:\path\to\uv.exe\" run --project C:\path\to\cortex cortex browse serve"
+schtasks /Create /SC ONLOGON /TN CortexBrowse /TR "\"C:\path\to\cortex.exe\" browse serve"
 ```
+
+From a source checkout, point the task at uv instead (find it with `where uv`):
+`/TR "\"C:\path\to\uv.exe\" run --project C:\path\to\cortex cortex browse serve"`.
 
 Remove it with `schtasks /Delete /TN CortexBrowse`. The task runs `serve` with your default
 vault from `~/.cortex/config.yaml`.

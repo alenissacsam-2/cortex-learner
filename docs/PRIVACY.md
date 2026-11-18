@@ -91,4 +91,4 @@ Cortex can turn your browser history into pages. It is off until you run an impo
 
 ## Reporting a problem
 
-To report a security or privacy problem, open an issue in the repository (`alenissacsam-2/cortex-learner`) or contact the maintainer listed there.
+To report a security or privacy problem, use GitHub's private vulnerability reporting, as [SECURITY.md](../SECURITY.md) explains. Never open a public issue for a privacy bug.

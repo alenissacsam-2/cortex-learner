@@ -30,6 +30,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cortex"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# the dashboard's Help tab and glossary; the repo files stay the one source (dashboard._help)
+"skills/cortex/modes/help.md" = "cortex/assets/help/help.md"
+"docs/GUIDE.md" = "cortex/assets/help/GUIDE.md"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

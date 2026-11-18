@@ -1688,7 +1688,7 @@
     host.append(g2);
 
     host.append(el('h2', null, 'Patterns'));
-    const pats = D.pages.filter((p) => p.id === 'youtube-and-notebooklm-patterns' || p.tags.includes('patterns'));
+    const pats = D.pages.filter((p) => p.tags.includes('patterns'));
     host.append(boardList(board('Patterns Cortex has noticed'), pats.map((p) => brow({ id: p.id, title: p.title,
       sub: p.summary || '', brainId: p.id })), 50,
     'No pattern notes yet. Ask a Claude chat to look for patterns in your imports.'));
@@ -1869,7 +1869,7 @@
       }
       if (isDay(s.placement_date)) {
         const n = between(TODAY, s.placement_date);
-        if (n >= 0) box.append(el('p', 'muted', `Phase 1 placements in ${plural(n, 'day')}`));
+        if (n >= 0) box.append(el('p', 'muted', `${s.title} in ${plural(n, 'day')}`));
       }
     }
     const tiles = $('tiles');

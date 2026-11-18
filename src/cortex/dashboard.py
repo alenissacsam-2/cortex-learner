@@ -44,7 +44,7 @@ _SLOT = re.compile(r"\{\{(\w+)\}\}")
 BODY_MAX = 20 * 1024
 TRUNCATED = "\n\n*… truncated here; open the note in Obsidian for the rest.*\n"
 SHOWN_PROPS = 30  # list items and characters below are capped too, to keep the blob small
-REPO = Path(__file__).resolve().parents[2]  # the checkout; the help files are absent when installed
+REPO = Path(__file__).resolve().parents[2]  # a source checkout; installed, assets/help instead
 GLOSSARY = "The names, in plain words"  # the GUIDE heading after its number
 _NAME_RE = re.compile(r"\*\*Name:\*\*\s*(\S+)")
 UNFILED = "unfiled"
@@ -89,7 +89,8 @@ def _sprint(track) -> dict | None:
              "status": "upcoming" if cur is None or n > cur else "current" if n == cur
              else "done"} for n in range(1, last + 1)]
     pd = planner._day(track.fields.get("placement_date"))
-    return {"day": cur, "days": days, "placement_date": pd.isoformat() if pd else None,
+    return {"day": cur, "days": days, "title": _title(track),
+            "placement_date": pd.isoformat() if pd else None,
             "today_counts": {"done": done, "left": left}}
 
 
@@ -299,16 +300,24 @@ def _plained(row: dict, *keys: str) -> dict:
     return row | {k: plain(row[k], 300) for k in keys if row.get(k) is not None}
 
 
+def _read_help(name: str, *repo_path: str) -> str | None:
+    """A help file: the wheel's copy (pyproject force-include), else the checkout's."""
+    for p in (ASSETS / "help" / name, REPO.joinpath(*repo_path)):
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    return None
+
+
 def _help() -> dict:
-    """The `/cortex help` reference and the GUIDE glossary table (trusted repo files)."""
-    cmds, guide = REPO / "skills" / "cortex" / "modes" / "help.md", REPO / "docs" / "GUIDE.md"
-    text = guide.read_text(encoding="utf-8") if guide.is_file() else ""
+    """The `/cortex help` reference and the GUIDE glossary table (trusted shipped files)."""
+    cmds = _read_help("help.md", "skills", "cortex", "modes", "help.md")
+    text = _read_help("GUIDE.md", "docs", "GUIDE.md") or ""
     # match the heading by name, so renumbering the guide's sections can't lose the glossary
     head = next((ln[3:].strip() for ln in text.splitlines()
                  if ln.startswith("## ") and ln.rstrip().endswith(GLOSSARY)), None)
     rows = [ln for ln in loops.section_text(text, head).splitlines()
             if ln.startswith("|")] if head else []
-    return {"commands_md": cmds.read_text(encoding="utf-8") if cmds.is_file() else None,
+    return {"commands_md": cmds,
             "glossary_md": "\n".join(rows) or None}
 
 
