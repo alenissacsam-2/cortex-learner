@@ -182,8 +182,8 @@ section:focus { outline: none; }
 .home-row.two { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
 .brain-slot { position: relative; background: var(--stage); overflow: hidden; }
 .brain-host { position: absolute; inset: 0; }
-.ready { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.bar { flex: 1; height: 8px; background: var(--unlit); border-radius: 2px; overflow: hidden; min-width: 40px; }
+.ready { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; }  /* a long label wraps under the bar */
+.bar { flex: 1; height: 8px; background: var(--unlit); border-radius: 2px; overflow: hidden; min-width: 120px; }
 .bar > span { display: block; height: 100%; background: var(--solid); }
 
 /* brain section */
