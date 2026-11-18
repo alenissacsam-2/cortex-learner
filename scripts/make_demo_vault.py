@@ -4,7 +4,8 @@ Adds the packaged sample (Sam, a made-up learner) and then more made-up evidence
 normal vault and event APIs: extra concepts and notes, two mistakes, graded answers with a
 "how sure" level of 1-4, two upcoming assessments and a few lessons taught. Every event is
 keyed `demo:<n>`, so running it again adds nothing. Dates are relative to today; everything
-else is fixed. Never point it at a real vault. For imported chats, run `cortex import` on the
+else is fixed. It refuses the configured vault and any vault with events of its own (not demo
+or sample ones) unless --force. For imported chats, run `cortex import` on the
 synthetic exports in tests/fixtures/exports afterwards.
 
     uv run cortex init <vault>
@@ -14,11 +15,12 @@ synthetic exports in tests/fixtures/exports afterwards.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from cortex import sample
+from cortex import sample, taint
 from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog
 from cortex.vault import Vault
@@ -174,10 +176,25 @@ def events(vault: Vault, now: datetime) -> int:
     return n
 
 
+def refusal(root: Path) -> str | None:
+    """Why `root` looks like a real vault (made-up events are permanent history), or None."""
+    named = (taint.config().get("vault"), os.environ.get("CORTEX_VAULT"))
+    if any(v and Path(v).expanduser().resolve() == root for v in named):
+        return f"{root} is your configured Cortex vault"
+    real = sum(1 for e in EventLog(Vault(root)).iter_events()
+               if not str(e.get("key") or "").startswith(("demo:", sample.KEY)))
+    return f"{root} already has {real} events of its own" if real else None
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("vault", type=Path, help="an existing throwaway vault (cortex init)")
+    ap.add_argument("--force", action="store_true",
+                    help="write even into the configured vault or one with events of its own")
     a = ap.parse_args(argv)
+    if not a.force and (why := refusal(a.vault.resolve())):
+        ap.error(f"{why}; refusing to add made-up history. Use a fresh `cortex init` folder, "
+                 "or pass --force.")
     vault = Vault(a.vault.resolve())
     now = datetime.now(UTC)
     sample.seed(vault, now)

@@ -1,4 +1,4 @@
-"""The `cortex` command-line interface (SPEC §7, §15a.18). Logic lives in the core modules."""
+"""The `cortex` command-line interface. Logic lives in the core modules."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from cortex import doctor as doctor_mod
 from cortex import levels, planner, render, taint
 from cortex import session as session_mod
 from cortex._proc import NO_WINDOW
-from cortex.catalog import Catalog, resolve_or_inbox
+from cortex.catalog import Catalog, resolve_or_inbox, slugify
 from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from cortex.session import _git
@@ -185,8 +185,8 @@ def _vault(path: Path | Vault | None) -> Vault:
 
 
 def _refuse_excluded(action: str) -> None:
-    """Commands that print me/ text refuse inside an `exclude:` folder, as the server does
-    (review r4 L7): an agent there could otherwise read the user's lines through Bash."""
+    """Commands that print me/ text refuse inside an `exclude:` folder, as the server does:
+    an agent there could otherwise read the user's lines through Bash."""
     if folder := taint.excluded(*taint.session_dirs()):
         raise VaultError("invalid_argument", f"{folder} is excluded; refusing to {action}.")
 
@@ -725,7 +725,7 @@ def lint_cmd(vault: VaultOpt = None) -> None:
     v = _vault(vault)
     findings, totals = lint_mod.lint_report(v)
     for f in findings:
-        typer.echo(f"{f['kind']}: {f['id']} - {f['detail']}")
+        typer.echo(render.term(f"{f['kind']}: {f['id']} - {f['detail']}"))
     more = lint_mod.not_shown(findings, totals)
     typer.echo(f"{len(findings)} findings" + (f" (not shown: {more})" if more else ""))
     v.append_log(local_day(datetime.now(UTC)), "lint", f"{len(findings)} findings")
@@ -759,14 +759,15 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
                + (f" ({out['unconfirmed_dropped']} older than 60 days not shown)"
                   if out["unconfirmed_dropped"] else ""))
     for u in out["unconfirmed"]:
-        typer.echo(f"  - {u['text']}" + (f" (since {u['since']})" if u["since"] else ""))
+        typer.echo(render.term(f"  - {u['text']}"
+                               + (f" (since {u['since']})" if u["since"] else "")))
     typer.echo(f"Emerging clusters: {len(out['emerging'])}")
     for c in out["emerging"]:
-        typer.echo(f"  - {c['suggested_title']}: {', '.join(c['members'])} "
-                   f"(shared: {', '.join(c['shared'])})")
+        typer.echo(render.term(f"  - {c['suggested_title']}: {', '.join(c['members'])} "
+                               f"(shared: {', '.join(c['shared'])})"))
     typer.echo(f"Old fleeting lines: {len(out['old_fleeting'])}")
     for f in out["old_fleeting"]:
-        typer.echo(f"  - {f['text']} (since {f['since']})")
+        typer.echo(render.term(f"  - {f['text']} (since {f['since']})"))
     w = out["week"]
     typer.echo(f"Week {w['from']} to {w['to']}: {w['sessions']} sessions, "
                f"{w['correct']}/{w['grades']} correct, {len(w['changed'])} concepts changed")
@@ -811,7 +812,8 @@ def needs_cmd(vault: VaultOpt = None) -> None:
 @_errors
 def chats_cmd(since: Annotated[str | None, typer.Option(help="Only chats updated on or after "
                                                          "this date (YYYY-MM-DD).")] = None,
-              limit: int = 20, vault: VaultOpt = None) -> None:
+              limit: Annotated[int, typer.Option(help="Show at most this many.")] = 20,
+              vault: VaultOpt = None) -> None:
     r"""List past chats (Claude Code, and Claude Chat once imported), newest first; \[saved]
     marks ones already saved."""  # \[ keeps Rich markup in --help from eating [saved]
     from cortex import chats
@@ -820,8 +822,8 @@ def chats_cmd(since: Annotated[str | None, typer.Option(help="Only chats updated
     saved = {c for _, c in chats.saved_ids(EventLog(v).iter_events())}
     for c in chats.list_chats(saved, since, limit):
         mark = " [saved]" if c["saved"] else ""
-        typer.echo(f"{c['updated'][:16]}  {c['id']}  {c['turns']} turns{mark}  "
-                   f"{c['first_user_line']}")
+        typer.echo(render.term(f"{c['updated'][:16]}  {c['id']}  {c['turns']} turns{mark}  "
+                               f"{c['first_user_line']}"))
 
 
 @app.command("import-chats")
@@ -886,11 +888,11 @@ def digest_cmd(yes: Annotated[bool, typer.Option(
     for r in rows:
         found = [c for c in digest.concepts_for(idx, r["query"], embed, quiet)
                  if c["id"] not in done]
-        typer.echo(f"\n{r['updated'][:10]}  {r['source']}  {r['title']}")
+        typer.echo(render.term(f"\n{r['updated'][:10]}  {r['source']}  {r['title']}"))
         if not found:
             typer.echo("  (no matching topic)")
         for c in found:
-            line = f"  {c['title']} ({c['id']})"
+            line = render.term(f"  {c['title']} ({c['id']})")
             if dry_run:
                 typer.echo(line)
             elif yes or typer.confirm(f"{line}: right?", default=False):
@@ -1009,7 +1011,7 @@ def claims_cmd(tier: Annotated[str | None, typer.Option(
             for b in cal["bins"] if b["n"]))
 
 
-@app.command("saved", hidden=True)  # review r4 S1: now `claims --unasked`
+@app.command("saved", hidden=True)  # now `claims --unasked`
 @_errors
 def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
     """What was saved about you without your say: claim lines an assistant wrote unasked or
@@ -1038,7 +1040,7 @@ def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
         typer.echo("To keep an unasked line, say yes in a /cortex reflect with no outside reads.")
 
 
-@app.command("know", hidden=True)  # review r4 S1: now `claims --summary`
+@app.command("know", hidden=True)  # now `claims --summary`
 @_errors
 def know_cmd(vault: VaultOpt = None) -> None:
     """How well Cortex knows you: per me/ page, live claims by tier and bet state, calibration
@@ -1127,10 +1129,16 @@ def voice_import(file: Path,
 
 # ---- brief ----------------------------------------------------------------------
 
+FIRST_STEPS = ("To start: 1. add a test date (tell any Claude chat, or add one in assessments/); "
+               "2. run /cortex in Claude; 3. import your notes or chats with "
+               "`cortex import <file>`.")
+
+
 def _today_line(it: dict) -> str:
     state = it["state"]
     head = f"{levels.GLYPH[state]} {levels.LABEL[state]}" if state else "- Track item"
-    name = it["title"] if not it["id"] or it["title"] == it["id"] else \
+    # the id only when it says something the title doesn't ("Sorting", not "Sorting (sorting)")
+    name = it["title"] if not it["id"] or slugify(it["title"]) == it["id"] else \
         f"{it['title']} ({it['id']})"
     return f"{head}: {name} [{it['why']}]"
 
@@ -1143,12 +1151,16 @@ def _print_today(v: Vault, now: datetime, minutes: int | None = None) -> list[di
     items = planner.today(v, catalog, states, now=now)
     shown = planner.fit(items, minutes) if minutes else items
     for it in shown:
-        typer.echo(_today_line(it))
+        typer.echo(render.term(_today_line(it)))
     if minutes and shown:
         typer.echo(f"Time: {planner.budget_note(shown, minutes)}")
-    if not items:
+    if not items:  # "done" only after work today; a vault never graded gets first steps
+        events = list(EventLog(v).iter_events())
         typer.echo("Nothing planned yet.")
-        typer.echo("Done for today ✓")
+        if not any(e.get("kind") == "grade" for e in events):
+            typer.echo(FIRST_STEPS)
+        elif any(e.get("day") == day for e in events):
+            typer.echo("Done for today ✓")
     return items
 
 
@@ -1187,6 +1199,8 @@ def dashboard(no_open: Annotated[bool, typer.Option("--no-open", help="Write it 
               vault: VaultOpt = None) -> None:
     """Write .cortex/dashboard.html and index.md, and open the dashboard in the browser."""
     v, now = _vault(vault), datetime.now(UTC)
+    pages = sum(len(v.note_paths(k)) for k in Vault.KIND_DIRS if k != "browse")
+    typer.echo(f"Building the dashboard ({pages:,} pages)…", err=True)  # a big vault takes a while
     path = dashboard_mod.write_dashboard(v, now=now, relayout=relayout)
     dashboard_mod.write_index(v, now=now)
     typer.echo(str(path))
@@ -1214,7 +1228,11 @@ def _problem(v: Vault, id: str) -> str:
 @log_app.command("result")
 @_errors
 def log_result(concept: str, outcome: Annotated[str, typer.Argument(help="pass|partial|fail")],
-               hints: int = 0, confidence: int | None = None, problem: str | None = None,
+               hints: Annotated[int, typer.Option(help="Hints you needed.")] = 0,
+               confidence: Annotated[int | None, typer.Option(
+                   help="How sure you were before checking, 1-4.")] = None,
+               problem: Annotated[str | None, typer.Option(
+                   help="The problem id it was about, if any.")] = None,
                vault: VaultOpt = None) -> None:
     """Log a graded result on a concept."""
     if outcome not in VERDICTS:
@@ -1233,14 +1251,15 @@ def log_result(concept: str, outcome: Annotated[str, typer.Argument(help="pass|p
 
 @log_app.command("solved")
 @_errors
-def log_solved(problem: str, hints: int = 0, vault: VaultOpt = None) -> None:
+def log_solved(problem: str, hints: Annotated[int, typer.Option(help="Hints you needed.")] = 0,
+               vault: VaultOpt = None) -> None:
     """Log a solved problem (a correct verdict on its primary concept)."""
     v = _vault(vault)
     _problem(v, problem)
     EventLog(v).append(session="cli", kind="log", source="external", fields={
         "object": f"problem:{problem}", "payload": {
             "kind": "problem_status", "problem": problem, "status": "solved", "hints": hints}})
-    v.set_field("problem", problem, "status", "solved")  # the planner reads the note (SPEC §5)
+    v.set_field("problem", problem, "status", "solved")  # the planner reads the note
     v.set_field("problem", problem, "solved_on", local_day(datetime.now(UTC)))
     typer.echo(f"logged solved on problem:{problem}")
 
@@ -1249,8 +1268,14 @@ def log_solved(problem: str, hints: int = 0, vault: VaultOpt = None) -> None:
 @_errors
 def log_assessment_cmd(id: str, outcome: Annotated[str, typer.Option(
                            help="pass|fail|pending|unknown")],
-                       score: str | None = None, company: str | None = None,
-                       kind: str | None = None, date: str | None = None,
+                       score: Annotated[str | None, typer.Option(
+                           help="Your score as written, e.g. 7/10.")] = None,
+                       company: Annotated[str | None, typer.Option(
+                           help="Who set the test.")] = None,
+                       kind: Annotated[str | None, typer.Option(
+                           help="The kind of test, e.g. oa, interview, exam.")] = None,
+                       date: Annotated[str | None, typer.Option(
+                           help="The test's date (YYYY-MM-DD).")] = None,
                        weak: Annotated[str | None, typer.Option(help="a,b,c")] = None,
                        vault: VaultOpt = None) -> None:
     """Log an assessment result; creates the assessment note if it is missing."""
@@ -1277,11 +1302,17 @@ def log_taught(concept: str, vault: VaultOpt = None) -> None:
 
 @concept_app.command("add")
 @_errors
-def concept_add(title: str, parent: str | None = None,
+def concept_add(title: str,
+                parent: Annotated[str | None, typer.Option(
+                    help="The parent id (a domain for an area, an area for a concept).")] = None,
                 kind: Annotated[str, typer.Option(help="domain|area|concept")] = "concept",
-                alias: Annotated[list[str] | None, typer.Option()] = None,
-                requires: Annotated[list[str] | None, typer.Option()] = None,
-                force: bool = False, vault: VaultOpt = None) -> None:
+                alias: Annotated[list[str] | None, typer.Option(
+                    help="Another name for it; repeat for more.")] = None,
+                requires: Annotated[list[str] | None, typer.Option(
+                    help="A concept id it builds on; repeat for more.")] = None,
+                force: Annotated[bool, typer.Option(
+                    help="Add it even when a similar concept exists.")] = False,
+                vault: VaultOpt = None) -> None:
     """Add a domain, area or concept to the catalog and create its note."""
     v = _vault(vault)
     try:
@@ -1365,7 +1396,10 @@ def catalog_sync_cmd(vault: VaultOpt = None) -> None:
 
 @app.command()
 @_errors
-def replay(dry_run: bool = False, all_: Annotated[bool, typer.Option("--all")] = False,
+def replay(dry_run: Annotated[bool, typer.Option(
+               help="Print a diff of what would change; write nothing.")] = False,
+           all_: Annotated[bool, typer.Option(
+               "--all", help="Show every changed line, not 25 per group.")] = False,
            vault: VaultOpt = None) -> None:
     """Recompute all states and rewrite cortex_status/cortex_next where they changed.
 
@@ -1419,7 +1453,9 @@ def replay(dry_run: bool = False, all_: Annotated[bool, typer.Option("--all")] =
 
 @app.command()
 @_errors
-def backup(to: Path | None = None, vault: VaultOpt = None) -> None:
+def backup(to: Annotated[Path | None, typer.Option(
+               help="Folder for the zip; default .cortex/backups in the vault.")] = None,
+           vault: VaultOpt = None) -> None:
     """Zip the whole vault (with .git) to .cortex/backups or --to DIR."""
     v = _vault(vault)
     dest = backup_mod.backup(v.root, to)
@@ -1615,7 +1651,8 @@ def exclude_list() -> None:
 
 @app.command("access")
 @_errors
-def access_cmd(days: int = 30, vault: VaultOpt = None) -> None:
+def access_cmd(days: Annotated[int, typer.Option(help="How many days back to list.")] = 30,
+               vault: VaultOpt = None) -> None:
     """List act-as-me reads and drafts from the access log, oldest first."""
     from cortex import delegation
 
@@ -1629,7 +1666,7 @@ def access_cmd(days: int = 30, vault: VaultOpt = None) -> None:
         typer.echo(f"no access in the last {days} days")
 
 
-# ---- semantic recall (SPEC §0 U7) ------------------------------------------------
+# ---- semantic recall ------------------------------------------------
 
 
 def _dir_mb(d: Path) -> float:
@@ -1716,7 +1753,11 @@ def model_status(vault: VaultOpt = None) -> None:
 
 @app.command("recall")
 @_errors
-def recall_cmd(query: str, limit: int = 8, hops: int = 1, vault: VaultOpt = None,
+def recall_cmd(query: str,
+               limit: Annotated[int, typer.Option(help="Show at most this many hits.")] = 8,
+               hops: Annotated[int, typer.Option(
+                   help="Also follow links up to this many steps from each hit (0-2).")] = 1,
+               vault: VaultOpt = None,
                explain: bool = typer.Option(False, help="Print each hit's score parts."),
                show_misses: bool = typer.Option(
                    False, help="Also list the next 5 pages that missed the cut, and why.")) -> None:
@@ -1734,8 +1775,8 @@ def recall_cmd(query: str, limit: int = 8, hops: int = 1, vault: VaultOpt = None
     parts, misses = semantic.explained(idx, ex, hits, 5 if show_misses else 0) if ex is not None \
         else ([], [])
     for k, h in enumerate(hits):
-        typer.echo(f"{h['score']:.3f}  {h['match']:<7}  {h['id']} — {h['title']}"
-                   + (f"  (via {h['via']})" if "via" in h else ""))
+        typer.echo(render.term(f"{h['score']:.3f}  {h['match']:<7}  {h['id']} — {h['title']}"
+                               + (f"  (via {h['via']})" if "via" in h else "")))
         if explain:
             typer.echo("         " + _parts(parts[k]))
     if not hits:
@@ -1762,9 +1803,9 @@ def ask_cmd(question: str, vault: VaultOpt = None) -> None:
     if "error" in out:
         typer.echo(out["message"], err=True)
         raise typer.Exit(1)
-    typer.echo(out["answer"])
+    typer.echo(render.term(out["answer"]))
     for s in out["sources"]:
-        typer.echo(f"[{s['n']}] {s['path']}")
+        typer.echo(render.term(f"[{s['n']}] {s['path']}"))
     typer.echo(f"answered by {out['model']}")
 
 
@@ -1786,7 +1827,7 @@ def _parts(p: dict) -> str:
 
 @eval_app.callback(invoke_without_command=True)
 def eval_main(ctx: typer.Context, k: int = 8, vault: VaultOpt = None) -> None:
-    """Measure ranking on logged usage; bare `cortex eval` runs `all` (review r4 S2)."""
+    """Measure ranking on logged usage; bare `cortex eval` runs `all`."""
     if ctx.invoked_subcommand is None:
         eval_all(k, vault)
     elif vault is not None or k != 8:  # the subcommand has its own options; never drop them
@@ -1796,7 +1837,8 @@ def eval_main(ctx: typer.Context, k: int = 8, vault: VaultOpt = None) -> None:
 
 @eval_app.command("recall")
 @_errors
-def eval_recall(k: int = 8, vault: VaultOpt = None) -> None:
+def eval_recall(k: Annotated[int, typer.Option(help="Score the top k hits.")] = 8,
+                vault: VaultOpt = None) -> None:
     """Replay logged recall queries (relevant = pages opened after them) through each ranking
     variant: recall@k and MRR."""
     from cortex import recall_log, semantic
@@ -1836,7 +1878,8 @@ def eval_learning(since: Annotated[str | None, typer.Option(
 
 @eval_app.command("all")
 @_errors
-def eval_all(k: int = 8, vault: VaultOpt = None) -> None:
+def eval_all(k: Annotated[int, typer.Option(help="Score the top k recall hits.")] = 8,
+             vault: VaultOpt = None) -> None:
     """Recall and learning evals in one report; appends its numbers (never queries or text) to
     .cortex/eval-history.jsonl and prints deltas against an earlier run from another commit on
     the same day and index. Run it before and after a tuning change."""
@@ -1891,8 +1934,13 @@ def topics_status(vault: VaultOpt = None) -> None:
 
 @topics_app.command("attach")
 @_errors
-def topics_attach(dry_run: DryRun = False, margin: float | None = None,
-                  floor: float | None = None,
+def topics_attach(dry_run: DryRun = False,
+                  margin: Annotated[float | None, typer.Option(
+                      help="How far the best hub must beat the next one (default 0.02).")]
+                  = None,
+                  floor: Annotated[float | None, typer.Option(
+                      help="The lowest similarity that still files a page (default 0.80).")]
+                  = None,
                   limit: Annotated[int | None, typer.Option(
                       help="Try a seeded sample of N unfiled pages.")] = None,
                   vault: VaultOpt = None) -> None:
@@ -1987,7 +2035,10 @@ def topics_split(hub: Annotated[str | None, typer.Argument(help="The hub to spli
 
 @topics_app.command("eval")
 @_errors
-def topics_eval(margins: str = "0.01,0.02,0.03", floor: float | None = None,
+def topics_eval(margins: Annotated[str, typer.Option(
+                    help="Comma-separated margins to try.")] = "0.01,0.02,0.03",
+                floor: Annotated[float | None, typer.Option(
+                    help="The similarity floor (default 0.80).")] = None,
                 splits: Annotated[bool, typer.Option(
                     "--splits", help="Score the hand-made splits against automatic ones "
                     "instead.")] = False,
@@ -2033,7 +2084,7 @@ app.add_typer(harvest_app, name="harvest")
 
 
 @harvest_app.command("status")
-@eval_app.command("harvest", hidden=True)  # review r4 S3: now `harvest status`
+@eval_app.command("harvest", hidden=True)  # now `harvest status`
 @_errors
 def harvest_status(since: Annotated[str | None, typer.Option(
                      help="Only harvests on or after this local day (YYYY-MM-DD).")] = None,
@@ -2121,7 +2172,7 @@ def export_context_cmd(out: Annotated[Path | None, typer.Argument(
                    "/cortex reflect to export them.", err=True)
 
 
-# ---- the Cortex app (docs/design/cortex-app.md) ----------------------------------------------
+# ---- the Cortex app ----------------------------------------------
 
 @app.command("app")
 def app_cmd(vault: VaultOpt = None,
@@ -2137,7 +2188,7 @@ def app_cmd(vault: VaultOpt = None,
                echo=typer.echo)
 
 
-# ---- browse brain (docs/design/browse-brain.md): browsing, processed on this machine only ----
+# ---- browse brain: browsing, processed on this machine only ----
 
 browse_app = typer.Typer(no_args_is_help=True, help="Your browser history as Cortex pages, "
                          "read and filtered on this machine only.")

@@ -55,7 +55,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 |---|---|
 | `/cortex save` | Saves what's worth keeping from **this** chat (you approve the list first) |
 | `/cortex history` | Saves older Claude Code chats from this laptop, a few at a time |
-| `/cortex harvest` | Distils your **3,650 imported chats** (Gemini, Perplexity, Claude) into a few good pages, see below |
+| `/cortex harvest` | Distils your **imported chats** (Gemini, Perplexity, Claude) into a few good pages, see below |
 
 ### About you
 | Command | What it does |
@@ -67,7 +67,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 
 ## 3. Harvest, explained
 
-Your vault holds 3,650 chats imported from Gemini, Perplexity and Claude. They are raw transcripts: searchable, but nothing has been learned from them.
+Chats you import from Gemini, Perplexity and Claude are raw transcripts: searchable, but nothing has been learned from them.
 
 `/cortex harvest` turns them into knowledge, about 10 minutes a night:
 1. Cortex gives the chat a **bundle**: whole topic hubs (for example "SQL and databases"), about 12 chats at a time, placement topics first. Only **your own messages** are shown.
@@ -77,13 +77,13 @@ Your vault holds 3,650 chats imported from Gemini, Perplexity and Claude. They a
 
 It never edits or deletes an imported chat, and it never counts an old chat as a revision today. `cortex harvest status` shows progress and the undo command for each run.
 
-Is it worth it now? It's not urgent before placements. Try it on an evening when you're too tired to study.
+Is it worth it now? It's not urgent while a test is close. Try it on an evening when you're too tired to study.
 
 ---
 
 ## 4. Terminal commands worth knowing
 
-Run these in a terminal from the Cortex folder, always as `uv run cortex …`.
+Run these in any terminal. From a source checkout, prefix `uv run`.
 
 | Command | What it does |
 |---|---|
@@ -110,13 +110,13 @@ Run these in a terminal from the Cortex folder, always as `uv run cortex …`.
 
 ### Importing your history
 
-Get the export from the service, then run `uv run cortex import <the .zip, folder or file>`. It takes chat exports (claude.ai, ChatGPT, Gemini, Perplexity), notes (Obsidian, Notion, any folder of .md or .txt), a calendar (.ics) and Google activity (Takeout), and works out which one it got. If it can't, add `--source` with `claude`, `chatgpt`, `gemini`, `perplexity`, `google-activity`, `obsidian`, `notion`, `notes` or `calendar`. `--dry-run` prints the counts and writes nothing; `--private` makes the imported notes or calendar pages private.
+Get the export from the service, then run `cortex import <the .zip, folder or file>`. It takes chat exports (claude.ai, ChatGPT, Gemini, Perplexity), notes (Obsidian, Notion, any folder of .md or .txt), a calendar (.ics) and Google activity (Takeout), and works out which one it got. If it can't, add `--source` with `claude`, `chatgpt`, `gemini`, `perplexity`, `google-activity`, `obsidian`, `notion`, `notes` or `calendar`. `--dry-run` prints the counts and writes nothing; `--private` makes the imported notes or calendar pages private.
 
-Secrets are redacted on import. Importing a newer chat export again replaces the older copy instead of adding a duplicate; notes and events already imported are skipped. A large ChatGPT or claude.ai export split into several `conversations*.json` files is read whole; a conversation in two of them is kept once, its newest copy. Then run `/cortex` to learn from the chats. Imported notes and calendar months become pages in `resources/` that Claude can read, unless a note's frontmatter marks it private (`private: true`, `yes` or `on`, or a `private` tag) or you used `--private` ([PRIVACY.md](PRIVACY.md)). `uv run cortex import-chats` still imports chat exports only.
+Secrets are redacted on import. Importing a newer chat export again replaces the older copy instead of adding a duplicate; notes and events already imported are skipped. A large ChatGPT or claude.ai export split into several `conversations*.json` files is read whole; a conversation in two of them is kept once, its newest copy. Then run `/cortex` to learn from the chats. Imported notes and calendar months become pages in `resources/` that Claude can read, unless a note's frontmatter marks it private (`private: true`, `yes` or `on`, or a `private` tag) or you used `--private` ([PRIVACY.md](PRIVACY.md)). `cortex import-chats` still imports chat exports only.
 
 Every import ends with a report line, for example `Obsidian: read 10, imported 6, private 3, duplicate 0, skipped 4 (3 not a note, 1 over 5 MB)`: the items read, imported, made private, already imported (or twice in the export), and skipped, with the reason.
 
-To turn imported chats into context, run `uv run cortex digest` when you want to. It lists each chat imported since your last digest with up to 3 topics from your catalog that it seems to be about (local search, no AI model; private topics are never proposed), and asks about each one. A yes records a topic touch: context for your plan, never a grade, so a topic's level moves only after a real check. The listed chats are not shown again. `--dry-run` only lists, `--yes` accepts every topic shown, and `--since DATE` and `--limit N` (default 10) narrow the list. Claude Code chats are left out: a connected Claude records topics as you talk.
+To turn imported chats into context, run `cortex digest` when you want to. It lists each chat imported since your last digest with up to 3 topics from your catalog that it seems to be about (local search, no AI model; private topics are never proposed), and asks about each one. A yes records a topic touch: context for your plan, never a grade, so a topic's level moves only after a real check. The listed chats are not shown again. `--dry-run` only lists, `--yes` accepts every topic shown, and `--since DATE` and `--limit N` (default 10) narrow the list. Claude Code chats are left out: a connected Claude records topics as you talk.
 
 The steps below match `GUIDES` in `src/cortex/chats.py` and `src/cortex/importers.py`.
 
@@ -145,7 +145,7 @@ Gemini's export has no conversation ids, so prompts become one chat until 30 min
 3. Download the .zip from Perplexity's email soon: the link expires.
 4. For a few threads only: open each one, choose Export > Markdown from its menu, and save the .md files in one folder.
 
-**Google activity (Search, YouTube and Chrome).** Wait: usually the same day, up to a few days. Keep the Takeout .zip as it is. Its rows go through the browse privacy filter and land private by default, under the browse rules in section 6. `uv run cortex import <the .zip>` imports them (so does `cortex browse import --takeout`). Takeouts in English, Spanish, Portuguese, French, German, Hindi, Indonesian and Japanese are read; in other languages, rows whose date or product Cortex cannot read are skipped (HTML ones are counted).
+**Google activity (Search, YouTube and Chrome).** Wait: usually the same day, up to a few days. Keep the Takeout .zip as it is. Its rows go through the browse privacy filter and land private by default, under the browse rules in section 6. `cortex import <the .zip>` imports them (so does `cortex browse import --takeout`). Takeouts in English, Spanish, Portuguese, French, German, Hindi, Indonesian and Japanese are read; in other languages, rows whose date or product Cortex cannot read are skipped (HTML ones are counted).
 1. Open takeout.google.com and click Deselect all.
 2. Tick My Activity, click All activity data included, click Deselect all, tick Search, YouTube and Chrome, then OK.
 3. Leave Activity records as HTML (the default) or set them to JSON under Multiple formats; Cortex reads both.
@@ -212,27 +212,27 @@ Cortex can turn your browser history into pages, so it knows what you have been 
 - By default every sensitive category (health, money, betting, dating, sexuality, drugs, self-harm and adult) is private, and adult is not saved at all.
 - It reads Chrome, Edge, Brave and Firefox on Windows, macOS and Linux (and Comet on Windows).
 
-**Steps** (from the Cortex folder)
-1. `uv run cortex browse selftest` runs the whole import on made-up history in a temp folder, never your vault or your browsers. Each check prints PASS or FAIL; the last line says whether all passed.
-2. `uv run cortex browse scan` shows counts only: per browser and profile, visits kept, private and dropped, whether Comet was found, and the date range. It writes nothing.
-3. `uv run cortex browse import --dry-run` does everything except writing and prints how many day pages it would write.
-4. `uv run cortex browse import` writes a private page per day with your topics and time at the top, then the titles, searches, videos and sites. With `visible_to_claude: true` it also writes a public page per day with your topics and time. It prints a line per browser (counts only) and a summary; its last line says which mode ran. You can run it again safely, and Ctrl+C is safe too.
+**Steps**
+1. `cortex browse selftest` runs the whole import on made-up history in a temp folder, never your vault or your browsers. Each check prints PASS or FAIL; the last line says whether all passed.
+2. `cortex browse scan` shows counts only: per browser and profile, visits kept, private and dropped, whether Comet was found, and the date range. It writes nothing.
+3. `cortex browse import --dry-run` does everything except writing and prints how many day pages it would write.
+4. `cortex browse import` writes a private page per day with your topics and time at the top, then the titles, searches, videos and sites. With `visible_to_claude: true` it also writes a public page per day with your topics and time. It prints a line per browser (counts only) and a summary; its last line says which mode ran. You can run it again safely, and Ctrl+C is safe too.
    - If a browser is open and its history can't be copied, it says so and goes on with the others. Close that browser and run it again.
-   - If it says the embedding model isn't downloaded, every page lands under "Other" on the private page. Run `uv run cortex model download`, then import again with `--since` to redo old days.
-5. `uv run cortex browse status` shows the mode, the last run, and the last read per browser.
-6. `uv run cortex browse deepen` gives your local AI time with your sites (see below).
-7. `uv run cortex browse forget --site <domain>` (or `--category <name>`, for example `--category health`) removes that site or category from everything Cortex stored: day and site pages (private ones too), visit counts, search vectors, site summaries and the extension's archive. It prints what it removed. Add the site to `deny_domains` as well, or the next import reads it again from your browser.
+   - If it says the embedding model isn't downloaded, every page lands under "Other" on the private page. Run `cortex model download`, then import again with `--since` to redo old days.
+5. `cortex browse status` shows the mode, the last run, and the last read per browser.
+6. `cortex browse deepen` gives your local AI time with your sites (see below).
+7. `cortex browse forget --site <domain>` (or `--category <name>`, for example `--category health`) removes that site or category from everything Cortex stored: day and site pages (private ones too), visit counts, search vectors, site summaries and the extension's archive. It prints what it removed. Add the site to `deny_domains` as well, or the next import reads it again from your browser.
 
 **One page per website.** Each import also writes a page per site you visited, in a folder per category: `browse/sites/<category>/` for what Claude may see, and the private folder for hidden categories. A site with some hidden visits (a video site, say) gets both: the visible page never counts or names the hidden ones. Each page has the visits, first and last seen, top pages, the searches that led there, related sites and links to your topics. `browse/browse-profile.md` sums it up: when you browse (by hour and weekday), top categories and sites, interests and months. The private profile adds the hidden categories, with their top sites and searches. `browse/sites.csv` lists the sites for a spreadsheet.
 
-**The first big run** (for example Comet since 1 August, with LM Studio's Qwen 3.5 2B):
-1. `uv run cortex browse import --browser comet --since 2026-08-01` writes the day and site pages. Sites the built-in table doesn't know go under `other` for now.
-2. `uv run cortex browse deepen` lets the local AI sort the `other` sites into categories, write a one-line description per site and suggest related sites and topics, most visited sites first. It stops when its time runs out (`localllm.budget_s`, or `--budget-s 3600` for an hour) and remembers where it stopped, so run it again to go on. Ctrl+C keeps what it has done. The receiver (`cortex browse serve`) runs it by itself after 30 minutes without browsing.
+**The first big run** (for example one browser's history since a start date, with a small local model):
+1. `cortex browse import --browser chrome --since 2026-08-01` writes the day and site pages. Sites the built-in table doesn't know go under `other` for now.
+2. `cortex browse deepen` lets the local AI sort the `other` sites into categories, write a one-line description per site and suggest related sites and topics, most visited sites first. It stops when its time runs out (`localllm.budget_s`, or `--budget-s 3600` for an hour) and remembers where it stopped, so run it again to go on. Ctrl+C keeps what it has done. The receiver (`cortex browse serve`) runs it by itself after 30 minutes without browsing.
 
 **Optional: a local AI for summaries and `deepen`**
 Run `cortex app` → Setup. It finds or installs a runner (Ollama is recommended; LM Studio is the alternative), suggests a model that fits this computer, downloads it, tests it with a made-up sentence and turns it on.
 
-Without the app: install Ollama, run `ollama pull qwen3.5:4b` (`qwen3.5:2b` with under 6 GB of graphics memory or RAM, `qwen3.5:9b` with 10 GB or more), then add `localllm: {enabled: true}` to `~/.cortex/config.yaml` (for LM Studio, `localllm: {enabled: true, runner: lmstudio}`). `uv run cortex llm status` checks it.
+Without the app: install Ollama, run `ollama pull qwen3.5:4b` (`qwen3.5:2b` with under 6 GB of graphics memory or RAM, `qwen3.5:9b` with 10 GB or more), then add `localllm: {enabled: true}` to `~/.cortex/config.yaml` (for LM Studio, `localllm: {enabled: true, runner: lmstudio}`). `cortex llm status` checks it.
 
 It only talks to your own machine. For a public day page it hears your topic names only; for a site, that site's page titles. It can move a site into a sensitive category, never out of one. Without it, the summary line lists your top topics and unknown sites stay under `other`.
 
@@ -244,13 +244,13 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 - **Settings** (Chat settings, top right; saved under `chat:` in `~/.cortex/config.yaml`): answer length (short, normal, long), creativity (0 to 1, default 0.2), pages read per answer (4 to 12, default 8), which sources to search (notes, saved AI chats, browsing, private browsing), and Keep chat history.
 - **History:** each chat is a file in `<vault>/.cortex/browse/chat/`, inside the private browse folder: never shown to Claude or any other AI app, never on the dashboard. Delete one with its Delete button, or all with Chat settings → Delete all chats. With Keep chat history off, new chats are never written and are forgotten when the app stops.
 
-With no local model or no search model, Chat shows what is missing with a button to Setup. In a terminal, `uv run cortex ask "what did I read about binary search?"` answers one question the same way, without history.
+With no local model or no search model, Chat shows what is missing with a button to Setup. In a terminal, `cortex ask "what did I read about binary search?"` answers one question the same way, without history.
 
 **Optional: the browser extension**
 It adds time on screen and a short text excerpt of pages you read. It works in Chrome, Edge and Brave, and should work in Comet too (it is built on the same engine; not yet tried there). It never runs in private windows.
 1. Follow `extension/README.md` and use Load unpacked.
-2. Run `uv run cortex browse pair` and paste the token in the extension's popup.
-3. Keep `uv run cortex browse serve` running while you browse.
+2. Run `cortex browse pair` and paste the token in the extension's popup.
+3. Keep `cortex browse serve` running while you browse.
 
 **Settings** (in `~/.cortex/config.yaml`, under `browse:`)
 - `visible_to_claude: false` or `true`. The default is `false`: only private pages, and no journal lines, topic touches or dashboard pages from browsing. With `true`, the day pages (your topics, time and counts only), the site pages and profile of ordinary sites and of every sensitive category in `cloud_categories`, journal lines and topic touches are written too. Switching back to `false`, hiding or skipping one more category, or denying a site, removes what is no longer allowed on the next import, from older pages, visit counts and search vectors too.
@@ -265,14 +265,14 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
   `cloudllm: {provider: openrouter, model: <model>, api_key_env: OPENROUTER_API_KEY}`
   Providers: `openai`, `openrouter`, `gemini`, `anthropic`, or your own `https://` `base_url`. At most `max_items` calls a run (default 500); each run adds a counts-only line to `.cortex/cloud-log.jsonl`.
 
-**Google activity.** `uv run cortex browse import --takeout <Takeout zip or folder>` also reads your Google Search, YouTube and Chrome activity (Takeout → My Activity, as HTML or JSON), through the same filter. `uv run cortex import <the .zip>` does the same. Rows on days your browsers already hold are skipped, so nothing counts twice.
+**Google activity.** `cortex browse import --takeout <Takeout zip or folder>` also reads your Google Search, YouTube and Chrome activity (Takeout → My Activity, as HTML or JSON), through the same filter. `cortex import <the .zip>` does the same. Rows on days your browsers already hold are skipped, so nothing counts twice.
 
 ---
 
 ## 7. What to try, in order
 
-**This week (placements first):**
-1. **Date your 8 pending tests** in Obsidian (in `assessments/`, `date: 2026-12-01` if you don't know the day). Until then the exam clock, the extra revision near exams and the readiness forecast are all off.
+**This week:**
+1. **Date your pending tests** in Obsidian (in `assessments/`; a best guess like `date: 2026-12-01` if you don't know the day). Until then the exam clock, the extra revision near exams and the readiness forecast are all off.
 2. **`/cortex`** once, to see the home card.
 3. **`/cortex learn`** (or `/cortex learn <subject>`) as your daily session.
 4. **`/cortex sweep`** every few days, to catch topics you only *think* you know.
@@ -305,7 +305,7 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 | **Taught, not yet checked** | Explained but not tested; comes first next time |
 | **Hub / topic tree** | Topic pages that group your chats and notes (e.g. "SQL and databases") |
 | **Touch** | A mark that a chat was about a topic hub |
-| **Harvest** | Distilling imported chats into hub lines and notes (§3) |
+| **Harvest** | Distilling imported chats into hub lines and notes (`/cortex harvest`) |
 | **Sweep** | 10 mixed cold questions with "how sure?" |
 | **Mock** | The interview mode |
 | **Claim** | A line about you on a `me/` page, with an id |
@@ -324,8 +324,8 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 ## 9. Where things are
 
 - **Your vault:** your notes folder. In Obsidian, Ctrl+G shows the graph, coloured by subject.
-- **What changed and how to undo it:** `docs/design/v6/MORNING.md` in the Cortex repo.
-- **Your behaviour patterns:** the note `youtube-and-notebooklm-patterns`.
-- **Your decisions and open loops about Cortex:** the project page `cortex-k-graph`.
+- **What changed and how to undo it:** `cortex claims --unasked` lists what chats saved about you, each with its undo; `cortex undo <session>` reverts one chat.
+- **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
+- **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
 
 **One catch:** the Claude desktop **Chat tab** uses a separately uploaded copy of the skill, which predates `harvest`, `sweep` and `mock`. To get them there, run `uv run python scripts/build_skills.py` and upload `dist/cortex-skill.zip` again in Chat's skill settings. Claude Code already has them after a restart.

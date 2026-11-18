@@ -1,4 +1,4 @@
-"""The offline dashboard (SPEC §0 U2, §10; docs/design/dashboard.md).
+"""The offline dashboard.
 
 One self-contained `.cortex/dashboard.html`: the data blob, d3 v7 and the page script are
 inlined, and the CSP allows only those scripts by hash. Note text reaches the page as plain
@@ -13,12 +13,14 @@ import json
 import re
 import string
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 from cortex import (
     brainmap,
+    index,
     know,
     learning_eval,
     levels,
@@ -29,6 +31,7 @@ from cortex import (
     reflect,
     topics,
 )
+from cortex import vault as vault_mod
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.index import _edge_targets, link_targets
@@ -44,7 +47,7 @@ _SLOT = re.compile(r"\{\{(\w+)\}\}")
 BODY_MAX = 20 * 1024
 TRUNCATED = "\n\n*… truncated here; open the note in Obsidian for the rest.*\n"
 SHOWN_PROPS = 30  # list items and characters below are capped too, to keep the blob small
-REPO = Path(__file__).resolve().parents[2]  # the checkout; the help files are absent when installed
+REPO = Path(__file__).resolve().parents[2]  # a source checkout; installed, assets/help instead
 GLOSSARY = "The names, in plain words"  # the GUIDE heading after its number
 _NAME_RE = re.compile(r"\*\*Name:\*\*\s*(\S+)")
 UNFILED = "unfiled"
@@ -54,14 +57,21 @@ GROUP_TITLES = {"journal": "Journal", "you": "About you", "sessions": "Study ses
                 "media": "YouTube and NotebookLM", "chats": "Unsorted chats",
                 "browsing": "Browsing"}
 GROUPS = {"journal": "journal", "me": "you", "session": "sessions",  # page kind -> group lobe
-          "browse": "browsing",  # browse-brain.md §4; private browse pages are never read
+          "browse": "browsing",  # private browse pages are never read
           **dict.fromkeys(("assessment", "application", "track"), "placements")}
 NO_HUB = {"project": "projects", "decision": "projects", "loop": "projects", "person": "people"}
 MEDIA, CHATS = {"youtube", "notebooklm"}, {"claude", "gemini", "perplexity"}
 
 
 def _title(note) -> str:
+    if note.kind == "me" and not note.fields.get("title"):  # me/teaching-contract -> words
+        return note.id.replace("-", " ").capitalize()
     return plain(note.fields.get("title") or note.id) or note.id
+
+
+def _share(ready) -> float | None:
+    """planner.readiness's weighted share: a float, or a dict with `weighted` (or `share`)."""
+    return ready.get("weighted", ready.get("share")) if isinstance(ready, dict) else ready
 
 
 def _sprint(track) -> dict | None:
@@ -89,12 +99,13 @@ def _sprint(track) -> dict | None:
              "status": "upcoming" if cur is None or n > cur else "current" if n == cur
              else "done"} for n in range(1, last + 1)]
     pd = planner._day(track.fields.get("placement_date"))
-    return {"day": cur, "days": days, "placement_date": pd.isoformat() if pd else None,
+    return {"day": cur, "days": days, "title": _title(track),
+            "placement_date": pd.isoformat() if pd else None,
             "today_counts": {"done": done, "left": left}}
 
 
 def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
-    """The dashboard blob (docs/design/dashboard.md "Data blob"); private notes never enter it.
+    """The dashboard blob; private notes never enter it.
     `relayout` lays the brain out from scratch (brainmap)."""
     catalog = Catalog.load(vault)
     day = local_day(now)
@@ -138,7 +149,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
                 "score": plain(str(score)) if score is not None else None,
                 "readiness": {"solid": sum(state(c) == "solid" for c in tested),
                               "total": len(tested),
-                              "share": planner.readiness(vault, catalog, states, a),
+                              "share": _share(planner.readiness(vault, catalog, states, a)),
                               # a forecast beside the Solid share, only for a day still ahead
                               # and once calibrated, as on the home card; until then, why not
                               "forecast": planner.recall_on_day(vault, catalog, states, a, now)
@@ -254,10 +265,13 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
 
     return {
         "as_of": now.astimezone().isoformat(timespec="seconds"),
+        "day": day,  # the 04:00 Cortex day, which the calendar date in `as_of` is not
         "sprint": _sprint(next((t for t in notes["track"] if t.id not in private), None)),
         "counts": counts,
         "today": today,
-        "plan_cleared": not today,
+        # an empty plan is "done" only after work today; never graded at all is a first run
+        "plan_cleared": not today and any(e.get("day") == day for e in events),
+        "first_run": not today and not any(e.get("kind") == "grade" for e in events),
         "assessments": coming,
         "mistakes": mistakes,
         "graph": {"nodes": nodes, "links": links},
@@ -266,7 +280,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         "details": details,
         "history": {"weeks": weeks, "assessments": rows,
                     "mistakes": {"opened": moved("open"), "resolved": moved("resolved")}},
-        # council item 6: how often each stated confidence (1-4) was right; display-only
+        # how often each stated confidence (1-4) was right; display-only
         "confidence": learning_eval.confidence_mirror(events, pc, hidden),
         "owner": {"name": name} if name else None,
         "clusters": clusters,
@@ -299,16 +313,24 @@ def _plained(row: dict, *keys: str) -> dict:
     return row | {k: plain(row[k], 300) for k in keys if row.get(k) is not None}
 
 
+def _read_help(name: str, *repo_path: str) -> str | None:
+    """A help file: the wheel's copy (pyproject force-include), else the checkout's."""
+    for p in (ASSETS / "help" / name, REPO.joinpath(*repo_path)):
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    return None
+
+
 def _help() -> dict:
-    """The `/cortex help` reference and the GUIDE glossary table (trusted repo files)."""
-    cmds, guide = REPO / "skills" / "cortex" / "modes" / "help.md", REPO / "docs" / "GUIDE.md"
-    text = guide.read_text(encoding="utf-8") if guide.is_file() else ""
+    """The `/cortex help` reference and the GUIDE glossary table (trusted shipped files)."""
+    cmds = _read_help("help.md", "skills", "cortex", "modes", "help.md")
+    text = _read_help("GUIDE.md", "docs", "GUIDE.md") or ""
     # match the heading by name, so renumbering the guide's sections can't lose the glossary
     head = next((ln[3:].strip() for ln in text.splitlines()
                  if ln.startswith("## ") and ln.rstrip().endswith(GLOSSARY)), None)
     rows = [ln for ln in loops.section_text(text, head).splitlines()
             if ln.startswith("|")] if head else []
-    return {"commands_md": cmds.read_text(encoding="utf-8") if cmds.is_file() else None,
+    return {"commands_md": cmds,
             "glossary_md": "\n".join(rows) or None}
 
 
@@ -388,7 +410,7 @@ def _prop(v):
 
 def _pages(vault: Vault, notes: dict, hidden: set, catalog: Catalog, pc: dict
            ) -> tuple[list[dict], list[dict]]:
-    """Every non-private note for the reader view (phase4-wiki §8; `raw/` is not a kind), and
+    """Every non-private note for the reader view (`raw/` is not a kind), and
     the brain lobes (`_lobes`)."""
     keep = {}
     for ns in notes.values():
@@ -448,18 +470,48 @@ def render_html(data: dict) -> str:
     return _SLOT.sub(lambda m: slots[m.group(1)], read("dashboard.html.tmpl"))
 
 
+@contextmanager
+def _snapshot_parses(vault: Vault):
+    """Serve notes whose (mtime, size) still match the search index's snapshot from it, instead
+    of opening and YAML-parsing every file again (most of a big vault's build time). Scoped:
+    the entries leave the parse cache afterwards, so a later write in this process reads the
+    file itself. Snapshot values are JSON (a date is its ISO string); the build reads them as
+    text. Private entries hold no fields and are parsed as usual."""
+    added = {}
+    try:
+        files = json.loads((vault.root / index.SNAPSHOT).read_bytes())
+        files = files["files"] if files.get("schema") == index.SNAPSHOT_SCHEMA else {}
+    except (OSError, ValueError, AttributeError, KeyError):
+        files = {}
+    for e in files.values() if isinstance(files, dict) else ():
+        if not (isinstance(e, list) and len(e) == 6 and isinstance(e[4], dict)
+                and isinstance(e[5], str) and e[2] in Vault.KIND_DIRS and e[2] != "browse"):
+            continue
+        path = vault.root / Vault.KIND_DIRS[e[2]] / f"{e[3]}.md"
+        if path not in vault_mod._PARSED:
+            added[path] = vault_mod._PARSED[path] = ((e[0], e[1]), e[4], e[5])
+    try:
+        yield
+    finally:
+        for path, hit in added.items():
+            if vault_mod._PARSED.get(path) is hit:
+                del vault_mod._PARSED[path]
+
+
 def write_dashboard(vault: Vault, *, now: datetime, relayout: bool = False) -> Path:
     """Regenerate `<vault>/.cortex/dashboard.html`."""
-    return vault.write_text(vault.root / ".cortex" / "dashboard.html",
-                            render_html(build_data(vault, now=now, relayout=relayout)))
+    with _snapshot_parses(vault):
+        data = build_data(vault, now=now, relayout=relayout)
+    return vault.write_text(vault.root / ".cortex" / "dashboard.html", render_html(data))
 
 
 def write_index(vault: Vault, *, now: datetime) -> Path:
     """Regenerate `<vault>/index.md`, the one-file text map of every non-private page. Like
     the dashboard it is built on demand (`cortex dashboard`), never at session close."""
     catalog = Catalog.load(vault)
-    after, _ = planner.current_states(vault, local_day(now), catalog)
-    private = planner.hidden(vault, catalog)
-    notes = [n for n in vault.iter_notes() if not is_private(n) and n.id not in private]
-    return vault.write_text(vault.root / "index.md", index_md(
-        notes, catalog.entries, {c: s.state for c, s in after.items()}))
+    with _snapshot_parses(vault):
+        after, _ = planner.current_states(vault, local_day(now), catalog)
+        private = planner.hidden(vault, catalog)
+        notes = [n for n in vault.iter_notes() if not is_private(n) and n.id not in private]
+        text = index_md(notes, catalog.entries, {c: s.state for c, s in after.items()})
+    return vault.write_text(vault.root / "index.md", text)

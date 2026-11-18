@@ -1,4 +1,4 @@
-/* Night Platform (docs/design/dashboard-v2.md). Night is the default; day is airport yellow. */
+/* Night Platform. Night is the default; day is airport yellow. */
 :root, :root[data-theme="night"] {
   --ground: #0b0b0a; --panel: #141412; --band: #1b1a17; --band-ink: #ffb000;
   --rule: rgba(255, 176, 0, .16); --lit: #ffb000; --unlit: #3a2c10;

@@ -306,12 +306,54 @@ def test_today_prints_and_writes_today_md(vault):
     assert "Done for today" not in out  # open items: not done
 
 
-def test_today_says_done_only_with_no_items(vault, monkeypatch):
-    from cortex import planner
+def test_today_says_done_only_after_work_today(vault, monkeypatch):
+    from datetime import UTC, datetime
+
+    from cortex import cli, planner
 
     monkeypatch.setattr(planner, "today", lambda *a, **k: [])
+    out = run("today", "--vault", vault).output  # never graded: first steps, not "done"
+    assert out.splitlines()[1:3] == ["Nothing planned yet.", cli.FIRST_STEPS]
+    assert "Done for today" not in out
+    EventLog(Vault(vault)).append(session="cli", kind="grade", source="external",
+                                  now=datetime.now(UTC), fields={
+                                      "object": "concept:two-pointers", "verdict": "correct"})
     out = run("today", "--vault", vault).output
     assert out.splitlines()[1:3] == ["Nothing planned yet.", "Done for today ✓"]
+
+
+def test_today_line_skips_an_id_the_title_already_says():
+    from cortex.cli import _today_line
+
+    row = {"state": "not_started", "why": "New", "title": "Sorting", "id": "sorting"}
+    assert _today_line(row) == "○ Not started: Sorting [New]"
+    assert _today_line(row | {"id": "sort-algos"}) == "○ Not started: Sorting (sort-algos) [New]"
+
+
+def test_cli_prints_note_text_without_control_characters(vault, monkeypatch):
+    from cortex import planner
+
+    monkeypatch.setattr(planner, "today", lambda *a, **k: [{
+        "state": None, "why": "Sprint plan", "id": None, "kind": "track",
+        "title": "evil\x1b]8;;http://x\x07link\x1b[2J ‮esrever"}])
+    out = run("today", "--vault", vault).output
+    assert "\x1b" not in out and "\x07" not in out and "‮" not in out
+    assert "- Track item: evil]8;;http://xlink[2J esrever [Sprint plan]" in out
+
+
+def test_every_visible_option_has_help():
+    import typer
+
+    def walk(cmd, path):
+        if hasattr(cmd, "commands"):
+            for n, c in cmd.commands.items():
+                if not c.hidden:
+                    yield from walk(c, [*path, n])
+        else:
+            yield from (f"{' '.join(path)} {p.opts[0]}" for p in cmd.params
+                        if p.param_type_name == "option" and not p.help and not p.hidden)
+
+    assert list(walk(typer.main.get_command(app), [])) == []
 
 
 # ---- log --------------------------------------------------------------------------

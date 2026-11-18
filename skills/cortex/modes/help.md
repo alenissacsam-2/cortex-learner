@@ -47,7 +47,7 @@ No session: do not call `cortex_start`. `/cortex help <word>` (for example `help
 ## Without any command
 In every chat Cortex already knows you from your first message, saves what's durable (facts, sources, decisions, quiz answers) and tells you when it wrote something. Each chat's changes can be undone in one step.
 
-## Terminal (`uv run cortex …` in the Cortex folder)
+## Terminal (`cortex …` in any terminal; from a source checkout, prefix `uv run`)
 | Command | What it does |
 |---|---|
 | `today` / `brief` | Today's plan / brief, teaching contract and Today |

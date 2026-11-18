@@ -137,7 +137,7 @@ def test_dashboard_uses_webbrowser(root, monkeypatch):
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
     r = runner.invoke(app, ["dashboard", "--vault", str(root)])  # CLI-only since the merge
     assert r.exit_code == 0, r.output
-    assert opened == [Path(r.output.strip()).as_uri()]
+    assert opened == [Path(r.stdout.strip()).as_uri()]  # stderr carries the progress line
 
 
 def test_init_appends_workspace_ignore_once(root):

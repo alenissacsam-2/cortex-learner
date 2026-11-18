@@ -1,4 +1,4 @@
-/* Cortex dashboard, Night Platform (docs/design/dashboard-v2.md). Every note-derived string goes
+/* Cortex dashboard, Night Platform. Every note-derived string goes
    in with textContent (or d3 .text); nothing here parses HTML. */
 (() => {
   'use strict';
@@ -15,7 +15,7 @@
     ['refresh', 'Refresh'], ['new', 'Ready to learn']];
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const $ = (id) => document.getElementById(id);
-  const TODAY = D.as_of.slice(0, 10);
+  const TODAY = D.day || D.as_of.slice(0, 10);  // the 04:00 Cortex day, as `cortex today`
   const NAME = D.owner && D.owner.name ? D.owner.name : '';
   const SVGNS = d3.namespaces.svg;
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -180,7 +180,8 @@
     toast(ok ? 'Copied. Paste it into Claude.' : 'Copy failed. Select the text and copy it.');
   }
   const copyBtn = (prompt, cls) => iconBtn('copy', 'Copy: ' + prompt, () => copyText(prompt), cls);
-  const loopPrompt = (title) => `Let's work on this open loop from Cortex: ${title}`;
+  // copied text becomes the user's own message, so it carries ids only, never note titles
+  const loopPrompt = (id) => `Let's work on the open loop [[${id}]] from Cortex.`;
 
   /* ---- pages, lobes, platform codes ---- */
   const PAGES = new Map(D.pages.map((p) => [p.id, p]));
@@ -231,10 +232,10 @@
   }
   const dateOf = (p) => p.date || p.updated;
   function promptFor(p) {
-    if (p.kind === 'project') return `/cortex project ${p.title}`;
-    if (p.kind === 'concept') return `/cortex learn ${p.title}`;
-    if (p.kind === 'loop') return loopPrompt(p.title);
-    return `/cortex about ${p.title}`;
+    if (p.kind === 'project') return `/cortex project ${p.id}`;
+    if (p.kind === 'concept') return `/cortex learn ${p.id}`;
+    if (p.kind === 'loop') return loopPrompt(p.id);
+    return `/cortex about ${p.id}`;
   }
 
   /* ---- Markdown reader: DOM nodes only ---- */
@@ -263,7 +264,8 @@
   }
   const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
   // Block Markdown: headings, paragraphs, lists, fenced code, blockquotes, tables, rules.
-  function md(src) {
+  const QUOTE_DEPTH = 20;  // deeper quotes render as text: untrusted nesting must not blow the stack
+  function md(src, depth = 0) {
     const out = document.createDocumentFragment();
     const lines = src.replace(/\r\n?/g, '\n').split('\n');
     let para = [], list = null;
@@ -293,7 +295,7 @@
         for (; i < lines.length && lines[i].startsWith('>'); i++) q.push(lines[i].replace(/^>\s?/, ''));
         i--;
         const bq = el('blockquote');
-        bq.append(md(q.join('\n')));
+        bq.append(depth < QUOTE_DEPTH ? md(q.join('\n'), depth + 1) : el('p', null, q.join('\n')));
         out.append(bq);
       } else if (line.trim().startsWith('|') && /^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[i + 1] || '')) {
         flush();
@@ -592,7 +594,7 @@
       box.append(el('h4', null, 'File this chat under…'));
       for (const l of beacons) {
         const t = LOBES.get(l).title, b = button('btn', null,
-          () => copyText(`File the chat "${p.title}" under the topic "${t}" in Cortex.`));
+          () => copyText(`File the chat [[${p.id}]] under the topic [[${l.replace(/^domain:/, '')}]] in Cortex.`));
         b.append(icon('copy'), ' ' + t);
         b.title = `Copy: file this chat under ${t}`;
         row.append(b);
@@ -873,7 +875,7 @@
   if (!brainFailed) $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'));
   else noBrain();
 
-  /* ---- Look: the brain's style, generated from the renderer's schema (brain-v4.md §5) ---- */
+  /* ---- Look: the brain's style, generated from the renderer's schema ---- */
   const CB = window.CortexBrain || {};
   // an older brain3d.js has no schema: no Look button, nothing else changes
   const HAS_STYLE = !brainFailed && Array.isArray(CB.STYLE_SCHEMA) && Array.isArray(CB.PRESETS);
@@ -1074,7 +1076,7 @@
     if (l.due) bits.push('due ' + fmtDay(l.due));
     if (l.summary) bits.push(l.summary);
     return brow({ id: l.id, title: l.title, sub: bits.join(' · '), left: loopCode(l.loop_type),
-      prompt: loopPrompt(l.title), brainId: l.id });
+      prompt: loopPrompt(l.id), brainId: l.id });
   }
   const fromWhen = (id) => {
     const p = PAGES.get(id), d = p && dateOf(p);
@@ -1082,17 +1084,25 @@
   };
   function resurfaceRow(r) {
     return brow({ id: r.id, title: r.title, sub: [fromWhen(r.id), r.summary].filter(Boolean).join(' · '),
-      left: el('span', 'kind', kindWord(r.kind)), prompt: `/cortex about ${r.title}`, brainId: r.id });
+      left: el('span', 'kind', kindWord(r.kind)), prompt: `/cortex about ${r.id}`, brainId: r.id });
   }
   function followRow(f) {
     return brow({ id: f.id, title: f.title, sub: 'revisit on ' + fmtDay(f.review_on),
-      left: el('span', 'code', 'DEC'), prompt: loopPrompt(f.title), brainId: f.id });
+      left: el('span', 'code', 'DEC'), prompt: loopPrompt(f.id), brainId: f.id });
   }
   function boardList(b, rows, cap, empty, more) {
     if (!rows.length) b.body.append(el('p', 'empty', empty));
     for (const r of rows.slice(0, cap)) b.body.append(r);
     if (more && rows.length > cap) b.root.append(moreFoot(rows.length - cap, more[0], more[1]));
     return b.root;
+  }
+  // One readiness metric on Home and Study: the weighted Solid share, named as such, beside
+  // the plain topic count (the two differ when topics carry different weights).
+  function readiness(r) {
+    const topics = `${r.solid} of ${plural(r.total, 'topic')}`;
+    if (r.share == null) return { pct: Math.round(100 * r.solid / r.total), label: `${topics} solid` };
+    const pct = Math.round(100 * r.share);
+    return { pct, label: `${pct}% of the test's weight solid · ${topics}` };
   }
   function assessRow(a) {
     const r = el('div', 'brow');
@@ -1104,10 +1114,10 @@
     const rd = a.readiness;
     if (rd.total) {
       const bar = el('div', 'bar'), fill = el('span');
-      const label = `${rd.solid} of ${rd.total} tested topics solid`;
+      const { pct, label } = readiness(rd);
       bar.setAttribute('role', 'img');
       bar.setAttribute('aria-label', label);
-      fill.style.width = Math.round(100 * rd.solid / rd.total) + '%';
+      fill.style.width = pct + '%';
       bar.append(fill);
       ready.append(bar, el('span', 'sub', label));
     } else ready.append(el('span', 'sub', 'No tested topics recorded'));
@@ -1116,9 +1126,21 @@
     const n = a.days_left;
     acts.append(n == null ? el('span', 'sub', 'date not set') : dm(n === 0 ? 'TODAY' : `IN ${n}D`, 2,
       n === 0 ? 'today' : `in ${plural(n, 'day')}`));
-    acts.append(copyBtn(`/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim()));
+    acts.append(copyBtn(`/cortex mock ${a.id}`));
     r.append(t, acts);
     return r;
+  }
+
+  // Nothing planned and nothing ever checked: three first steps instead of "Done for today".
+  function firstRunBoard() {
+    const b = board('Start here', { cls: 'first-run' });
+    const steps = [
+      ['Add a test date', 'Tell any Claude chat about a test and its date, or add one in assessments/.', null],
+      ['Run /cortex in Claude', 'Your home card, what is due and what is waiting for you.', '/cortex'],
+      ['Import your notes or chats', 'In a terminal: cortex import <your export, notes folder or .ics>.', null]];
+    steps.forEach(([title, sub, prompt], i) => b.body.append(brow({ title, sub, prompt,
+      left: el('span', 'code', String(i + 1)) })));
+    return b.root;
   }
 
   /* ---- Home ---- */
@@ -1128,24 +1150,24 @@
       if (a.days_left == null || a.days_left < 0 || a.days_left > 2) continue;
       items.push({ time: a.days_left === 0 ? 'TODAY' : `IN ${a.days_left}D`, id: a.id,
         title: [a.company || a.id, a.kind].filter(Boolean).join(' · '), why: 'Assessment',
-        lobe: pageLobe(a.id), word: 'DUE', prompt: `/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim() });
+        lobe: pageLobe(a.id), word: 'DUE', prompt: `/cortex mock ${a.id}` });
     }
     const groupOf = Object.fromEntries(GROUPS);
     for (const i of D.today) {
       items.push({ time: i.kind === 'unchecked' || i.kind === 'asked' ? 'NOW' : 'NEXT', id: i.id, title: i.title,
         why: i.why || groupOf[i.kind] || '', lobe: pageLobe(i.id), state: i.state,
-        prompt: i.kind === 'refresh' ? '/cortex review' : `/cortex learn ${i.title}` });
+        prompt: i.kind === 'refresh' ? '/cortex review' : i.id ? `/cortex learn ${i.id}` : '/cortex learn' });
     }
     const dated = (d) => (d === TODAY ? 'TODAY' : fmtDay(d).toUpperCase());
     for (const l of D.loops) {
       if (!isDay(l.due) || l.due > TODAY) continue;
       items.push({ time: dated(l.due), id: l.id, title: l.title, why: 'Open loop', lobe: pageLobe(l.id),
-        word: 'OPEN', prompt: loopPrompt(l.title) });
+        word: 'OPEN', prompt: loopPrompt(l.id) });
     }
     for (const f of D.follow_ups) {
       if (!isDay(f.review_on) || f.review_on > TODAY) continue;
       items.push({ time: dated(f.review_on), id: f.id, title: f.title, why: 'Decision to revisit',
-        lobe: pageLobe(f.id), word: 'DUE', prompt: loopPrompt(f.title) });
+        lobe: pageLobe(f.id), word: 'DUE', prompt: loopPrompt(f.id) });
     }
     return items;
   }
@@ -1185,7 +1207,7 @@
     if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due.'));
     else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
     else b.root.append(el('div', 'foot', 'That is everything due today.'));
-    host.replaceChildren(b.root);
+    host.replaceChildren(D.first_run && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, once
       flicked = true;
       times.forEach((d, k) => {
@@ -1393,7 +1415,9 @@
     arch.title = 'Show the unsorted chats as a faint ring under the brain';
     arch.setAttribute('aria-pressed', String(archiveOn));
     const months = [];
-    const dates = D.pages.map((p) => p.date).filter(isDay).sort();
+    // a typo like 0001-01-01 or 9999-12-31 must not make the slider thousands of months long
+    const latest = String(+TODAY.slice(0, 4) + 1) + TODAY.slice(4);
+    const dates = D.pages.map((p) => p.date).filter((d) => isDay(d) && d >= '1990' && d <= latest).sort();
     if (dates.length) {
       let y = +dates[0].slice(0, 4), m = +dates[0].slice(5, 7);
       const end = dates[dates.length - 1].slice(0, 7);
@@ -1677,7 +1701,7 @@
     };
     if (!me.length) lb.body.append(el('p', 'empty', 'No me/ pages yet. Tell any Claude chat about yourself.'));
     for (const p of me) {
-      const r = brow({ id: p.id, title: p.title, sub: p.summary || '', prompt: `/cortex about ${p.title}`, brainId: p.id });
+      const r = brow({ id: p.id, title: p.title, sub: p.summary || '', prompt: `/cortex about ${p.id}`, brainId: p.id });
       const peek = iconBtn('chevron', 'Show beside the list', () => showMe(p));
       r.lastChild.prepend(peek);
       lb.body.append(r);
@@ -1688,7 +1712,7 @@
     host.append(g2);
 
     host.append(el('h2', null, 'Patterns'));
-    const pats = D.pages.filter((p) => p.id === 'youtube-and-notebooklm-patterns' || p.tags.includes('patterns'));
+    const pats = D.pages.filter((p) => p.tags.includes('patterns'));
     host.append(boardList(board('Patterns Cortex has noticed'), pats.map((p) => brow({ id: p.id, title: p.title,
       sub: p.summary || '', brainId: p.id })), 50,
     'No pattern notes yet. Ask a Claude chat to look for patterns in your imports.'));
@@ -1723,8 +1747,9 @@
     host.append(el('p', 'muted', `Pages by the day they were written, newest month first${months.length === 48 ? ' (the last 48 months)' : ''}. Every month uses the same scale.`));
     const LW = 116, CW = 14, RH = 25, TW = 48;
     const W = LW + 31 * CW + TW, H = months.length * RH;
-    const svg = svgEl('svg', { class: 'tl-grid', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img',
+    const svg = svgEl('svg', { class: 'tl-grid', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'group',
       'aria-label': 'Pages per day, one row per month' });
+    const label = (day, n) => `${+day.slice(8, 10)} ${MON[+day.slice(5, 7) - 1]} ${day.slice(0, 4)} · ${plural(n, 'page')}`;
     months.forEach((key, r) => {
       const g = svgEl('g', { transform: `translate(0 ${r * RH})` });
       const lab = dm(MON[+key.slice(5, 7) - 1] + ' ' + key.slice(2, 4), 2);
@@ -1739,6 +1764,11 @@
         const c = svgEl('circle', { cx: LW + (d - 1) * CW + CW / 2, cy: RH / 2, r: 4.5, class: 'c' + STEP(n) + (n ? ' hit' : '') });
         c.dataset.day = day;
         c.dataset.n = n;
+        if (n) {  // a day with pages is a keyboard button too, not mouse-only
+          c.setAttribute('tabindex', '0');
+          c.setAttribute('role', 'button');
+          c.setAttribute('aria-label', label(day, n));
+        } else c.setAttribute('aria-hidden', 'true');
         g.append(c);
       }
       const t = svgEl('text', { x: W - 4, y: RH / 2 + 4, 'text-anchor': 'end', class: 'tl-total' });
@@ -1746,7 +1776,6 @@
       g.append(t);
       svg.append(g);
     });
-    const label = (day, n) => `${+day.slice(8, 10)} ${MON[+day.slice(5, 7) - 1]} ${day.slice(0, 4)} · ${plural(n, 'page')}`;
     svg.addEventListener('mousemove', (e) => {
       const c = e.target.closest('circle');
       if (!c) { hideTip(); return; }
@@ -1755,14 +1784,20 @@
     svg.addEventListener('mouseleave', hideTip);
     const list = el('div');
     let selC = null;
-    svg.addEventListener('click', (e) => {
+    const pick = (e) => {
       const c = e.target.closest('circle');
       if (!c || !+c.dataset.n) return;
+      if (e.type === 'keydown') {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+      }
       if (selC) selC.classList.remove('sel');
       selC = c;
       c.classList.add('sel');
       dayList(list, c.dataset.day, byDay.get(c.dataset.day));
-    });
+    };
+    svg.addEventListener('click', pick);
+    svg.addEventListener('keydown', pick);
     const wrap = board('Activity', { note: `${plural(byDay.size, 'day')} with dated pages` });
     const sc = el('div', 'tl-wrap');
     sc.append(svg);
@@ -1846,7 +1881,7 @@
       .sort((a, b) => (dateOf(b) > dateOf(a) ? 1 : -1));
     host.append(boardList(board('Notes from the last 30 days', { note: plural(ideas.length, 'note') }),
       ideas.map((p) => brow({ id: p.id, title: p.title, sub: `${fmtDay(dateOf(p))} · ${p.summary || kindWord(p.kind)}`,
-        left: lobeChip(p.cluster), prompt: `/cortex about ${p.title}`, brainId: p.id })), 1e9,
+        left: lobeChip(p.cluster), prompt: `/cortex about ${p.id}`, brainId: p.id })), 1e9,
       'No new ideas in the last 30 days. Say "note this idea" in any Claude chat.'));
   }
 
@@ -1869,7 +1904,7 @@
       }
       if (isDay(s.placement_date)) {
         const n = between(TODAY, s.placement_date);
-        if (n >= 0) box.append(el('p', 'muted', `Phase 1 placements in ${plural(n, 'day')}`));
+        if (n >= 0) box.append(el('p', 'muted', `${s.title} in ${plural(n, 'day')}`));
       }
     }
     const tiles = $('tiles');
@@ -1880,7 +1915,9 @@
       tiles.append(b);
     }
     const plan = $('plan');
-    if (D.plan_cleared) plan.append(el('div', 'board done-card', 'Done for today ✓'));
+    if (D.first_run) plan.append(firstRunBoard());
+    else if (D.plan_cleared) plan.append(el('div', 'board done-card', 'Done for today ✓'));
+    else if (!D.today.length) plan.append(el('p', 'empty', 'Nothing planned yet.'));
     for (const [kind, head] of GROUPS) {
       const items = D.today.filter((i) => i.kind === kind);
       if (!items.length) continue;
@@ -1908,8 +1945,7 @@
       if (r.total) {
         const wrap = el('div', 'ready'), bar = el('div', 'bar');
         bar.setAttribute('role', 'img');
-        const pct = Math.round(100 * (r.share == null ? r.solid / r.total : r.share));
-        const label = `${pct}% ready (${r.solid} of ${r.total} solid)`;
+        const { pct, label } = readiness(r);
         bar.setAttribute('aria-label', label);
         const fill = el('span');
         fill.style.width = pct + '%';
@@ -1929,7 +1965,7 @@
         c.append(chips);
       }
       const acts = el('div', 'chip-list');
-      const cp = button('btn', null, () => copyText(`/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim()));
+      const cp = button('btn', null, () => copyText(`/cortex mock ${a.id}`));
       cp.append(icon('copy'), ' Copy mock prompt');
       acts.append(cp);
       c.append(acts);
@@ -1991,7 +2027,7 @@
       b.append(dm(String(D.history.mistakes[k]), 4), el('span', 'muted', word));
       ms.append(b);
     }
-    // council item 6: display-only; a band under its minimum shows its count, not a share
+    // display-only; a band under its minimum shows its count, not a share
     const mir = $('mirror'), C = D.confidence || [];
     if (!C.some((r) => r.n)) mir.append(el('p', 'empty', 'No answers with a "how sure" (1-4) yet.'));
     else {
@@ -2158,6 +2194,8 @@
     }
   });
   pal.addEventListener('mousedown', (e) => { if (e.target === pal) closePalette(); });
+  // a modal dialog: Tab stays on the search box (results move with the arrows)
+  pal.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); pq.focus(); } });
 
   /* ---- 2D map (the old Map tab, behaviour unchanged) ---- */
   const G = (() => {
@@ -2364,6 +2402,7 @@
     const mctx = document.createElement('canvas').getContext('2d');
     const PRI = { you: 0, domain: 1, area: 2, concept: 3, project: 3, resource: 3, note: 3, decision: 3 };
     const fontSize = (n) => (n.kind === 'domain' ? 14.3 : 11);
+    const MAX_LABELS = 300;  // on screen, by priority: bounds the overlap scan on big maps
     function labelWidth(n) {
       if (n._w == null) {
         mctx.font = `${n.kind === 'domain' ? 600 : 400} ${fontSize(n)}px system-ui, sans-serif`;
@@ -2375,11 +2414,12 @@
       if (!R) return;  // the renderer's first zoom event fires while it is being built
       const cand = nodes.filter((n) => n._label && !n._hide);
       cand.sort((a, b) => (b._force - a._force) || (PRI[a.kind] - PRI[b.kind]) || (b.degree - a.degree));
-      const placed = [];
+      const placed = [], gh = $('graph'), vw = gh.clientWidth || 800, vh = gh.clientHeight || 600;
       for (const n of cand) {
         const x0 = tf.applyX(n.x + n.r + 3), y = tf.applyY(n.y + 3.5), fs = fontSize(n);
         const box = [x0 - 2, y - fs * 0.85, x0 + labelWidth(n) + 2, y + fs * 0.3];
-        n._shown = n === hover || !placed.some((b) => box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3]);
+        const off = box[2] < 0 || box[0] > vw || box[3] < 0 || box[1] > vh;  // off screen: no label
+        n._shown = n === hover || (!off && placed.length < MAX_LABELS && !placed.some((b) => box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3]));
         if (n._shown) placed.push(box);
       }
       for (const n of nodes) if (!n._label || n._hide) n._shown = false;
@@ -2613,7 +2653,7 @@
       };
     }
 
-    // Wiki kinds (phase4-wiki §5): project rounded square, resource diamond, decision triangle;
+    // Wiki kinds: project rounded square, resource diamond, decision triangle;
     // a note stays a small dot (a circle, so no path).
     function shapePath(n) {
       const r = n.r;

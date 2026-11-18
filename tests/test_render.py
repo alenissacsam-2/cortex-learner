@@ -35,6 +35,23 @@ def test_esc_keeps_plain_text_and_truncates():
     assert len(long) == 50 and long.endswith("…")
 
 
+def test_plain_drops_bidi_controls_and_nested_link_parens():
+    from cortex.render import plain, term
+
+    assert plain("[a](http://x/(y)) b") == "a b"  # no stray ")"
+    assert plain("![i](http://x/(y))Heap") == "Heap"
+    assert plain("abc‮def⁦g⁩ \x1b[31mred\x00") == "abcdefg [31mred"
+    assert term("a\tb\nc\x1b]0;title\x07‫d\u0085") == "a\tb\nc]0;titled"
+
+
+def test_assessment_label_says_the_kind_once():
+    from cortex.render import _label
+
+    assert _label({"company": "Practice OA", "kind": "oa"}) == "Practice OA"
+    assert _label({"company": "Acme", "kind": "oa"}) == "Acme oa"
+    assert _label({"id": "x"}) == "x"
+
+
 def _items(n, kind="refresh"):
     return [{"kind": kind, "id": f"c{i}", "title": f"Concept {i}", "state": "needs_refresh",
              "why": "due 2026-11-12"} for i in range(n)]
