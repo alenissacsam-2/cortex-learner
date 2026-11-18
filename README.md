@@ -53,7 +53,7 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ![Browsing privacy: the cloud switch is off and each sensitive category has its own three-way choice](docs/images/app-privacy.png)
 
-**Ask your archive** answers questions from your notes and browsing with a model on this computer, and lists the pages it used. It never uses a cloud model.
+**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, and lists the pages each answer used. It never uses a cloud model.
 
 ![Ask your archive: a question about loop mistakes, an answer with numbered citations and the source pages](docs/images/app-ask.png)
 
@@ -256,7 +256,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
 ## Local models
 
-A local model is optional. Cortex uses it to sort and summarise your browsing and to answer **Ask your archive**. It never leaves your computer.
+A local model is optional. Cortex uses it to sort and summarise your browsing and to answer in **Chat**. It never leaves your computer.
 
 - **Ollama** is recommended: the app's Setup can install it (`winget` on Windows, Homebrew on macOS; on Linux it shows the command).
 - **LM Studio** is the alternative, through its own `lms` command.

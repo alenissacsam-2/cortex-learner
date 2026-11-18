@@ -74,7 +74,7 @@ Cortex can turn your browser history into pages. It is off until you run an impo
 **Also built in this release:**
 
 - **Cloud processing**, which lets a cloud model sort and summarise the "Cloud AI apps can read" categories. It is opt-in and off by default, for everyone. It never sees a skipped or local-only category, and if no local model is available, local-only data is skipped, never sent to the cloud.
-- **A local chat** (`cortex ask` and "Ask your archive" in the app) that answers questions about your archive, private pages included, with your local model only. It never uses the cloud model, whatever the cloud settings say.
+- **A local chat** (Chat in the app, and `cortex ask`) that answers questions about your archive, private pages included, with your local model only. It never uses the cloud model, whatever the cloud settings say. Chat history stays on this computer, in `<vault>/.cortex/browse/chat/` inside the private browse folder: it is never served to Claude or any other AI app, never on the dashboard and never logged. Delete it in Chat settings, or turn Keep chat history off to write nothing.
 - In the app, the cloud settings never take an API key: you name the environment variable that holds it, and the page shows only whether that variable is set.
 
 **Two things to know:**

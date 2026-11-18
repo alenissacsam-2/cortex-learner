@@ -13,6 +13,7 @@ stdlib only. See docs/design/browse-brain.md section 5.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -100,6 +101,70 @@ def _clean(text: str) -> str:
     return (text[:i] if i >= 0 else text).strip()
 
 
+STREAM_TIMEOUT = 120  # per read: a small model on a CPU can take long for its first token
+
+
+def _stream_line(kind: str, raw: bytes) -> tuple[str, bool, bool]:
+    """(content piece, thinking arrived, done) of one streamed line: Ollama NDJSON or an
+    OpenAI-compatible SSE `data:` line. Lines that are not JSON are skipped."""
+    line = raw.decode("utf-8", "replace").strip()
+    if kind != "ollama":
+        if not line.startswith("data:"):
+            return "", False, False
+        line = line[5:].strip()
+        if line == "[DONE]":
+            return "", False, True
+    try:
+        obj = json.loads(line)
+        if kind == "ollama":
+            msg = obj.get("message") or {}
+            return str(msg.get("content") or ""), bool(msg.get("thinking")), obj.get("done") is True
+        delta = (obj["choices"][0].get("delta") or {}) if obj.get("choices") else {}
+        thinking = bool(delta.get("reasoning_content") or delta.get("reasoning"))
+        return str(delta.get("content") or ""), thinking, False
+    except (ValueError, AttributeError, KeyError, IndexError, TypeError):
+        return "", False, False
+
+
+class _ThinkStrip:
+    """Drops <think>…</think> from streamed text whose tags may be cut across pieces, and the
+    whitespace before the answer starts."""
+
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self.buf, self.inside, self.started = "", False, False
+
+    def feed(self, s: str) -> str:
+        self.buf += s
+        out = []
+        while True:
+            tag = self.CLOSE if self.inside else self.OPEN
+            i = self.buf.lower().find(tag)
+            if i >= 0:
+                if not self.inside:
+                    out.append(self.buf[:i])
+                self.buf, self.inside = self.buf[i + len(tag):], not self.inside
+                continue
+            # hold back a tail that may be the start of the tag
+            k = next((k for k in range(min(len(tag) - 1, len(self.buf)), 0, -1)
+                      if tag.startswith(self.buf[-k:].lower())), 0)
+            if not self.inside:
+                out.append(self.buf[:len(self.buf) - k])
+            self.buf = self.buf[len(self.buf) - k:]
+            return self._lead("".join(out))
+
+    def flush(self) -> str:
+        out, self.buf = ("" if self.inside else self.buf), ""
+        return self._lead(out)
+
+    def _lead(self, s: str) -> str:
+        if not self.started:
+            s = s.lstrip()
+            self.started = bool(s)
+        return s
+
+
 @dataclass
 class Runner:
     kind: str  # "ollama" or "openai"
@@ -152,11 +217,51 @@ class Runner:
             if str(e) == _REFUSED:
                 raise
             return None
-        except (OSError, KeyError, IndexError, TypeError):  # incl. timeouts, HTTP errors
-            return None
+        except (OSError, http.client.HTTPException, KeyError, IndexError, TypeError):
+            return None  # incl. timeouts, HTTP errors, a cut or garbled response
         finally:
             if budget is not None:
                 budget.spend(time.monotonic() - t0)
+
+    def stream(self, messages: list[dict], *, temperature: float = 0.2, max_tokens: int = 700,
+               timeout: float = STREAM_TIMEOUT, cancel=None, on_thinking=None):
+        """Yield the answer's text pieces as the runner streams them ({role, content}
+        `messages`, the last one the user's). Loopback only, like every call here. The thinking
+        of a reasoning model is never yielded: `on_thinking()` is called while it arrives.
+        `timeout` is per read (a CPU's first token can take minutes); a set `cancel`
+        (threading.Event) stops at the next line and closes the response. Raises OSError (no
+        answer, timeout, HTTP error) or ValueError (a refused url)."""
+        msgs = [{"role": m["role"], "content": m["content"]} for m in messages]
+        if self.kind == "ollama":
+            url = self.base + "/api/chat"
+            body = {"model": self.model, "messages": msgs, "stream": True, "think": False,
+                    "options": {"temperature": temperature, "num_predict": max_tokens}}
+        else:
+            if "qwen" in self.model.lower():  # the trick _chat explains
+                msgs[-1]["content"] += " /no_think"
+                msgs.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
+            url = self.base + self.chat_path
+            body = {"model": self.model, "messages": msgs, "stream": True,
+                    "temperature": temperature, "max_tokens": max_tokens}
+        req = urllib.request.Request(_check_url(url), data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        strip = _ThinkStrip()
+        try:
+            with _OPENER.open(req, timeout=timeout) as resp:
+                for raw in resp:
+                    if cancel is not None and cancel.is_set():
+                        return
+                    piece, thinking, done = _stream_line(self.kind, raw)
+                    if thinking and on_thinking is not None:
+                        on_thinking()
+                    if piece and (out := strip.feed(piece)):
+                        yield out
+                    if done:
+                        break
+        except http.client.HTTPException as e:  # a cut stream: not an OSError
+            raise OSError(f"the runner's answer broke off ({type(e).__name__})") from e
+        if out := strip.flush():
+            yield out
 
     def ping(self, timeout: float = _TIMEOUT) -> float | None:
         """Seconds a one-token reply takes, or None when the runner did not answer."""
@@ -283,16 +388,30 @@ def _local_name(names: list[str], wanted: str) -> str | None:
     return next((n for n in names if n.lower() in (base, base + ":latest")), None)
 
 
-def _pick(names: list[str], wanted: str | None) -> str | None:
+_NOT_CHAT = re.compile(r"embed|rerank|bge|minilm", re.I)
+
+
+def _pick(names: list[str], wanted: str | None, chats=lambda n: True) -> str | None:
+    """The configured model, else the first small (<= 5B) model that can chat, else the first
+    that can. `chats(name)` asks the runner; embedding models are skipped by name too (Ollama
+    lists the newest first, often an embedding model, and chat with it answers nothing)."""
     if not names:
         return None
     if wanted:
         return _local_name(names, wanted)
-    for n in names:
-        m = _SMALL.search(n.lower())
-        if m and float(m.group(1)) <= 5:
-            return n
-    return names[0]
+    names = [n for n in names if not _NOT_CHAT.search(n)]
+    small = [n for n in names if (m := _SMALL.search(n.lower())) and float(m.group(1)) <= 5]
+    return next((n for n in [*small, *names] if chats(n)), None)
+
+
+def _completes(base: str, name: str) -> bool:
+    """Ollama's /api/show says whether `name` can chat (its `completion` capability); True
+    when it cannot tell (an old Ollama, an error): the name filter then decides alone."""
+    try:
+        caps = _request(base + "/api/show", {"model": name}, 2).get("capabilities")
+    except (OSError, http.client.HTTPException, ValueError, AttributeError):
+        return True
+    return "completion" in caps if isinstance(caps, list) else True
 
 
 def _probe(kind: str, base: str, path: str, wanted: str | None) -> Runner | None:
@@ -309,12 +428,14 @@ def _probe(kind: str, base: str, path: str, wanted: str | None) -> Runner | None
         if str(e) == _REFUSED:
             raise
         return None
-    except (OSError, KeyError, TypeError, AttributeError):
+    except (OSError, http.client.HTTPException, KeyError, TypeError, AttributeError):
         return None
     if wanted and _local_name(sorted(remote), wanted):
         raise ValueError(_CLOUD)
-    model = _pick(names, wanted)
-    return Runner(kind, base.rstrip("/"), model) if model else None
+    base = base.rstrip("/")
+    model = _pick(names, wanted, (lambda n: _completes(base, n)) if kind == "ollama"
+                  else (lambda n: True))
+    return Runner(kind, base, model) if model else None
 
 
 def find(config: dict | None = None) -> Runner | None:
@@ -330,7 +451,10 @@ def find(config: dict | None = None) -> Runner | None:
         raise ValueError(_CLOUD)
     probes = list(_PROBES)
     url = cfg.get("url")
-    if enabled(config) and (got := ensure_lmstudio(wanted, config=config)):
+    # `lms` spawns processes: ask it first only for runner lmstudio, else only when no probe
+    # answered (a localllm.url on the port of an LM Studio server whose model is unloaded)
+    lms_first = enabled(config) and cfg.get("runner") == "lmstudio"
+    if lms_first and (got := ensure_lmstudio(wanted, config=config)):
         url = url or got
     if url:
         _check_url(str(url))  # fail loudly on a non-loopback config
@@ -339,6 +463,11 @@ def find(config: dict | None = None) -> Runner | None:
     for kind, base, path in probes:
         if r := _probe(kind, base, path, wanted):
             return r
+    if enabled(config) and not lms_first and (got := ensure_lmstudio(wanted, config=config)):
+        base = str(url or got).rstrip("/")
+        for kind, path in (("ollama", "/api/tags"), ("openai", "/v1/models")):
+            if r := _probe(kind, base, path, wanted):
+                return r
     return None
 
 
@@ -365,7 +494,8 @@ def _lms(exe: Path, *args: str, timeout: float = 20, parse: bool = True):
     """`lms args` stdout (parsed as JSON when `parse`), or None when it failed."""
     try:
         out = subprocess.run([str(exe), *args], capture_output=True, encoding="utf-8",
-                             errors="replace", stdin=subprocess.DEVNULL, timeout=timeout)
+                             errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:

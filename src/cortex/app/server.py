@@ -173,18 +173,22 @@ class App:
         self.receiver = actions.Receiver()
         self.scanned: dict = {}  # source key -> the last scan's counts
         self.uploads: dict[str, Path] = {}  # upload id -> its file under ~/.cortex/tmp
+        self.chatting = threading.Lock()  # one chat answer at a time, beside any job
         self.last = time.monotonic()
         self.stop = threading.Event()
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
-                    "/api/setup": self.setup, "/api/ask": self.ask_state,
+                    "/api/setup": self.setup, "/api/chat": self.chat_state,
+                    "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
+                    "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test,
             "/api/browse/settings": self.browse_settings, "/api/browse/cloud": self.cloud,
-            "/api/browse/receiver": self.receive, "/api/ask": self.ask,
+            "/api/browse/receiver": self.receive, "/api/chat": None,  # do_POST streams it
+            "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
             "/api/browse/login": self.login, "/api/browse/pair": self.pair,
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
@@ -240,8 +244,38 @@ class App:
     def vault(self) -> dict:
         return {**status.vault(self.root), "embed": status.embedding()}
 
-    def ask_state(self) -> dict:
-        return {"vault": self.entry() is not None, "embed": status.embedding()["downloaded"]}
+    def chat_state(self) -> dict:
+        """What the Chat page needs to open: the missing pieces (search model, local model),
+        the model's name, the settings and the past chats."""
+        from cortex import chat, localllm
+        if self.entry() is None:
+            return {"vault": False}
+        st = localllm.status()  # read-only: a GET never starts LM Studio or loads a model
+        runner, why = st["runner"], st["error"]
+        missing = [k for k, gone in (("embed", not status.embedding()["downloaded"]),
+                                     ("llm", runner is None)) if gone]
+        return {"vault": True, "missing": missing, "llm_error": why,
+                "model": runner.model if runner else None, "settings": chat.get_settings(),
+                "chats": chat.list(self._vault())}
+
+    def _vault(self):
+        from cortex.vault import Vault
+        return Vault(self.need_root())
+
+    def chat_list(self) -> dict:
+        from cortex import chat
+        return {"chats": chat.list(self._vault())}
+
+    def chat_get(self, query: dict) -> dict:
+        from cortex import chat
+        cid = (query.get("id") or [None])[0]
+        if cid is None:
+            return {"id": None, "messages": []}
+        return {"id": cid, "messages": chat.load(self._vault(), cid)}  # load checks the id
+
+    def chat_settings_get(self) -> dict:
+        from cortex import chat
+        return chat.get_settings()
 
     def setup(self) -> dict:
         from cortex import chats, cli, importers
@@ -380,25 +414,29 @@ class App:
                           browse={**b, "cloud_processing": on})
         return {"ok": True}
 
-    def ask(self, body: dict) -> dict:
-        q = body.get("question")
-        if not isinstance(q, str) or not q.strip() or len(q) > 2000:
-            raise ValueError("Type a question (up to 2,000 characters).")
-        root = self.need_root()
+    def chat_begin(self, body: dict) -> tuple:
+        """Check a chat turn and take the one chat slot: (vault, id or None, text). Busy while
+        another answer streams; ValueError on a bad body."""
+        from cortex import chat
+        cid, text = body.get("id"), body.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > chat.MAX_TEXT:
+            raise ValueError(f"Type a message (up to {chat.MAX_TEXT:,} characters).")
+        vault = self._vault()
+        if cid is not None:
+            chat._path(vault, cid)  # a ULID or ValueError: never a path
+        if not self.chatting.acquire(blocking=False):
+            raise Busy("An answer is still being written; wait for it or press Stop.")
+        return vault, cid, text
 
-        def run(job):
-            from cortex import ask, localllm, semantic
-            from cortex.vault import Vault
-            job.say("checking the search model and the local model")
-            runner = localllm.find()  # local only: never cloudllm
-            # every missing piece at once, so one trip to Setup covers them all (R3-2)
-            missing = [k for k, gone in (("embed", semantic.load_embedder() is None),
-                                         ("llm", runner is None)) if gone]
-            if missing:
-                return {"kind": "ask", "error": "missing", "missing": missing}
-            job.say("searching your archive, then asking the local model")
-            return {"kind": "ask", **ask.ask(Vault(root), q.strip(), runner=runner)}
-        return self.jobs.start("Asking your archive", "ask", run, quiet_errors=True)
+    def chat_delete(self, body: dict) -> dict:
+        from cortex import chat
+        if body.get("all") is True:
+            return {"deleted": chat.delete_all(self._vault())}
+        return {"deleted": int(chat.delete(self._vault(), body.get("id")))}
+
+    def chat_settings(self, body: dict) -> dict:
+        from cortex import chat
+        return chat.save_settings(body)
 
     def receive(self, body: dict) -> dict:
         if _bool(body, "on"):
@@ -697,9 +735,14 @@ def _handler(app: App):
                 except (ValueError, OSError):
                     pass
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self._head(code, ctype, len(data))
+            self.wfile.write(data)
+
+        def _head(self, code: int, ctype: str, length: int | None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
+            if length is not None:
+                self.send_header("Content-Length", str(length))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Security-Policy", CSP)
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -707,7 +750,6 @@ def _handler(app: App):
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.end_headers()
-            self.wfile.write(data)
 
         def _gate(self, query_token: str | None = None, need_token: bool = True) -> bool:
             hosts = {f"{HOST}:{app.port}", f"localhost:{app.port}"}
@@ -744,7 +786,8 @@ def _handler(app: App):
                     data = data.replace(b"{{T}}", app.token.encode() if ok else b"")
                 self._send(200, data, ctype)
             elif url.path in app.get:
-                self._run(app.get[url.path])
+                self._run(app.get[url.path],
+                          *([parse_qs(url.query)] if url.path == "/api/chat/get" else []))
             elif url.path in app.post:
                 self._send(405, {"error": "use POST"})
             else:
@@ -782,7 +825,48 @@ def _handler(app: App):
             if not isinstance(body, dict):
                 self._send(400, {"error": "the body must be a JSON object"})
                 return
+            if path == "/api/chat":
+                self._chat(body)
+                return
             self._run(app.post[path], body)
+
+        def _chat(self, body: dict):
+            """Stream one chat turn as NDJSON on this thread (not a job: chat works while an
+            import runs). The client going away sets cancel; the partial answer is kept."""
+            from cortex import chat, localllm
+            try:
+                vault, cid, text = app.chat_begin(body)
+            except Busy as e:
+                self._send(409, {"error": str(e)})
+                return
+            except ValueError as e:
+                self._send(400, {"error": str(e)[:500]})
+                return
+            cancel = threading.Event()
+
+            def emit(ev: dict):
+                if cancel.is_set():
+                    return
+                app.touch()
+                try:
+                    self.wfile.write(json.dumps(ev).encode() + b"\n")
+                    self.wfile.flush()
+                except OSError:  # BrokenPipe, ConnectionReset/Aborted: the page stopped
+                    cancel.set()
+            try:
+                self.close_connection = True  # no length: the end of the answer ends the body
+                self._head(200, "application/x-ndjson", None)
+                try:
+                    runner = localllm.find()  # local only: never cloudllm
+                except ValueError as e:
+                    emit({"t": "err", "code": "no_local_model", "message": str(e)})
+                    return
+                chat.reply(vault, cid, text, runner, emit, cancel)
+            except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)
+                emit({"t": "err", "code": "internal",
+                      "message": f"internal error ({type(e).__name__})"})
+            finally:
+                app.chatting.release()
 
         def _upload(self, ctype: str):
             """Stream an export to ~/.cortex/tmp/upload-<id>-<stem><ext>, owner-only (0600).

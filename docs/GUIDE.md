@@ -231,12 +231,15 @@ Without the app: install Ollama, run `ollama pull qwen3.5:4b` (`qwen3.5:2b` with
 
 It only talks to your own machine. For a public day page it hears your topic names only; for a site, that site's page titles. It can move a site into a sensitive category, never out of one. Without it, the summary line lists your top topics and unknown sites stay under `other`.
 
-**Ask your archive**
-Once a local model runs (Ollama or LM Studio), ask questions about everything Cortex holds, private browsing included:
-- in the app: `cortex app` → **Ask your archive**, type the question, press Ask;
-- in a terminal: `uv run cortex ask "what did I read about binary search?"`.
+**Chat**
+Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with it about everything Cortex holds: in `cortex app` → **Chat**. Ask a question, then follow up ("and its running time?"); each answer searches again, with your new message and the one before it.
+- **What it searches:** your notes and mistakes, the AI chats you imported (Claude, ChatGPT, Gemini, Perplexity), and your browsing, private pages included. Only the model on this computer reads them; Chat never uses a cloud model, whatever the cloud settings say, and refuses any runner that is not on this computer.
+- **Dates:** "yesterday", "3 days ago" (a day either side), "last week", "this month", "on 12 Nov", "in October" and "since 2026-11-01" keep the answer to pages dated then: the browsing day pages and notes with a date. "Which sites did I visit yesterday?" lists that day's pages, newest first.
+- **Sources:** the answer cites pages as [1], [2]; click a number to jump to its source, and a source to open it in Obsidian. When nothing fits it says "I don't know from your archive."
+- **Settings** (Chat settings, top right; saved under `chat:` in `~/.cortex/config.yaml`): answer length (short, normal, long), creativity (0 to 1, default 0.2), pages read per answer (4 to 12, default 8), which sources to search (notes, saved AI chats, browsing, private browsing), and Keep chat history.
+- **History:** each chat is a file in `<vault>/.cortex/browse/chat/`, inside the private browse folder: never shown to Claude or any other AI app, never on the dashboard. Delete one with its Delete button, or all with Chat settings → Delete all chats. With Keep chat history off, new chats are never written and are forgotten when the app stops.
 
-The answer cites its sources as [1], [2], and the list under it names each page (click one in the app to open it in Obsidian). Only the model on this computer reads your pages; Ask never uses a cloud model. With no local model running it tells you so: start Ollama, or set one up in `cortex app` → Setup.
+With no local model or no search model, Chat shows what is missing with a button to Setup. In a terminal, `uv run cortex ask "what did I read about binary search?"` answers one question the same way, without history.
 
 **Optional: the browser extension**
 It adds time on screen and a short text excerpt of pages you read. It works in Chrome, Edge and Brave, and should work in Comet too (it is built on the same engine; not yet tried there). It never runs in private windows.

@@ -1127,21 +1127,7 @@ def test_extension_setup_pairs_then_starts_the_receiver(app, vault, monkeypatch,
         assert fakes[-1][0] == "open" and fakes[-1][1].endswith("/extension")
 
 
-# ---- ask your archive, the audience control, cloud settings, setup order ------------------
-
-
-class AskRunner:
-    """A local runner that answers from passage 1."""
-
-    def __init__(self):
-        from cortex import localllm
-        self.r = localllm.Runner("ollama", "http://127.0.0.1:11434", "gemma3:2b")
-
-    def describe(self):
-        return self.r.describe()
-
-    def chat(self, system, user, **kw):
-        return "Move the pointer on the smaller side [1]."
+# ---- chat, the audience control, cloud settings, setup order --------------------------------
 
 
 @pytest.fixture
@@ -1152,33 +1138,142 @@ def embed(monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
 
 
-def test_ask_needs_the_key_and_the_origin(app):
-    assert call(app, "POST", "/api/ask", {"question": "x"}, token=False)[0] == 401
-    assert call(app, "POST", "/api/ask", {"question": "x"}, origin="http://evil.example")[0] == 403
-    assert call(app, "GET", "/api/ask", token=False)[0] == 401
-    for bad in ({}, {"question": "  "}, {"question": 3}, {"question": "x" * 2001}):
-        assert call(app, "POST", "/api/ask", bad)[0] == 400, bad
+@pytest.fixture
+def llm(monkeypatch):
+    """A fake Ollama streaming an answer that cites passage 1; `localllm.find` returns it."""
+    from test_chat import Stream
 
-
-def test_ask_without_a_local_model_says_so(app, embed):
-    assert call(app, "POST", "/api/ask", {"question": "two pointers"})[0] == 200
-    job = wait_job(app)
-    assert job["section"] == "ask" and job["error"] is None
-    assert job["result"]["error"] == "missing" and job["result"]["missing"] == ["llm"]
-
-
-def test_ask_answers_with_sources_and_the_model(app, embed, monkeypatch, vault, fakes):
     from cortex import cloudllm, localllm
-    monkeypatch.setattr(localllm, "find", lambda config=None: AskRunner())
+    s = Stream("ollama", ["Move the pointer", " on the smaller side [1]."], delay=0.01)
+    monkeypatch.setattr(localllm, "find", lambda config=None: s.runner())
     monkeypatch.setattr(cloudllm, "find", lambda *a, **k: pytest.fail("cloud runner used"))
-    call(app, "POST", "/api/ask", {"question": "two pointers"})
-    r = wait_job(app)["result"]
-    assert r["kind"] == "ask" and r["answer"].endswith("[1].") and "gemma3:2b" in r["model"]
-    assert r["sources"][0]["n"] == 1 and r["sources"][0]["path"].endswith(".md")
-    # a source opens in Obsidian; only a page inside the vault
-    assert call(app, "POST", "/api/open", {"what": "page",
-                                           "path": r["sources"][0]["path"]})[0] == 200
-    assert fakes[-1][1].startswith("obsidian://open?path=")
+    yield s
+    s.close()
+
+
+def chat_stream(app, body, *, token=True, origin=None):
+    """POST /api/chat; (status, headers, [events])."""
+    c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+    headers = {"Host": f"127.0.0.1:{app.port}", "Content-Type": "application/json"}
+    if token:
+        headers["X-Cortex-Token"] = app.token
+    if origin:
+        headers["Origin"] = origin
+    c.request("POST", "/api/chat", body=json.dumps(body).encode(), headers=headers)
+    r = c.getresponse()
+    raw = r.read()
+    c.close()
+    if r.status != 200:
+        return r.status, r, json.loads(raw)
+    return r.status, r, [json.loads(line) for line in raw.decode().splitlines() if line]
+
+
+def test_chat_needs_the_key_and_the_origin(app):
+    assert chat_stream(app, {"text": "x"}, token=False)[0] == 401
+    assert chat_stream(app, {"text": "x"}, origin="http://evil.example")[0] == 403
+    for path in ("/api/chat", "/api/chat/list", "/api/chat/settings"):
+        assert call(app, "GET", path, token=False)[0] == 401
+    for bad in ({}, {"text": "  "}, {"text": 3}, {"text": "x" * 4001},
+                {"text": "hi", "id": "../../config"}, {"text": "hi", "id": 5}):
+        assert chat_stream(app, bad)[0] == 400, bad
+    assert call(app, "GET", "/api/chat/get?id=..%2F..%2Fx")[0] == 400
+    assert call(app, "POST", "/api/chat/delete", {"id": "../x"})[0] == 400
+
+
+def test_chat_state_names_every_missing_piece(app, monkeypatch):
+    from cortex import localllm
+    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    code, js, _, _ = call(app, "GET", "/api/chat")
+    assert code == 200 and js["missing"] == ["embed", "llm"] and js["chats"] == []
+    assert js["settings"]["length"] == "normal"
+
+    def refused(config=None):
+        raise ValueError("localllm: a cloud model is refused")
+    monkeypatch.setattr(localllm, "find", refused)
+    js = call(app, "GET", "/api/chat")[1]
+    assert "llm" in js["missing"] and "cloud model" in js["llm_error"]
+
+
+def test_chat_streams_ndjson_and_keeps_the_chat(app, embed, llm, vault):
+    code, r, ev = chat_stream(app, {"text": "two pointers"})
+    assert code == 200 and r.getheader("Content-Type") == "application/x-ndjson"
+    assert r.getheader("Content-Length") is None and "default-src" in r.getheader(
+        "Content-Security-Policy") and r.getheader("X-Content-Type-Options") == "nosniff"
+    assert [e["t"] for e in ev][0] == "start" and ev[-1]["t"] == "done"
+    assert "".join(e["s"] for e in ev if e["t"] == "tok").endswith("[1].")
+    src = next(e for e in ev if e["t"] == "src")["sources"]
+    assert src[0]["n"] == 1 and src[0]["path"].endswith(".md")
+    cid = ev[-1]["id"]
+    assert (vault / ".cortex" / "browse" / "chat" / f"{cid}.jsonl").is_file()
+    assert call(app, "GET", "/api/chat/list")[1]["chats"][0]["id"] == cid
+    got = call(app, "GET", f"/api/chat/get?id={cid}")[1]
+    assert [m["role"] for m in got["messages"]] == ["user", "assistant"]
+    # a follow-up in the same chat; then the answer's source opens in Obsidian
+    ev = chat_stream(app, {"id": cid, "text": "and why?"})[2]
+    assert ev[-1]["id"] == cid and len(llm.bodies[-1]["messages"]) == 4
+    assert call(app, "POST", "/api/open", {"what": "page", "path": src[0]["path"]})[0] == 200
+    assert call(app, "POST", "/api/chat/delete", {"id": cid})[1] == {"deleted": 1}
+    assert call(app, "POST", "/api/chat/delete", {"all": True})[1] == {"deleted": 0}
+
+
+def test_a_second_chat_stream_is_409_and_a_job_does_not_block_chat(app, embed, llm):
+    llm.pieces = [f"w{i} " for i in range(40)]
+    llm.delay = 0.05
+    first = threading.Thread(target=chat_stream, args=(app, {"text": "two pointers"}))
+    first.start()
+    for _ in range(100):
+        if app.chatting.locked():
+            break
+        time.sleep(0.02)
+    code, _, js = chat_stream(app, {"text": "again"})
+    assert code == 409 and "still being written" in js["error"]
+    first.join(10)
+    assert not app.chatting.locked()
+    hold = threading.Event()
+    app.jobs.start("A long import", "setup", lambda job: hold.wait(10))
+    llm.delay, llm.pieces = 0, ["ok [1]"]
+    try:
+        assert chat_stream(app, {"text": "two pointers"})[2][-1]["t"] == "done"
+    finally:
+        hold.set()
+
+
+def test_a_closed_page_cancels_and_keeps_the_partial_answer(app, embed, llm, vault):
+    import socket as sock
+    llm.pieces = [f"w{i} " for i in range(200)]
+    llm.delay = 0.02
+    body = json.dumps({"text": "two pointers"}).encode()
+    s = sock.create_connection(("127.0.0.1", app.port))
+    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Cortex-Token: %s\r\n"
+              b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+              % (app.port, app.token.encode(), len(body)) + body)
+    got = b""
+    while b'"tok"' not in got:
+        got += s.recv(4096)
+    s.close()
+    for _ in range(300):
+        if not app.chatting.locked():
+            break
+        time.sleep(0.05)
+    assert not app.chatting.locked() and llm.sent < 200
+    from cortex import chat
+    from cortex.vault import Vault
+    last = chat.load(Vault(vault), chat.list(Vault(vault))[0]["id"])[-1]
+    assert last["role"] == "assistant" and last["stopped"] is True
+
+
+def test_chat_settings_round_trip(app, home):
+    code, js, _, _ = call(app, "POST", "/api/chat/settings", {"length": "short",
+                                                              "sources": {"private": False}})
+    assert code == 200 and js["length"] == "short" and js["sources"]["private"] is False
+    assert call(app, "GET", "/api/chat/settings")[1]["length"] == "short"
+    for bad in ({"length": "x"}, {"temperature": -1}, {"passages": 2}, {"history": 1},
+                {"sources": {"cloud": True}}, {"api_key": "x"}):
+        assert call(app, "POST", "/api/chat/settings", bad)[0] == 400, bad
+
+
+def test_open_page_only_inside_the_vault(app, fakes, vault):
+    assert call(app, "POST", "/api/open", {"what": "page", "path": "notes/x.md"})[0] == 400
     for bad in ("../outside.md", str(vault / "concepts" / "two-pointers.md"), "concepts/none.md",
                 ".cortex/config.md", 5):
         assert call(app, "POST", "/api/open", {"what": "page", "path": bad})[0] == 400, bad
@@ -1367,15 +1462,6 @@ def test_google_activity_preview_says_the_search_model_is_needed(app, monkeypatc
     assert r["need"] == "embed" and r["ok"] is False and r["found"] >= 1
     js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
     assert "stopped: needs the search model" in js  # the job bar never says done for it
-
-
-def test_ask_lists_every_missing_piece_at_once(app, monkeypatch):
-    """R3-2: no search model and no local model: both named in one answer."""
-    from cortex import semantic
-    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
-    call(app, "POST", "/api/ask", {"question": "binary search"})
-    r = wait_job(app)["result"]
-    assert r["error"] == "missing" and r["missing"] == ["embed", "llm"]
 
 
 def test_cloud_on_needs_provider_model_and_variable(app, home):
