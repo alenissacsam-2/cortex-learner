@@ -1,0 +1,15 @@
+{"checkpoints": [
+  {"after": 2, "today": "2026-11-01",
+   "concepts": {"arrays-basics": {"state": "learning", "pass_days": 1, "interval_days": 4,
+                                  "next_due": "2026-11-05", "attempts": 2}}},
+  {"after": 6, "today": "2026-11-06",
+   "concepts": {"arrays-basics": {"state": "learning", "pass_days": 3, "stability": 19.83,
+                                  "depth_pass": false, "last_pass_day": "2026-11-05",
+                                  "interval_days": 37, "next_due": "2026-12-12", "attempts": 4},
+                "two-pointers": {"state": "learning", "pass_days": 2, "stability": 7.32,
+                                 "last_pass_day": "2026-11-02",
+                                 "interval_days": 14, "next_due": "2026-11-16"}}},
+  {"after": 6, "today": "2026-11-17",
+   "concepts": {"arrays-basics": {"state": "learning", "next_due": "2026-12-12"},
+                "two-pointers": {"state": "learning", "pass_days": 2, "next_due": "2026-11-16"}}}
+]}

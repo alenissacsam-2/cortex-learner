@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{CSP}}">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortex</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<header class="top" id="top">
+  <div class="brand">
+    <span class="wordmark" id="wordmark"></span>
+    <span class="greet" id="greet"></span>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Sections" id="tabs">
+    <button type="button" role="tab" id="tab-home" aria-controls="view-home">Home</button>
+    <button type="button" role="tab" id="tab-brain" aria-controls="view-brain">Brain</button>
+    <button type="button" role="tab" id="tab-library" aria-controls="view-library">Library</button>
+    <button type="button" role="tab" id="tab-you" aria-controls="view-you">You</button>
+    <button type="button" role="tab" id="tab-timeline" aria-controls="view-timeline">Timeline</button>
+    <button type="button" role="tab" id="tab-ideas" aria-controls="view-ideas">Ideas</button>
+    <button type="button" role="tab" id="tab-study" aria-controls="view-study">Study</button>
+    <button type="button" role="tab" id="tab-help" aria-controls="view-help">Help</button>
+  </nav>
+  <select class="section-select" id="section-select" aria-label="Section"></select>
+  <div class="hright">
+    <span class="clock" id="clock"></span>
+    <span class="stale" id="stale" hidden>· run cortex dashboard to refresh</span>
+    <button type="button" class="icon-btn" id="open-search" aria-label="Search (Ctrl+K)" aria-keyshortcuts="Control+K" title="Search (Ctrl+K)"></button>
+    <button type="button" class="icon-btn" id="theme"></button>
+  </div>
+</header>
+<main id="main">
+  <section id="view-home" role="tabpanel" aria-labelledby="tab-home" tabindex="-1">
+    <div class="home-top">
+      <div id="departures"></div>
+      <div class="board home-brain">
+        <div class="band">
+          <h2>Your brain</h2>
+          <span class="band-note" id="lobe-line"></span>
+          <div class="band-tools" id="home-brain-tools"></div>
+          <button type="button" class="band-btn" id="explore">Explore</button>
+        </div>
+        <div class="brain-slot" id="home-brain-slot"></div>
+      </div>
+    </div>
+    <div class="home-row three" id="home-row-a"></div>
+    <div class="home-row two" id="home-row-b"></div>
+  </section>
+
+  <section id="view-brain" role="tabpanel" aria-labelledby="tab-brain" tabindex="-1" hidden>
+    <div class="brain-stage">
+      <div class="viewswitch" role="group" aria-label="Brain view" id="viewswitch">
+        <button type="button" data-view="3d" aria-pressed="true">3D brain</button>
+        <button type="button" data-view="2d" aria-pressed="false">2D map</button>
+        <button type="button" data-view="list" aria-pressed="false">List</button>
+      </div>
+      <div class="b3d" id="b3d">
+        <div class="brain-tools" id="brain-tools" role="toolbar" aria-label="Brain controls"></div>
+        <div class="brain-slot" id="brain-slot"></div>
+        <aside class="rail" id="rail" aria-label="Brain filters">
+          <button type="button" class="rail-toggle" id="rail-toggle" aria-expanded="true">Filters</button>
+          <div class="rail-body" id="rail-body">
+            <input type="search" id="bq" placeholder="Find in the brain" aria-label="Find in the brain" autocomplete="off">
+            <p class="rail-note" id="bq-note"></p>
+            <h3>Kinds</h3>
+            <div class="chips" id="bkinds" role="group" aria-label="Show kinds"></div>
+            <h3>Concept states</h3>
+            <div class="chips" id="bstates" role="group" aria-label="Show concept states"></div>
+            <h3><button type="button" class="outline-toggle" id="outline-toggle" aria-expanded="true" aria-controls="outline-box">Outline</button></h3>
+            <div id="outline-box">
+              <button type="button" class="all-lobes" id="all-lobes" aria-pressed="true">All lobes</button>
+              <ul class="outline" id="outline" role="tree" aria-label="Brain outline: regions, lobes and pages"></ul>
+            </div>
+          </div>
+        </aside>
+        <div class="legend" id="legend"></div>
+        <p class="sr-only" id="brain-live" aria-live="polite"></p>
+      </div>
+      <div class="b2d" id="b2d" hidden>
+        <div class="filters">
+          <input type="search" id="q" placeholder="Highlight on the map" aria-label="Highlight on the map" autocomplete="off">
+          <select id="domain" aria-label="Domain"><option value="">All domains</option></select>
+          <div class="chips" id="kinds" role="group" aria-label="Show kinds"></div>
+          <div class="chips" id="chips" role="group" aria-label="Show states"></div>
+          <label class="toggle"><input type="checkbox" id="weak"> Only weak</label>
+          <label class="toggle"><input type="checkbox" id="local"> Local graph</label>
+          <label class="toggle"><input type="checkbox" id="files"> Files</label>
+        </div>
+        <div class="stage" id="stage">
+          <nav class="tree" id="tree" aria-label="Files" hidden></nav>
+          <div class="graph" id="graph"></div>
+          <div class="table-wrap" id="table" hidden></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-library" role="tabpanel" aria-labelledby="tab-library" tabindex="-1" hidden>
+    <h1>Library</h1>
+    <div class="lib-controls">
+      <input type="search" id="lq" placeholder="Search titles, summaries and text" aria-label="Search the library" autocomplete="off">
+      <select id="llobe" aria-label="Lobe"><option value="">All lobes</option></select>
+      <select id="lsort" aria-label="Sort">
+        <option value="date">Newest date first</option>
+        <option value="updated">Recently updated first</option>
+        <option value="title">Title A to Z</option>
+      </select>
+    </div>
+    <div class="chips presets" id="lpresets" role="group" aria-label="Kind presets"></div>
+    <div class="lib-tag" id="ltag" hidden></div>
+    <div class="lib-tag" id="llobe-chip" hidden></div>
+    <p class="count-line" id="lcount"></p>
+    <div class="board lib-board"><div class="table-scroll" id="ltable"></div></div>
+    <button type="button" class="more" id="lmore" hidden>Show 100 more</button>
+  </section>
+
+  <section id="view-you" role="tabpanel" aria-labelledby="tab-you" tabindex="-1" hidden></section>
+  <section id="view-timeline" role="tabpanel" aria-labelledby="tab-timeline" tabindex="-1" hidden></section>
+  <section id="view-ideas" role="tabpanel" aria-labelledby="tab-ideas" tabindex="-1" hidden></section>
+
+  <section id="view-study" role="tabpanel" aria-labelledby="tab-study" tabindex="-1" hidden>
+    <h1>Study</h1>
+    <div class="board sprint" id="sprint"></div>
+    <div class="staterow" id="tiles" role="group" aria-label="Topics by state"></div>
+    <div class="cols">
+      <div>
+        <h2>Today's plan</h2>
+        <div id="plan"></div>
+      </div>
+      <div>
+        <h2>Coming up</h2>
+        <div id="coming"></div>
+        <h2>Open mistakes</h2>
+        <div id="open-mistakes"></div>
+      </div>
+    </div>
+    <h2>Answers per week (graded, last 8 weeks)</h2>
+    <div class="board pad" id="weeks"></div>
+    <h2>Assessments</h2>
+    <div class="board pad" id="timeline"></div>
+    <h2>Mistakes, last 30 days</h2>
+    <div class="board pad numbers" id="mstats"></div>
+    <h2>How sure vs how often right</h2>
+    <div class="board pad" id="mirror"></div>
+  </section>
+
+  <section id="view-help" role="tabpanel" aria-labelledby="tab-help" tabindex="-1" hidden></section>
+</main>
+
+<aside class="reader" id="reader" aria-label="Page reader" hidden></aside>
+<aside class="reader inspector look" id="look" aria-label="Brain look" hidden></aside>
+<div class="palette-scrim" id="palette" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search">
+    <input type="search" id="pq" placeholder="Search pages, sections and commands" aria-label="Search pages, sections and commands" aria-controls="presults" autocomplete="off">
+    <div class="presults" id="presults" role="listbox" aria-label="Results"></div>
+    <p class="palette-foot">Enter opens · arrows move · Esc closes</p>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script type="application/json" id="data">{{DATA}}</script>
+<script>{{D3}}</script>
+<script>{{BRAIN}}</script>
+<script>{{APP}}</script>
+</body>
+</html>

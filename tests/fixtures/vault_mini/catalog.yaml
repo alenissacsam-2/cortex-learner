@@ -1,0 +1,22 @@
+# Synthetic test catalog; mirrors domains/, areas/ and concepts/ in this fixture.
+schema: 1
+domains:
+  - id: "dsa"
+    title: "Data structures and algorithms"
+    aliases: ["DSA"]
+    areas:
+      - id: "dsa.arrays"
+        title: "Arrays"
+        concepts:
+          - id: "arrays-basics"
+            title: "Array basics"
+            aliases: []
+            requires: []
+          - id: "two-pointers"
+            title: "Two pointers"
+            aliases: ["2 pointers", "two-pointer technique"]
+            requires: ["arrays-basics"]
+          - id: "secret-diary"
+            title: "Private concept"
+            aliases: []
+            requires: []

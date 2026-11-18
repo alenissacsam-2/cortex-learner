@@ -1,0 +1,37 @@
+"""Build dist/CortexSetup.exe (Windows only): `uv run python installer/build.py`.
+
+uv build --wheel, then stage the wheel and this machine's uv.exe as the exe's payload, then
+PyInstaller (fetched by uvx at build time, never a project dependency) packs
+installer/setup_app.py into one windowed exe. Staging lives in dist/ (git-ignored)."""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PYINSTALLER = "pyinstaller==6.22.3"
+
+
+def main() -> None:
+    if sys.platform != "win32":
+        sys.exit("CortexSetup.exe builds on Windows only.")
+    uv = shutil.which("uv") or sys.exit("uv is not on PATH.")
+    stage = ROOT / "dist" / "installer-build"
+    shutil.rmtree(stage, ignore_errors=True)
+    payload = stage / "payload"
+    subprocess.run([uv, "build", "--wheel", "--out-dir", str(payload)], cwd=ROOT, check=True)
+    shutil.copy2(uv, payload / "uv.exe")
+    subprocess.run([uv, "tool", "run", "--python", "3.12", "--from", PYINSTALLER, "pyinstaller",
+                    "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "CortexSetup",
+                    "--add-data", f"{payload}{os.pathsep}payload",
+                    "--distpath", str(ROOT / "dist"), "--workpath", str(stage / "work"),
+                    "--specpath", str(stage), str(ROOT / "installer" / "setup_app.py")],
+                   cwd=ROOT, check=True)
+    exe = ROOT / "dist" / "CortexSetup.exe"
+    print(f"built {exe} ({exe.stat().st_size / 1e6:.1f} MB)")
+
+
+if __name__ == "__main__":
+    main()

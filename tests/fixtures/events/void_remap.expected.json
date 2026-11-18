@@ -1,0 +1,11 @@
+{"checkpoints": [
+  {"after": 1, "today": "2026-11-01",
+   "concepts": {"old-arrays": {"state": "learning", "pass_days": 1}}},
+  {"after": 4, "today": "2026-11-04",
+   "concepts": {"arrays-basics": {"state": "learning", "pass_days": 1, "attempts": 3}},
+   "absent": ["old-arrays"]},
+  {"after": 5, "today": "2026-11-04",
+   "concepts": {"arrays-basics": {"state": "learning", "pass_days": 2, "stability": 10.96,
+                                  "attempts": 2, "open_mistakes": []}},
+   "absent": ["old-arrays", "dsa.off-by-one"]}
+]}

@@ -1,0 +1,3 @@
+{"type":"user","isSidechain":false,"timestamp":"2026-11-12T08:00:00.000Z","message":{"role":"user","content":"Plan my DP revision\nsecond line"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-11-12T08:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Start with knapsack."}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-11-12T08:01:00.000Z","message":{"role":"user","content":"ok"}}

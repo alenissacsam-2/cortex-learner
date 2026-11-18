@@ -1,0 +1,10 @@
+{"problem_concepts": {"lc-167": "two-pointers"},
+ "checkpoints": [
+  {"after": 8, "today": "2026-11-10",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 1, "depth_pass": true,
+                                 "attempts": 3},
+                "clarifying-questions": {"state": "learning", "pass_days": 0,
+                                         "depth_pass": false, "attempts": 1},
+                "testing-own-code": {"state": "learning", "pass_days": 1, "depth_pass": true},
+                "thinking-aloud": {"state": "learning", "pass_days": 0, "depth_pass": false}}}
+]}

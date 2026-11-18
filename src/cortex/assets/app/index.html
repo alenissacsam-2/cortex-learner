@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Cortex</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css?t={{T}}">
+<script src="/app.js?t={{T}}" defer></script>
+</head>
+<body>
+<div class="chrome">
+<header class="top">
+  <div class="brand"><span id="wordmark"></span><span class="greet">Set up and manage Cortex</span></div>
+  <select class="section-select" id="section-select" aria-label="Section">
+    <option value="setup">Setup</option>
+    <option value="ask">Ask your archive</option>
+    <option value="status">Status</option>
+    <option value="connect">Connect AI apps</option>
+    <option value="llm">Local model</option>
+    <option value="browse">Browsing</option>
+    <option value="vault">Dashboard and vault</option>
+  </select>
+  <div class="hright">
+    <button class="icon-btn" id="theme" type="button"></button>
+    <button class="band-btn" id="quit" type="button">Quit</button>
+  </div>
+</header>
+<div class="jobline" id="jobline" role="status" aria-live="polite">
+  <span class="job-name" id="job-name"></span>
+  <span class="job-line" id="job-line"></span>
+  <span class="job-time" id="job-time"></span>
+  <button class="btn" id="job-cancel" type="button" hidden>Cancel</button>
+</div>
+<p class="gone" id="gone" role="alert" hidden>The Cortex app has stopped. Run <code>cortex app</code> again to reopen it.</p>
+</div>
+<div class="shell">
+  <nav class="side" aria-label="Sections">
+    <button type="button" data-s="setup">Setup</button>
+    <button type="button" data-s="ask">Ask your archive</button>
+    <button type="button" data-s="status">Status</button>
+    <button type="button" data-s="connect">Connect AI apps</button>
+    <button type="button" data-s="llm">Local model</button>
+    <button type="button" data-s="browse">Browsing</button>
+    <button type="button" data-s="vault">Dashboard and vault</button>
+  </nav>
+  <main id="main">
+    <section id="s-setup" hidden tabindex="-1">
+      <h1>Setup</h1>
+      <p class="lede">Get Cortex working on this computer, one step at a time. Finished steps show ✓; every step can be skipped and done later.</p>
+      <div id="setup"></div>
+    </section>
+    <section id="s-ask" hidden tabindex="-1">
+      <h1>Ask your archive</h1>
+      <p class="lede">Ask a question; the local model on this computer answers from your notes and browsing, and shows the pages it used.</p>
+      <div id="ask"></div>
+    </section>
+    <section id="s-status" hidden tabindex="-1">
+      <h1>Status</h1>
+      <p class="lede">Each part of Cortex on this computer, and what to do when one needs you.</p>
+      <div id="status"></div>
+    </section>
+    <section id="s-connect" hidden tabindex="-1">
+      <h1>Connect AI apps</h1>
+      <p class="lede">Tick each AI app that should use Cortex. Apply adds Cortex to the ticked ones and removes it from the others, after showing exactly which files change. Every file is backed up first.</p>
+      <div id="connect"></div>
+    </section>
+    <section id="s-llm" hidden tabindex="-1">
+      <h1>Local model</h1>
+      <p class="lede">An optional small AI that runs on this computer. Cortex uses it to sort your browsing into topics; nothing is sent anywhere.</p>
+      <div id="llm"></div>
+    </section>
+    <section id="s-browse" hidden tabindex="-1">
+      <h1>Browsing</h1>
+      <p class="lede">Your browsing, kept on this computer. This page only ever shows counts, never page titles, addresses or searches.</p>
+      <div id="browse"></div>
+    </section>
+    <section id="s-vault" hidden tabindex="-1">
+      <h1>Dashboard and vault</h1>
+      <p class="lede">Your notes folder (the vault), its dashboard, backups and health checks.</p>
+      <div id="vault"></div>
+    </section>
+  </main>
+</div>
+<dialog class="confirm" id="confirm" aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Apply these changes?</h2>
+  <div id="confirm-body"></div>
+  <div class="ractions">
+    <button class="btn lit" id="confirm-ok" type="button">Apply</button>
+    <button class="btn" id="confirm-no" type="button">Cancel</button>
+  </div>
+</dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

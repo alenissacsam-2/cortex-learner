@@ -1,0 +1,2791 @@
+/* Cortex dashboard, Night Platform (docs/design/dashboard-v2.md). Every note-derived string goes
+   in with textContent (or d3 .text); nothing here parses HTML. */
+(() => {
+  'use strict';
+  const T0 = performance.now();
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const STATES = ['solid', 'learning', 'needs_refresh', 'unverified', 'not_started'];
+  const GLYPH = { solid: '●', learning: '◐', needs_refresh: '↻', unverified: '◌', not_started: '○' };
+  const LABEL = { solid: 'Solid', learning: 'Learning', needs_refresh: 'Needs refresh',
+    unverified: 'Unverified', not_started: 'Not started' };
+  const VERDICT = { correct: '✓', partial: '½', wrong: '✗' };
+  const OUTCOME = { pass: '✓ pass', fail: '✗ fail', pending: '… pending', unknown: '? unknown' };
+  const GROUPS = [['unchecked', 'Taught, not yet checked'], ['asked', 'Asked, not graded'],
+    ['confident_miss', 'Confident miss'], ['track', 'Sprint plan'], ['warmup', 'Warm-up'],
+    ['refresh', 'Refresh'], ['new', 'Ready to learn']];
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const $ = (id) => document.getElementById(id);
+  const TODAY = D.as_of.slice(0, 10);
+  const NAME = D.owner && D.owner.name ? D.owner.name : '';
+  const SVGNS = d3.namespaces.svg;
+  const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = String(text);
+    return e;
+  }
+  function svgEl(tag, attrs) {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs || {}) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function button(cls, text, onClick, label) {
+    const b = el('button', cls, text);
+    b.type = 'button';
+    if (label) { b.setAttribute('aria-label', label); b.title = label; }
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
+  }
+  const isDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}/.test(s);
+  const dayNum = (s) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
+  const between = (a, b) => Math.round(dayNum(b) - dayNum(a));
+  const fmtDay = (s) => (isDay(s) ? `${+s.slice(8, 10)} ${MON[+s.slice(5, 7) - 1]}` : (s || ''));
+  const fmtMonth = (s) => `${MON[+s.slice(5, 7) - 1]} ${s.slice(0, 4)}`;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const glyph = (state) => el('span', 'glyph g-' + state, GLYPH[state] || '▫');
+  const stateWord = (state) => {
+    const s = el('span', 'state');
+    s.append(glyph(state), ' ' + (LABEL[state] || ''));
+    return s;
+  };
+  function nextText(due) {
+    if (!isDay(due)) return 'no refresh scheduled';
+    const n = between(TODAY, due);
+    return n > 0 ? `refresh in ${plural(n, 'day')}` : n === 0 ? 'refresh due today'
+      : `due since ${plural(-n, 'day')}`;
+  }
+  function greeting() {
+    const h = new Date().getHours();
+    const g = h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 17 ? 'Good afternoon'
+      : h >= 17 && h < 22 ? 'Good evening' : 'Late night';
+    return NAME ? `${g}, ${NAME}` : g;
+  }
+
+  /* ---- dot matrix: an authored 5x7 font drawn as lit dots over the unlit cell ---- */
+  const FONT = {
+    0: [14, 17, 19, 21, 25, 17, 14], 1: [4, 12, 4, 4, 4, 4, 14], 2: [14, 17, 1, 2, 4, 8, 31],
+    3: [31, 2, 4, 2, 1, 17, 14], 4: [2, 6, 10, 18, 31, 2, 2], 5: [31, 16, 30, 1, 1, 17, 14],
+    6: [6, 8, 16, 30, 17, 17, 14], 7: [31, 1, 2, 4, 8, 8, 8], 8: [14, 17, 17, 14, 17, 17, 14],
+    9: [14, 17, 17, 15, 1, 2, 12], A: [14, 17, 17, 17, 31, 17, 17], B: [30, 17, 17, 30, 17, 17, 30],
+    C: [14, 17, 16, 16, 16, 17, 14], D: [28, 18, 17, 17, 17, 18, 28], E: [31, 16, 16, 30, 16, 16, 31],
+    F: [31, 16, 16, 30, 16, 16, 16], G: [14, 17, 16, 23, 17, 17, 15], H: [17, 17, 17, 31, 17, 17, 17],
+    I: [14, 4, 4, 4, 4, 4, 14], J: [7, 2, 2, 2, 2, 18, 12], K: [17, 18, 20, 24, 20, 18, 17],
+    L: [16, 16, 16, 16, 16, 16, 31], M: [17, 27, 21, 21, 17, 17, 17], N: [17, 17, 25, 21, 19, 17, 17],
+    O: [14, 17, 17, 17, 17, 17, 14], P: [30, 17, 17, 30, 16, 16, 16], Q: [14, 17, 17, 17, 21, 18, 13],
+    R: [30, 17, 17, 30, 20, 18, 17], S: [15, 16, 16, 14, 1, 1, 30], T: [31, 4, 4, 4, 4, 4, 4],
+    U: [17, 17, 17, 17, 17, 17, 14], V: [17, 17, 17, 17, 17, 10, 4], W: [17, 17, 17, 21, 21, 21, 10],
+    X: [17, 17, 10, 4, 10, 17, 17], Y: [17, 17, 17, 10, 4, 4, 4], Z: [31, 1, 2, 4, 8, 16, 31],
+    ':': [0, 12, 12, 0, 12, 12, 0], '.': [0, 0, 0, 0, 0, 12, 12], '-': [0, 0, 0, 31, 0, 0, 0],
+    '/': [0, 1, 2, 4, 8, 16, 0], '+': [0, 4, 4, 31, 4, 4, 0], '%': [24, 25, 2, 4, 8, 19, 3],
+    ' ': [0, 0, 0, 0, 0, 0, 0],
+  };
+  const SCRAMBLE = 'ABCDEFGHKMNPRSTXZ0123456789';
+  function dmPaths(text, size) {
+    const pitch = size + 1, r = size / 2;
+    let on = '', off = '';
+    [...text].forEach((ch, ci) => {
+      const rows = FONT[ch] || FONT[' '];
+      for (let y = 0; y < 7; y++) {
+        for (let x = 0; x < 5; x++) {
+          const cx = (ci * 6 + x) * pitch + pitch / 2, cy = y * pitch + pitch / 2;
+          const d = `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${size} 0a${r} ${r} 0 1 0 ${-size} 0`;
+          if (rows[y] & (16 >> x)) on += d; else off += d;
+        }
+      }
+    });
+    return [on, off];
+  }
+  // A dot-matrix display of `text` (upper-cased) with `size` px dots.
+  function dm(text, size, label) {
+    const t = String(text).toUpperCase();
+    const pitch = size + 1, w = Math.max(1, t.length * 6 - 1) * pitch, h = 7 * pitch;
+    const s = svgEl('svg', { class: 'dm', viewBox: `0 0 ${w} ${h}`, width: w, height: h, role: 'img',
+      'aria-label': label || t });
+    const [on, off] = dmPaths(t, size);
+    s.append(svgEl('path', { class: 'off', d: off }), svgEl('path', { class: 'on', d: on }));
+    s.dataset.text = t;
+    s.dataset.size = size;
+    return s;
+  }
+  function dmSet(s, text) {  // redraw in place (the split-flap flick)
+    const [on, off] = dmPaths(text, +s.dataset.size);
+    s.lastChild.setAttribute('d', on);
+    s.firstChild.setAttribute('d', off);
+  }
+
+  /* ---- icons: one 1.5 px stroke, round caps, currentColor ---- */
+  const ICONS = {
+    copy: ['M9 9h10v10H9z', 'M5 15V5h10'],
+    obsidian: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v5H5V6h5'],
+    target: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M12 7a5 5 0 1 0 0.01 0', 'M12 11a1 1 0 1 0 0.01 0'],
+    search: ['M10.5 4a6.5 6.5 0 1 0 0.01 0', 'M15.5 15.5L20 20'],
+    sun: ['M12 8a4 4 0 1 0 0.01 0', 'M12 2v2', 'M12 20v2', 'M2 12h2', 'M20 12h2', 'M4.9 4.9l1.4 1.4',
+      'M17.7 17.7l1.4 1.4', 'M4.9 19.1l1.4-1.4', 'M17.7 6.3l1.4-1.4'],
+    moon: ['M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z'],
+    close: ['M6 6l12 12', 'M18 6L6 18'],
+    chevron: ['M9 6l6 6-6 6'],
+    help: ['M12 3a9 9 0 1 0 0.01 0', 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7', 'M12 17h.01'],
+  };
+  function icon(name) {
+    const s = svgEl('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    for (const d of ICONS[name]) s.append(svgEl('path', { d }));
+    return s;
+  }
+  function iconBtn(name, label, onClick, cls) {
+    const b = button(cls || 'act', null, onClick, label);
+    b.append(icon(name));
+    return b;
+  }
+
+  /* ---- tooltip, toast, copy ---- */
+  const tip = $('tip');
+  function showTipAt(x, y, parts) {
+    tip.replaceChildren(...parts);
+    tip.hidden = false;
+    tip.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+    tip.style.top = Math.min(y + 14, window.innerHeight - tip.offsetHeight - 8) + 'px';
+  }
+  const showTip = (e, parts) => showTipAt(e.clientX, e.clientY, parts);
+  const moveTip = (e) => showTipAt(e.clientX, e.clientY, [...tip.childNodes]);
+  const hideTip = () => { tip.hidden = true; };
+  const toastEl = $('toast');
+  let toastTimer = 0;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2200);
+  }
+  function fallbackCopy(text) {
+    const ta = el('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+  async function copyText(text) {
+    let ok = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+    } catch (e) { ok = false; }
+    if (!ok) ok = fallbackCopy(text);
+    toast(ok ? 'Copied. Paste it into Claude.' : 'Copy failed. Select the text and copy it.');
+  }
+  const copyBtn = (prompt, cls) => iconBtn('copy', 'Copy: ' + prompt, () => copyText(prompt), cls);
+  const loopPrompt = (title) => `Let's work on this open loop from Cortex: ${title}`;
+
+  /* ---- pages, lobes, platform codes ---- */
+  const PAGES = new Map(D.pages.map((p) => [p.id, p]));
+  const GN = new Map(D.graph.nodes.map((n) => [n.id, n]));
+  const LOBES = new Map(D.clusters.map((c) => [c.id, c]));
+  const WIKI = new Set(['project', 'resource', 'note', 'decision']);
+  const KIND_WORD = { concept: 'Concept', domain: 'Domain', area: 'Area', project: 'Project',
+    resource: 'Resource', note: 'Note', decision: 'Decision', journal: 'Journal', me: 'About me',
+    mistake: 'Mistake', problem: 'Problem', assessment: 'Assessment', application: 'Application',
+    track: 'Track', session: 'Session', loop: 'Loop', person: 'Person' };
+  const kindWord = (k) => KIND_WORD[k] || k;
+  const linkIds = (v) => [].concat(v || []).flatMap((s) => [...String(s).matchAll(/\[\[([^\]|#^]+)/g)])
+    .map((m) => m[1].trim());
+  const SMALL = new Set(['and', 'of', 'the', 'a', 'an', 'in', 'on', 'for', 'to', 'with']);
+  const CODES = new Map();
+  function code(title) {  // a station-style code: a short first word, else initials, else 4 letters
+    if (!CODES.has(title)) {
+      const words = String(title).toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+      let c = '';
+      if (words.length && words[0].length <= 5) c = words[0];
+      else {
+        const sig = words.filter((w) => !SMALL.has(w.toLowerCase()));
+        c = sig.length > 1 ? sig.map((w) => w[0]).join('').slice(0, 5) : (sig[0] || words[0] || '').slice(0, 4);
+      }
+      CODES.set(title, c || '—');
+    }
+    return CODES.get(title);
+  }
+  function lobeChip(clusterId) {
+    const c = LOBES.get(clusterId);
+    if (!c) return el('span', 'code', '—');
+    const s = el('span', 'code', code(c.title));
+    s.title = c.title;
+    s.setAttribute('aria-label', 'Lobe: ' + c.title);
+    return s;
+  }
+  const pageLobe = (id) => (PAGES.has(id) ? PAGES.get(id).cluster : null);
+  const CHAT = new Set(['Claude', 'Gemini', 'Perplexity']);
+  const MEDIA = new Set(['YouTube', 'NotebookLM']);
+  function kindGroup(p) {
+    if (p.kind === 'concept' || p.kind === 'domain' || p.kind === 'area') return 'concept';
+    if (p.kind === 'note' || p.kind === 'project' || p.kind === 'decision' || p.kind === 'person') return p.kind;
+    if (p.kind === 'resource') {
+      if (CHAT.has(p.source)) return 'chat';
+      if (MEDIA.has(p.source) || p.tags.includes('youtube') || p.tags.includes('notebooklm')) return 'youtube';
+    }
+    return 'other';
+  }
+  const dateOf = (p) => p.date || p.updated;
+  function promptFor(p) {
+    if (p.kind === 'project') return `/cortex project ${p.title}`;
+    if (p.kind === 'concept') return `/cortex learn ${p.title}`;
+    if (p.kind === 'loop') return loopPrompt(p.title);
+    return `/cortex about ${p.title}`;
+  }
+
+  /* ---- Markdown reader: DOM nodes only ---- */
+  function wikilink(id, label) {
+    if (!PAGES.has(id)) return el('span', 'wl-missing', (label || id).trim());
+    const text = (label || PAGES.get(id).title).trim();
+    return button('wl', text, () => openReader(id));
+  }
+  // Inline Markdown as DOM nodes: text nodes only, images dropped, [label](url) keeps the label.
+  const INLINE = new RegExp(['(`+)([\\s\\S]*?)\\1', '!\\[[^\\]]*\\]\\([^)]*\\)',
+    '\\[\\[([^\\]|#]+)(?:#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', '\\[([^\\]]*)\\]\\([^)]*\\)',
+    '\\*\\*(.+?)\\*\\*', '(?<!\\w)__(.+?)__(?!\\w)', '\\*(.+?)\\*', '(?<!\\w)_(.+?)_(?!\\w)'].join('|'), 'g');
+  function inline(text, into) {
+    let i = 0;
+    for (const m of text.matchAll(INLINE)) {
+      if (m.index > i) into.append(text.slice(i, m.index));
+      i = m.index + m[0].length;
+      if (m[1]) into.append(el('code', null, m[2]));
+      else if (m[3]) into.append(wikilink(m[3].trim(), m[4]));
+      else if (m[5] != null) inline(m[5], into);
+      else if (m[6] || m[7]) inline(m[6] || m[7], into.appendChild(el('strong')));
+      else if (m[8] || m[9]) inline(m[8] || m[9], into.appendChild(el('em')));
+    }
+    if (i < text.length) into.append(text.slice(i));
+    return into;
+  }
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  // Block Markdown: headings, paragraphs, lists, fenced code, blockquotes, tables, rules.
+  function md(src) {
+    const out = document.createDocumentFragment();
+    const lines = src.replace(/\r\n?/g, '\n').split('\n');
+    let para = [], list = null;
+    const flush = () => {
+      if (para.length) out.append(inline(para.join(' '), el('p')));
+      para = [];
+      list = null;
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      let m;
+      if ((m = /^\s*(```+|~~~+)/.exec(line))) {
+        flush();
+        const code = [];
+        while (++i < lines.length && !lines[i].trim().startsWith(m[1])) code.push(lines[i]);
+        const pre = el('pre');
+        pre.append(el('code', null, code.join('\n')));
+        out.append(pre);
+      } else if (!line.trim()) flush();
+      else if ((m = /^(#{1,6})\s+(.*?)\s*#*$/.exec(line))) {
+        flush();
+        out.append(inline(m[2], el('h' + Math.min(6, m[1].length + 3), 'md-h' + m[1].length)));
+      } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.append(el('hr')); }
+      else if (line.startsWith('>')) {
+        flush();
+        const q = [];
+        for (; i < lines.length && lines[i].startsWith('>'); i++) q.push(lines[i].replace(/^>\s?/, ''));
+        i--;
+        const bq = el('blockquote');
+        bq.append(md(q.join('\n')));
+        out.append(bq);
+      } else if (line.trim().startsWith('|') && /^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[i + 1] || '')) {
+        flush();
+        const tr = el('tr'), thead = el('thead'), tbody = el('tbody'), table = el('table');
+        for (const c of cells(line)) tr.append(inline(c, el('th')));
+        thead.append(tr);
+        for (i += 2; i < lines.length && lines[i].trim().startsWith('|'); i++) {
+          const r = el('tr');
+          for (const c of cells(lines[i])) r.append(inline(c, el('td')));
+          tbody.append(r);
+        }
+        i--;
+        table.append(thead, tbody);
+        const wrap = el('div', 'md-table');
+        wrap.append(table);
+        out.append(wrap);
+      } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
+        if (para.length) flush();
+        const tag = /\d/.test(m[2]) ? 'OL' : 'UL';
+        if (!list || list.tagName !== tag) { list = el(tag); out.append(list); }
+        const li = el('li');
+        const depth = Math.floor(m[1].replace(/\t/g, '  ').length / 2);
+        if (depth) li.style.marginLeft = (16 * depth) + 'px';
+        let t = m[3];
+        const box = /^\[([ xX])\]\s+/.exec(t);
+        if (box) { li.append(box[1] === ' ' ? '☐ ' : '☑ '); t = t.slice(box[0].length); }
+        list.append(inline(t, li));
+      } else if (list && /^\s+\S/.test(line)) inline(' ' + line.trim(), list.lastChild);
+      else { list = null; para.push(line.trim()); }
+    }
+    flush();
+    return out;
+  }
+
+  let BACK = null;
+  function backlinks(id) {
+    if (!BACK) {
+      BACK = new Map();
+      for (const p of D.pages) {
+        for (const t of p.links) {
+          if (!BACK.has(t)) BACK.set(t, []);
+          BACK.get(t).push(p);
+        }
+      }
+    }
+    const marks = ['[[' + id + ']]', '[[' + id + '|', '[[' + id + '#'];
+    return (BACK.get(id) || []).map((p) => ({ p, line: (p.body.split('\n')
+      .find((l) => marks.some((k) => l.includes(k))) || '').replace(/^[\s>#*+-]+/, '').slice(0, 240) }));
+  }
+
+  // shortcut: a linear scan over a precomputed lowercase index; ~5k pages scan in tens of ms.
+  let HAY = null;
+  function search(q, tag) {
+    if (!HAY) {
+      HAY = D.pages.map((p) => ({ p, t: p.title.toLowerCase(),
+        a: [].concat(p.props.aliases || []).join(' ').toLowerCase(),
+        s: (p.summary || '').toLowerCase(), b: p.body.toLowerCase() }));
+    }
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = [];
+    for (const h of HAY) {
+      if (tag && !h.p.tags.includes(tag)) continue;
+      let score = 0;
+      for (const w of words) {
+        const s = h.t.includes(w) ? 4 : h.a.includes(w) ? 3 : h.s.includes(w) ? 2 : h.b.includes(w) ? 1 : 0;
+        if (!s) { score = -1; break; }
+        score += s;
+      }
+      if (score >= 0) hits.push({ h, words, score });
+    }
+    return hits.sort((x, y) => y.score - x.score || x.h.p.title.localeCompare(y.h.p.title));
+  }
+  function snippet({ h, words }) {
+    const i = Math.min(...words.map((w) => h.b.indexOf(w)).filter((j) => j >= 0));
+    if (!isFinite(i)) return h.p.summary || '';
+    const s = h.p.body.slice(Math.max(0, i - 40), i + 100)
+      .replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1').replace(/[#*_`>|]/g, '').replace(/\s+/g, ' ').trim();
+    return (i > 40 ? '…' : '') + s + '…';
+  }
+
+  /* ---- reader panel: one for every section ---- */
+  const reader = $('reader');
+  let readerId = null, readerFrom = null;
+  function readerSection(title, list) {
+    if (!list.length) return [];
+    const ul = el('ul');
+    for (const li of list) ul.append(li);
+    return [el('h4', null, title), ul];
+  }
+  function chipTo(id) {
+    const n = GN.get(id) || PAGES.get(id);
+    return button('chip', n ? n.title : id, () => openReader(id));
+  }
+  function groupCounts(n) {
+    const key = n.kind === 'domain' ? 'domain' : 'area';
+    const c = Object.fromEntries(STATES.map((s) => [s, 0]));
+    for (const x of D.graph.nodes) if (x.kind === 'concept' && x[key] === n.id) c[x.state]++;
+    return c;
+  }
+  function conceptDetails(n) {
+    const out = [];
+    const dom = GN.get(n.domain), area = GN.get(n.area);
+    if (n.kind === 'concept') {
+      const m = el('div', 'meta');
+      m.append(stateWord(n.state));
+      out.push(m, el('div', 'meta muted', [dom && dom.title, area && area.title].filter(Boolean).join(' › ')),
+        el('div', 'meta', nextText(n.next_due)));
+      const d = D.details[n.id] || {};
+      const mist = new Map(D.mistakes.map((x) => [x.id, x]));
+      out.push(...readerSection('Open mistakes', (d.mistakes || []).map((id) => {
+        const mm = mist.get(id), li = el('li');
+        li.append(el('span', 'flag', '⚑ '), mm ? mm.title : id, el('span', 'muted', mm ? ` (${mm.count}×)` : ''));
+        return li;
+      })));
+      out.push(...readerSection('Evidence trail', (d.evidence || []).map((ev) => el('li', null,
+        [fmtDay(ev.day), VERDICT[ev.verdict] || ev.verdict, ev.item_type, ev.source].filter(Boolean).join(' · ')))));
+      for (const [title, ids] of [['Requires', d.requires || []], ['Required by', d.required_by || []]]) {
+        if (!ids.length) continue;
+        const box = el('div', 'chip-list');
+        for (const id of ids) box.append(chipTo(id));
+        out.push(el('h4', null, title), box);
+      }
+      out.push(...readerSection('Problems', (d.problems || []).map((p) => {
+        const li = el('li');
+        li.append(p.title, el('span', 'muted', p.status ? ' · ' + p.status : ''));
+        return li;
+      })));
+      if (!d.evidence || !d.evidence.length) out.push(el('p', 'empty', 'No evidence yet. Try /cortex learn on it.'));
+    } else {
+      if (n.kind === 'area' && dom) out.push(el('div', 'meta muted', dom.title));
+      const c = groupCounts(n), total = STATES.reduce((a, s) => a + c[s], 0);
+      out.push(el('div', 'meta', total ? `${Math.round(100 * c.solid / total)}% solid · ${plural(total, 'topic')}`
+        : 'No topics yet'));
+      out.push(...readerSection('Topics by state', STATES.filter((s) => c[s]).map((s) => {
+        const li = el('li');
+        li.append(stateWord(s), el('span', 'muted', ' ' + c[s]));
+        return li;
+      })));
+    }
+    return out;
+  }
+  function pageView(p) {
+    const out = [];
+    if (p.summary) out.push(el('p', 'summary', p.summary));
+    if (p.tags.length) {
+      const box = el('div', 'chip-list');
+      for (const t of p.tags) box.append(button('chip', '#' + t, () => setTag(t), 'Show pages tagged ' + t + ' in the Library'));
+      out.push(box);
+    }
+    const keys = Object.keys(p.props);
+    if (keys.length) {
+      const table = el('table', 'props'), tbody = el('tbody');
+      for (const k of keys) {
+        const tr = el('tr'), th = el('th', null, k), td = el('td');
+        th.scope = 'row';
+        [].concat(p.props[k]).forEach((v, i) => { if (i) td.append(', '); inline(String(v), td); });
+        tr.append(th, td);
+        tbody.append(tr);
+      }
+      table.append(tbody);
+      out.push(el('h4', null, 'Properties'), table);
+    }
+    const body = el('div', 'md');
+    body.append(md(p.body));
+    out.push(body);
+    if (p.links.length) {
+      const box = el('div', 'chip-list');
+      for (const id of p.links) box.append(chipTo(id));
+      out.push(el('h4', null, 'Links'), box);
+    }
+    out.push(el('h4', null, 'Backlinks'));
+    const back = backlinks(p.id);
+    if (!back.length) out.push(el('p', 'empty', 'No backlinks.'));
+    else {
+      const ul = el('ul', 'backlinks');
+      for (const { p: from, line } of back) {
+        const li = el('li');
+        li.append(button('chip', from.title, () => openReader(from.id)));
+        if (line) li.append(inline(line, el('div', 'muted small')));
+        ul.append(li);
+      }
+      out.push(ul);
+    }
+    return out;
+  }
+  // The right-side panel, emptied and titled: the reader, or the brain's compact inspector.
+  function panel(id, title, inspector) {
+    closeLook(false);  // the inspector and Look share the right side; the newer one wins
+    if (reader.hidden) readerFrom = document.activeElement;
+    readerId = id;
+    hideTip();
+    reader.replaceChildren();
+    reader.classList.toggle('inspector', !!inspector);
+    reader.setAttribute('aria-label', inspector ? 'Brain inspector' : 'Page reader');
+    reader.hidden = false;
+    reader.scrollTop = 0;
+    reader.append(iconBtn('close', `Close the ${inspector ? 'inspector' : 'reader'} (Esc)`, closeReader, 'icon-btn close'),
+      el('h2', null, title));
+  }
+  function openReader(id) {
+    const p = PAGES.get(id), n = GN.get(id);
+    if (!p && !n) return;
+    panel(id, p ? p.title : n.title, false);
+    const meta = el('div', 'rmeta');
+    meta.append(el('span', null, kindWord(p ? p.kind : n.kind)));
+    if (p) {
+      const lobe = LOBES.get(p.cluster);
+      meta.append(lobeChip(p.cluster));
+      if (lobe) meta.append(el('span', null, lobe.title));
+      if (p.date) meta.append(el('span', null, fmtDay(p.date) + ' ' + p.date.slice(0, 4)));
+      if (p.source) meta.append(el('span', null, p.source));
+    }
+    reader.append(meta);
+    const acts = el('div', 'ractions');
+    if (p) {
+      const sib = button('btn', null, () => showInBrain(id));
+      sib.append(icon('target'), ' Show in brain');
+      acts.append(obsidianBtn(p), sib, promptBtn(p));
+    }
+    reader.append(acts);
+    if (n && (n.kind === 'concept' || n.kind === 'domain' || n.kind === 'area')) reader.append(...conceptDetails(n));
+    if (p) reader.append(...pageView(p));
+    G.setCurrent(id);
+    reader.querySelector('.close').focus({ preventScroll: true });
+  }
+  function obsidianBtn(p) {
+    const a = el('a', 'btn', null);
+    a.append(icon('obsidian'), ' Open in Obsidian');
+    a.href = 'obsidian://open?vault=' + encodeURIComponent(D.vault_name)
+      + '&file=' + encodeURIComponent(p.path);
+    return a;
+  }
+  function promptBtn(p) {
+    const cp = button('btn', null, () => copyText(promptFor(p)));
+    cp.append(icon('copy'), ' Copy prompt');
+    cp.title = promptFor(p);
+    return cp;
+  }
+
+  /* ---- the brain inspector: a page's neighbourhood, or a lobe ---- */
+  const DEG = new Map();  // undirected link degree, for "top pages" lists
+  {
+    const seen = new Set();
+    for (const p of D.pages) {
+      for (const t of p.links) {
+        if (t === p.id || !PAGES.has(t)) continue;
+        const key = p.id < t ? p.id + '\n' + t : t + '\n' + p.id;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        DEG.set(p.id, (DEG.get(p.id) || 0) + 1);
+        DEG.set(t, (DEG.get(t) || 0) + 1);
+      }
+    }
+  }
+  const topPagesOf = (lobeId, n) => D.pages.filter((p) => p.cluster === lobeId)
+    .sort((a, b) => (DEG.get(b.id) || 0) - (DEG.get(a.id) || 0) || a.title.localeCompare(b.title)).slice(0, n);
+  const live = (msg) => { const r = $('brain-live'); r.textContent = ''; setTimeout(() => { r.textContent = msg; }, 30); };
+  function ilist(ids, cls) {
+    const ul = el('ul', 'ilist');
+    for (const id of ids) {
+      const p = PAGES.get(id);
+      if (!p) continue;
+      const li = el('li');
+      if (cls) {  // the same solid / dashed marks as the brain's lines
+        const mk = el('span', 'mk ' + cls);
+        mk.setAttribute('aria-hidden', 'true');
+        li.append(mk);
+      }
+      li.append(button('linkbtn', p.title, () => explorePage(id)));
+      ul.append(li);
+    }
+    return ul;
+  }
+  // Fly to a page, light its neighbourhood and show it in the inspector.
+  function explorePage(id) {
+    const info = brain && brain.explore(id);
+    if (info) inspectPage(id, info);
+    else openReader(id);
+  }
+  function inspectPage(id, info) {
+    const p = PAGES.get(id);
+    if (!p) return;
+    panel(id, p.title, true);
+    const meta = el('div', 'rmeta'), lobe = LOBES.get(p.cluster), st = GN.has(id) ? GN.get(id).state : null;
+    meta.append(el('span', null, kindWord(p.kind)), lobeChip(p.cluster));
+    if (lobe) meta.append(el('span', null, lobe.title));
+    if (p.kind === 'concept' && st) meta.append(stateWord(st));
+    if (dateOf(p)) meta.append(el('span', null, fmtDay(dateOf(p)) + ' ' + dateOf(p).slice(0, 4)));
+    const acts = el('div', 'ractions'), open = button('btn', 'Open page', () => openReader(id));
+    const lib = button('btn', 'Show in Library', () => libraryFind(p.title));
+    acts.append(open, obsidianBtn(p), promptBtn(p), lib);
+    reader.append(meta, acts);
+    const beacons = (info.beacons || []).filter((l) => LOBES.has(l));
+    if (beacons.length) {
+      const box = el('div', 'file-under'), row = el('div', 'ractions');
+      box.append(el('h4', null, 'File this chat under…'));
+      for (const l of beacons) {
+        const t = LOBES.get(l).title, b = button('btn', null,
+          () => copyText(`File the chat "${p.title}" under the topic "${t}" in Cortex.`));
+        b.append(icon('copy'), ' ' + t);
+        b.title = `Copy: file this chat under ${t}`;
+        row.append(b);
+      }
+      box.append(row);
+      reader.append(box);
+    }
+    reader.append(el('h4', null, `Linked (${info.linked.length + info.hiddenLinks})`));
+    if (info.linked.length) reader.append(ilist(info.linked, 'linked'));
+    else reader.append(el('p', 'empty', 'No links.'));
+    if (info.hiddenLinks > 0) reader.append(el('p', 'muted small', `+${info.hiddenLinks} more links (open the page for all of them)`));
+    reader.append(el('h4', null, 'Similar meaning'));
+    if (info.similar.length) reader.append(ilist(info.similar, 'similar'));
+    else reader.append(el('p', 'empty', 'No similar pages beyond the links.'));
+    markOutline(id);
+    live(`Selected ${p.title}, ${kindWord(p.kind)}${lobe ? ' in ' + lobe.title : ''}: `
+      + `${plural(info.linked.length + info.hiddenLinks, 'link')}, ${info.similar.length} similar.`);
+  }
+  function inspectLobe(lobeId) {
+    const c = LOBES.get(lobeId), k = D.clusters.findIndex((x) => x.id === lobeId);
+    if (!c) return;
+    panel(null, c.title, true);
+    const meta = el('div', 'rmeta');
+    meta.append(lobeChip(lobeId), el('span', null, plural(c.count, 'page')));
+    const acts = el('div', 'ractions');
+    acts.append(button('btn', 'Show in Library', () => { filterLibraryLobe(lobeId); show('library'); }));
+    reader.append(meta, acts);
+    const tracts = ((D.brain && D.brain.tracts) || []).filter((t) => t.a === k || t.b === k)
+      .map((t) => ({ l: D.clusters[t.a === k ? t.b : t.a], n: t.n })).filter((t) => t.l)
+      .sort((a, b) => b.n - a.n).slice(0, 5);
+    if (tracts.length) {
+      const ul = el('ul', 'ilist');
+      for (const t of tracts) {
+        const li = el('li');
+        li.append(el('span', null, 'connected to '), button('linkbtn', t.l.title, () => selectLobe(t.l.id)),
+          el('span', 'n', `(${plural(t.n, 'link')})`));
+        ul.append(li);
+      }
+      reader.append(el('h4', null, 'Strongest connections'), ul);
+    }
+    const top = topPagesOf(lobeId, 20);
+    reader.append(el('h4', null, `Pages (top ${top.length} by links)`), ilist(top.map((p) => p.id), null));
+    live(`${c.title}: ${plural(c.count, 'page')}.`);
+  }
+  function closeReader() {
+    if (reader.hidden) return;
+    reader.hidden = true;
+    readerId = null;
+    G.setCurrent(null);
+    if (readerFrom && readerFrom.isConnected) readerFrom.focus({ preventScroll: true });
+  }
+
+  /* ---- sections and routing ---- */
+  const SECTIONS = ['home', 'brain', 'library', 'you', 'timeline', 'ideas', 'study', 'help'];
+  const TITLES = { home: 'Home', brain: 'Brain', library: 'Library', you: 'You', timeline: 'Timeline',
+    ideas: 'Ideas', study: 'Study', help: 'Help' };
+  const rendered = new Set();
+  let current = null;
+  const sel = $('section-select');
+  for (const s of SECTIONS) { const o = el('option', null, TITLES[s]); o.value = s; sel.append(o); }
+  sel.addEventListener('change', () => show(sel.value));
+  function show(name, focusTab) {
+    if (!SECTIONS.includes(name)) name = 'home';
+    hideTip();
+    if (name !== current) {
+      closeLook(false);
+      for (const s of SECTIONS) {
+        const t = $('tab-' + s);
+        t.setAttribute('aria-selected', String(s === name));
+        t.tabIndex = s === name ? 0 : -1;
+        $('view-' + s).hidden = s !== name;
+      }
+      sel.value = name;
+      current = name;
+      try { history.replaceState(null, '', '#' + name); } catch (e) { /* a file URL may refuse */ }
+      if (!rendered.has(name)) { rendered.add(name); RENDER[name](); }
+      if (name === 'home') placeBrain('home-brain-slot');
+      if (name === 'brain') setView(view);
+      window.scrollTo(0, 0);
+    }
+    if (focusTab) $('tab-' + name).focus();
+  }
+  for (const s of SECTIONS) $('tab-' + s).addEventListener('click', () => show(s));
+  $('tabs').addEventListener('keydown', (e) => {
+    const f = SECTIONS.indexOf(String(e.target.id).replace('tab-', '')), i = f >= 0 ? f : SECTIONS.indexOf(current);
+    const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: SECTIONS.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    show(SECTIONS[(to + SECTIONS.length) % SECTIONS.length], true);
+  });
+  window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+  const typing = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+    || t.isContentEditable);
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
+    if (e.key === 'Escape') {
+      if (!$('palette').hidden) { closePalette(); return; }
+      if (!look.hidden) { closeLook(true); return; }
+      if (!reader.hidden) { closeReader(); return; }
+      hideTip();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey || typing(e.target) || !$('palette').hidden) return;
+    // the brain uses + - 0, arrows and A M G S; the outline uses arrows
+    if (e.target && e.target.closest && e.target.closest('.brain-host, .outline')) return;
+    const n = +e.key;
+    if (n >= 1 && n <= 8) { e.preventDefault(); show(SECTIONS[n - 1]); }
+  });
+  function setHdr() {
+    document.documentElement.style.setProperty('--hdr', $('top').offsetHeight + 'px');
+  }
+  window.addEventListener('resize', setHdr);
+
+  /* ---- header: wordmark, greeting, clock, theme ---- */
+  const phone = () => window.innerWidth <= 760;
+  function renderHeader() {
+    $('wordmark').replaceChildren(dm('CORTEX', phone() ? 2 : 3, 'Cortex'));
+    $('greet').textContent = greeting();
+    const hm = D.as_of.slice(11, 16);
+    $('clock').replaceChildren(dm(phone() ? hm : 'AS OF ' + hm, phone() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
+    $('clock').title = `Built ${fmtDay(TODAY)} ${TODAY.slice(0, 4)}, ${hm}`;
+    $('stale').hidden = !(Date.now() - Date.parse(D.as_of) > 12 * 36e5);
+    $('open-search').replaceChildren(icon('search'));
+  }
+  $('open-search').addEventListener('click', () => openPalette());
+  let wasPhone = phone();
+  window.addEventListener('resize', () => {
+    if (phone() !== wasPhone) { wasPhone = phone(); renderHeader(); setHdr(); }
+  });
+
+  const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+  let theme = 'night', themeChosen = false;
+  try {
+    const t = localStorage.getItem('cortex-theme');
+    if (t === 'night' || t === 'day') { theme = t; themeChosen = true; }
+  } catch (e) { /* storage off: follow the system */ }
+  if (!themeChosen) theme = darkMq.matches || !window.matchMedia('(prefers-color-scheme: light)').matches ? 'night' : 'day';
+  function applyTheme(t) {
+    theme = t;
+    document.documentElement.dataset.theme = t;
+    const b = $('theme'), next = t === 'night' ? 'day' : 'night';
+    b.replaceChildren(icon(t === 'night' ? 'sun' : 'moon'));
+    b.setAttribute('aria-label', `Switch to the ${next} theme`);
+    b.title = `Switch to the ${next} theme`;
+    G.retheme();
+  }
+  $('theme').addEventListener('click', () => {
+    applyTheme(theme === 'night' ? 'day' : 'night');
+    try { localStorage.setItem('cortex-theme', theme); } catch (e) { /* not kept */ }
+  });
+  darkMq.addEventListener('change', () => { if (!themeChosen) applyTheme(darkMq.matches ? 'night' : 'day'); });
+
+  /* ---- the brain: one instance, moved between Home and Brain ---- */
+  // An old blob has no `brain` (layout is Python's now): the Brain section falls back to the 2D map.
+  let brain = null, brainHost = null, brainFailed = !(D.brain && D.brain.nodes && window.CortexBrain);
+  let view = brainFailed ? '2d' : '3d', archiveOn = true;
+  const BRAIN_IDS = new Set(brainFailed ? [] : D.brain.nodes.ids);
+  const MODES = [['activity', 'Activity', 'A'], ['mastery', 'Mastery', 'M'], ['growth', 'Growth', 'G']];
+  const modeBtns = [], spinBtns = [], aliveBtns = [];
+  const brainFilter = { kinds: new Set(['concept', 'note', 'project', 'decision', 'chat', 'youtube', 'person', 'other']),
+    states: new Set(STATES) };
+  function ensureBrain() {
+    if (brain || brainFailed) return brain;
+    const t = performance.now();
+    const pages = D.pages.map((p) => ({ id: p.id, title: p.title, kind: p.kind, cluster: p.cluster, links: p.links,
+      date: p.date, updated: p.updated, group: kindGroup(p), state: GN.has(p.id) ? GN.get(p.id).state : null }));
+    brainHost = el('div', 'brain-host');
+    $('home-brain-slot').append(brainHost);
+    try {
+      brain = window.CortexBrain.mount(brainHost, {
+        brain: D.brain, pages, today: TODAY,
+        onHover(n, pos) {
+          if (!n || !pos) { hideTip(); return; }
+          const r = brainHost.getBoundingClientRect(), c = LOBES.get(n.cluster);
+          showTipAt(r.left + pos.x, r.top + pos.y, [el('b', null, n.title), el('br'),
+            el('span', 'k', kindWord(n.kind) + (n.state ? ' · ' + LABEL[n.state] : '') + (c ? ' · ' + c.title : ''))]);
+        },
+        onSelect(n, info) { if (info) inspectPage(n.id, info); },
+        onCluster(c) { if (c) { markLobe(c.id); filterLibraryLobe(c.id); } },
+        onLobe(c) { if (c) inspectLobe(c.id); },
+        onMode: syncMode,
+        onSpin: syncSpin,
+        onAlive: syncAlive,
+        style: HAS_STYLE ? savedStyle() : undefined,
+        keyHelp: HAS_STYLE ? 'L opens Look.' : '',
+        onStyle(s) { saveStyle(s); syncLook(); },
+        onCrumbs(c) {
+          const words = (c || []).map((x) => (typeof x === 'string' ? x : x && (x.label || x.title))).filter(Boolean);
+          if (words.length) live(words.join(' › '));
+        },
+      });
+    } catch (err) {
+      if (window.console) console.warn('brain: could not mount, showing the 2D map', err);
+      brainHost.remove();
+      brain = null;
+      brainFailed = true;
+      noBrain();
+      return null;
+    }
+    // brain3d.js owns the other keys on the stage; L is the page's
+    brainHost.addEventListener('keydown', (e) => {
+      if (HAS_STYLE && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        openLook();
+      }
+    });
+    document.body.dataset.brainMs = String(Math.round(performance.now() - t));
+    document.body.dataset.brainRenderer = brain.renderer;
+    requestAnimationFrame(() => { document.body.dataset.brainFrameMs = String(Math.round(performance.now() - T0)); });
+    syncMode(brain.mode);
+    syncAlive(!!brain.alive);
+    return brain;
+  }
+  // No 3D brain: Home says so in one line, the Brain section opens on the 2D map.
+  function noBrain() {
+    $('home-brain-slot').replaceChildren(el('p', 'empty',
+      'The 3D brain needs a fresh build: run cortex dashboard. The 2D map is in Brain.'));
+    $('home-brain-tools').hidden = true;
+    $('viewswitch').querySelector('[data-view="3d"]').hidden = true;
+    if (view === '3d') view = '2d';
+  }
+  function placeBrain(slotId) {
+    const b = ensureBrain(), slot = $(slotId);
+    if (!b) return;
+    if (brainHost.parentNode !== slot) slot.append(brainHost);
+    b.setArchive(slotId === 'brain-slot' && archiveOn);  // the unsorted-chat ring stays off on Home
+    b.resize();
+  }
+  function showInBrain(id) {
+    show('brain');
+    if (!ensureBrain()) { setView('2d'); G.setCurrent(id); return; }
+    setView('3d');
+    if (!brain.flyTo(id)) {  // filtered out: show everything, then fly
+      resetBrainFilters();
+      brain.flyTo(id);
+    }
+  }
+  // Mode buttons: Home and Brain both show them; onMode keeps them in step.
+  function modeGroup() {
+    const g = el('div', 'seg');
+    g.setAttribute('role', 'group');
+    g.setAttribute('aria-label', 'Brain mode');
+    for (const [m, word, key] of MODES) {
+      const b = button(null, word, () => { if (brain) brain.setMode(m); });
+      b.title = `${word} mode (${key} in the brain)`;
+      b.dataset.mode = m;
+      b.setAttribute('aria-pressed', 'false');
+      modeBtns.push(b);
+      g.append(b);
+    }
+    return g;
+  }
+  function todayBtn(cls) {
+    const b = button(cls, null, playToday);
+    b.title = 'Replay what you saved today, then settle on the first departure';
+    b.append(icon('target'), ' Today');
+    return b;
+  }
+  function playToday() {
+    if (!brain) return;
+    const d = (p) => dateOf(p) || '';
+    const ids = D.pages.filter((p) => p.updated === TODAY && BRAIN_IDS.has(p.id))
+      .sort((a, b) => (d(b) > d(a) ? 1 : d(b) < d(a) ? -1 : 0)).slice(0, 30).map((p) => p.id);
+    const first = departures()[0], focusId = first && BRAIN_IDS.has(first.id) ? first.id : null;
+    brain.today(ids, focusId);
+    live(ids.length ? `Replaying ${plural(ids.length, 'page')} saved today.` : 'Nothing saved today.');
+  }
+  function syncMode(m) {
+    for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+    if (brainUi && !brainFailed) { $('scrub').hidden = m !== 'growth'; renderLegend(m); }
+  }
+  function syncSpin(on) {
+    for (const b of spinBtns) b.setAttribute('aria-pressed', String(on));
+  }
+  function syncAlive(on) {
+    for (const b of aliveBtns) b.setAttribute('aria-pressed', String(on));
+  }
+  if (!brainFailed) $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'));
+  else noBrain();
+
+  /* ---- Look: the brain's style, generated from the renderer's schema (brain-v4.md §5) ---- */
+  const CB = window.CortexBrain || {};
+  // an older brain3d.js has no schema: no Look button, nothing else changes
+  const HAS_STYLE = !brainFailed && Array.isArray(CB.STYLE_SCHEMA) && Array.isArray(CB.PRESETS);
+  const SCHEMA = HAS_STYLE ? CB.STYLE_SCHEMA : [];
+  const STYLE_KEY = 'cortex.brain.style';
+  const look = $('look'), lookSync = [], lookBtns = [];
+  let lookBuilt = false, lookFrom = null, readerWas = false;
+  // Only schema keys survive a reload, so a stale or hand-edited entry cannot inject others.
+  function savedStyle() {
+    const out = Object.assign({}, CB.DEFAULT_STYLE);
+    try {
+      const s = JSON.parse(localStorage.getItem(STYLE_KEY));
+      if (s && typeof s === 'object' && !Array.isArray(s)) for (const f of SCHEMA) if (f.key in s) out[f.key] = s[f.key];
+    } catch (e) { /* storage blocked or bad JSON: the default */ }
+    return out;
+  }
+  // Only keys that differ from the default are kept, so a later default change still reaches the user.
+  function saveStyle(s) {
+    const diff = {};
+    for (const f of SCHEMA) if (f.key in s && !same(s[f.key], CB.DEFAULT_STYLE[f.key])) diff[f.key] = s[f.key];
+    try {
+      if (Object.keys(diff).length) localStorage.setItem(STYLE_KEY, JSON.stringify(diff));
+      else localStorage.removeItem(STYLE_KEY);
+    } catch (e) { /* not kept */ }
+  }
+  function setLook(partial) {
+    if (!brain) return;
+    brain.setStyle(partial);
+    syncLook();
+  }
+  const same = (a, b) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : a === b);
+  const fullPreset = (p) => Object.assign({}, CB.DEFAULT_STYLE, p.style);
+  function fmtVal(f, v) {
+    const dec = String(f.step || 1).split('.')[1];
+    return String(+(+v).toFixed(dec ? dec.length : 0));
+  }
+  function buildLook() {
+    lookBuilt = true;
+    look.append(iconBtn('close', 'Close Look (Esc)', () => closeLook(true), 'icon-btn close'), el('h2', null, 'Look'));
+    const pre = el('div', 'look-presets'), seg = el('div', 'seg'), custom = el('span', 'look-custom', 'Custom');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'Presets');
+    for (const p of CB.PRESETS) {
+      const b = button(null, p.label, () => setLook(fullPreset(p)));
+      b.setAttribute('aria-pressed', 'false');
+      seg.append(b);
+      lookSync.push((s) => {
+        const full = fullPreset(p);
+        b.setAttribute('aria-pressed', String(SCHEMA.every((f) => same(s[f.key], full[f.key]))));
+      });
+    }
+    lookSync.push(() => { custom.hidden = !!seg.querySelector('[aria-pressed="true"]'); });
+    pre.append(el('h3', null, 'Presets'), seg, custom);
+    look.append(pre);
+    const groups = [];
+    for (const f of SCHEMA) if (!groups.includes(f.group)) groups.push(f.group);
+    for (const g of groups) {
+      const sec = el('details', 'look-group');
+      sec.open = true;
+      sec.append(el('summary', null, g));
+      for (const f of SCHEMA.filter((x) => x.group === g)) sec.append(lookRow(f));
+      look.append(sec);
+    }
+    look.append(button('btn look-reset', 'Reset to default', () => setLook(Object.assign({}, CB.DEFAULT_STYLE))));
+  }
+  function lookRow(f) {
+    const row = el('div', 'look-row'), id = 'look-' + f.key, helpId = id + '-help';
+    const help = f.help ? el('p', 'look-help', f.help) : null;
+    if (help) help.id = helpId;
+    const describe = (n) => { if (help) n.setAttribute('aria-describedby', helpId); };
+    if (f.type === 'toggle') {
+      const lab = el('label', 'toggle'), box = el('input');
+      box.type = 'checkbox';
+      box.id = id;
+      describe(box);
+      box.addEventListener('change', () => setLook({ [f.key]: box.checked }));
+      lab.append(box, ' ' + f.label);
+      row.append(lab);
+      lookSync.push((s) => { box.checked = !!s[f.key]; });
+    } else if (f.type === 'range') {
+      const lab = el('label', 'look-label', f.label), r = el('input'), out = el('output'), line = el('div', 'look-range');
+      lab.htmlFor = id;
+      r.type = 'range';
+      r.id = id;
+      r.min = String(f.min);
+      r.max = String(f.max);
+      r.step = String(f.step || 'any');
+      out.htmlFor = id;
+      describe(r);
+      const showVal = (v) => { out.textContent = fmtVal(f, v); r.setAttribute('aria-valuetext', out.textContent); };
+      r.addEventListener('input', () => { showVal(r.value); setLook({ [f.key]: +r.value }); });
+      line.append(r, out);
+      row.append(lab, line);
+      lookSync.push((s) => { if (s[f.key] != null) { r.value = String(s[f.key]); showVal(s[f.key]); } });
+    } else if (f.type === 'choice') {
+      const lab = el('span', 'look-label', f.label), seg = el('div', 'seg');
+      lab.id = id;
+      seg.setAttribute('role', 'group');
+      seg.setAttribute('aria-labelledby', id);
+      describe(seg);
+      for (const [v, word] of f.options || []) {
+        const b = button(null, word, () => setLook({ [f.key]: v }));
+        b.setAttribute('aria-pressed', 'false');
+        seg.append(b);
+        lookSync.push((s) => b.setAttribute('aria-pressed', String(same(s[f.key], v))));
+      }
+      row.append(lab, seg);
+    } else return row;
+    if (help) row.append(help);
+    return row;
+  }
+  function syncLook() {
+    if (!lookBuilt || !brain) return;
+    const s = brain.style || {};
+    for (const fn of lookSync) fn(s);
+  }
+  function openLook() {
+    if (!brain || !HAS_STYLE) return;
+    if (!lookBuilt) buildLook();
+    if (look.hidden) {
+      lookFrom = document.activeElement;
+      readerWas = !reader.hidden;
+      reader.hidden = true;
+      hideTip();
+    }
+    look.hidden = false;
+    syncLook();
+    for (const b of lookBtns) b.setAttribute('aria-expanded', 'true');
+    const first = look.querySelector('.look-presets button');
+    if (first) first.focus({ preventScroll: true });
+  }
+  function closeLook(restore) {
+    if (look.hidden) return;
+    look.hidden = true;
+    for (const b of lookBtns) b.setAttribute('aria-expanded', 'false');
+    if (restore && readerWas) reader.hidden = false;
+    readerWas = false;
+    if (restore && lookFrom && lookFrom.isConnected) lookFrom.focus({ preventScroll: true });
+  }
+  function lookBtn() {
+    const b = button('btn tbtn', 'Look', () => (look.hidden ? openLook() : closeLook(true)));
+    b.title = 'Change how the brain looks (L in the brain)';
+    b.setAttribute('aria-expanded', 'false');
+    b.setAttribute('aria-controls', 'look');
+    b.setAttribute('aria-keyshortcuts', 'L');
+    lookBtns.push(b);
+    return b;
+  }
+
+  /* ---- boards ---- */
+  function board(title, opts) {
+    opts = opts || {};
+    const root = el('div', 'board' + (opts.cls ? ' ' + opts.cls : ''));
+    const band = el('div', 'band');
+    band.append(el('h2', null, title));
+    if (opts.note) band.append(el('span', 'band-note', opts.note));
+    if (opts.action) band.append(opts.action);
+    const body = el('div', 'board-body');
+    root.append(band, body);
+    return { root, band, body };
+  }
+  // Board -> brain: hovering or focusing a row lights its page in the brain.
+  function syncRow(row, id) {
+    const on = () => { if (brain) brain.hoverId(id); }, off = () => { if (brain) brain.hoverId(null); };
+    row.addEventListener('pointerenter', on);
+    row.addEventListener('pointerleave', off);
+    row.addEventListener('focusin', on);
+    row.addEventListener('focusout', off);
+  }
+  // One board row: title (opens the reader) over a muted line, a right-hand cell and actions.
+  function brow({ id, title, sub, left, right, prompt, brainId }) {
+    const r = el('div', 'brow');
+    const t = el('div', 't'), l1 = el('div', 'line1');
+    if (left) l1.append(left);
+    l1.append(id && (PAGES.has(id) || GN.has(id)) ? button('ttl linkbtn', title, () => openReader(id)) : el('span', 'ttl', title));
+    t.append(l1);
+    if (sub) t.append(el('span', 'sub', sub));
+    const acts = el('div', 'acts');
+    if (right) acts.append(right);
+    if (prompt) acts.append(copyBtn(prompt));
+    if (brainId && PAGES.has(brainId)) {
+      acts.append(iconBtn('target', 'Show in brain', () => showInBrain(brainId)));
+      syncRow(r, brainId);
+    }
+    r.append(t, acts);
+    return r;
+  }
+  function moreFoot(n, where, section) {
+    const f = el('div', 'foot');
+    f.append(button('linkbtn', `+ ${n} more on ${where}`, () => show(section)));
+    return f;
+  }
+  const LOOP_CODE = { commitment: 'CMT', question: 'Q', idea: 'IDEA' };
+  const loopCode = (t) => el('span', 'code', LOOP_CODE[t] || (t ? String(t).slice(0, 4).toUpperCase() : 'LOOP'));
+  function loopRow(l) {
+    const bits = [];
+    if (l.created) bits.push('since ' + fmtDay(l.created));
+    if (l.due) bits.push('due ' + fmtDay(l.due));
+    if (l.summary) bits.push(l.summary);
+    return brow({ id: l.id, title: l.title, sub: bits.join(' · '), left: loopCode(l.loop_type),
+      prompt: loopPrompt(l.title), brainId: l.id });
+  }
+  const fromWhen = (id) => {
+    const p = PAGES.get(id), d = p && dateOf(p);
+    return isDay(d) ? 'from ' + fmtMonth(d) : '';
+  };
+  function resurfaceRow(r) {
+    return brow({ id: r.id, title: r.title, sub: [fromWhen(r.id), r.summary].filter(Boolean).join(' · '),
+      left: el('span', 'kind', kindWord(r.kind)), prompt: `/cortex about ${r.title}`, brainId: r.id });
+  }
+  function followRow(f) {
+    return brow({ id: f.id, title: f.title, sub: 'revisit on ' + fmtDay(f.review_on),
+      left: el('span', 'code', 'DEC'), prompt: loopPrompt(f.title), brainId: f.id });
+  }
+  function boardList(b, rows, cap, empty, more) {
+    if (!rows.length) b.body.append(el('p', 'empty', empty));
+    for (const r of rows.slice(0, cap)) b.body.append(r);
+    if (more && rows.length > cap) b.root.append(moreFoot(rows.length - cap, more[0], more[1]));
+    return b.root;
+  }
+  function assessRow(a) {
+    const r = el('div', 'brow');
+    const t = el('div', 't'), l1 = el('div', 'line1');
+    const who = [a.company || a.id, a.kind].filter(Boolean).join(' · ');
+    l1.append(PAGES.has(a.id) ? button('ttl linkbtn', who, () => openReader(a.id)) : el('span', 'ttl', who));
+    t.append(l1);
+    const ready = el('div', 'ready');
+    const rd = a.readiness;
+    if (rd.total) {
+      const bar = el('div', 'bar'), fill = el('span');
+      const label = `${rd.solid} of ${rd.total} tested topics solid`;
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label', label);
+      fill.style.width = Math.round(100 * rd.solid / rd.total) + '%';
+      bar.append(fill);
+      ready.append(bar, el('span', 'sub', label));
+    } else ready.append(el('span', 'sub', 'No tested topics recorded'));
+    t.append(ready);
+    const acts = el('div', 'acts');
+    const n = a.days_left;
+    acts.append(n == null ? el('span', 'sub', 'date not set') : dm(n === 0 ? 'TODAY' : `IN ${n}D`, 2,
+      n === 0 ? 'today' : `in ${plural(n, 'day')}`));
+    acts.append(copyBtn(`/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim()));
+    r.append(t, acts);
+    return r;
+  }
+
+  /* ---- Home ---- */
+  function departures() {
+    const items = [];
+    for (const a of D.assessments) {
+      if (a.days_left == null || a.days_left < 0 || a.days_left > 2) continue;
+      items.push({ time: a.days_left === 0 ? 'TODAY' : `IN ${a.days_left}D`, id: a.id,
+        title: [a.company || a.id, a.kind].filter(Boolean).join(' · '), why: 'Assessment',
+        lobe: pageLobe(a.id), word: 'DUE', prompt: `/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim() });
+    }
+    const groupOf = Object.fromEntries(GROUPS);
+    for (const i of D.today) {
+      items.push({ time: i.kind === 'unchecked' || i.kind === 'asked' ? 'NOW' : 'NEXT', id: i.id, title: i.title,
+        why: i.why || groupOf[i.kind] || '', lobe: pageLobe(i.id), state: i.state,
+        prompt: i.kind === 'refresh' ? '/cortex review' : `/cortex learn ${i.title}` });
+    }
+    const dated = (d) => (d === TODAY ? 'TODAY' : fmtDay(d).toUpperCase());
+    for (const l of D.loops) {
+      if (!isDay(l.due) || l.due > TODAY) continue;
+      items.push({ time: dated(l.due), id: l.id, title: l.title, why: 'Open loop', lobe: pageLobe(l.id),
+        word: 'OPEN', prompt: loopPrompt(l.title) });
+    }
+    for (const f of D.follow_ups) {
+      if (!isDay(f.review_on) || f.review_on > TODAY) continue;
+      items.push({ time: dated(f.review_on), id: f.id, title: f.title, why: 'Decision to revisit',
+        lobe: pageLobe(f.id), word: 'DUE', prompt: loopPrompt(f.title) });
+    }
+    return items;
+  }
+  let flicked = false;
+  function renderHome() {
+    const items = departures(), host = $('departures');
+    const b = board('Departures: today', { cls: 'departures' });
+    const head = el('div', 'dep-head');
+    for (const h of ['TIME', 'ITEM', 'PLATFORM', 'STATUS', '']) head.append(el('span', null, h));
+    b.body.append(head);
+    const times = [];
+    for (let k = 0; k < 8; k++) {
+      const it = items[k], r = el('div', 'dep-row' + (it ? '' : ' idle'));
+      const tc = el('div', 'tcell'), d = dm(it ? it.time : '     ', 2, it ? it.time : 'empty');
+      tc.append(d);
+      times.push(it ? d : null);
+      if (!it) {
+        r.setAttribute('aria-hidden', 'true');
+        r.append(tc, el('div'), el('div', 'plat'), el('div', 'status'), el('div', 'acts'));
+        b.body.append(r);
+        continue;
+      }
+      const item = el('div', 't');
+      item.append(PAGES.has(it.id) || GN.has(it.id) ? button('ttl linkbtn', it.title, () => openReader(it.id))
+        : el('span', 'ttl', it.title), el('span', 'sub', it.why));
+      const plat = el('div', 'plat');
+      plat.append(lobeChip(it.lobe));
+      const st = el('div', 'status' + (it.word ? ' word' : ''));
+      if (it.word) st.textContent = it.word; else st.append(stateWord(it.state));
+      const acts = el('div', 'acts');
+      acts.append(copyBtn(it.prompt));
+      if (PAGES.has(it.id)) acts.append(iconBtn('target', 'Show in brain', () => showInBrain(it.id)));
+      r.append(tc, item, plat, st, acts);
+      if (PAGES.has(it.id)) syncRow(r, it.id);
+      b.body.append(r);
+    }
+    if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due.'));
+    else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
+    else b.root.append(el('div', 'foot', 'That is everything due today.'));
+    host.replaceChildren(b.root);
+    if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, once
+      flicked = true;
+      times.forEach((d, k) => {
+        if (!d) return;
+        setTimeout(() => {
+          dmSet(d, [...d.dataset.text].map((c) => (c === ' ' ? c : SCRAMBLE[Math.floor(Math.random() * SCRAMBLE.length)])).join(''));
+          requestAnimationFrame(() => requestAnimationFrame(() => dmSet(d, d.dataset.text)));
+        }, k * 40);
+      });
+    }
+
+    const lobes = D.clusters.filter((c) => c.count > 0).length;
+    $('lobe-line').textContent = `${D.pages.length.toLocaleString('en')} pages in ${plural(lobes, 'lobe')}`;
+    $('explore').addEventListener('click', () => { show('brain'); setView('3d'); });
+
+    const rowA = $('home-row-a');
+    const pending = D.assessments;
+    rowA.append(boardList(board('Coming up'), pending.map(assessRow), 4,
+      'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']));
+    rowA.append(boardList(board('Open loops'), D.loops.map(loopRow), 5,
+      "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']));
+    rowA.append(boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
+      'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
+      ['Ideas', 'ideas']));
+
+    const rowB = $('home-row-b');
+    const weekAgo = new Date(dayNum(TODAY) * 864e5 - 7 * 864e5).toISOString().slice(0, 10);
+    const recent = D.pages.filter((p) => p.updated >= weekAgo)
+      .sort((a, b) => (b.updated > a.updated ? 1 : b.updated < a.updated ? -1 : (dateOf(b) || '') > (dateOf(a) || '') ? 1 : -1));
+    rowB.append(boardList(board('Recently saved', { note: `${recent.length.toLocaleString('en')} ${recent.length === 1 ? 'page' : 'pages'} this week` }),
+      recent.slice(0, 10).map((p) => brow({ id: p.id, title: p.title, sub: `${fmtDay(p.updated)} · ${kindWord(p.kind)}`,
+        left: lobeChip(p.cluster), brainId: p.id })), 10,
+      'Nothing saved in the last 7 days. Chats save what they learn as you talk.'));
+    rowB.append(boardList(board('Cortex wants to ask'), D.needs.slice(0, 3).map((n) => brow({
+      title: n.area ? `Something about your ${n.area}` : 'Something about you',
+      sub: n.count > 1 ? `came up in ${n.count} chats` : 'came up in a chat',
+      prompt: 'Ask me what Cortex wants to know' })), 3,
+    'Nothing to ask right now. Cortex adds a question here when a chat lacks something about you.'));
+  }
+
+  /* ---- Brain section ---- */
+  const KGROUPS = [['concept', 'Concepts'], ['note', 'Notes'], ['project', 'Projects'], ['decision', 'Decisions'],
+    ['chat', 'Chats'], ['youtube', 'YouTube'], ['person', 'People'], ['other', 'Other']];
+  function applyBrainFilter() {
+    const k = brainFilter.kinds, s = brainFilter.states;
+    const all = k.size === KGROUPS.length && s.size === STATES.length;
+    brain.setFilter(all ? null : (n) => k.has(n.group) && (n.kind !== 'concept' || s.has(n.state)));
+    for (const b of $('bkinds').children) b.setAttribute('aria-pressed', String(k.has(b.dataset.k)));
+    for (const b of $('bstates').children) b.setAttribute('aria-pressed', String(s.has(b.dataset.s)));
+  }
+  function resetBrainFilters() {
+    KGROUPS.forEach(([k]) => brainFilter.kinds.add(k));
+    STATES.forEach((s) => brainFilter.states.add(s));
+    applyBrainFilter();
+  }
+  function markLobe(id) {
+    $('all-lobes').setAttribute('aria-pressed', String(!id));
+    for (const li of $('outline').querySelectorAll('.lobe')) li.setAttribute('aria-selected', String(li.dataset.id === id));
+  }
+  function markOutline(pageId) {
+    if (!brainUi || brainFailed) return;
+    for (const li of $('outline').querySelectorAll('.page')) li.setAttribute('aria-selected', String(li.dataset.id === pageId));
+  }
+  function selectLobe(id) {
+    if (!brain) return;
+    brain.focusCluster(id);
+    markLobe(id);
+    inspectLobe(id);
+  }
+  function renderLegend(m) {
+    const lg = $('legend');
+    lg.replaceChildren(el('p', 'honest', D.brain.legend || ''));
+    if (brain && brain.legendNote) lg.append(el('p', null, brain.legendNote));
+    if (m === 'mastery') {
+      const sw = el('div', 'sw');
+      for (const s of STATES) sw.append(stateWord(s));
+      lg.append(sw, el('p', null, 'Concepts take their state; study lobes are tinted from Needs refresh to Solid; other lobes are grey.'));
+    } else if (m === 'growth') {
+      lg.append(el('p', null, 'Pages appear month by month, dated by the source, not by when it was saved.'));
+    } else lg.append(el('p', null, 'A halo marks a page saved or changed in the last 7 days.'));
+    lg.append(el('p', null, 'drag to turn · scroll to zoom · click a lobe name for its pages · click a point to inspect it · double-click empty space for the overview'));
+    lg.append(el('p', null, 'keys: Esc back · [ ] step · Backspace previous · F frame · 0 reset · arrows turn · + − zoom · A M G modes · S spin'
+      + (HAS_STYLE ? ' · L look' : '')));
+  }
+
+  /* the outline: region > lobe > page as a WAI tree (an equal route to the canvas) */
+  const REGIONS = [['topic', 'Topics'], ['domain', 'Study subjects'], ['group', 'Routines, projects and the rest'],
+    ['archive', 'Unsorted chats']];
+  const regionOf = (l) => (l.archive ? 'archive' : l.kind === 'topic' || l.kind === 'domain' ? l.kind : 'group');
+  function treeItem(cls, level, label, parent) {
+    const li = el('li', cls);
+    li.setAttribute('role', 'treeitem');
+    li.setAttribute('aria-level', String(level));
+    li.tabIndex = -1;
+    const row = el('div', 'ti');
+    row.append(...label);
+    li.append(row);
+    parent.append(li);
+    return li;
+  }
+  function addGroup(li) {
+    const ul = el('ul');
+    ul.setAttribute('role', 'group');
+    ul.hidden = li.getAttribute('aria-expanded') !== 'true';
+    li.append(ul);
+    return ul;
+  }
+  function setExpanded(li, on) {
+    if (!li.hasAttribute('aria-expanded')) return;
+    li.setAttribute('aria-expanded', String(on));
+    let ul = li.querySelector(':scope > ul');
+    if (on && li.classList.contains('lobe') && !ul.childElementCount) {  // pages are built on first open
+      for (const p of topPagesOf(li.dataset.id, 20)) {
+        const pi = treeItem('page', 3, [el('span'), el('span', 'nm', p.title)], ul);
+        pi.dataset.id = p.id;
+        pi.setAttribute('aria-selected', 'false');
+      }
+    }
+    ul.hidden = !on;
+  }
+  function activate(li) {
+    if (li.classList.contains('region')) setExpanded(li, li.getAttribute('aria-expanded') !== 'true');
+    else if (li.classList.contains('lobe')) { setExpanded(li, true); selectLobe(li.dataset.id); }
+    else explorePage(li.dataset.id);
+  }
+  function buildOutline() {
+    const tree = $('outline');
+    const lobes = D.brain.lobes.filter((l) => l.count > 0);
+    for (const [r, word] of REGIONS) {
+      const ls = lobes.filter((l) => regionOf(l) === r);
+      if (!ls.length) continue;
+      const n = ls.reduce((a, l) => a + l.count, 0);
+      const ri = treeItem('region', 1, [icon('chevron'), el('span', 'nm', word), el('span', 'n', n.toLocaleString('en'))], tree);
+      ri.setAttribute('aria-expanded', 'true');
+      const rg = addGroup(ri);
+      for (const l of ls) {
+        const li = treeItem('lobe', 2, [icon('chevron'), el('span', 'code', code(l.title)), el('span', 'nm', l.title),
+          el('span', 'n', l.count.toLocaleString('en'))], rg);
+        li.dataset.id = l.id;
+        li.title = `${l.title} · ${l.count.toLocaleString('en')}`;
+        li.setAttribute('aria-label', `${l.title}, ${plural(l.count, 'page')}`);
+        li.setAttribute('aria-expanded', 'false');
+        li.setAttribute('aria-selected', 'false');
+        addGroup(li);
+      }
+    }
+    const first = tree.querySelector('[role="treeitem"]');
+    if (first) first.tabIndex = 0;
+    const visible = () => [...tree.querySelectorAll('[role="treeitem"]')].filter((li) => !li.parentElement.closest('[role="group"][hidden]'));
+    const move = (li) => {
+      if (!li) return;
+      for (const x of tree.querySelectorAll('[role="treeitem"][tabindex="0"]')) x.tabIndex = -1;
+      li.tabIndex = 0;
+      li.focus();
+    };
+    tree.addEventListener('click', (e) => {
+      const li = e.target.closest('[role="treeitem"]');
+      if (!li) return;
+      move(li);
+      activate(li);
+    });
+    tree.addEventListener('keydown', (e) => {
+      const li = e.target.closest('[role="treeitem"]');
+      if (!li || e.ctrlKey || e.metaKey || e.altKey) return;
+      const vis = visible(), i = vis.indexOf(li), open = li.getAttribute('aria-expanded');
+      if (e.key === 'ArrowDown') move(vis[i + 1]);
+      else if (e.key === 'ArrowUp') move(vis[i - 1]);
+      else if (e.key === 'Home') move(vis[0]);
+      else if (e.key === 'End') move(vis[vis.length - 1]);
+      else if (e.key === 'ArrowRight') {
+        if (open === 'false') setExpanded(li, true);
+        else if (open === 'true') move(li.querySelector(':scope > ul > [role="treeitem"]'));
+      } else if (e.key === 'ArrowLeft') {
+        if (open === 'true') setExpanded(li, false);
+        else move(li.parentElement.closest('[role="treeitem"]'));
+      } else if (e.key === 'Enter' || e.key === ' ') activate(li);
+      else return;
+      e.preventDefault();
+    });
+  }
+
+  function renderBrainSection() {
+    for (const b of $('viewswitch').children) b.addEventListener('click', () => setView(b.dataset.view));
+    if (brainFailed) {
+      $('b2d').prepend(el('p', 'empty', 'The 3D brain needs a fresh build: run cortex dashboard. Showing the 2D map.'));
+      return;
+    }
+    // The toolbar: modes, spin, Today, the unsorted-chat ring, and the Growth scrubber.
+    const tools = $('brain-tools');
+    const spin = button('btn tbtn', null, () => { if (brain) brain.setSpin(spin.getAttribute('aria-pressed') !== 'true'); });
+    spin.textContent = 'Spin';
+    spin.title = 'Turn the brain slowly when idle (S in the brain)';
+    spin.setAttribute('aria-pressed', 'false');
+    spinBtns.push(spin);
+    const alive = button('btn tbtn', null, () => { if (brain) brain.setAlive(alive.getAttribute('aria-pressed') !== 'true'); });
+    alive.textContent = 'Alive';
+    alive.title = 'Neurons fire now and then and waves drift through the topics; sleeps after 2 minutes idle';
+    alive.setAttribute('aria-pressed', String(!!(brain && brain.alive)));
+    aliveBtns.push(alive);
+    const arch = button('btn tbtn', 'Unsorted chats', () => {
+      archiveOn = !archiveOn;
+      arch.setAttribute('aria-pressed', String(archiveOn));
+      if (brain) brain.setArchive(archiveOn);
+    });
+    arch.title = 'Show the unsorted chats as a faint ring under the brain';
+    arch.setAttribute('aria-pressed', String(archiveOn));
+    const months = [];
+    const dates = D.pages.map((p) => p.date).filter(isDay).sort();
+    if (dates.length) {
+      let y = +dates[0].slice(0, 4), m = +dates[0].slice(5, 7);
+      const end = dates[dates.length - 1].slice(0, 7);
+      for (;;) {
+        const k = `${y}-${String(m).padStart(2, '0')}`;
+        months.push(k);
+        if (k >= end) break;
+        if (++m > 12) { m = 1; y++; }
+      }
+    }
+    const scrub = el('div', 'scrub'), range = el('input'), out = el('output');
+    scrub.id = 'scrub';
+    scrub.hidden = true;
+    range.type = 'range';
+    range.min = '0';
+    range.max = String(Math.max(0, months.length - 1));
+    range.value = range.max;
+    range.setAttribute('aria-label', 'Growth: show pages up to this month');
+    const setOut = () => {
+      const mo = months[+range.value];
+      out.textContent = mo ? fmtMonth(mo) : '';
+      range.setAttribute('aria-valuetext', out.textContent);
+    };
+    setOut();
+    range.addEventListener('input', () => { setOut(); if (brain) brain.setGrowth(months[+range.value] || null); });
+    scrub.append(el('span', null, 'Up to'), range, out);
+    if (!months.length) range.disabled = true;
+    tools.append(modeGroup(), spin, alive, todayBtn('btn'), arch);
+    if (HAS_STYLE) tools.append(lookBtn());
+    tools.append(scrub);
+    buildOutline();
+    $('all-lobes').addEventListener('click', () => { if (brain) brain.focusCluster(null); markLobe(null); });
+    $('outline-toggle').addEventListener('click', () => {
+      const on = $('outline-toggle').getAttribute('aria-expanded') !== 'true';
+      $('outline-toggle').setAttribute('aria-expanded', String(on));
+      $('outline-box').hidden = !on;
+    });
+    if (!ensureBrain()) return;
+    for (const [k, word] of KGROUPS) {
+      const b = button(null, word, () => {
+        if (brainFilter.kinds.has(k)) brainFilter.kinds.delete(k); else brainFilter.kinds.add(k);
+        applyBrainFilter();
+      });
+      b.dataset.k = k;
+      $('bkinds').append(b);
+    }
+    for (const s of STATES) {
+      const b = button(null, null, () => {
+        if (brainFilter.states.has(s)) brainFilter.states.delete(s); else brainFilter.states.add(s);
+        applyBrainFilter();
+      });
+      b.dataset.s = s;
+      b.append(glyph(s), ' ' + LABEL[s]);
+      $('bstates').append(b);
+    }
+    applyBrainFilter();
+    markLobe(null);
+    let timer = 0;
+    $('bq').addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const q = $('bq').value.trim();
+        if (!q) { brain.highlight(null); $('bq-note').textContent = ''; return; }
+        const hits = search(q);
+        brain.highlight(hits.map((h) => h.h.p.id));
+        const msg = hits.length ? `${plural(hits.length, 'page')} lit` : 'No pages match.';
+        $('bq-note').textContent = msg;
+        live(msg);
+      }, 160);
+    });
+    $('rail-toggle').addEventListener('click', () => {
+      const open = $('rail').classList.toggle('closed');
+      $('rail-toggle').setAttribute('aria-expanded', String(!open));
+      $('rail-body').hidden = open;
+    });
+    if (phone()) $('rail-toggle').click();
+    syncMode(brain.mode);
+  }
+  let brainUi = false;
+  function ensureBrainUi() { if (!brainUi) { brainUi = true; renderBrainSection(); } }
+  function setView(v) {
+    ensureBrainUi();
+    if (v === '3d' && brainFailed) v = '2d';
+    view = v;
+    for (const b of $('viewswitch').children) b.setAttribute('aria-pressed', String(b.dataset.view === v));
+    $('b3d').hidden = v !== '3d';
+    $('b2d').hidden = v === '3d';
+    hideTip();
+    if (current !== 'brain') return;
+    if (v === '3d') placeBrain('brain-slot');
+    if (v === '3d' && brainFailed) { setView('2d'); return; }  // the mount just failed
+    if (v !== '3d') { closeLook(false); G.init(); G.setList(v === 'list'); }
+  }
+
+  /* ---- Library ---- */
+  const PRESETS = [['all', 'All'], ['project', 'Projects'], ['note', 'Notes'], ['decision', 'Decisions'],
+    ['reading', 'Reading'], ['chat', 'Chats'], ['youtube', 'YouTube'], ['person', 'People'], ['topic', 'Topics']];
+  const LIB = { q: '', preset: 'all', lobe: '', tag: '', sort: 'date', shown: 100, hits: null };
+  function inPreset(p) {
+    const k = LIB.preset;
+    if (k === 'all') return true;
+    if (k === 'topic') return p.tags.includes('topic');
+    if (k === 'reading') return p.kind === 'resource' && kindGroup(p) === 'other';
+    if (k === 'chat' || k === 'youtube') return kindGroup(p) === k;
+    return p.kind === k;
+  }
+  // Brain -> Library: a lobe clicked in the brain filters the Library (a chip clears it).
+  function filterLibraryLobe(id) {
+    LIB.lobe = id || '';
+    LIB.shown = 100;
+    $('llobe').value = LIB.lobe;
+    renderLibraryRows();
+  }
+  function libraryFind(text) {
+    $('lq').value = text;
+    LIB.q = text;
+    LIB.hits = new Set(search(text).map((h) => h.h.p.id));
+    LIB.shown = 100;
+    show('library');
+    renderLibraryRows();
+  }
+  function setTag(t) {
+    LIB.tag = t;
+    LIB.shown = 100;
+    show('library');
+    renderLibraryRows();
+  }
+  function renderLibrary() {
+    const pr = $('lpresets');
+    for (const [k, word] of PRESETS) {
+      const b = button(null, word, () => { LIB.preset = k; LIB.shown = 100; renderLibraryRows(); });
+      b.dataset.k = k;
+      pr.append(b);
+    }
+    const lob = $('llobe');
+    for (const c of D.clusters) {
+      if (!c.count) continue;
+      const o = el('option', null, `${code(c.title)} · ${c.title} (${c.count})`);
+      o.value = c.id;
+      lob.append(o);
+    }
+    lob.addEventListener('change', () => { LIB.lobe = lob.value; LIB.shown = 100; renderLibraryRows(); });
+    $('lsort').addEventListener('change', () => { LIB.sort = $('lsort').value; renderLibraryRows(); });
+    let timer = 0;
+    $('lq').addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        LIB.q = $('lq').value.trim();
+        LIB.hits = LIB.q ? new Set(search(LIB.q).map((h) => h.h.p.id)) : null;
+        LIB.shown = 100;
+        renderLibraryRows();
+      }, 160);
+    });
+    $('lmore').addEventListener('click', () => { LIB.shown += 100; renderLibraryRows(); });
+    renderLibraryRows();
+  }
+  function renderLibraryRows() {
+    if (!rendered.has('library')) return;
+    for (const b of $('lpresets').children) b.setAttribute('aria-pressed', String(b.dataset.k === LIB.preset));
+    const tagBox = $('ltag');
+    tagBox.hidden = !LIB.tag;
+    tagBox.replaceChildren();
+    if (LIB.tag) {
+      tagBox.append(el('span', null, 'Tagged'), el('span', 'chip', '#' + LIB.tag),
+        button('linkbtn', 'Clear tag', () => { LIB.tag = ''; renderLibraryRows(); }));
+    }
+    const chip = $('llobe-chip'), lobe = LOBES.get(LIB.lobe);
+    $('llobe').value = LIB.lobe;
+    chip.hidden = !lobe;
+    chip.replaceChildren();
+    if (lobe) {
+      const x = button('chip', null, () => filterLibraryLobe(''), 'Clear the lobe filter');
+      x.append('Filtered by ' + lobe.title + ' ', icon('close'));
+      chip.append(x);
+    }
+    const rows = D.pages.filter((p) => inPreset(p) && (!LIB.lobe || p.cluster === LIB.lobe)
+      && (!LIB.tag || p.tags.includes(LIB.tag)) && (!LIB.hits || LIB.hits.has(p.id)));
+    const key = LIB.sort === 'title' ? null : LIB.sort === 'updated' ? (p) => p.updated : dateOf;
+    rows.sort(key ? (a, b) => { const x = key(a) || '', y = key(b) || ''; return x < y ? 1 : x > y ? -1 : a.title.localeCompare(b.title); }
+      : (a, b) => a.title.localeCompare(b.title));
+    $('lcount').textContent = `${rows.length.toLocaleString('en')} of ${D.pages.length.toLocaleString('en')} pages`
+      + (rows.length > LIB.shown ? `, showing the first ${LIB.shown.toLocaleString('en')}` : '');
+    if (!rows.length) {
+      $('ltable').replaceChildren(el('p', 'empty', 'No pages match. Clear the search, preset, lobe or tag to see more.'));
+      $('lmore').hidden = true;
+      return;
+    }
+    const table = el('table'), thead = el('thead'), htr = el('tr'), tbody = el('tbody');
+    for (const h of ['DATE', 'TITLE', 'KIND', 'PLATFORM', 'SOURCE', 'UPDATED']) {
+      const th = el('th', null, h);
+      th.scope = 'col';
+      htr.append(th);
+    }
+    thead.append(htr);
+    for (const p of rows.slice(0, LIB.shown)) {
+      const tr = el('tr'), tc = el('td', 'ttlc');
+      tc.append(button(null, p.title, (e) => { e.stopPropagation(); openReader(p.id); }));
+      if (p.summary) tc.append(el('span', 'sum', p.summary));
+      const pc = el('td');
+      pc.append(lobeChip(p.cluster));
+      tr.append(el('td', 'nowrap', dateOf(p) ? fmtDay(dateOf(p)) + ' ' + dateOf(p).slice(0, 4) : ''), tc,
+        el('td', 'nowrap', kindWord(p.kind)), pc, el('td', 'nowrap', p.source || ''), el('td', 'nowrap', fmtDay(p.updated)));
+      tr.addEventListener('click', () => openReader(p.id));
+      syncRow(tr, p.id);
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    $('ltable').replaceChildren(table);
+    $('lmore').hidden = rows.length <= LIB.shown;
+  }
+
+  /* ---- You ---- */
+  const TIER_ROWS = [['you confirmed', ['confirmed', 'typed', 'legacy'], false],
+    ['a chat relayed (ask)', ['agent'], true], ['a chat saved (ask)', ['exposed'], true]];
+  function renderYou() {
+    const host = $('view-you'), know = D.you.know || { pages: [], total: { tiers: {} } };
+    host.append(el('h1', null, NAME || 'You'));
+    const tiers = (t) => TIER_ROWS.map(([, keys]) => keys.reduce((a, k) => a + ((t || {})[k] || 0), 0));
+    const pagesWith = know.pages.filter((p) => !p.private && p.live).length;
+    const lead = el('p', 'muted');
+    lead.textContent = `Cortex has ${plural(tiers(know.total.tiers)[0], 'confirmed line')} about you across ${plural(pagesWith, 'page')}.`;
+    host.append(lead);
+
+    const grid = el('div', 'you-grid');
+    const wait = board('Waiting for your yes', { action: copyBtn('/cortex reflect', 'band-btn') });
+    const un = D.you.unconfirmed || [];
+    if (!un.length) wait.body.append(el('p', 'empty', 'Nothing waiting.'));
+    for (const u of un) {
+      const r = el('div', 'brow');
+      const t = el('div', 't');
+      t.append(el('div', null, u.text), el('span', 'sub', u.since ? 'proposed ' + fmtDay(u.since) : 'in inbox.md'));
+      r.append(t, el('div'));
+      wait.body.append(r);
+    }
+    wait.root.append(el('div', 'foot', 'Copy /cortex reflect and paste it into Claude to go through them.'));
+
+    const kb = board('How well Cortex knows you');
+    const rows = know.pages.filter((p) => !p.private);
+    const max = Math.max(1, ...rows.map((p) => Math.max(...tiers(p.tiers))));
+    const box = el('div', 'tiers');
+    for (const p of know.pages) {
+      const r = el('div', 'trow2');
+      const title = PAGES.has(p.page) ? button('linkbtn', PAGES.get(p.page).title, () => openReader(p.page)) : el('span', null, p.page);
+      r.append(title);
+      const bars = el('div');
+      if (p.private) bars.append(el('span', 'sub', 'A private page; not shown here.'));
+      else {
+        tiers(p.tiers).forEach((v, k) => {
+          const b = el('div', 'tbar'), tr = el('div', 'track' + (TIER_ROWS[k][2] ? ' ask' : '')), f = el('span');
+          f.style.width = (100 * v / max) + '%';
+          tr.append(f);
+          tr.setAttribute('role', 'img');
+          tr.setAttribute('aria-label', `${v} lines ${TIER_ROWS[k][0]}`);
+          b.append(el('span', null, TIER_ROWS[k][0]), tr, el('span', 'v', v));
+          bars.append(b);
+        });
+      }
+      r.append(bars);
+      box.append(r);
+    }
+    if (!know.pages.length) box.append(el('p', 'empty', 'No pages about you yet. Tell any Claude chat about yourself.'));
+    kb.body.append(box);
+    const pr = (D.you.probes || {}).overall || { n: 0 };
+    const pf = el('div', 'foot');
+    if (pr.n) pf.textContent = `Predicted you right ${Math.round(pr.twin * pr.n)} of ${pr.n}.`;
+    else pf.append('No probes yet: try /cortex probe ', copyBtn('/cortex probe'));
+    kb.root.append(pf);
+    grid.append(wait.root, kb.root);
+    host.append(grid);
+
+    host.append(el('h2', null, 'Your pages'));
+    const g2 = el('div', 'you-grid');
+    const me = D.pages.filter((p) => p.kind === 'me').sort((a, b) => (a.id === 'profile' ? -1 : b.id === 'profile' ? 1 : a.title.localeCompare(b.title)));
+    const lb = board('About you', { note: plural(me.length, 'page') });
+    const view = board('Profile');
+    const showMe = (p) => {
+      view.band.firstChild.textContent = p.title;
+      const body = el('div', 'md me-view');
+      body.append(md(p.body));
+      view.body.replaceChildren(body);
+    };
+    if (!me.length) lb.body.append(el('p', 'empty', 'No me/ pages yet. Tell any Claude chat about yourself.'));
+    for (const p of me) {
+      const r = brow({ id: p.id, title: p.title, sub: p.summary || '', prompt: `/cortex about ${p.title}`, brainId: p.id });
+      const peek = iconBtn('chevron', 'Show beside the list', () => showMe(p));
+      r.lastChild.prepend(peek);
+      lb.body.append(r);
+    }
+    const prof = me.find((p) => p.id === 'profile') || me[0];
+    if (prof) showMe(prof); else view.body.append(el('p', 'empty', 'No profile yet.'));
+    g2.append(lb.root, view.root);
+    host.append(g2);
+
+    host.append(el('h2', null, 'Patterns'));
+    const pats = D.pages.filter((p) => p.id === 'youtube-and-notebooklm-patterns' || p.tags.includes('patterns'));
+    host.append(boardList(board('Patterns Cortex has noticed'), pats.map((p) => brow({ id: p.id, title: p.title,
+      sub: p.summary || '', brainId: p.id })), 50,
+    'No pattern notes yet. Ask a Claude chat to look for patterns in your imports.'));
+  }
+
+  /* ---- Timeline ---- */
+  const STEP = (n) => (n >= 8 ? 3 : n >= 3 ? 2 : n >= 1 ? 1 : 0);  // fixed thresholds: 1, 3, 8+
+  function renderTimeline() {
+    const host = $('view-timeline');
+    host.append(el('h1', null, 'Timeline'));
+    const byDay = new Map();
+    for (const p of D.pages) {
+      if (!isDay(p.date)) continue;
+      const d = p.date.slice(0, 10);
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(p);
+    }
+    if (!byDay.size) {
+      host.append(el('p', 'empty', 'No dated pages yet. Import your chats or keep a journal and they appear here.'));
+      return;
+    }
+    const days = [...byDay.keys()].sort();
+    const last = days[days.length - 1] > TODAY ? TODAY : days[days.length - 1];
+    let y = +last.slice(0, 4), m = +last.slice(5, 7);
+    const first = days[0].slice(0, 7), months = [];
+    while (months.length < 48) {
+      const key = `${y}-${String(m).padStart(2, '0')}`;
+      months.push(key);
+      if (key <= first) break;
+      if (--m === 0) { m = 12; y--; }
+    }
+    host.append(el('p', 'muted', `Pages by the day they were written, newest month first${months.length === 48 ? ' (the last 48 months)' : ''}. Every month uses the same scale.`));
+    const LW = 116, CW = 14, RH = 25, TW = 48;
+    const W = LW + 31 * CW + TW, H = months.length * RH;
+    const svg = svgEl('svg', { class: 'tl-grid', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img',
+      'aria-label': 'Pages per day, one row per month' });
+    months.forEach((key, r) => {
+      const g = svgEl('g', { transform: `translate(0 ${r * RH})` });
+      const lab = dm(MON[+key.slice(5, 7) - 1] + ' ' + key.slice(2, 4), 2);
+      lab.setAttribute('x', 0);
+      lab.setAttribute('y', 2);  // 21 px tall in a 25 px row
+      g.append(lab);
+      const dim = new Date(Date.UTC(+key.slice(0, 4), +key.slice(5, 7), 0)).getUTCDate();
+      let total = 0;
+      for (let d = 1; d <= dim; d++) {
+        const day = `${key}-${String(d).padStart(2, '0')}`, n = (byDay.get(day) || []).length;
+        total += n;
+        const c = svgEl('circle', { cx: LW + (d - 1) * CW + CW / 2, cy: RH / 2, r: 4.5, class: 'c' + STEP(n) + (n ? ' hit' : '') });
+        c.dataset.day = day;
+        c.dataset.n = n;
+        g.append(c);
+      }
+      const t = svgEl('text', { x: W - 4, y: RH / 2 + 4, 'text-anchor': 'end', class: 'tl-total' });
+      t.textContent = String(total);
+      g.append(t);
+      svg.append(g);
+    });
+    const label = (day, n) => `${+day.slice(8, 10)} ${MON[+day.slice(5, 7) - 1]} ${day.slice(0, 4)} · ${plural(n, 'page')}`;
+    svg.addEventListener('mousemove', (e) => {
+      const c = e.target.closest('circle');
+      if (!c) { hideTip(); return; }
+      showTip(e, [label(c.dataset.day, +c.dataset.n)]);
+    });
+    svg.addEventListener('mouseleave', hideTip);
+    const list = el('div');
+    let selC = null;
+    svg.addEventListener('click', (e) => {
+      const c = e.target.closest('circle');
+      if (!c || !+c.dataset.n) return;
+      if (selC) selC.classList.remove('sel');
+      selC = c;
+      c.classList.add('sel');
+      dayList(list, c.dataset.day, byDay.get(c.dataset.day));
+    });
+    const wrap = board('Activity', { note: `${plural(byDay.size, 'day')} with dated pages` });
+    const sc = el('div', 'tl-wrap');
+    sc.append(svg);
+    const key = el('div', 'tl-key');
+    for (const [s, txt] of [[0, 'none'], [1, '1 to 2 pages'], [2, '3 to 7'], [3, '8 or more']]) {
+      const k = el('span'), ks = svgEl('svg', { width: 12, height: 12, class: 'tl-grid', 'aria-hidden': 'true' });
+      ks.append(svgEl('circle', { cx: 6, cy: 6, r: 4.5, class: 'c' + s }));
+      k.append(ks, ' ' + txt);
+      key.append(k);
+    }
+    key.append(el('span', null, 'Click a day to list its pages.'));
+    sc.append(key);
+    wrap.body.append(sc);
+    host.append(wrap.root, list);
+
+    host.append(el('h2', null, 'Months'));
+    const SRC = [['Claude', (p) => p.source === 'Claude'], ['Gemini', (p) => p.source === 'Gemini'],
+      ['Perplexity', (p) => p.source === 'Perplexity'], ['YouTube', (p) => p.source === 'YouTube' || p.source === 'NotebookLM'],
+      ['notes', (p) => p.kind === 'note'], ['journal', (p) => p.kind === 'journal']];
+    const mb = board('Months');
+    const ul = el('ul', 'months');
+    for (const key of months) {
+      const ps = days.filter((d) => d.startsWith(key)).flatMap((d) => byDay.get(d));
+      if (!ps.length) continue;
+      const li = el('li');
+      li.append(el('span', 'm', fmtMonth(key + '-01')));
+      for (const [word, f] of SRC) {
+        const n = ps.filter(f).length;
+        if (n) li.append(el('span', 'muted', `${word} ${n}`));
+      }
+      const jr = D.pages.find((p) => p.kind === 'journal' && p.id.startsWith(key));
+      if (jr) li.append(button('linkbtn', 'Journal', () => openReader(jr.id)));
+      if (PAGES.has('youtube-' + key)) li.append(button('linkbtn', 'YouTube month', () => openReader('youtube-' + key)));
+      ul.append(li);
+    }
+    mb.body.append(ul);
+    host.append(mb.root);
+  }
+  function dayList(host, day, ps) {
+    const groups = new Map();
+    for (const p of ps) {
+      const k = p.source || kindWord(p.kind);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(p);
+    }
+    const b = board(`${+day.slice(8, 10)} ${MON[+day.slice(5, 7) - 1]} ${day.slice(0, 4)}`, { note: plural(ps.length, 'page') });
+    for (const [k, xs] of groups) {
+      b.body.append(el('h4', 'pad-h', k));
+      for (const p of xs) b.body.append(brow({ id: p.id, title: p.title, sub: p.summary || kindWord(p.kind), left: lobeChip(p.cluster), brainId: p.id }));
+    }
+    b.root.style.marginTop = '16px';
+    host.replaceChildren(b.root);
+    b.root.scrollIntoView({ block: 'nearest', behavior: REDUCED.matches ? 'auto' : 'smooth' });
+  }
+
+  /* ---- Ideas ---- */
+  function renderIdeas() {
+    const host = $('view-ideas');
+    host.append(el('h1', null, 'Ideas and loops'));
+    const grid = el('div', 'ideas-grid');
+    const lb = board('Open loops', { note: plural(D.loops.length, 'open loop') });
+    if (!D.loops.length) lb.body.append(el('p', 'empty', "No open loops. Say 'remind me to…' in any Claude chat."));
+    const TYPES = [['commitment', 'Commitments'], ['question', 'Questions'], ['idea', 'Ideas']];
+    const known = new Set(TYPES.map((t) => t[0]));
+    for (const [t, word] of [...TYPES, ['', 'Other']]) {
+      const ls = D.loops.filter((l) => (t ? l.loop_type === t : !known.has(l.loop_type)));
+      if (!ls.length) continue;
+      lb.body.append(el('h4', 'pad-h', word));
+      for (const l of ls) lb.body.append(loopRow(l));
+    }
+    grid.append(lb.root);
+    grid.append(boardList(board('Decisions to revisit'), D.follow_ups.map(followRow), 1e9,
+      'No decisions waiting for a second look. A decision with a review date shows up here when it is due.'));
+    grid.append(boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 1e9,
+      'Nothing coming back today. Old ideas and decisions return here when they are due another look.'));
+    host.append(grid);
+    host.append(el('h2', null, 'Recent ideas'));
+    const since = new Date(dayNum(TODAY) * 864e5 - 30 * 864e5).toISOString().slice(0, 10);
+    const ideas = D.pages.filter((p) => p.kind === 'note' && (p.tags.includes('idea')
+      || ['fleeting', 'permanent'].includes(String(p.props.note_type || ''))) && (dateOf(p) || '') >= since)
+      .sort((a, b) => (dateOf(b) > dateOf(a) ? 1 : -1));
+    host.append(boardList(board('Notes from the last 30 days', { note: plural(ideas.length, 'note') }),
+      ideas.map((p) => brow({ id: p.id, title: p.title, sub: `${fmtDay(dateOf(p))} · ${p.summary || kindWord(p.kind)}`,
+        left: lobeChip(p.cluster), prompt: `/cortex about ${p.title}`, brainId: p.id })), 1e9,
+      'No new ideas in the last 30 days. Say "note this idea" in any Claude chat.'));
+  }
+
+  /* ---- Study (the old Today and History) ---- */
+  function renderStudy() {
+    const s = D.sprint, box = $('sprint');
+    if (!s || !s.days.length) box.hidden = true;
+    else {
+      const strip = el('ol', 'strip');
+      strip.setAttribute('aria-label', 'Sprint days');
+      for (const d of s.days) {
+        const li = el('li', 'pill ' + d.status, d.label + (d.status === 'done' ? ' ✓' : ''));
+        if (d.status === 'current') li.setAttribute('aria-current', 'step');
+        strip.append(li);
+      }
+      box.append(strip);
+      if (s.day != null) {
+        const c = s.today_counts;
+        box.append(el('p', null, `Day ${s.day} · ${c.done} done · ${c.left} left`));
+      }
+      if (isDay(s.placement_date)) {
+        const n = between(TODAY, s.placement_date);
+        if (n >= 0) box.append(el('p', 'muted', `Phase 1 placements in ${plural(n, 'day')}`));
+      }
+    }
+    const tiles = $('tiles');
+    for (const st of STATES) {
+      const b = button(null, null, () => { show('brain'); setView('2d'); G.onlyState(st); });
+      b.append(glyph(st), ' ' + LABEL[st], dm(String(D.counts[st] || 0), 4));
+      b.setAttribute('aria-label', `${LABEL[st]}: ${D.counts[st] || 0}, show on the 2D map`);
+      tiles.append(b);
+    }
+    const plan = $('plan');
+    if (D.plan_cleared) plan.append(el('div', 'board done-card', 'Done for today ✓'));
+    for (const [kind, head] of GROUPS) {
+      const items = D.today.filter((i) => i.kind === kind);
+      if (!items.length) continue;
+      const g = el('div', 'group');
+      const ul = el('ul', 'rows');
+      for (const i of items) {
+        const li = el('li', 'row');
+        const mid = el('span', 'title');
+        mid.append(PAGES.has(i.id) || GN.has(i.id) ? button('linkbtn', i.title, () => openReader(i.id)) : i.title);
+        if (i.state) mid.append(el('span', 'label muted', LABEL[i.state]));
+        li.append(glyph(i.state), mid, el('span', 'why', i.why === head ? '' : i.why));
+        ul.append(li);
+      }
+      g.append(el('h3', null, head), ul);
+      plan.append(g);
+    }
+    const coming = $('coming');
+    if (!D.assessments.length) coming.append(el('p', 'empty', 'Nothing scheduled. Tell any Claude chat about a test and its date.'));
+    for (const a of D.assessments) {
+      const c = el('div', 'board assess');
+      c.append(el('h3', null, [a.company || a.id, a.kind].filter(Boolean).join(' · ')));
+      const n = a.days_left;
+      c.append(el('div', 'when', n == null ? 'date not set' : n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`));
+      const r = a.readiness;
+      if (r.total) {
+        const wrap = el('div', 'ready'), bar = el('div', 'bar');
+        bar.setAttribute('role', 'img');
+        const pct = Math.round(100 * (r.share == null ? r.solid / r.total : r.share));
+        const label = `${pct}% ready (${r.solid} of ${r.total} solid)`;
+        bar.setAttribute('aria-label', label);
+        const fill = el('span');
+        fill.style.width = pct + '%';
+        bar.append(fill);
+        wrap.append(bar);
+        c.append(wrap, el('div', 'small muted', label));
+        if (r.forecast != null) {  // FSRS prediction, never a score; the Solid share stays
+          const day = new Date(a.date + 'T12:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+          c.append(el('div', 'small muted', `Forecast recall on ${day}: ${Math.round(100 * r.forecast)}%`));
+        } else if (r.calibrating) {  // too few checked forecasts to trust a number yet
+          c.append(el('div', 'small muted', `Forecast after ${r.calibrating.need} checked reviews (${r.calibrating.n} so far)`));
+        }
+      } else c.append(el('div', 'small muted', 'No tested topics recorded'));
+      if (a.domains.length) {
+        const chips = el('div', 'chip-list');
+        for (const d of a.domains) chips.append(el('span', 'chip', d));
+        c.append(chips);
+      }
+      const acts = el('div', 'chip-list');
+      const cp = button('btn', null, () => copyText(`/cortex mock ${a.company || a.id} ${a.kind || ''}`.trim()));
+      cp.append(icon('copy'), ' Copy mock prompt');
+      acts.append(cp);
+      c.append(acts);
+      coming.append(c);
+    }
+    const om = $('open-mistakes');
+    const open = D.mistakes.filter((m) => m.status === 'open').slice(0, 5);
+    if (!open.length) om.append(el('p', 'empty', 'No open mistakes.'));
+    for (const m of open) {
+      const row = el('div', 'mrow');
+      const left = el('span');
+      left.append(el('span', 'flag', '⚑ '), PAGES.has(m.id) ? button('linkbtn', m.title, () => openReader(m.id)) : m.title,
+        el('span', 'muted', ` (${m.count}×)`));
+      row.append(left, el('span', 'muted small', m.last_day ? 'last ' + fmtDay(m.last_day) : ''));
+      om.append(row);
+    }
+    renderHistory();
+  }
+  function renderHistory() {
+    const W = D.history.weeks, host = $('weeks');
+    const w = Math.max(320, host.clientWidth - 28 || 640), h = 200;
+    const m = { t: 12, r: 6, b: 26, l: 30 };
+    const x = d3.scaleBand().domain(W.map((d) => d.start)).range([m.l, w - m.r]);
+    const max = d3.max(W, (d) => d.answers) || 1;
+    const y = d3.scaleLinear().domain([0, max]).nice().range([h - m.b, m.t]);
+    const svg = d3.select(host).append('svg').attr('viewBox', `0 0 ${w} ${h}`)
+      .attr('role', 'img').attr('aria-label', 'Graded answers per week, last 8 weeks: '
+        + W.map((d) => `${fmtDay(d.start)} ${d.answers}`).join(', '));
+    const ticks = y.ticks(4);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('class', 'grid')
+      .attr('x1', m.l).attr('x2', w - m.r).attr('y1', y).attr('y2', y);
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'axis')
+      .attr('x', m.l - 6).attr('y', (d) => y(d) + 4).attr('text-anchor', 'end').text((d) => d);
+    const bw = Math.max(1, x.bandwidth() - 2);
+    svg.append('g').selectAll('rect').data(W).join('rect').attr('class', 'wbar')
+      .attr('x', (d) => x(d.start) + 1).attr('width', bw)
+      .attr('y', (d) => y(d.answers)).attr('height', (d) => Math.max(0, y(0) - y(d.answers)))
+      .on('mouseenter', (e, d) => showTip(e, [`Week of ${fmtDay(d.start)}: ` + plural(d.answers, 'answer')]))
+      .on('mousemove', moveTip).on('mouseleave', hideTip);
+    svg.append('g').selectAll('text').data(W).join('text').attr('class', 'axis')
+      .attr('x', (d) => x(d.start) + x.bandwidth() / 2).attr('y', h - 8)
+      .attr('text-anchor', 'middle').text((d) => fmtDay(d.start));
+
+    const tl = $('timeline');
+    const rows = D.history.assessments;
+    if (!rows.length) tl.append(el('p', 'empty', 'No assessments yet.'));
+    for (const a of rows) {
+      const r = el('div', 'trow');
+      const who = el('span');
+      who.append(a.company || a.id, el('span', 'muted', a.kind ? ' · ' + a.kind : ''));
+      r.append(el('span', 'muted', a.date ? fmtDay(a.date) + ' ' + a.date.slice(0, 4) : 'date not set'),
+        el('span', 'badge', OUTCOME[a.outcome] || a.outcome), who,
+        el('span', 'muted', a.score ? 'score ' + a.score : ''));
+      tl.append(r);
+    }
+    const ms = $('mstats');
+    for (const [k, word] of [['opened', 'opened'], ['resolved', 'resolved']]) {
+      const b = el('div');
+      b.append(dm(String(D.history.mistakes[k]), 4), el('span', 'muted', word));
+      ms.append(b);
+    }
+    // council item 6: display-only; a band under its minimum shows its count, not a share
+    const mir = $('mirror'), C = D.confidence || [];
+    if (!C.some((r) => r.n)) mir.append(el('p', 'empty', 'No answers with a "how sure" (1-4) yet.'));
+    else {
+      mir.append(el('p', 'small muted', 'Each time you answer, you say how sure you are. This is how often you were right at each level, over all your answers.'));
+      for (const r of C) {
+        mir.append(el('div', 'mrow', r.share == null
+          ? `When you said ${r.label}: not enough answers yet (${r.n})`
+          : `When you said ${r.label}, you were right ${r.right} of ${r.n} times`));
+      }
+    }
+  }
+
+  /* ---- Help ---- */
+  function commandRows() {
+    const md0 = D.help && D.help.commands_md;
+    if (!md0) return [];
+    const out = [];
+    for (const line of md0.split('\n')) {
+      const m = /^\|\s*`([^`]+)`\s*\|\s*(.*?)\s*\|?\s*$/.exec(line);
+      if (m && /^\/?cortex\b/.test(m[1])) out.push({ cmd: m[1], desc: m[2].replace(/[`*]/g, '') });
+    }
+    return out;
+  }
+  function renderHelp() {
+    const host = $('view-help');
+    host.append(el('h1', null, 'Help'));
+    const prose = el('div', 'prose');
+    prose.append(el('p', null, `${greeting()}. Here is everything Cortex can do.`),
+      el('p', 'muted', 'This page is read-only: buttons copy a command to paste into Claude; Claude does every write.'));
+    host.append(prose);
+    const h = D.help || {};
+    if (!h.commands_md) {
+      host.append(el('p', 'empty', 'Run /cortex help in Claude for every command.'));
+    } else {
+      host.append(el('h2', null, 'Commands'));
+      const src = h.commands_md, cut = src.indexOf('\n---');  // the lines above are for Claude
+      const body = el('div', 'md help-cmds');
+      body.append(md(cut >= 0 ? src.slice(cut + 4) : src));
+      for (const c of body.querySelectorAll('td code')) {
+        const t = c.textContent.trim();
+        if (!/^\/?cortex\b/.test(t)) continue;
+        const wrap = el('span', 'copycell');
+        c.replaceWith(wrap);
+        wrap.append(c, copyBtn(t));
+      }
+      host.append(body);
+    }
+    host.append(el('h2', null, 'How saving works'));
+    const ul = el('ul', 'prose');
+    for (const t of ['The first message of a chat primes it with what Cortex knows about the topic.',
+      'Durable things (facts, sources, decisions, insights, results) are saved as they come up, and each save is announced.',
+      'Lines about you wait for your yes before a chat relies on them.',
+      '/cortex save is the safety net for very long chats.',
+      "Every chat's changes can be undone: cortex undo <session>."]) ul.append(el('li', null, t));
+    host.append(ul);
+    host.append(el('h2', null, 'The names'));
+    if (h.glossary_md) {
+      const g = el('div', 'md');
+      g.append(md(h.glossary_md));
+      host.append(g);
+    } else host.append(el('p', 'empty', 'Run /cortex help in Claude for every command.'));
+    host.append(el('h2', null, 'This dashboard'));
+    const SAY = { home: 'what is due today, what is coming, open loops and what changed this week',
+      brain: 'every page as a point in a 3D brain, one lobe per topic; also the 2D concept map and its list',
+      library: 'every page as a sortable timetable, with presets, lobes and tags',
+      you: 'what Cortex knows about you, lines waiting for your yes, and your me/ pages',
+      timeline: 'pages by the day they were written, month by month',
+      ideas: 'open loops, decisions to revisit, ideas coming back and recent notes',
+      study: 'the sprint, learning states, the plan, readiness for tests, mistakes and weekly answers',
+      help: 'this page' };
+    const tbl = el('table'), tb = el('tbody');
+    SECTIONS.forEach((s, i) => {
+      const tr = el('tr'), th = el('th', null, `${i + 1} · ${TITLES[s]}`);
+      th.scope = 'row';
+      tr.append(th, el('td', null, SAY[s]));
+      tb.append(tr);
+    });
+    tbl.append(tb);
+    const tb2 = board('Sections');
+    tb2.body.append(tbl);
+    host.append(tb2.root);
+    host.append(el('h3', null, 'Keyboard'));
+    const keys = el('ul', 'prose');
+    for (const t of ['Ctrl+K: search pages, sections and commands', '1 to 8: switch sections',
+      'Arrow keys in the section tabs: move between sections', 'Esc: close the reader or the search',
+      'In the brain: drag to turn, scroll to zoom, arrows turn, + and − zoom, 0 resets the view',
+      'In the brain: Esc goes back one level (page, region, overview); double-click empty space for the overview; double-click a page or region name to fly to it',
+      'With a page selected: [ and ] step to the previous or next connection, Backspace returns to the previous page, F frames the selection',
+      'With the brain focused: A, M and G switch Activity, Mastery and Growth; S turns spin on or off; L opens Look',
+      'In Look: presets, then switches and sliders for each part of the brain; Esc closes it',
+      'In the brain outline: arrows move and open, Enter selects']) keys.append(el('li', null, t));
+    host.append(keys);
+  }
+
+  /* ---- command palette (Ctrl+K) ---- */
+  const pal = $('palette'), pq = $('pq'), pres = $('presults');
+  let palItems = [], palSel = 0, palFrom = null, CMDS = null;
+  function openPalette() {
+    if (pal.hidden) palFrom = document.activeElement;
+    pal.hidden = false;
+    hideTip();
+    pq.focus();
+    pq.select();
+    renderPalette();
+  }
+  function closePalette() {
+    pal.hidden = true;
+    if (palFrom && palFrom.isConnected) palFrom.focus({ preventScroll: true });
+  }
+  function palRow(title, sub, right, run) {
+    const b = button('hit', null, () => { closePalette(); run(); });
+    b.setAttribute('role', 'option');
+    b.tabIndex = -1;
+    const t = el('span', 'ttl', title);
+    b.append(t, right || el('span'));
+    if (sub) b.append(el('span', 'sub', sub));
+    palItems.push(b);
+    return b;
+  }
+  function renderPalette() {
+    const q = pq.value.trim().toLowerCase();
+    palItems = [];
+    pres.replaceChildren();
+    const secs = SECTIONS.filter((s) => !q || TITLES[s].toLowerCase().includes(q) || s.includes(q));
+    if (secs.length) {
+      pres.append(el('h4', null, 'Sections'));
+      for (const s of secs) pres.append(palRow(TITLES[s], null, el('span', 'kind', 'key ' + (SECTIONS.indexOf(s) + 1)), () => show(s)));
+    }
+    if (q) {
+      if (!CMDS) CMDS = commandRows();
+      const cmds = CMDS.filter((c) => c.cmd.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q)).slice(0, 6);
+      if (cmds.length) {
+        pres.append(el('h4', null, 'Commands (Enter copies)'));
+        for (const c of cmds) pres.append(palRow(c.cmd, c.desc, el('span', 'kind', 'copy'), () => copyText(c.cmd)));
+      }
+      const hits = search(q).slice(0, 40);
+      if (hits.length) {
+        pres.append(el('h4', null, 'Pages'));
+        for (const x of hits) {
+          const p = x.h.p, right = el('span', 'line1');
+          right.append(el('span', 'kind', kindWord(p.kind)), lobeChip(p.cluster));
+          pres.append(palRow(p.title, p.summary || snippet(x), right, () => openReader(p.id)));
+        }
+      }
+      if (!cmds.length && !hits.length && !secs.length) pres.append(el('p', 'empty', 'Nothing matches. Try fewer words.'));
+    }
+    palSel = 0;
+    markPal();
+  }
+  function markPal() {
+    palItems.forEach((b, i) => b.setAttribute('aria-selected', String(i === palSel)));
+    if (palItems[palSel]) palItems[palSel].scrollIntoView({ block: 'nearest' });
+  }
+  let palTimer = 0;
+  pq.addEventListener('input', () => { clearTimeout(palTimer); palTimer = setTimeout(renderPalette, 120); });
+  pq.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); palSel = Math.min(palSel + 1, palItems.length - 1); markPal(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); palSel = Math.max(palSel - 1, 0); markPal(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(palTimer);
+      if (pq.value.trim() && !palItems.length) renderPalette();
+      if (palItems[palSel]) palItems[palSel].click();
+    }
+  });
+  pal.addEventListener('mousedown', (e) => { if (e.target === pal) closePalette(); });
+
+  /* ---- 2D map (the old Map tab, behaviour unchanged) ---- */
+  const G = (() => {
+    const F = { states: new Set(STATES), domain: '', weak: false, list: false, q: '',
+      kinds: new Set(['concept', 'project']), local: false };
+    const RADIUS = { area: 4.5, you: 9, project: 5, resource: 3.5, note: 2.5, decision: 3.5 };
+    const DIST = { domain: 55, area: 28, requires: 70, wiki: 45 };
+    const PRETICKS = 80;
+    const CHARGE = { you: -300, domain: -300, area: -70, concept: -24, project: -40, resource: -24,
+      note: -24, decision: -24 };
+    let nodes, links, byId, adj, R, sim, hover = null, k = 1, ready = false, touched = false, built = false;
+    let tf = d3.zoomIdentity, ticks = 0, near = null;
+    let sortKey = 'title', sortDir = 1, current = null;
+
+    const KINDS = [['concept', '●', 'Concepts'], ['project', '▢', 'Projects'],
+      ['resource', '◆', 'Resources'], ['note', '•', 'Notes'], ['decision', '▲', 'Decisions']];
+    const kchips = $('kinds'), chips = $('chips'), sel = $('domain');
+    function build() {  // the controls, once
+      if (built) return;
+      built = true;
+      for (const [kd, g, word] of KINDS) {
+        const b = button(null, null, () => {
+          if (F.kinds.has(kd)) F.kinds.delete(kd); else F.kinds.add(kd);
+          syncChips();
+          apply();
+        });
+        b.dataset.kind = kd;
+        b.append(el('span', 'glyph k-' + kd, g), ' ' + word);
+        kchips.append(b);
+      }
+      for (const s of STATES) {
+        const b = button(null, null, () => {
+          if (F.states.has(s)) F.states.delete(s); else F.states.add(s);
+          syncChips();
+          apply();
+        });
+        b.dataset.state = s;
+        b.append(glyph(s), ' ' + LABEL[s]);
+        chips.append(b);
+      }
+      syncChips();
+      for (const n of D.graph.nodes.filter((x) => x.kind === 'domain')) {
+        const o = el('option', null, n.title);
+        o.value = n.id;
+        sel.append(o);
+      }
+      sel.addEventListener('change', () => {
+        F.domain = sel.value;
+        apply();
+        if (ready && F.domain && !F.list) R.fit(nodes.filter((n) => n.domain === F.domain), 600);
+      });
+      $('weak').addEventListener('change', (e) => { F.weak = e.target.checked; apply(); });
+      $('local').addEventListener('change', (e) => { F.local = e.target.checked; relocal(); });
+      $('files').addEventListener('change', (e) => {
+        $('tree').hidden = !e.target.checked;
+        if (e.target.checked && !$('tree').childElementCount) renderTree();
+      });
+      $('q').addEventListener('input', (e) => { F.q = e.target.value.trim().toLowerCase(); apply(); });
+    }
+    function setList(on) {
+      F.list = on;
+      $('graph').hidden = on;
+      $('table').hidden = !on;
+      apply();
+    }
+    // Obsidian's local graph: the open note plus 2 hops, never through the You hub.
+    function relocal() {
+      near = null;
+      if (F.local && current && byId && byId.has(current)) {
+        near = new Set([current]);
+        let edge = [current];
+        for (let d = 0; d < 2; d++) {
+          const next = [];
+          for (const x of edge) {
+            for (const y of adj.get(x)) {
+              if (!near.has(y) && byId.get(y).kind !== 'you') { near.add(y); next.push(y); }
+            }
+          }
+          edge = next;
+        }
+      }
+      apply();
+      if (ready && !F.list) R.fit(nodes.filter((n) => !n._hide), 500);
+    }
+    function syncChips() {
+      for (const b of chips.children) b.setAttribute('aria-pressed', String(F.states.has(b.dataset.state)));
+      for (const b of kchips.children) b.setAttribute('aria-pressed', String(F.kinds.has(b.dataset.kind)));
+    }
+
+    const weakNode = (n) => n.state === 'learning' || n.state === 'needs_refresh' || n.open_mistakes > 0;
+    function visible(n) {
+      if (near) { if (!near.has(n.id)) return false; if (n.id === current) return true; }
+      if (n.kind === 'you') return true;
+      if (F.domain && n.domain !== F.domain) return false;
+      if (WIKI.has(n.kind)) return F.kinds.has(n.kind);
+      if (n.kind !== 'concept') return true;
+      return F.kinds.has('concept') && F.states.has(n.state) && (!F.weak || weakNode(n));
+    }
+    const matches = (n) => !!F.q && n.title.toLowerCase().includes(F.q);
+
+    function radius(n) {
+      if (n.kind === 'concept') return Math.min(6, 3.5 + Math.max(0, n.degree - 1) * 0.5);
+      if (n.kind === 'domain') return 7 + Math.sqrt(n.degree) * 1.6;
+      return RADIUS[n.kind];
+    }
+
+    function init() {
+      build();
+      if (ready) return;
+      ready = true;
+      nodes = D.graph.nodes.map((n) => Object.assign({}, n));
+      const have = new Set(nodes.map((n) => n.id));
+      const wiki = D.pages.filter((p) => WIKI.has(p.kind) && !have.has(p.id));
+      for (const p of wiki) {
+        nodes.push({ id: p.id, kind: p.kind, title: p.title, state: null, domain: null, area: null,
+          degree: 0, open_mistakes: 0, next_due: null });
+      }
+      byId = new Map(nodes.map((n) => [n.id, n]));
+      links = D.graph.links.filter((l) => byId.has(l.s) && byId.has(l.t))
+        .map((l) => ({ source: byId.get(l.s), target: byId.get(l.t), type: l.type }));
+      const pairs = new Set();
+      for (const p of wiki) {
+        for (const t of p.links) {
+          const key = [p.id, t].sort().join('\n');
+          if (!byId.has(t) || pairs.has(key)) continue;
+          pairs.add(key);
+          links.push({ source: byId.get(p.id), target: byId.get(t), type: 'wiki' });
+          byId.get(p.id).degree++;
+          if (WIKI.has(byId.get(t).kind)) byId.get(t).degree++;
+        }
+      }
+      adj = new Map(nodes.map((n) => [n.id, new Set()]));
+      for (const l of links) { adj.get(l.source.id).add(l.target.id); adj.get(l.target.id).add(l.source.id); }
+      // Domains sit on a ring around You; areas and concepts settle outside their hub.
+      const doms = nodes.filter((n) => n.kind === 'domain');
+      const ring = Math.max(140, 11 * Math.sqrt(nodes.length));
+      const RING = { you: 0, domain: ring, area: ring * 1.6, concept: ring * 2.1 };
+      const PULL = { you: 0, domain: 0.5, area: 0.12, concept: 0.03 };
+      for (const kd of WIKI) { RING[kd] = ring * 2.4; PULL[kd] = 0.02; }
+      const angle = new Map(doms.map((n, i) => [n.id, 2 * Math.PI * i / doms.length]));
+      for (const n of nodes) {
+        n.r = radius(n);
+        const a = WIKI.has(n.kind) ? Math.random() * 2 * Math.PI
+          : (angle.get(n.domain) || 0) + (n.kind === 'domain' ? 0 : (Math.random() - 0.5) * 0.4);
+        n.x = Math.cos(a) * RING[n.kind]; n.y = Math.sin(a) * RING[n.kind];
+        if (n.kind === 'you') { n.fx = 0; n.fy = 0; }
+      }
+      sim = d3.forceSimulation(nodes).alphaMin(0.02)
+        .force('link', d3.forceLink(links)
+          .distance((l) => (l.type === 'hier' ? DIST[l.source.kind] : l.type === 'you' ? ring : DIST[l.type]))
+          .strength((l) => (l.type === 'requires' || l.type === 'area' ? 0.02 : l.type === 'you' ? 0.1
+            : 1 / Math.min(l.source.degree || 1, l.target.degree || 1))))
+        .force('charge', d3.forceManyBody().strength((n) => CHARGE[n.kind]).distanceMax(500))
+        .force('collide', d3.forceCollide((n) => n.r + 2))
+        .force('radial', d3.forceRadial((n) => RING[n.kind], 0, 0).strength((n) => PULL[n.kind]));
+      apply();  // drop the hidden kinds from the simulation before it settles
+      const t0 = performance.now();
+      sim.stop().tick(PRETICKS);  // most of the settling happens before the first paint
+      R = nodes.length > 1500 ? canvasRenderer() : svgRenderer();
+      R.tick();
+      sim.restart();
+      let first = true;
+      sim.on('tick', () => { R.tick(); if (++ticks % 5 === 0) relabel(); }).on('end', () => {
+        relabel();
+        if (!first) return;
+        first = false;
+        const ms = Math.round(performance.now() - t0);
+        document.body.dataset.settleMs = String(ms);
+        console.info(`cortex: graph settled in ${ms} ms (${nodes.length} nodes)`);
+        if (!touched) R.fit(nodes.filter((n) => !n._hide), 500);
+      });
+      apply();
+      if (current) relocal();
+    }
+
+    function apply() {
+      if (!ready) return;
+      const nb = hover ? adj.get(hover.id) : null;
+      let changed = false;
+      for (const n of nodes) {
+        const hide = !visible(n);
+        changed = changed || hide !== !!n._hide;
+        n._hide = hide;
+        n._dim = hover ? !(n === hover || nb.has(n.id)) : (F.q ? !matches(n) : false);
+        n._force = matches(n) || (hover != null && (n === hover || nb.has(n.id)));
+        n._label = !(n.kind === 'concept' || WIKI.has(n.kind)) || k >= 1.2 || n._force;
+      }
+      for (const l of links) {
+        l._hide = l.source._hide || l.target._hide;
+        l._dim = hover ? !(l.source === hover || l.target === hover)
+          : (F.q ? !(matches(l.source) && matches(l.target)) : false);
+      }
+      if (changed) {  // hidden nodes leave the force simulation (and rejoin when shown again)
+        sim.nodes(nodes.filter((n) => !n._hide));
+        sim.force('link').links(links.filter((l) => !l._hide));
+        if (R) sim.alpha(Math.max(sim.alpha(), 0.3)).restart();
+      }
+      relabel();
+      if (F.list) renderTable();
+    }
+
+    // A label that would overlap a higher-priority one is skipped (the hovered node's never):
+    // hovered and matched labels first, then domains, areas and concepts, each by degree.
+    const mctx = document.createElement('canvas').getContext('2d');
+    const PRI = { you: 0, domain: 1, area: 2, concept: 3, project: 3, resource: 3, note: 3, decision: 3 };
+    const fontSize = (n) => (n.kind === 'domain' ? 14.3 : 11);
+    function labelWidth(n) {
+      if (n._w == null) {
+        mctx.font = `${n.kind === 'domain' ? 600 : 400} ${fontSize(n)}px system-ui, sans-serif`;
+        n._w = mctx.measureText(n.title + (n.open_mistakes ? ' ⚑' : '')).width;
+      }
+      return n._w;
+    }
+    function relabel() {
+      if (!R) return;  // the renderer's first zoom event fires while it is being built
+      const cand = nodes.filter((n) => n._label && !n._hide);
+      cand.sort((a, b) => (b._force - a._force) || (PRI[a.kind] - PRI[b.kind]) || (b.degree - a.degree));
+      const placed = [];
+      for (const n of cand) {
+        const x0 = tf.applyX(n.x + n.r + 3), y = tf.applyY(n.y + 3.5), fs = fontSize(n);
+        const box = [x0 - 2, y - fs * 0.85, x0 + labelWidth(n) + 2, y + fs * 0.3];
+        n._shown = n === hover || !placed.some((b) => box[0] < b[2] && b[0] < box[2] && box[1] < b[3] && b[1] < box[3]);
+        if (n._shown) placed.push(box);
+      }
+      for (const n of nodes) if (!n._label || n._hide) n._shown = false;
+      R.update();
+    }
+
+    function tipFor(e, n) {
+      const parts = [el('b', null, n.title)];
+      if (n.kind === 'concept') {
+        parts.push(el('br'), (GLYPH[n.state] || '') + ' ' + LABEL[n.state]);
+        if (n.open_mistakes) parts.push(' · ⚑ ' + n.open_mistakes);
+      } else if (n.kind === 'domain' || n.kind === 'area') {
+        const c = groupCounts(n), total = STATES.reduce((a, s) => a + c[s], 0);
+        parts.push(el('br'), total ? `${Math.round(100 * c.solid / total)}% solid (${c.solid} of ${total})`
+          : 'no topics yet');
+      } else if (n.kind !== 'you') parts.push(el('br'), kindWord(n.kind));
+      showTip(e, parts);
+    }
+    function hoverOn(e, n) { hover = n; apply(); tipFor(e, n); }
+    function hoverOff() { hover = null; apply(); hideTip(); }
+
+    function click(n) {
+      if (n.kind === 'domain' || n.kind === 'area') {
+        const key = n.kind === 'domain' ? 'domain' : 'area';
+        R.fit(nodes.filter((x) => x[key] === n.id && !x._hide), 600);
+      }
+      if (n.kind !== 'you') openReader(n.id);
+    }
+    // Bring a page's node into view (showing it if the filters hid it).
+    function focus(id) {
+      if (!ready) return;
+      const n = byId.get(id);
+      if (!n) return;
+      if (n._hide) {
+        F.states = new Set(STATES); F.weak = false; F.domain = ''; F.kinds.add(n.kind);
+        syncControls();
+        apply();
+      }
+      if (!F.list) R.center(n);
+    }
+    function syncControls() {
+      syncChips();
+      $('weak').checked = F.weak;
+      sel.value = F.domain;
+    }
+    function setCurrent(id) {
+      current = id;
+      if (!ready) return;
+      if (F.local) relocal();
+      if (id && !$('b2d').hidden && !$('view-brain').hidden) focus(id);
+    }
+
+    /* file tree: domains › areas › concepts from the catalog, every other folder flat */
+    function renderTree() {
+      const tree = $('tree');
+      const kids = new Map();
+      for (const l of D.graph.links) {
+        if (l.type !== 'hier' || !byId.has(l.t)) continue;
+        if (!kids.has(l.s)) kids.set(l.s, []);
+        kids.get(l.s).push(byId.get(l.t));
+      }
+      const byTitle = (a, b) => a.title.localeCompare(b.title);
+      const leaf = (id, title) => button('leaf', title, () => openReader(id));
+      const folder = (label, children, n) => {
+        const d = el('details'), s = el('summary', null, label + ' ');
+        s.append(el('span', 'muted', String(children.length)));
+        d.append(s);
+        if (n && PAGES.has(n.id)) d.append(leaf(n.id, 'Open ' + n.title));
+        d.append(...children);
+        return d;
+      };
+      const branch = (n) => (n.kind === 'concept' ? leaf(n.id, n.title)
+        : folder(n.title, (kids.get(n.id) || []).sort(byTitle).map(branch), n));
+      tree.append(folder('Domains', nodes.filter((n) => n.kind === 'domain').sort(byTitle).map(branch)));
+      const folders = new Map();
+      for (const p of D.pages) {
+        if (p.kind === 'concept' || p.kind === 'domain' || p.kind === 'area') continue;
+        const f = p.path.split('/')[0];
+        if (!folders.has(f)) folders.set(f, []);
+        folders.get(f).push(p);
+      }
+      for (const [f, ps] of [...folders].sort((a, b) => a[0].localeCompare(b[0]))) {
+        tree.append(folder(f, ps.sort(byTitle).map((p) => leaf(p.id, p.title))));
+      }
+    }
+
+    /* list view */
+    const COLS = [['title', 'TITLE'], ['domain', 'DOMAIN'], ['area', 'AREA'], ['state', 'STATE'],
+      ['next', 'NEXT REFRESH']];
+    function cell(n, key) {
+      if (key === 'domain' || key === 'area') { const p = byId.get(n[key]); return p ? p.title : ''; }
+      if (key === 'state') return STATES.indexOf(n.state);
+      if (key === 'next') return n.next_due || '9999';
+      return n.title.toLowerCase();
+    }
+    function renderTable() {
+      const rows = nodes.filter((n) => n.kind === 'concept' && !n._hide && (!F.q || matches(n)));
+      rows.sort((a, b) => { const x = cell(a, sortKey), y = cell(b, sortKey); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
+      const table = el('table');
+      table.append(el('caption', null, `${plural(rows.length, 'topic')}`));
+      const tr = el('tr');
+      for (const [key, name] of COLS) {
+        const th = el('th');
+        th.scope = 'col';
+        if (key === sortKey) th.setAttribute('aria-sort', sortDir > 0 ? 'ascending' : 'descending');
+        th.append(button(null, name + (key === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''), () => {
+          sortDir = sortKey === key ? -sortDir : 1;
+          sortKey = key;
+          renderTable();
+        }));
+        tr.append(th);
+      }
+      const thead = el('thead');
+      thead.append(tr);
+      const tbody = el('tbody');
+      for (const n of rows) {
+        const r = el('tr');
+        const t = el('td');
+        t.append(button(null, n.title, () => openReader(n.id)));
+        if (n.open_mistakes) t.append(el('span', 'flag', ' ⚑'));
+        const s = el('td');
+        s.append(stateWord(n.state));
+        r.append(t, el('td', null, cell(n, 'domain')), el('td', null, cell(n, 'area')), s,
+          el('td', 'muted', n.next_due ? nextText(n.next_due) : '—'));
+        tbody.append(r);
+      }
+      table.append(thead, tbody);
+      $('table').replaceChildren(table);
+    }
+
+    function onZoom(t) {
+      const crossed = (k >= 1.2) !== (t.k >= 1.2);
+      k = t.k;
+      tf = t;
+      if (crossed) apply(); else relabel();
+    }
+
+    function fitTransform(set, w, h) {
+      if (!set.length) return d3.zoomIdentity.translate(w / 2, h / 2);
+      const xs = set.map((n) => n.x), ys = set.map((n) => n.y);
+      const x0 = Math.min(...xs) - 30, x1 = Math.max(...xs) + 30;
+      const y0 = Math.min(...ys) - 30, y1 = Math.max(...ys) + 30;
+      const s = Math.min(4, 0.9 * Math.min(w / (x1 - x0), h / (y1 - y0)));
+      return d3.zoomIdentity.translate(w / 2, h / 2).scale(s).translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
+    }
+
+    function dragger(subject) {
+      const d = d3.drag()
+        .on('start', (e) => {
+          touched = true;
+          if (!e.active) sim.alphaTarget(0.3).restart();
+          e.subject.fx = e.subject.x; e.subject.fy = e.subject.y;
+        })
+        .on('drag', (e) => { e.subject.fx = e.x; e.subject.fy = e.y; })
+        .on('end', (e) => {
+          if (!e.active) sim.alphaTarget(0);
+          e.subject.fx = null; e.subject.fy = null;
+        });
+      return subject ? d.subject(subject) : d;
+    }
+
+    function svgRenderer() {
+      const host = $('graph');
+      const svg = d3.select(host).append('svg')
+        .attr('aria-label', 'Knowledge map. List view shows the same topics as a table.');
+      svg.append('defs').append('marker').attr('id', 'arrow').attr('viewBox', '0 0 8 8')
+        .attr('refX', 7).attr('refY', 4).attr('markerWidth', 5).attr('markerHeight', 5)
+        .attr('orient', 'auto').append('path').attr('d', 'M0,0L8,4L0,8z').attr('class', 'arrowhead');
+      const root = svg.append('g');
+      const L = root.append('g').selectAll('line').data(links).join('line')
+        .attr('class', (l) => 'link l-' + l.type)
+        .attr('marker-end', (l) => (l.type === 'requires' ? 'url(#arrow)' : null));
+      const N = root.append('g').selectAll('g').data(nodes).join('g').attr('class', 'node')
+        .attr('tabindex', (n) => (n.kind === 'you' ? null : 0))
+        .attr('role', (n) => (n.kind === 'you' ? null : 'button'))
+        .attr('aria-label', (n) => n.title + (n.state ? ', ' + LABEL[n.state] : ''));
+      N.filter((n) => n.state === 'needs_refresh').append('circle').attr('class', 'ring')
+        .attr('r', (n) => n.r + 2.5);
+      N.each(function (n) {
+        const p = paint(n), d = shapePath(n);
+        const s = d3.select(this).append(d ? 'path' : 'circle').attr(d ? 'd' : 'r', d || n.r).node();
+        s.style.fill = p.fill;
+        s.style.stroke = p.stroke || 'none';
+        if (p.dash) s.style.strokeDasharray = '2 1.6';
+      });
+      N.on('mouseenter', hoverOn).on('mousemove', moveTip).on('mouseleave', hoverOff)
+        .on('click', (e, n) => { if (!e.defaultPrevented) click(n); })
+        .on('keydown', (e, n) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); click(n); } })
+        .call(dragger());
+      const labels = root.append('g').attr('class', 'labels').attr('font-size', 11);
+      const T = labels.selectAll('text').data(nodes).join('text')
+        .attr('class', (n) => 'lab-' + n.kind).text((n) => n.title);
+      T.filter((n) => n.open_mistakes > 0).append('tspan').attr('class', 'flag').text(' ⚑');
+      const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e) => {
+        if (e.sourceEvent) touched = true;
+        root.attr('transform', e.transform);
+        labels.attr('font-size', 11 / e.transform.k);
+        onZoom(e.transform);
+      });
+      svg.call(zoom).on('dblclick.zoom', null);
+      const size = () => [host.clientWidth || 800, host.clientHeight || 600];
+      svg.call(zoom.transform, d3.zoomIdentity.translate(size()[0] / 2, size()[1] / 2).scale(0.6));
+      return {
+        tick() {
+          L.each(function (l) {
+            let { x: x2, y: y2 } = l.target;
+            if (l.type === 'requires') {
+              const dx = x2 - l.source.x, dy = y2 - l.source.y, len = Math.hypot(dx, dy) || 1;
+              x2 -= dx / len * (l.target.r + 2); y2 -= dy / len * (l.target.r + 2);
+            }
+            this.setAttribute('x1', l.source.x); this.setAttribute('y1', l.source.y);
+            this.setAttribute('x2', x2); this.setAttribute('y2', y2);
+          });
+          N.attr('transform', (n) => `translate(${n.x},${n.y})`);
+          T.attr('x', (n) => n.x + n.r + 3).attr('y', (n) => n.y + 3.5);
+        },
+        update() {
+          N.classed('hide', (n) => n._hide).classed('dim', (n) => n._dim);
+          L.classed('hide', (l) => l._hide).classed('dim', (l) => l._dim);
+          T.classed('show', (n) => n._shown).classed('dim', (n) => n._dim);
+        },
+        fit(set, ms) {
+          const [w, h] = size();
+          svg.transition().duration(ms).call(zoom.transform, fitTransform(set, w, h));
+        },
+        center(n) {
+          const [w, h] = size();
+          svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity
+            .translate(w / 2, h / 2).scale(Math.max(k, 1.6)).translate(-n.x, -n.y));
+        },
+      };
+    }
+
+    // Wiki kinds (phase4-wiki §5): project rounded square, resource diamond, decision triangle;
+    // a note stays a small dot (a circle, so no path).
+    function shapePath(n) {
+      const r = n.r;
+      if (n.kind === 'project') {
+        const c = 1.5;
+        return `M${c - r},${-r}H${r - c}Q${r},${-r} ${r},${c - r}V${r - c}Q${r},${r} ${r - c},${r}`
+          + `H${c - r}Q${-r},${r} ${-r},${r - c}V${c - r}Q${-r},${-r} ${c - r},${-r}Z`;
+      }
+      if (n.kind === 'resource') return `M0,${-1.3 * r}L${1.3 * r},0L0,${1.3 * r}L${-1.3 * r},0Z`;
+      if (n.kind === 'decision') return `M0,${-1.2 * r}L${1.1 * r},${0.8 * r}L${-1.1 * r},${0.8 * r}Z`;
+      return null;
+    }
+
+    function paint(n) {
+      if (n.kind === 'you') return { fill: 'var(--ink)' };
+      if (n.kind === 'domain' || n.kind === 'project') return { fill: 'var(--lit)' };
+      if (n.kind === 'area' || WIKI.has(n.kind)) return { fill: 'var(--ink-3)' };
+      if (n.state === 'solid') return { fill: 'var(--solid)' };
+      if (n.state === 'learning') return { fill: 'var(--learning)' };
+      if (n.state === 'needs_refresh') return { fill: 'var(--refresh)', ring: true };
+      return { fill: 'var(--panel)', stroke: 'var(--hollow)', dash: n.state === 'unverified' };
+    }
+
+    function canvasRenderer() {
+      const host = $('graph');
+      const canvas = d3.select(host).append('canvas')
+        .attr('aria-label', 'Knowledge map. List view shows the same topics as a table.').node();
+      const ctx = canvas.getContext('2d');
+      let t = d3.zoomIdentity, w = 0, h = 0, raf = 0, css = null;
+      const col = (v) => (v.startsWith('var(') ? css.getPropertyValue(v.slice(4, -1)).trim() : v);
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        w = host.clientWidth || 800; h = host.clientHeight || 600;
+        canvas.width = w * dpr; canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      function draw() {
+        raf = 0;
+        css = getComputedStyle(document.documentElement);  // the theme can change between frames
+        ctx.save();
+        ctx.clearRect(0, 0, w, h);
+        ctx.translate(t.x, t.y);
+        ctx.scale(t.k, t.k);
+        for (const l of links) {
+          if (l._hide) continue;
+          ctx.globalAlpha = (l._dim ? 0.12 : 1) * (l.type === 'you' ? 0.55 : 1);
+          ctx.strokeStyle = col(l.type === 'requires' ? 'var(--ink-3)' : 'var(--edge)');
+          ctx.lineWidth = (l.type === 'you' || l.type === 'wiki' ? 0.6 : l.type === 'area' ? 0.5 : 1) / t.k;
+          ctx.setLineDash(l.type === 'requires' ? [3 / t.k, 3 / t.k] : l.type === 'wiki' ? [1 / t.k, 2 / t.k] : []);
+          ctx.beginPath(); ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        for (const n of nodes) {
+          if (n._hide) continue;
+          const p = paint(n);
+          ctx.globalAlpha = n._dim ? 0.12 : 1;
+          ctx.fillStyle = col(p.fill);
+          const d = shapePath(n);
+          if (d) {
+            ctx.save(); ctx.translate(n.x, n.y); ctx.fill(new Path2D(d)); ctx.restore();
+            continue;
+          }
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 2 * Math.PI);
+          ctx.fill();
+          if (p.stroke) {
+            ctx.setLineDash(p.dash ? [2, 1.6] : []);
+            ctx.strokeStyle = col(p.stroke); ctx.lineWidth = 1.2; ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          if (p.ring) {
+            ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 2.5, 0, 2 * Math.PI);
+            ctx.strokeStyle = col('var(--refresh)'); ctx.lineWidth = 1.5; ctx.stroke();
+          }
+        }
+        ctx.lineJoin = 'round';
+        for (const n of nodes) {
+          if (!n._shown) continue;
+          ctx.globalAlpha = n._dim ? 0.12 : 1;
+          const fs = (n.kind === 'domain' ? 14.3 : 11) / t.k;
+          ctx.font = `${n.kind === 'domain' ? 600 : 400} ${fs}px system-ui, sans-serif`;
+          const s = n.title + (n.open_mistakes ? ' ⚑' : '');
+          ctx.strokeStyle = col('var(--panel)'); ctx.lineWidth = 3 / t.k;
+          ctx.strokeText(s, n.x + n.r + 3, n.y + 3.5);
+          ctx.fillStyle = col(n.kind === 'area' ? 'var(--ink-2)' : 'var(--ink)');
+          ctx.fillText(s, n.x + n.r + 3, n.y + 3.5);
+        }
+        ctx.restore();
+      }
+      const schedule = () => { if (!raf) raf = requestAnimationFrame(draw); };
+      const find = (e) => {
+        const [x, y] = t.invert(d3.pointer(e, canvas));
+        let best = null, bd = Infinity;
+        for (const n of nodes) {
+          if (n._hide) continue;
+          const d = Math.hypot(n.x - x, n.y - y) - n.r;
+          if (d < bd) { bd = d; best = n; }
+        }
+        return bd <= 4 / t.k ? best : null;
+      };
+      const zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', (e) => {
+        if (e.sourceEvent) touched = true;
+        t = e.transform; onZoom(t); schedule();
+      });
+      const sel2 = d3.select(canvas);
+      sel2.call(dragger((e) => {
+        const n = find(e.sourceEvent);
+        if (!n) return null;
+        const [x, y] = t.apply([n.x, n.y]);
+        return { node: n, x, y };
+      }).on('drag.canvas', (e) => {
+        [e.subject.node.fx, e.subject.node.fy] = t.invert([e.x, e.y]);
+      }).on('start.canvas', (e) => {
+        e.subject.node.fx = e.subject.node.x; e.subject.node.fy = e.subject.node.y;
+      }).on('end.canvas', (e) => { e.subject.node.fx = null; e.subject.node.fy = null; }))
+        .call(zoom).on('dblclick.zoom', null);
+      sel2.on('mousemove', (e) => {
+        const n = find(e);
+        if (n !== hover) { if (n) hoverOn(e, n); else hoverOff(); } else if (n) moveTip(e);
+      }).on('mouseleave', () => { if (hover) hoverOff(); })
+        .on('click', (e) => { const n = find(e); if (n) click(n); });
+      resize();
+      t = d3.zoomIdentity.translate(w / 2, h / 2).scale(0.4);
+      sel2.call(zoom.transform, t);
+      new ResizeObserver(() => { if (host.clientWidth) { resize(); schedule(); } }).observe(host);
+      return {
+        tick: schedule,
+        update: schedule,
+        fit(set) { sel2.transition().duration(500).call(zoom.transform, fitTransform(set, w, h)); },
+        center(n) {
+          sel2.transition().duration(500).call(zoom.transform, d3.zoomIdentity
+            .translate(w / 2, h / 2).scale(Math.max(k, 1.6)).translate(-n.x, -n.y));
+        },
+      };
+    }
+
+    function onlyState(st) {
+      F.states = new Set([st]);
+      F.weak = false;
+      F.domain = '';
+      syncControls();
+      apply();
+    }
+    function retheme() { if (R) R.update(); }
+
+    return { init, onlyState, setList, setCurrent, retheme };
+  })();
+
+  const RENDER = { home: renderHome, brain: ensureBrainUi, library: renderLibrary, you: renderYou,
+    timeline: renderTimeline, ideas: renderIdeas, study: renderStudy, help: renderHelp };
+
+  /* ---- start ---- */
+  applyTheme(theme);
+  renderHeader();
+  setHdr();
+  const start = SECTIONS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home';
+  // The brain's layout is the slow part: let the first paint land before it is built.
+  if (start === 'home') {
+    rendered.add('home');
+    renderHome();
+    for (const s of SECTIONS) {
+      $('tab-' + s).setAttribute('aria-selected', String(s === 'home'));
+      $('tab-' + s).tabIndex = s === 'home' ? 0 : -1;
+    }
+    current = 'home';
+    sel.value = 'home';
+    document.body.dataset.readyMs = String(Math.round(performance.now() - T0));
+    setTimeout(() => {
+      placeBrain('home-brain-slot');
+      document.body.dataset.brainReadyMs = String(Math.round(performance.now() - T0));
+    }, 50);
+  } else {
+    show(start);
+    document.body.dataset.readyMs = String(Math.round(performance.now() - T0));
+  }
+})();

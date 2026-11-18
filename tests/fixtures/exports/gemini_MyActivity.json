@@ -1,0 +1,38 @@
+[
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted And for weighted graphs?",
+    "time": "2026-10-02T09:05:00.000Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"],
+    "safeHtmlItem": [{"html": "<p>Use <b>Dijkstra</b> &amp; a heap.</p>"}]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted How does BFS work? token api_key=abcdefghijklmnop",
+    "time": "2026-10-02T09:00:00.000Z",
+    "products": ["Gemini Apps"],
+    "activityControls": ["Gemini Apps Activity"],
+    "safeHtmlItem": [{"html": "<p>Level by level.</p>"}]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Used Gemini Apps",
+    "time": "2026-10-02T08:59:00.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Eingegebener Prompt: Was ist ein Graph?",
+    "time": "2026-10-01T20:00:00Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Prompted Plan my week",
+    "titleUrl": "https://gemini.google.com/app/c/abc123def456",
+    "time": "2026-09-30T07:00:00.000Z",
+    "products": ["Gemini Apps"],
+    "safeHtmlItem": [{"html": "Sure."}]
+  }
+]

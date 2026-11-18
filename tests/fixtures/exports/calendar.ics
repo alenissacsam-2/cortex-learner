@@ -1,0 +1,31 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+BEGIN:VEVENT
+DTSTART;VALUE=DATE:20261105
+DTEND;VALUE=DATE:20261106
+SUMMARY:Diwali holiday
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=Asia/Kolkata:20261103T093000
+DTEND;TZID=Asia/Kolkata:20261103T100000
+RRULE:FREQ=WEEKLY;BYDAY=TU
+SUMMARY:Algorithms lab with a long title that the export folds onto a
+  second line
+LOCATION:Room 4\, CS block
+ORGANIZER;CN=Prof:mailto:prof@uni.example
+ATTENDEE;CN=Friend;ROLE=REQ-PARTICIPANT:mailto:friend@example.com
+ATTENDEE;CN=Other:mailto:other.person@example.org
+DESCRIPTION:Join at https://meet.example/abc
+Call friend@example.com
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+TRIGGER:-PT10M
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261201T140000Z
+SUMMARY:Mock interview
+END:VEVENT
+END:VCALENDAR

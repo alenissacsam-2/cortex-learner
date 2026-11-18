@@ -1,0 +1,547 @@
+"""browse_serve: the loopback receiver. Tmp vaults and random loopback ports only."""
+import http.client
+import json
+import logging
+import re
+import shutil
+import socket
+import subprocess
+import threading
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from cortex import browse_serve as bs
+from cortex.browse import lists
+from cortex.events import local_day
+
+EXT = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+START = "2026-11-10T12:00:00Z"
+DAY = local_day(datetime(2026, 11, 10, 12, tzinfo=UTC))
+
+
+def rec(url="https://example.com/a", **kw):
+    return {"url": url, "title": "A page", "start": START, "active_ms": 60_000,
+            "excerpt": "Some text.", "kind": "page", **kw}
+
+
+@pytest.fixture
+def vault(tmp_path):
+    v = tmp_path / "vault"
+    v.mkdir()
+    return v
+
+
+@pytest.fixture
+def srv(vault):
+    token = bs.pair(vault)
+    s = bs.make_server(vault, 0)
+    threading.Thread(target=lambda: s.serve_forever(0.05), daemon=True).start()
+    s.token = token
+    yield s
+    s.shutdown()
+    s.server_close()
+
+
+def call(s, method, path, body=None, *, token=None, headers=None, raw=None):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=5)
+    h = {"Content-Type": "application/json"}
+    if token is not False:
+        h["Authorization"] = f"Bearer {token or s.token}"
+    h.update(headers or {})
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    c.request(method, path, body=data, headers=h)
+    r = c.getresponse()
+    out = r.status, dict(r.getheaders()), r.read()
+    c.close()
+    return out
+
+
+def inbox(vault, day=DAY):
+    p = Path(vault) / ".cortex" / "browse" / f"inbox-{day}.jsonl"
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+
+def test_pair_creates_and_rotates(vault):
+    a = bs.pair(vault)
+    path = vault / ".cortex" / "browse" / "token"
+    assert path.read_text() == a and len(a) >= 43
+    b = bs.pair(vault)
+    assert b != a and path.read_text() == b
+
+
+def test_binds_loopback_only(vault):
+    for host in ("0.0.0.0", "192.168.1.5", "localhost", "::"):
+        with pytest.raises(ValueError, match="127.0.0.1 only"):
+            bs.make_server(vault, 0, host=host)
+    s = bs.make_server(vault, 0)
+    assert s.server_address[0] == "127.0.0.1"
+    s.server_close()
+    with pytest.raises(ValueError, match="pair"):  # no token yet
+        bs.serve(vault, 0, stop=threading.Event())
+
+
+def test_serve_runs_until_stopped(vault):
+    token = bs.pair(vault)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    stop = threading.Event()
+    t = threading.Thread(target=bs.serve, args=(vault, port), kwargs={"stop": stop})
+    t.start()
+    for _ in range(50):
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            c.request("GET", "/v1/ping", headers={"Authorization": f"Bearer {token}"})
+            r = c.getresponse()
+            break
+        except ConnectionRefusedError:
+            stop.wait(0.05)
+    assert r.status == 200 and json.loads(r.read()) == {
+        "ok": True, "deny_domains": []}
+    c.close()
+    stop.set()
+    t.join(5)
+    assert not t.is_alive()
+
+
+def test_auth(srv, vault):
+    assert call(srv, "GET", "/v1/ping")[0] == 200
+    assert call(srv, "GET", "/v1/ping", token=False)[0] == 401
+    assert call(srv, "GET", "/v1/ping", token="nope")[0] == 401
+    assert call(srv, "GET", "/v1/ping", token=False,
+                headers={"Authorization": f"Basic {srv.token}"})[0] == 401
+    assert call(srv, "POST", "/v1/visit", rec(), token="nope")[0] == 401
+    old = srv.token
+    srv.token = bs.pair(vault)  # rotation takes effect at once
+    assert call(srv, "GET", "/v1/ping", token=old)[0] == 401
+    assert call(srv, "GET", "/v1/ping")[0] == 200
+    assert inbox(vault) == []
+
+
+def test_origin_and_host_rules(srv, vault):
+    for bad in ("https://evil.example", "null", "http://127.0.0.1:1234", EXT + ".evil.com"):
+        code, h, _ = call(srv, "POST", "/v1/visit", rec(), headers={"Origin": bad})
+        assert code == 403 and "Access-Control-Allow-Origin" not in h
+    code, h, _ = call(srv, "POST", "/v1/visit", rec(), headers={"Origin": EXT})
+    assert code == 200 and h["Access-Control-Allow-Origin"] == EXT
+    code, h, _ = call(srv, "GET", "/v1/ping")
+    assert code == 200 and "Access-Control-Allow-Origin" not in h  # no CORS for *
+    moz = "moz-extension://0b5e7f2a-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
+    assert call(srv, "GET", "/v1/ping", headers={"Origin": moz})[0] == 200
+    assert call(srv, "OPTIONS", "/v1/batch", token=False, headers={"Origin": EXT})[0] == 204
+    assert call(srv, "OPTIONS", "/v1/batch", token=False,
+                headers={"Origin": "https://evil.example"})[0] == 403
+    # DNS rebinding: a page on evil.example resolved to 127.0.0.1 sends its own Host
+    assert call(srv, "GET", "/v1/ping", headers={"Host": "evil.example:8799"})[0] == 403
+    assert len(inbox(vault)) == 1
+
+
+def test_body_cap_type_and_batch_cap(srv, vault):
+    # a declared body over the cap is refused before it is read
+    code, _, _ = call(srv, "POST", "/v1/batch", raw=b"",
+                      headers={"Content-Length": str(bs.MAX_BODY + 1)})
+    assert code == 413
+    assert call(srv, "POST", "/v1/visit", rec(), headers={"Content-Type": "text/plain"})[0] == 415
+    assert call(srv, "POST", "/v1/visit", raw=b"{not json")[0] == 400
+    assert call(srv, "POST", "/v1/batch", [rec()] * (bs.MAX_BATCH + 1))[0] == 400
+    assert call(srv, "POST", "/v1/batch", rec())[0] == 400  # an object, not a list
+    assert call(srv, "POST", "/v1/nope", rec())[0] == 404
+    assert inbox(vault) == []
+
+
+def test_validation(srv, vault):
+    for bad in (rec(kind="tab"), rec(active_ms=-1), rec(active_ms=True), rec(active_ms=1.5),
+                rec(start="yesterday"), rec(start="2999-01-01T00:00:00Z"), rec(url=""),
+                rec(url="x" * 5000), rec(title=7), {"url": "https://example.com/"}, []):
+        assert call(srv, "POST", "/v1/visit", bad)[0] == 400, bad
+    epoch = int(datetime(2026, 11, 10, 12, tzinfo=UTC).timestamp() * 1000)
+    code, _, body = call(srv, "POST", "/v1/batch", [
+        rec(active_ms=10**9, excerpt="x" * 5000, extra="ignored"),
+        rec(start=epoch), rec(kind="nope")])
+    assert code == 200 and json.loads(body) == {"ok": True, "stored": 2, "dropped": 0,
+                                                "invalid": 1}
+    a, b = inbox(vault)
+    assert a["active_ms"] == bs.MAX_ACTIVE_MS and len(a["excerpt"]) == bs.MAX_EXCERPT
+    assert "extra" not in a and a["start"] == b["start"] == "2026-11-10T12:00:00.000Z"
+
+
+def test_filter_runs_before_storing(srv, vault, caplog):
+    caplog.set_level(logging.DEBUG)
+    batch = [
+        rec("https://accounts.example.com/login?next=/x", title="Sign in SECRETLOGIN"),
+        rec("https://example.com/reset?token=abc123", title="Reset SECRETTOKEN"),
+        rec("http://192.168.1.1/admin"),
+        rec("chrome://settings/"),
+        rec("https://www.hdfcbank.com/personal"),
+        rec("https://docs.python.org/3/library/http.html?utm_source=x#frag"),
+        rec("https://www.google.com/search?q=fsrs+algorithm&sca_esv=1&ei=2",
+            title="fsrs algorithm - Google Search", kind="search", excerpt="results text"),
+        rec("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10", title="A talk - YouTube",
+            kind="video", channel="  Some   Channel "),
+        rec("https://www.webmd.com/a/b", title="Health page"),
+        rec("https://www.pornhub.com/view", title="x"),
+        rec("https://mail.google.com/mail/u/0/#inbox/abc", title="Subject line - Gmail"),
+    ]
+    code, _, body = call(srv, "POST", "/v1/batch", batch)
+    assert json.loads(body) == {"ok": True, "stored": 5, "dropped": 6, "invalid": 0}
+    got = {r["url"]: r for r in inbox(vault)}
+    assert set(got) == {
+        "https://docs.python.org/3/library/http.html",
+        "https://www.google.com/search?q=fsrs%20algorithm",
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://www.webmd.com/a/b",
+        "https://mail.google.com/",
+    }
+    s = got["https://www.google.com/search?q=fsrs%20algorithm"]
+    assert (s["kind"], s["title"], s["excerpt"]) == ("search", "fsrs algorithm", "")
+    v = got["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+    assert (v["kind"], v["title"], v["channel"]) == ("video", "A talk", "Some Channel")
+    assert got["https://www.webmd.com/a/b"]["private"] is True
+    assert got["https://www.webmd.com/a/b"]["excerpt"] == ""  # second review L2
+    m = got["https://mail.google.com/"]
+    assert (m["title"], m["excerpt"]) == ("mail.google.com", "")
+    assert not any("private" in r for u, r in got.items() if "webmd" not in u)
+    text = (vault / ".cortex" / "browse" / f"inbox-{DAY}.jsonl").read_text(encoding="utf-8")
+    assert "SECRET" not in text and "abc123" not in text and "Subject" not in text
+    logged = caplog.text
+    assert "http" not in logged and "fsrs" not in logged and "A talk" not in logged
+
+
+def test_user_deny_list_and_adult_private(srv, vault, home):
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "browse:\n  deny_domains: [example.org]\n  adult: private\n", encoding="utf-8")
+    code, _, body = call(srv, "POST", "/v1/batch", [
+        rec("https://sub.example.org/x"), rec("https://www.pornhub.com/view")])
+    assert json.loads(body)["stored"] == 1
+    (r,) = inbox(vault)
+    assert r["private"] is True and "pornhub" in r["url"]
+
+
+def test_ping_hands_the_extension_the_deny_list_only(srv, home):
+    """M4: the extension applies the config's deny_domains too; second review L3: the private
+    list stays with the receiver."""
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "browse:\n  deny_domains: [Diary.org]\n  private_domains: [clinic.in]\n",
+        encoding="utf-8")
+    code, _, body = call(srv, "GET", "/v1/ping")
+    assert code == 200 and json.loads(body) == {
+        "ok": True, "deny_domains": ["diary.org"]}
+    assert call(srv, "GET", "/v1/ping", token="wrong")[0] == 401
+
+
+def test_channel_is_judged_and_bank_titles_drop(srv, vault):
+    """L3: a video's channel goes through the category and secret checks; M2: bank titles."""
+    vid = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    batch = [rec(vid, title="A vlog", kind="video", channel="Herpes Support Group"),
+             rec(vid, title="A vlog", kind="video", channel="api_key=abcdefghijklmnop"),
+             rec("https://www.sbicard.com/en/personal/account-summary.page",
+                 title="Account Summary | SBI Card")]
+    code, _, body = call(srv, "POST", "/v1/batch", batch)
+    assert json.loads(body)["stored"] == 1
+    (r,) = inbox(vault)
+    assert r["private"] is True and r["channel"] == "Herpes Support Group"
+
+
+def test_deep_json_is_a_400_and_the_socket_times_out(srv):
+    """L5: a nesting bomb is refused, not a crashed handler thread; reads time out."""
+    deep = b"[" * 100_000 + b"]" * 100_000
+    code, _, body = call(srv, "POST", "/v1/batch", raw=deep[:200_000])
+    assert code in (400, 413)
+    code, _, body = call(srv, "POST", "/v1/batch", raw=b"[" * 60_000 + b"]" * 60_000)
+    assert code == 400 and json.loads(body)["error"] == "json"
+    assert srv.RequestHandlerClass.timeout == 10
+
+
+def test_jsonl_day_and_torn_line(srv, vault):
+    late = "2026-11-12T23:30:00+00:00"
+    call(srv, "POST", "/v1/visit", rec())
+    call(srv, "POST", "/v1/visit", rec(start=late))
+    day2 = local_day(datetime.fromisoformat(late))
+    assert len(inbox(vault)) == 1 and len(inbox(vault, day2)) == 1
+    p = vault / ".cortex" / "browse" / f"inbox-{DAY}.jsonl"
+    with open(p, "ab") as f:
+        f.write(b'{"torn":')
+    call(srv, "POST", "/v1/visit", rec(title="after"))
+    lines = p.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == '{"torn":' and json.loads(lines[2])["title"] == "after"
+
+
+def test_two_clients_at_once(srv, vault):
+    def client(n):
+        for i in range(10):
+            batch = [rec(f"https://example.com/{n}/{i}/{j}") for j in range(10)]
+            assert call(srv, "POST", "/v1/batch", batch)[0] == 200
+
+    ts = [threading.Thread(target=client, args=(n,)) for n in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    urls = [r["url"] for r in inbox(vault)]
+    assert len(urls) == len(set(urls)) == 200
+
+
+def test_extension_rules_mirror_python():
+    """extension/lib.js RULES must hold the same lists as cortex.browse.lists."""
+    src = (Path(__file__).parents[1] / "extension" / "lib.js").read_text(encoding="utf-8")
+    rules = json.loads(re.search(r"/\*RULES\*/(.*?)/\*END\*/", src, re.S).group(1))
+    want = {"authHosts": lists.AUTH_HOSTS, "authWords": lists.AUTH_WORDS,
+            "payHosts": lists.PAY_HOSTS, "payWords": lists.PAY_WORDS,
+            "bankHosts": lists.BANK_HOSTS, "webmailHosts": lists.WEBMAIL_HOSTS,
+            "secretKeys": lists.SECRET_KEYS, "secretParts": set(lists.SECRET_PARTS),
+            "bankWords": lists.BANK_WORDS, "bankTitles": set(lists.BANK_TITLES)}
+    for key, value in want.items():
+        assert set(rules[key]) == set(value), key
+    assert rules["bankLabel"] == lists.BANK_LABEL
+
+
+def test_extension_manifest():
+    ext = Path(__file__).parents[1] / "extension"
+    m = json.loads((ext / "manifest.json").read_text(encoding="utf-8"))
+    assert m["manifest_version"] == 3 and m["incognito"] == "not_allowed"
+    assert set(m["permissions"]) == {"tabs", "storage", "idle", "scripting", "alarms"}
+    assert "content_security_policy" not in m  # the MV3 default
+    for f in ext.glob("*.js"):  # no remote code, no URL other than the loopback receiver
+        text = f.read_text(encoding="utf-8")
+        assert not re.search(r"https?://(?!127\.0\.0\.1)[a-z0-9]", text), f.name
+        assert "eval(" not in text and "new Function" not in text, f.name
+    assert not re.search(r"https?://", (ext / "popup.html").read_text(encoding="utf-8"))
+
+
+# ---- second privacy review (17 Nov) --------------------------------------------------------
+
+def test_r2_l2_a_private_record_is_stored_without_its_text(srv, vault, home):
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(
+        "browse:\n  private_domains: [clinic.in]\n", encoding="utf-8")
+    call(srv, "POST", "/v1/batch", [rec("https://clinic.in/a", excerpt="CLINICTEXT"),
+                                    rec("https://e.com/a", title="HIV symptoms",
+                                        excerpt="HIVTEXT"), rec(excerpt="kept text")])
+    got = {r["url"]: r for r in inbox(vault)}
+    assert got["https://clinic.in/a"]["excerpt"] == got["https://e.com/a"]["excerpt"] == ""
+    assert got["https://example.com/a"]["excerpt"] == "kept text"
+
+
+def test_r2_m3_a_lone_surrogate_is_replaced_and_a_batch_is_all_or_nothing(srv, vault):
+    """p6: `document.title = "\\ud800"` reached the receiver, crashed `store` after one day's
+    file was written, and the extension resent the batch forever (duplicates)."""
+    good = json.dumps(rec(title="ok"))
+    bad = json.dumps(rec(title="x\ud800", start="2026-11-12T10:00:00Z"))
+    for _ in range(3):
+        code, _, body = call(srv, "POST", "/v1/batch", raw=f"[{good},{bad}]".encode())
+        assert code == 200 and json.loads(body)["stored"] == 2
+    day2 = local_day(datetime(2026, 11, 12, 10, tzinfo=UTC))
+    assert len(inbox(vault)) == 3 and [r["title"] for r in inbox(vault, day2)] == ["x?"] * 3
+    assert bs.validate(rec(url="https://e.com/\ud800")) is None
+    with pytest.raises(UnicodeEncodeError):  # a bad line anywhere: nothing is appended
+        bs.store(bs.Vault(vault), [{**rec(), "start": "2026-11-13T10:00:00.000Z"},
+                                   {**rec(), "title": "\ud800"}])
+    assert inbox(vault, local_day(datetime(2026, 11, 13, 10, tzinfo=UTC))) == []
+    assert len(inbox(vault)) == 3
+
+
+# ---- processing at session end ---------------------------------------------------------------
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture
+def runs(srv, monkeypatch):
+    """The import replaced by a recorder; the processor on a hand-moved clock."""
+    got = []
+    monkeypatch.setattr(bs, "run_import", lambda v, **kw: got.append(v) or {})
+    srv.processor.clock = Clock()
+    return got
+
+
+def test_session_end_runs_the_import_once_after_the_debounce(srv, vault, runs):
+    p, clock = srv.processor, srv.processor.clock
+    code, _, body = call(srv, "POST", "/v1/batch", {"records": [rec()], "session_end": True})
+    assert code == 200 and json.loads(body)["stored"] == 1 and len(inbox(vault)) == 1
+    assert not p.tick() and runs == []  # debounced
+    clock.t += bs.DEBOUNCE_S - 1
+    assert call(srv, "POST", "/v1/batch", {"records": [], "session_end": True})[0] == 200
+    clock.t += bs.DEBOUNCE_S - 1
+    assert not p.tick()  # the second end pushed the run back: still one run
+    clock.t += 1
+    assert p.tick() and len(runs) == 1 and runs[0].root == vault
+    clock.t += 3 * bs.IDLE_PROCESS_S
+    assert not p.tick() and len(runs) == 1  # nothing new, no second run
+    for body in ([rec()], {"records": [rec()]}, {"records": [], "session_end": "yes"}):
+        assert call(srv, "POST", "/v1/batch", body)[0] == 200  # no session end
+    clock.t += bs.DEBOUNCE_S
+    assert not p.tick() and len(runs) == 1
+    assert call(srv, "POST", "/v1/batch", {"records": rec(), "session_end": True})[0] == 400
+
+
+def test_records_left_20_min_without_a_batch_are_processed(srv, runs):
+    p, clock = srv.processor, srv.processor.clock
+    call(srv, "POST", "/v1/batch", [])  # nothing stored: no wait starts
+    clock.t += 2 * bs.IDLE_PROCESS_S
+    assert not p.tick()
+    call(srv, "POST", "/v1/batch", [rec()])
+    clock.t += bs.IDLE_PROCESS_S - 1
+    call(srv, "POST", "/v1/batch", [])  # any batch restarts the wait
+    clock.t += bs.IDLE_PROCESS_S - 1
+    assert not p.tick() and runs == []
+    clock.t += 1
+    assert p.tick() and len(runs) == 1
+    clock.t += 2 * bs.IDLE_PROCESS_S
+    assert not p.tick() and len(runs) == 1
+
+
+def test_one_run_at_a_time(srv, runs, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(bs, "run_import", lambda v, **kw: (runs.append(v), started.set(),
+                                                     release.wait(5)))
+    p, clock = srv.processor, srv.processor.clock
+    p.batch(1, True)
+    clock.t += bs.DEBOUNCE_S
+    t = threading.Thread(target=p.tick)
+    t.start()
+    assert started.wait(5)
+    p.batch(1, True)  # a session ends while the import runs
+    clock.t += bs.DEBOUNCE_S
+    assert not p.tick() and len(runs) == 1
+    assert json.loads(call(srv, "GET", "/v1/status")[2])["processing"] is True
+    release.set()
+    t.join(5)
+    assert p.tick() and len(runs) == 2  # then it gets its own run
+
+
+def test_status_needs_the_token_and_counts(srv, vault):
+    assert call(srv, "GET", "/v1/status", token=False)[0] == 401
+    assert call(srv, "GET", "/v1/status", token="nope")[0] == 401
+    assert call(srv, "GET", "/v1/status", headers={"Origin": "https://e.com"})[0] == 403
+    call(srv, "POST", "/v1/batch", [rec(), rec("https://example.com/b")])
+    code, _, body = call(srv, "GET", "/v1/status")
+    assert code == 200 and json.loads(body) == {"ok": True, "queued_records": 2,
+                                                "last_processed": None, "processing": False,
+                                                "last_summary": ""}
+    (vault / ".cortex" / "browse" / "state.json").write_text(
+        '{"last_run": "2026-11-17T09:00:00Z"}', encoding="utf-8")
+    assert json.loads(call(srv, "GET", "/v1/status")[2])["last_processed"] == \
+        "2026-11-17T09:00:00Z"
+
+
+def test_a_failed_run_logs_no_text(srv, monkeypatch, caplog):
+    def boom(v, **kw):
+        raise ValueError("https://secret.example/page Secret Title")
+
+    monkeypatch.setattr(bs, "run_import", boom)
+    p = srv.processor
+    p.clock = Clock()
+    p.batch(1, True)
+    p.clock.t += bs.DEBOUNCE_S
+    with caplog.at_level(logging.DEBUG, logger="cortex"):
+        assert p.tick()
+    assert "ValueError" in caplog.text and "secret" not in caplog.text.lower()
+    assert p.processing is False
+
+
+def test_run_import_is_the_whole_import_with_no_since(vault, home, monkeypatch):
+    """Every browser found, no `since` (it would skip History days before it), no runner
+    unless config enables the local LLM, and the embedder never downloaded."""
+    from cortex import semantic
+    from cortex.browse import build, sources
+
+    got = {}
+    monkeypatch.setattr(sources, "discover", lambda: ["a source"])
+    monkeypatch.setattr(semantic, "load_embedder", lambda download=False: got.update(
+        download=download))
+    monkeypatch.setattr(build, "run", lambda v, srcs, settings, **kw: got.update(
+        root=v.root, srcs=srcs, **kw) or {})
+    bs.run_import(bs.Vault(vault))
+    assert got["srcs"] == ["a source"] and got["root"] == vault and got["download"] is False
+    assert got["runner"] is None and got["budget"] is None and "since" not in got
+
+
+def test_session_end_writes_the_private_page_and_empties_the_inbox(srv, vault, home,
+                                                                    monkeypatch):
+    """End to end with the real import (no browser History, no embedder): the receiver's
+    records become the private day page and the inbox file goes."""
+    from cortex import semantic
+    from cortex.browse import sources
+
+    monkeypatch.setattr(sources, "discover", lambda: [])
+    monkeypatch.setattr(semantic, "load_embedder", lambda download=False: None)
+    p = srv.processor
+    p.clock = Clock()
+    call(srv, "POST", "/v1/batch", {"records": [rec(title="Fourier series notes")],
+                                    "session_end": True})
+    p.clock.t += bs.DEBOUNCE_S
+    assert p.tick()
+    page = vault / "browse" / "private" / f"browse-private-{DAY}.md"
+    assert "Fourier series notes" in page.read_text(encoding="utf-8")
+    assert inbox(vault) == []
+    st = json.loads(call(srv, "GET", "/v1/status")[2])
+    assert st["queued_records"] == 0 and st["last_processed"] and st["processing"] is False
+
+
+def test_extension_js_parses_and_session_logic(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    ext = Path(__file__).parents[1] / "extension"
+    for f in ext.glob("*.js"):
+        r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+        assert r.returncode == 0, (f.name, r.stderr)
+    lib = (ext / "lib.js").as_uri()
+    script = tmp_path / "session.mjs"
+    script.write_text(f"""
+import assert from "node:assert/strict";
+import {{ awaySince, sessionEndDue, batchBody, SESSION_IDLE_MS }} from "{lib}";
+const now = 10_000_000;
+assert.equal(SESSION_IDLE_MS, 15 * 60 * 1000);
+assert.equal(awaySince(0, "idle", now), now - 60000);  // idle is reported after 60 s
+assert.equal(awaySince(0, "locked", now), now);
+assert.equal(awaySince(now - 60000, "locked", now + 5), now - 60000);  // idle, then locked
+assert.equal(awaySince(now - 60000, "active", now), 0);
+assert.equal(sessionEndDue(now - SESSION_IDLE_MS, true, now), true);
+assert.equal(sessionEndDue(now - SESSION_IDLE_MS + 1, true, now), false);
+assert.equal(sessionEndDue(now - SESSION_IDLE_MS, false, now), false);  // nothing waits
+assert.equal(sessionEndDue(0, true, now), false);  // not away
+assert.deepEqual(batchBody([1], false), [1]);
+assert.deepEqual(batchBody([], true), {{ records: [], session_end: true }});
+console.log("ok");
+""", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+def test_processing_prints_counts_only_progress(tmp_path, monkeypatch):
+    lines = []
+    p = bs.Processor(bs.Vault(tmp_path), clock=lambda: 100.0, say=lines.append)
+
+    def fake(v, progress=None):
+        progress("comet/Default", 12, 5, None)
+        return {"days_from": "2026-11-01", "private_written": 3, "kept": 9, "private": 2,
+                "dropped": 1, "model": True}
+
+    monkeypatch.setattr(bs, "run_import", fake)
+    p.batch(0, True)
+    p.clock = lambda: 200.0
+    assert p.tick()
+    text = "\n".join(lines)
+    assert "session end received" in text and "comet/Default: 12 visits read, 5 new" in text
+    assert "3 private day pages written" in text and "local model used" in text
+    assert p.status()["last_summary"] == lines[-1]
+
+
+def test_second_server_on_same_port_refused(vault):
+    # P5: Windows would otherwise let a second receiver share the port silently
+    s = bs.make_server(vault, 0)
+    try:
+        with pytest.raises(OSError):
+            bs.make_server(vault, s.server_address[1]).server_close()
+    finally:
+        s.server_close()

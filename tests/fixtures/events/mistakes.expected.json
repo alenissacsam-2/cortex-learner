@@ -1,0 +1,14 @@
+{"checkpoints": [
+  {"after": 1, "today": "2026-11-01",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 0, "open_mistakes": ["dsa.off-by-one"]}},
+   "mistakes": {"dsa.off-by-one": {"status": "open", "count": 1, "last_day": "2026-11-01",
+                                   "concepts": ["two-pointers"]}}},
+  {"after": 4, "today": "2026-11-02",
+   "mistakes": {"dsa.off-by-one": {"status": "open", "count": 1}}},
+  {"after": 5, "today": "2026-11-03",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 2, "open_mistakes": []}},
+   "mistakes": {"dsa.off-by-one": {"status": "resolved", "count": 1}}},
+  {"after": 6, "today": "2026-11-04",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 2, "open_mistakes": ["dsa.off-by-one"]}},
+   "mistakes": {"dsa.off-by-one": {"status": "open", "count": 2, "last_day": "2026-11-04"}}}
+]}

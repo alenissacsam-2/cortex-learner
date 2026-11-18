@@ -1,0 +1,4 @@
+{"at":"2026-11-01T12:00:00Z","kind":"grade","fields":{"object":"problem:lc-1","verdict":"correct","also":["concept:arrays-basics"]}}
+{"at":"2026-11-02T12:00:00Z","kind":"log","source":"self","fields":{"object":"problem:lc-1","payload":{"kind":"problem_status","problem":"lc-1","status":"solved","hints":1}}}
+{"at":"2026-11-02T12:05:00Z","kind":"log","source":"self","fields":{"object":"problem:lc-167","payload":{"kind":"problem_status","problem":"lc-167","status":"todo"}}}
+{"at":"2026-11-03T12:00:00Z","kind":"log","source":"self","fields":{"object":"concept:arrays-basics","payload":{"kind":"self_report","concept":"arrays-basics","verdict":"partial"}}}

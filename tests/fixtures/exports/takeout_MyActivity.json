@@ -1,0 +1,46 @@
+[
+  {
+    "header": "YouTube",
+    "title": "Watched Dijkstra in 10 minutes",
+    "titleUrl": "https://www.youtube.com/watch?v=abcdefghijk",
+    "subtitles": [{"name": "Graph Channel", "url": "https://www.youtube.com/channel/UC123"}],
+    "time": "2026-10-02T10:00:00.000Z",
+    "products": ["YouTube"],
+    "activityControls": ["YouTube watch history"]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched a video that has been removed",
+    "time": "2026-10-02T09:50:00.000Z",
+    "products": ["YouTube"]
+  },
+  {
+    "header": "Chrome",
+    "title": "Visited Shortest path problem",
+    "titleUrl": "https://www.google.com/url?q=https://en.wikipedia.org/wiki/Shortest_path_problem&usg=AOvVaw0abc",
+    "time": "2026-10-02T09:40:00.000Z",
+    "products": ["Chrome"]
+  },
+  {
+    "header": "Search",
+    "title": "Searched for dijkstra algorithm",
+    "titleUrl": "https://www.google.com/search?q=dijkstra+algorithm",
+    "time": "2026-10-02T09:30:00Z",
+    "products": ["Search"],
+    "activityControls": ["Web & App Activity"]
+  },
+  {
+    "header": "Maps",
+    "title": "Searched for coffee",
+    "titleUrl": "https://www.google.com/maps/search/coffee",
+    "time": "2026-10-02T09:20:00Z",
+    "products": ["Maps"]
+  },
+  {
+    "header": "Search",
+    "title": "Searched for broken time",
+    "titleUrl": "https://www.google.com/search?q=broken",
+    "time": "not a time",
+    "products": ["Search"]
+  }
+]

@@ -1,0 +1,31 @@
+# private learner data never goes in the code repo
+vault/
+mydata/
+*.sqlite
+
+# build and tool outputs
+__pycache__/
+.venv/
+dist/
+build/
+*.spec
+.pytest_cache/
+.ruff_cache/
+
+# local only: the maintainer's design history, notes and tool state
+docs/design/
+docs/spikes/
+docs/SPEC.md
+docs/PLAN.md
+docs/CORTEX-DESIGN.md
+COUNCIL.md
+PRODUCT.md
+DESIGN.md
+CLAUDE.local.md
+.impeccable/
+.claude/
+research_notes/
+reports/
+spikes/
+# a maintainer's personal patterns for tests/test_privacy_scan.py
+tests/.private_patterns

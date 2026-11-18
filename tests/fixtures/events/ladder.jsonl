@@ -1,0 +1,6 @@
+{"at":"2026-11-01T12:00:00Z","kind":"grade","fields":{"object":"concept:arrays-basics","verdict":"correct"}}
+{"at":"2026-11-01T12:05:00Z","kind":"grade","fields":{"object":"concept:arrays-basics","verdict":"correct","hints":1}}
+{"at":"2026-11-02T12:00:00Z","kind":"grade","source":"self","fields":{"object":"concept:arrays-basics","verdict":"correct"}}
+{"at":"2026-11-05T12:00:00Z","kind":"grade","source":"external","fields":{"object":"concept:arrays-basics","verdict":"correct","hints":1}}
+{"at":"2026-11-01T13:00:00Z","kind":"grade","fields":{"object":"concept:two-pointers","verdict":"correct"}}
+{"at":"2026-11-02T13:00:00Z","kind":"grade","fields":{"object":"concept:two-pointers","verdict":"correct"}}

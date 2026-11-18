@@ -1,0 +1,10 @@
+{"problem_concepts": {"lc-1": "two-pointers", "lc-167": "two-pointers"},
+ "checkpoints": [
+  {"after": 1, "today": "2026-11-01",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 1, "attempts": 1},
+                "arrays-basics": {"state": "learning", "pass_days": 0, "attempts": 0}}},
+  {"after": 4, "today": "2026-11-03",
+   "concepts": {"two-pointers": {"state": "learning", "pass_days": 2, "depth_pass": false,
+                                 "attempts": 2},
+                "arrays-basics": {"state": "learning", "pass_days": 0, "attempts": 1}}}
+]}

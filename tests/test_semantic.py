@@ -1,0 +1,447 @@
+import json
+import os
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pytest
+from conftest import FakeEmbed, note
+
+from cortex import semantic
+from cortex.catalog import Catalog
+from cortex.index import Index
+from cortex.mcp_server import Cortex
+from cortex.vault import Vault, VaultError
+
+pytestmark = pytest.mark.usefixtures("home")
+
+FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
+
+
+@pytest.fixture
+def root(tmp_path):
+    r = tmp_path / "vault"
+    shutil.copytree(FIXTURE, r)
+    note(r, "notes/engines.md", "title: Engines\nsummary: how a motor works\n",
+         "# Engines\n\nAutomobile car motor basics.")
+    note(r, "notes/pasta.md", "title: Pasta\n",
+         "# Pasta\n\nA recipe from the kitchen, cooking slowly. The vehicle was late.")
+    note(r, "notes/gearbox.md", 'title: Gearbox\nrelated: ["[[engines]]"]\n',
+         "# Gearbox\n\nGears and teeth.")
+    note(r, "notes/hidden.md", "title: Hidden\nprivate: true\nrelated: [\"[[engines]]\"]\n",
+         "# Hidden\n\nautomobile vehicle car diary")
+    return r
+
+
+@pytest.fixture
+def idx(root):
+    v = Vault(root)
+    return Index(v, Catalog.load(v))
+
+
+Q = semantic.QUERY_PREFIX + "vehicle"
+
+
+def ids(hits):
+    return [h["id"] for h in hits]
+
+
+def test_hybrid_puts_the_similar_page_first_and_expands_links(idx):
+    hits = semantic.recall(idx, "vehicle", FakeEmbed(), limit=8, hops=1)
+    # pasta's cosine (~0.2) is under MIN_COS, so it ranks on its keyword credit alone
+    assert ids(hits)[:3] == ["engines", "gearbox", "pasta"]
+    assert [h["match"] for h in hits[:3]] == ["similar", "linked", "keyword"]
+    assert hits[0]["summary"] == "how a motor works" and hits[0]["kind"] == "note"
+    assert hits[1]["via"] == "engines (related)" and hits[1]["score"] == pytest.approx(0.35)
+    assert hits[2]["score"] == pytest.approx(semantic.W_KW)
+    assert hits[0]["score"] > hits[1]["score"] > hits[2]["score"]
+    assert "hidden" not in ids(hits)
+    assert ids(semantic.recall(idx, "vehicle", FakeEmbed(), hops=0)) == ["engines", "pasta"]
+
+
+def test_private_pages_are_never_embedded(idx):
+    fake = FakeEmbed()
+    semantic.recall(idx, "vehicle", fake)
+    assert not any("diary" in t for t in fake.texts)
+    assert not any("Private concept" in t for t in fake.texts)
+
+
+def test_embed_all_sorts_by_length_but_returns_input_order():
+    texts = ["car motor engine vehicle", "pasta", "", "kitchen cooking recipe pasta", "car"]
+    assert np.array_equal(semantic.embed_all(FakeEmbed(), texts, batch=2),
+                          semantic._embed(FakeEmbed(), texts))
+    assert semantic.embed_all(FakeEmbed(), []).shape[0] == 0
+
+
+def test_only_embeds_the_named_pages_heads(idx):
+    fake = FakeEmbed()
+    ids_, _, _, _ = semantic.vectors(idx, fake, 4, budget=0.0, only={"engines", "pasta"})
+    assert sorted(ids_) == ["engines", "pasta"] and len(fake.texts) == 2
+
+
+def test_cache_reembeds_only_changed_pages_and_drops_deleted(root, idx):
+    fake = FakeEmbed()
+    semantic.recall(idx, "vehicle", fake)
+    n_pages = len(fake.texts) - 1  # minus the query
+    assert n_pages == len(idx._notes) and (root / semantic.CACHE).is_file()
+
+    fake.texts.clear()
+    semantic.recall(idx, "vehicle", fake)
+    assert fake.texts == [Q]  # nothing changed: only the (prefixed) query
+
+    semantic._MEM.clear()  # a new process: the cache comes back from disk
+    semantic.recall(idx, "vehicle", fake)
+    assert fake.texts == [Q] * 2
+
+    p = note(root, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nNow about a motor car.")
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    (root / "notes/gearbox.md").unlink()
+    idx.refresh()
+    fake.texts.clear()
+    hits = semantic.recall(idx, "vehicle", fake)
+    assert len(fake.texts) == 2 and "Now about a motor car." in fake.texts[1]
+    assert "gearbox" not in ids(hits)
+    semantic._MEM.clear()
+    with np.load(root / semantic.CACHE) as z:
+        assert "gearbox" not in list(z["ids"]) and "hidden" not in list(z["ids"])
+        assert len(z["ids"]) == n_pages - 1
+
+
+def test_without_the_model_it_falls_back_to_keyword_and_says_so(idx, tmp_path, monkeypatch):
+    monkeypatch.setattr(semantic, "_embedder", None)
+    monkeypatch.setattr(semantic, "models_dir", lambda: tmp_path / "no-models")
+    hits, notice = semantic.search(idx, "vehicle")
+    assert notice == semantic.NOT_SET_UP and "cortex model download" in notice
+    assert ids(hits) == ["pasta"] and hits[0]["match"] == "keyword"
+    assert not (tmp_path / "no-models").exists()  # never downloads implicitly
+    assert semantic.search(idx, "")[0] == []
+
+
+def test_context_related_uses_recall_when_the_model_is_there(root, monkeypatch):
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    ctx = Cortex(Vault(root)).cortex_context(topic="automobile")["context"]
+    related = ctx.split("## Related\n", 1)[1]
+    assert related.index("[[engines]]") < related.index("[[gearbox]]")
+    assert "hidden" not in related
+
+
+def _bump(p):
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+def test_private_domain_hides_its_concepts_and_raw_over_mcp(root, monkeypatch):
+    """SEC-2: privacy inherits from the domain over MCP too, as it does in the views."""
+    with open(root / "catalog.yaml", "a", encoding="utf-8") as f:
+        f.write('  - id: "hobby"\n    title: "Hobby"\n    aliases: []\n    areas:\n'
+                '      - id: "hobby.cars"\n        title: "Cars"\n        concepts:\n'
+                '          - id: "gear-ratios"\n            title: "Gear ratios"\n'
+                '            aliases: []\n            requires: []\n')
+    dom = note(root, "domains/hobby.md", 'id: "hobby"\ntitle: "Hobby"\nkind: "domain"\n',
+               "# Hobby")
+    note(root, "areas/hobby.cars.md", 'id: "hobby.cars"\ntitle: "Cars"\ndomain: "hobby"\n'
+         'parent: "[[hobby]]"\n', "# Cars")
+    note(root, "concepts/gear-ratios.md", 'id: "gear-ratios"\ntitle: "Gear ratios"\n'
+         'domain: "hobby"\nparent: "[[hobby.cars]]"\n', "# Gear ratios\n\nautomobile car")
+    note(root, "resources/diary-src.md", 'title: "Diary"\nprivate: true\n'
+         'source: "raw/diary.md"\n', "# Diary")
+    (root / "raw").mkdir(exist_ok=True)
+    (root / "raw/diary.md").write_text("my diary", encoding="utf-8")
+    (root / "raw/open.md").write_text("open text", encoding="utf-8")
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    c = Cortex(Vault(root))
+    assert "gear-ratios" in ids(c.cortex_recall("vehicle")["hits"])  # domain still public
+
+    dom.write_text(dom.read_text("utf-8").replace("kind:", "private: true\nkind:"), "utf-8")
+    _bump(dom)
+    assert "gear-ratios" not in ids(c.cortex_find("gear ratios")["hits"])
+    with pytest.raises(VaultError) as e:
+        c.cortex_read("gear-ratios")
+    assert e.value.code == "unknown_id"
+    assert "gear-ratios" not in ids(c.cortex_recall("vehicle")["hits"])
+    assert "gear-ratios" not in c.cortex_context(topic="gear ratios")["context"]
+    semantic._MEM.clear()
+    with np.load(root / semantic.CACHE) as z:
+        assert "gear-ratios" not in list(z["ids"]) and "engines" in list(z["ids"])
+    with pytest.raises(VaultError) as e:
+        c.cortex_read("raw/diary.md")
+    assert e.value.code == "unknown_id"
+    assert "open text" in c.cortex_read("raw/open.md")["text"]
+
+    dom.write_text(dom.read_text("utf-8").replace("private: true\n", ""), "utf-8")
+    _bump(dom)
+    assert "gear-ratios" in ids(c.cortex_find("gear ratios")["hits"])  # privacy lifted
+
+
+def test_context_topic_finds_a_concept_named_by_one_word(root, monkeypatch):
+    """RETR-2: a phrase where one word names a concept still lists it, with or without the
+    model (the fallback retries the full-text match on any non-stopword word)."""
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    topic = Cortex(Vault(root)).cortex_context(topic="how about pointers")["context"]
+    assert "(two-pointers)" in topic.split("## Related", 1)[0]
+    monkeypatch.setattr(semantic, "_embedder", None)  # home has no models: no embedder
+    c_ctx = Cortex(Vault(root)).cortex_context(topic="how about pointers")["context"]
+    assert "(two-pointers)" in c_ctx and "No matching concepts." not in c_ctx
+
+
+def test_cosine_floor_and_stopwords_make_nothing_an_answer(root, idx, monkeypatch):
+    """RETR-3: under MIN_COS and with no non-stopword keyword match, a page is no hit."""
+    assert "pasta" in ids(semantic.recall(idx, "vehicle", FakeEmbed()))  # keyword hit
+    assert "pasta" not in ids(semantic.recall(idx, "motor", FakeEmbed()))  # cos ~0.2 only
+    assert semantic._keyword(idx, "what is the") == {}  # stopwords alone match nothing
+
+    class Far(FakeEmbed):  # the query sits ~70 degrees from every page
+        def __call__(self, texts):
+            out = super().__call__(texts)
+            for k, t in enumerate(texts):
+                if t.startswith(semantic.QUERY_PREFIX):
+                    out[k] = [0.4, 0.4, 1.0, 0.0]
+            return out
+
+    monkeypatch.setattr(semantic, "_embedder", Far())
+    ctx = Cortex(Vault(root)).cortex_context(topic="what is quantum")["context"]
+    assert "## Related" not in ctx and "No matching concepts." in ctx
+    monkeypatch.setattr(semantic, "MIN_COS", 0.3)
+    ctx = Cortex(Vault(root)).cortex_context(topic="what is quantum")["context"]
+    assert "[[pasta]]" in ctx.split("## Related", 1)[1]
+
+
+def test_under_the_floor_a_keyword_hit_needs_half_the_query_terms(root):
+    note(root, "notes/tips.md", "title: Tips\n", "# Tips\n\nThe best way to study.")
+    note(root, "problems/lc-1293.md", 'id: "lc-1293"\ntitle: "LC 1293"\n', "# LC 1293\n")
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    query = "best pizza in naples"  # "best" is 1 of 3 terms: no hit with the model
+    assert "tips" not in ids(semantic.recall(idx, query, FakeEmbed(), hops=0))
+    assert "tips" in ids(semantic.recall(idx, query, None, hops=0))  # keyword-only as before
+    assert ids(semantic.recall(idx, "LC 1293", FakeEmbed(), hops=0))[0] == "lc-1293"
+
+
+DEEP = "The vehicle broke down, so the car motor got fixed."
+
+
+def chat_body(n=40, deep_at=30):
+    """A chat page: a kitchen head, short timestamped turns, one vehicle turn deep down."""
+    turns = [f"### 2026-05-05 00:{k:02d}\n**Me:** turn {k}\n\n**Claude:** "
+             + (DEEP if k == deep_at else "filler words. " * 8) for k in range(n)]
+    return "# Trip\n\nA kitchen recipe for pasta.\n\n" + "\n\n".join(turns)
+
+
+@pytest.fixture
+def chat(root):
+    note(root, "resources/trip.md", "title: Trip\n", chat_body())
+    v = Vault(root)
+    return Index(v, Catalog.load(v))
+
+
+def test_chunks_are_title_prefixed_overlapping_windows_cut_at_turns():
+    n = {"title": "Trip", "fields": {}, "body": chat_body()}
+    body = semantic._filled(n["body"].strip())
+    ch = semantic._chunks(n)
+    assert ch[0] == (0, semantic._text(n)) and len(ch) > 3
+    assert ch[1][0] == semantic.BODY_CHARS - semantic.CHUNK_OVERLAP
+    for (s, t), (s2, _) in zip(ch[1:], ch[2:], strict=False):
+        piece = t.removeprefix("Trip\n")
+        assert t.startswith("Trip\n") and body[s:s + len(piece)] == piece
+        assert len(piece) <= semantic.CHUNK_CHARS
+        assert body[s + len(piece):].startswith("\n### ")  # cut before a whole turn
+        assert s2 == s + len(piece) - semantic.CHUNK_OVERLAP  # overlap
+    s, t = ch[-1]
+    assert body[s:] == t.removeprefix("Trip\n")  # the last one runs to the end
+    short = {"title": "S", "fields": {}, "body": "x" * semantic.BODY_CHARS}
+    assert semantic._chunks(short) == [(0, semantic._text(short))]
+    flat = {"title": "F", "fields": {}, "body": "y" * 5000}  # no boundary: a hard cut
+    tail = semantic._chunks(flat)[1:]
+    assert [s for s, _ in tail] == [1300, 2100, 2900, 3700, 4500]  # stride 800
+    assert [len(t) - 2 for _, t in tail] == [1000] * 4 + [500]
+
+
+def test_a_page_scores_by_its_best_chunk_and_reranks_on_it(chat):
+    hits = semantic.recall(chat, "vehicle", FakeEmbed(), hops=0)
+    trip = next(h for h in hits if h["id"] == "trip")
+    assert trip["match"] == "similar" and trip["score"] > semantic.W_COS  # cos 1 from deep down
+    start, text = next(c for c in semantic._chunks(chat._notes["trip"]) if DEEP in c[1])
+    assert trip["at"] == start
+    assert "at" not in next(h for h in hits if h["id"] == "engines")  # its head won
+    seen = []
+
+    def spy(query, texts):
+        seen.extend(texts)
+        return [0.0] * len(texts)
+
+    semantic.recall(chat, "vehicle", FakeEmbed(), hops=0, rerank_with=spy)
+    assert text in seen and semantic._text(chat._notes["trip"]) not in seen
+
+
+def test_partial_build_scores_by_chunk_0_and_a_build_completes_it(root, chat, monkeypatch):
+    monkeypatch.setattr(semantic, "RECALL_BUDGET", 0)
+    hits = semantic.recall(chat, "vehicle", FakeEmbed(), hops=0)
+    assert next(h for h in hits if h["id"] == "trip")["match"] == "keyword"  # head only
+    ids, page, start, _ = semantic.vectors(chat, FakeEmbed(), 4, 0)
+    assert len(start) == len(ids)  # one row per page: nothing past the heads yet
+    semantic.vectors(chat, FakeEmbed(), 4)  # no budget: `cortex model build`
+    semantic._MEM.clear()  # a new process
+    fake = FakeEmbed()
+    hits = semantic.recall(chat, "vehicle", fake, hops=0)
+    assert fake.texts == [Q]  # all built and saved: nothing re-embedded
+    assert next(h for h in hits if h["id"] == "trip")["match"] == "similar"
+
+
+def test_an_interrupted_build_resumes_without_redoing_saved_chunks(root, chat, monkeypatch):
+    monkeypatch.setattr(semantic, "BATCH", 2)
+    first, heads, tail_calls = FakeEmbed(), {semantic._text(n) for n in chat._notes.values()}, []
+
+    class Dies(FakeEmbed):  # killed on the second batch past the heads
+        def __call__(self, texts):
+            if texts[0] not in heads:
+                tail_calls.append(1)
+                if len(tail_calls) == 2:
+                    raise KeyboardInterrupt
+            return first(texts)
+
+    with pytest.raises(KeyboardInterrupt):
+        semantic.vectors(chat, Dies(), 4, save_every=0)
+    semantic._MEM.clear()
+    second = FakeEmbed()
+    semantic.vectors(chat, second, 4)
+    all_texts = [t for i in chat._notes for _, t in semantic._chunks(chat._notes[i])]
+    assert not set(first.texts) & set(second.texts)
+    assert sorted(first.texts + second.texts) == sorted(all_texts)
+
+
+def test_cache_versioning_rebuilds_on_new_chunking(root, chat, monkeypatch):
+    heads = {semantic._text(chat._notes[i]) for i in semantic._pages(chat)}
+    semantic.vectors(chat, FakeEmbed(), 4)
+    with np.load(root / semantic.CACHE) as z:
+        meta = json.loads(z["meta"].item())
+        assert meta["text"] == 3 and meta["chunk"] == semantic.CHUNKING
+        assert z["vecs"].dtype == np.float16 and z["full"].all()
+    semantic._MEM.clear()
+    monkeypatch.setattr(semantic, "CHUNKING", [1500, 800, 100])  # other settings: rebuild
+    fake = FakeEmbed()
+    semantic.vectors(chat, fake, 4)
+    assert heads <= set(fake.texts)
+
+
+def test_a_lost_cache_rebuilds_heads_under_a_budget(root, chat, monkeypatch):
+    full = semantic.vectors(chat, FakeEmbed(), 4)
+    semantic._MEM.clear()
+    (root / semantic.CACHE).unlink()  # PRIVACY.md: .cortex/ may be deleted at any time
+    monkeypatch.setattr(semantic, "HEAD_BUDGET", 0)
+    fake = FakeEmbed()
+    hits = semantic.recall(chat, "vehicle", fake, hops=0)
+    assert fake.texts == [Q]  # no page embedded inside the call
+    assert hits and {h["match"] for h in hits} == {"keyword"}
+    assert semantic.vectors(chat, FakeEmbed(), 4, 0, heads=0)[0] == []
+    ids, page, start, vecs = semantic.vectors(chat, FakeEmbed(), 4)  # a later build fills it
+    assert ids == full[0] and (start == full[2]).all() and np.allclose(vecs, full[3])
+
+
+def test_a_server_saving_during_a_build_keeps_the_builds_chunks(root, chat, monkeypatch):
+    monkeypatch.setattr(semantic, "RECALL_BUDGET", 0)
+    semantic.recall(chat, "vehicle", FakeEmbed())  # a server: heads only
+
+    class Racing(FakeEmbed):  # while the server embeds, another process builds and saves
+        def __call__(self, texts):
+            if not self.texts:
+                server = dict(semantic._MEM)
+                semantic._MEM.clear()
+                semantic.vectors(chat, FakeEmbed(), 4)  # `cortex model build`
+                semantic._MEM.clear()
+                semantic._MEM.update(server)
+            return super().__call__(texts)
+
+    _bump(note(root, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nNow about a motor car."))
+    chat.refresh()
+    semantic.recall(chat, "vehicle", Racing())  # embeds pasta's head, then saves
+    full, n_rows = semantic._read(chat.vault.root)["trip"][1:3]
+    assert full and len(n_rows) > 1  # the build's chunks survived the server's save
+
+
+def test_text_drops_empty_template_headings():
+    body = "# Asha\n\n## Who they are to me\n- Lab partner\n\n## How I write to them\n"
+    text = semantic._text({"title": "Asha", "fields": {}, "body": body})
+    assert "Lab partner" in text and "Who they are to me" in text
+    assert "How I write to them" not in text
+    nested = "## Plan\n### Step\n- go\n## Empty\n"
+    assert semantic._filled(nested) == "## Plan\n### Step\n- go"
+
+
+CARS = "# {t}\n\n{tl}Automobile car motor basics{z}.\n"
+TIMELINE = "Timeline: [[2026-05-01]] · Source: Gemini · Date: 2026-05-05\n\n"
+
+
+@pytest.fixture
+def chats(root):
+    note(root, "notes/cars.md", "title: Cars\n", CARS.format(t="Cars", tl="", z=""))
+    note(root, "resources/gem-cars.md", "title: Gem cars\n",
+         CARS.format(t="Gem cars", tl=TIMELINE, z=" blimp"))
+    note(root, "resources/book.md", "title: Book\n", CARS.format(t="Book", tl="", z=""))
+    v = Vault(root)
+    return Index(v, Catalog.load(v))
+
+
+def test_imported_chat_pages_rank_below_the_users_own_pages(chats):
+    n = chats._notes
+    assert semantic.is_chat(n["gem-cars"])
+    assert not semantic.is_chat(n["book"]) and not semantic.is_chat(n["cars"])
+    sc = {h["id"]: h["score"] for h in semantic.recall(chats, "vehicle", FakeEmbed(), hops=0)}
+    full = {h["id"]: h["score"]
+            for h in semantic.recall(chats, "vehicle", FakeEmbed(), hops=0, chats=True)}
+    assert sc["cars"] > sc["gem-cars"]
+    assert sc["gem-cars"] == pytest.approx(full["gem-cars"] * semantic.CHAT_WEIGHT, abs=1e-3)
+    assert full["cars"] == sc["cars"]
+    assert sc["book"] == full["book"]  # a resource without a Timeline Source is not a chat
+    # the only match is still returned
+    assert ids(semantic.recall(chats, "blimp", FakeEmbed(), hops=0)) == ["gem-cars"]
+
+
+def test_rerank_weights_chat_pages_unless_asked(chats):
+    def ce(query, texts):  # the cross-encoder slightly prefers the chat page
+        return [1.0 if t.startswith("Gem cars") else 0.5 for t in texts]
+
+    def top(**kw):
+        got = ids(semantic.recall(chats, "vehicle", FakeEmbed(), hops=0, rerank_with=ce, **kw))
+        return [i for i in got if i in ("cars", "gem-cars")]
+
+    assert top() == ["cars", "gem-cars"]
+    assert top(chats=True) == ["gem-cars", "cars"]
+
+
+def test_explain_shows_score_parts_and_the_misses(idx):
+    ex = {}
+    hits = semantic.recall(idx, "vehicle", FakeEmbed(), limit=1, hops=0, explain=ex)
+    parts, misses = semantic.explained(idx, ex, hits, 5)
+    assert ids(hits) == ["engines"] and parts[0]["cos"] == pytest.approx(1.0)
+    assert parts[0]["kw"] == 0.0 and parts[0]["weight"] == 1.0
+    assert "Automobile" in parts[0]["chunk"]
+    why = {m["id"]: m["reason"] for m in misses}
+    assert why["pasta"] == "below limit"  # a keyword hit that the limit cut
+    assert next(m for m in misses if m["id"] == "pasta")["kw"] == pytest.approx(1.0)
+    assert len(misses) == 5 and "hidden" not in why
+    assert all(r.startswith("cosine ") and "< MIN_COS" in r for i, r in why.items() if i != "pasta")
+    ex = {}
+    hits = semantic.recall(idx, "vehicle", FakeEmbed(), limit=1, hops=0, explain=ex,
+                           rerank_with=lambda q, texts: [0.0] * len(texts))
+    parts, misses = semantic.explained(idx, ex, hits, 5)
+    assert parts[0]["rerank"] == pytest.approx(0.5)
+    assert {m["id"]: m["reason"] for m in misses}["pasta"] == "below limit after rerank"
+    ex = {}  # keyword only: no cosine, no chunk
+    parts, _ = semantic.explained(idx, ex, semantic.recall(idx, "vehicle", explain=ex), 0)
+    assert parts[0]["cos"] is None and parts[0]["chunk"] == ""
+
+
+def test_recall_cli_explain_writes_no_recall_log(root, monkeypatch):
+    from typer.testing import CliRunner
+
+    from cortex import recall_log
+    from cortex.cli import app
+
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    out = CliRunner().invoke(app, ["recall", "vehicle", "--limit", "1", "--hops", "0",
+                                   "--explain", "--show-misses", "--vault", str(root)])
+    assert out.exit_code == 0, out.output
+    assert "cos 1.000  kw 0.000" in out.output and "chunk@0" in out.output
+    assert "missed:" in out.output and "pasta: below limit" in out.output
+    assert recall_log.rows(Vault(root)) == []

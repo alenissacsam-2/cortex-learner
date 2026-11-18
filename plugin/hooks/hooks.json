@@ -1,0 +1,39 @@
+{
+  "description": "On the first prompt of each Claude Code chat, injects the Cortex context that matches it (cortex_prime). When a Claude Code session ends, closes Cortex sessions whose server has exited (or idle over 2 h). After a web, browser or other non-Cortex MCP tool, marks the vault so the next Cortex write counts as exposed.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortex prime-hook || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortex session sweep || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(?!mcp__(cortex|plugin_cortex_cortex|ccd_[^_]*|visualize|scheduled-tasks|savvy-progress)__)(WebFetch|WebSearch|mcp__.+)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortex taint || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

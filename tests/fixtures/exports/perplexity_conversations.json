@@ -1,0 +1,21 @@
+{"conversations": [
+  {"collection_uuid": null, "context_title": "What is a trie?",
+   "context_uuid": "aaaa1111-2222-3333-4444-555566667777",
+   "created_at": "2026-09-01T10:00:00.000000Z", "updated_at": "2026-09-01T10:05:00.000000Z",
+   "mode": "COPILOT",
+   "entries": [
+     {"entry_uuid": "e0000001-0000-0000-0000-000000000001", "created_at": "2026-09-01T10:00:00.000000Z",
+      "query": "What is a trie?", "answer": "A prefix tree for strings.[1]",
+      "engine_mode": "copilot", "label": null, "query_status": "COMPLETED"},
+     {"entry_uuid": "e0000001-0000-0000-0000-000000000002", "created_at": "2026-09-01T10:05:00.000000Z",
+      "query": "Lookup cost? my key sk-pplxtesttesttesttest99", "answer": "",
+      "engine_mode": null, "label": null, "query_status": null}]},
+  {"collection_uuid": "c0000000-0000-0000-0000-000000000009", "context_title": "Heaps",
+   "context_uuid": "bbbb1111-2222-3333-4444-555566667777",
+   "created_at": "2026-09-02T08:00:00.000000Z", "updated_at": "2026-09-02T08:00:00.000000Z",
+   "mode": "CONCISE",
+   "entries": [
+     {"entry_uuid": "e0000002-0000-0000-0000-000000000001", "created_at": "2026-09-02T08:00:00.000000Z",
+      "query": "What is a heap?", "answer": "## Heap\nA tree where each parent beats its children.",
+      "engine_mode": "concise", "label": null, "query_status": "COMPLETED"}]}
+]}
