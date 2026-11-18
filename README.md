@@ -55,9 +55,9 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 **Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, and lists the pages each answer used. It never uses a cloud model.
 
-![Ask your archive: a question about loop mistakes, an answer with numbered citations and the source pages](docs/images/app-ask.png)
+![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips](docs/images/app-chat.png)
 
-*The answer in this screenshot comes from a stand-in for a local model, used to make the demo repeatable; the sources are the real search results for the sample vault.*
+*A real run on the demo vault with Qwen 3.5 2B and the search model. A model this small can still get a detail wrong, so check the cited pages; a bigger model (4B, 9B) does better if your computer can run it.*
 
 **Local model** shows the runner (Ollama or LM Studio) and the chosen model.
 
