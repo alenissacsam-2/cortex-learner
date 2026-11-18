@@ -659,3 +659,25 @@ console.log(JSON.stringify({ deep: depth(deep), ok: depth(ok) }));
     r = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == {"deep": 21, "ok": 2}
+
+
+def test_snapshot_parses_build_the_same_dashboard(root):
+    # D15: notes served from the index snapshot (no file read, no YAML) give the same blob
+    from cortex import vault as vault_mod
+    from cortex.index import Index
+
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    idx.refresh()
+    idx.save_snapshot()
+    dashboard.write_dashboard(v, now=NOW)  # the brain keeps its first layout; compare after it
+    for p in [p for p in vault_mod._PARSED if p.is_relative_to(root)]:
+        del vault_mod._PARSED[p]  # a fresh process: nothing parsed yet
+    want = dashboard.build_data(v, now=NOW)
+    for p in [p for p in vault_mod._PARSED if p.is_relative_to(root)]:
+        del vault_mod._PARSED[p]
+    with dashboard._snapshot_parses(v):
+        served = {p for p in vault_mod._PARSED if p.is_relative_to(root)}
+        got = dashboard.build_data(v, now=NOW)
+    assert served and got == want
+    assert not served & set(vault_mod._PARSED)  # scoped: later reads parse the files again

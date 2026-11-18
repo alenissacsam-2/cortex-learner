@@ -1158,6 +1158,8 @@ def dashboard(no_open: Annotated[bool, typer.Option("--no-open", help="Write it 
               vault: VaultOpt = None) -> None:
     """Write .cortex/dashboard.html and index.md, and open the dashboard in the browser."""
     v, now = _vault(vault), datetime.now(UTC)
+    pages = sum(len(v.note_paths(k)) for k in Vault.KIND_DIRS if k != "browse")
+    typer.echo(f"Building the dashboard ({pages:,} pages)…", err=True)  # a big vault takes a while
     path = dashboard_mod.write_dashboard(v, now=now, relayout=relayout)
     dashboard_mod.write_index(v, now=now)
     typer.echo(str(path))

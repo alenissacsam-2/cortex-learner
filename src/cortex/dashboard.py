@@ -1,4 +1,4 @@
-"""The offline dashboard (SPEC §0 U2, §10; docs/design/dashboard.md).
+"""The offline dashboard.
 
 One self-contained `.cortex/dashboard.html`: the data blob, d3 v7 and the page script are
 inlined, and the CSP allows only those scripts by hash. Note text reaches the page as plain
@@ -13,12 +13,14 @@ import json
 import re
 import string
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 from cortex import (
     brainmap,
+    index,
     know,
     learning_eval,
     levels,
@@ -29,6 +31,7 @@ from cortex import (
     reflect,
     topics,
 )
+from cortex import vault as vault_mod
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.index import _edge_targets, link_targets
@@ -467,18 +470,48 @@ def render_html(data: dict) -> str:
     return _SLOT.sub(lambda m: slots[m.group(1)], read("dashboard.html.tmpl"))
 
 
+@contextmanager
+def _snapshot_parses(vault: Vault):
+    """Serve notes whose (mtime, size) still match the search index's snapshot from it, instead
+    of opening and YAML-parsing every file again (most of a big vault's build time). Scoped:
+    the entries leave the parse cache afterwards, so a later write in this process reads the
+    file itself. Snapshot values are JSON (a date is its ISO string); the build reads them as
+    text. Private entries hold no fields and are parsed as usual."""
+    added = {}
+    try:
+        files = json.loads((vault.root / index.SNAPSHOT).read_bytes())
+        files = files["files"] if files.get("schema") == index.SNAPSHOT_SCHEMA else {}
+    except (OSError, ValueError, AttributeError, KeyError):
+        files = {}
+    for e in files.values() if isinstance(files, dict) else ():
+        if not (isinstance(e, list) and len(e) == 6 and isinstance(e[4], dict)
+                and isinstance(e[5], str) and e[2] in Vault.KIND_DIRS and e[2] != "browse"):
+            continue
+        path = vault.root / Vault.KIND_DIRS[e[2]] / f"{e[3]}.md"
+        if path not in vault_mod._PARSED:
+            added[path] = vault_mod._PARSED[path] = ((e[0], e[1]), e[4], e[5])
+    try:
+        yield
+    finally:
+        for path, hit in added.items():
+            if vault_mod._PARSED.get(path) is hit:
+                del vault_mod._PARSED[path]
+
+
 def write_dashboard(vault: Vault, *, now: datetime, relayout: bool = False) -> Path:
     """Regenerate `<vault>/.cortex/dashboard.html`."""
-    return vault.write_text(vault.root / ".cortex" / "dashboard.html",
-                            render_html(build_data(vault, now=now, relayout=relayout)))
+    with _snapshot_parses(vault):
+        data = build_data(vault, now=now, relayout=relayout)
+    return vault.write_text(vault.root / ".cortex" / "dashboard.html", render_html(data))
 
 
 def write_index(vault: Vault, *, now: datetime) -> Path:
     """Regenerate `<vault>/index.md`, the one-file text map of every non-private page. Like
     the dashboard it is built on demand (`cortex dashboard`), never at session close."""
     catalog = Catalog.load(vault)
-    after, _ = planner.current_states(vault, local_day(now), catalog)
-    private = planner.hidden(vault, catalog)
-    notes = [n for n in vault.iter_notes() if not is_private(n) and n.id not in private]
-    return vault.write_text(vault.root / "index.md", index_md(
-        notes, catalog.entries, {c: s.state for c, s in after.items()}))
+    with _snapshot_parses(vault):
+        after, _ = planner.current_states(vault, local_day(now), catalog)
+        private = planner.hidden(vault, catalog)
+        notes = [n for n in vault.iter_notes() if not is_private(n) and n.id not in private]
+        text = index_md(notes, catalog.entries, {c: s.state for c, s in after.items()})
+    return vault.write_text(vault.root / "index.md", text)

@@ -17,9 +17,12 @@ demo = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(demo)
 
 
-def test_demo_vault(tmp_path):
+def test_demo_vault(tmp_path, monkeypatch):
+    from cortex import taint
+
     root = tmp_path / "vault"
-    _init(root)
+    _init(root)  # the first init on a fresh home also makes it the configured vault
+    monkeypatch.setattr(taint, "config", lambda: {})  # as with a real vault configured elsewhere
     demo.main([str(root)])
     v = Vault(root)
     n = sum(1 for _ in EventLog(v).iter_events())
@@ -32,3 +35,26 @@ def test_demo_vault(tmp_path):
     mirror = data["confidence"]
     assert all(r["n"] >= learning_eval.MIN_BAND and r["share"] is not None for r in mirror)
     assert data["counts"]["solid"] >= 1 and len(data["mistakes"]) >= 3
+
+
+def test_demo_refuses_a_real_vault(tmp_path, monkeypatch):
+    # D17: made-up grades are permanent history in a real learner model
+    import pytest
+
+    from cortex import taint
+
+    root = tmp_path / "vault"
+    _init(root)
+    monkeypatch.delenv("CORTEX_VAULT", raising=False)
+    monkeypatch.setattr(taint, "config", lambda: {"vault": str(root)})
+    with pytest.raises(SystemExit):
+        demo.main([str(root)])
+    assert not list(EventLog(Vault(root)).iter_events())
+    monkeypatch.setattr(taint, "config", lambda: {})
+    EventLog(Vault(root)).append(session="cli", kind="taught", source="external",
+                                 now=datetime.now(UTC), fields={"object": "concept:x"})
+    with pytest.raises(SystemExit):
+        demo.main([str(root)])
+    assert demo.refusal(root.resolve()).endswith("already has 1 events of its own")
+    demo.main([str(root), "--force"])
+    assert sum(1 for _ in EventLog(Vault(root)).iter_events()) > 1
