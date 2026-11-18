@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from cortex import update
 from cortex.app import actions, status, targets, wizard
 
 HOST = "127.0.0.1"
@@ -177,7 +178,7 @@ class App:
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/ask": self.ask_state,
-                    "/api/job": self.jobs.view}
+                    "/api/update": self.update_state, "/api/job": self.jobs.view}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
@@ -196,7 +197,8 @@ class App:
             "/api/browse/setup": self.extension_setup, UPLOAD: None,  # do_POST streams it
             "/api/import/preview": self.import_preview, "/api/import/run": self.import_run,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
-            "/api/setup/skip": self.setup_skip}
+            "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
+            "/api/update/apply": self.update_apply}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -218,7 +220,7 @@ class App:
         ready = v["ok"] and (_connect_skipped() or any(
             t["connected"] for t in targets.describe(self.entry())))
         return {"rows": status.rows(self.root, self.receiver.status()),
-                "first_run": not v["ok"], "vault": v["path"],
+                "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def connect(self) -> dict:
@@ -626,6 +628,47 @@ class App:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:
             self.jobs.cur.cancel()
         return {"ok": True}
+
+    # ---- updates: only on a click, never in the background ----
+    def update_state(self) -> dict:
+        return {"current": update.current(), "mode": update.mode()}
+
+    def _check(self, job) -> tuple[dict, dict]:
+        job.say("asking GitHub for the latest release")
+        info, cur = update.latest(), update.current()
+        out = {"current": cur, "latest": ".".join(map(str, info["version"])),
+               "newer": update.newer(info["version"], update.parse_version(cur)),
+               "notes_url": info["notes_url"], "mode": update.mode(),
+               "size": info["exe_size"]}
+        if out["mode"] == "dev":
+            out["command"] = update.command(info["tag"])
+        return info, out
+
+    def update_check(self, body: dict) -> dict:
+        return self.jobs.start("Checking for updates", "update", lambda job: self._check(job)[1])
+
+    def update_apply(self, body: dict) -> dict:
+        """Download the new installer, check it, start it and quit; it reopens the app."""
+        if update.mode() != "installer":
+            info = update.latest()
+            raise ValueError("This Cortex was not installed with CortexSetup.exe. Update it "
+                             f"with: {update.command(info['tag'])}")
+
+        def run(job):
+            info, out = self._check(job)
+            if not out["newer"]:
+                return {**out, "launched": False}
+
+            def said(got, total):
+                job.say(f"downloaded {got >> 20} of {total >> 20} MB")
+            exe = update.download(info, update.dest_dir(info), said, job.cancelled)
+            if exe is None:
+                return {"cancelled": True}
+            job.say("checked; starting the installer")
+            update.launch(exe, os.getpid(), update.install_dir())
+            threading.Timer(2, self.stop.set).start()  # the page reads the result first
+            return {**out, "launched": True}
+        return self.jobs.start("Updating Cortex", "update", run, cancellable=True)
 
     def quit(self, body: dict) -> dict:
         self.stop.set()

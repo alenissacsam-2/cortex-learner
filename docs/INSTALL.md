@@ -17,11 +17,19 @@ On Windows you can skip sections 3 and 4: one program installs everything.
 3. Click **Install**. It needs an internet connection this once: it downloads Python and Cortex's parts (a few minutes). It needs no admin rights and installs for you only.
 4. Click **Open Cortex**. The app's **Setup** screen walks you through the rest: your vault, connecting your AI apps, the search model, a local model and imports. Later, open it with the **Cortex** shortcut on your desktop or in the Start menu.
 
-What it installs, all in `%LOCALAPPDATA%\Programs\Cortex`: Cortex itself (the `cortex` command, the app, the dashboard and the MCP server), its own copy of Python and uv, the **Cortex** shortcuts, and an entry in **Settings > Apps > Installed apps**. It adds the `cortex` command to your PATH, so new terminals know it. To update, run a newer `CortexSetup.exe`; it upgrades in place.
+What it installs, all in `%LOCALAPPDATA%\Programs\Cortex`: Cortex itself (the `cortex` command, the app, the dashboard and the MCP server), its own copy of Python and uv, the **Cortex** shortcuts, and an entry in **Settings > Apps > Installed apps**. It adds the `cortex` command to your PATH, so new terminals know it. To update, see **Updating** below.
 
 To uninstall, close Cortex (Quit on its page), then remove **Cortex** under **Settings > Apps > Installed apps**. This removes the program, shortcuts and PATH entry. Your vault and your settings in `~/.cortex` are kept; delete them yourself if you want them gone. If you connected AI apps or turned on **Start at login**, undo those in the app first (steps 1, 2 and 4 of section 11).
 
-For scripts: `CortexSetup.exe --quiet [--dir PATH] [--no-shortcuts] [--no-path] [--no-registry] [--uninstall]`. It is a windowed program, so in PowerShell run it with `Start-Process -Wait -PassThru` to get its exit code. The log is `%TEMP%\cortex-setup.log`. Developers build it with `uv run python installer/build.py` (Windows only; the exe lands in `dist/`, which is never committed).
+For scripts: `CortexSetup.exe --quiet [--dir PATH] [--no-shortcuts] [--no-path] [--no-registry] [--uninstall]`. `--update` updates the existing install without questions and then opens the app (the app's **Update now** runs it). With `--quiet`, setup stops with an error instead of closing programs that are still running from the install folder. It is a windowed program, so in PowerShell run it with `Start-Process -Wait -PassThru` to get its exit code. The log is `%TEMP%\cortex-setup.log`. Developers build it with `uv run python installer/build.py` (Windows only; the exe lands in `dist/`, which is never committed).
+
+### Updating
+
+Cortex looks for updates only when you click; it never checks in the background.
+
+- **Installed with `CortexSetup.exe`:** open the app, go to **Status**, and click **Check for updates** under **Updates**. When a newer version is out, **What's new** opens its release notes and **Update now** downloads the new `CortexSetup.exe` from the GitHub release, checks it against the release's SHA-256 checksum, closes Cortex, updates it in place and opens it again. If AI apps (such as Claude) or the browsing receiver are still using Cortex, the installer names them and asks before closing them. Restart those AI apps afterwards so they reconnect.
+- **Cortex 0.1.0** has no update button. Download the newest `CortexSetup.exe` from the **Releases** page once and run it; it updates in place, and from then on the button works.
+- **Installed from the repository (sections 3 and 4):** the button shows the command to run instead: `git pull` in your Cortex-app folder, then `uv tool install --editable . --reinstall` (section 11).
 
 On macOS or Linux, or to work on Cortex's code, use the steps below.
 
