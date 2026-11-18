@@ -20,6 +20,7 @@ from pathlib import Path
 from ulid import ULID
 
 from cortex import levels, planner, relink, render
+from cortex._proc import NO_WINDOW
 from cortex.catalog import Catalog
 from cortex.events import MODES, SESSION_RE, EventLog, local_day, parse_ts
 from cortex.taint import MARKER as TAINT_MARKER
@@ -288,7 +289,7 @@ def _run_git(cmd: list[str], input: str | None = None) -> subprocess.CompletedPr
     """git with UTF-8 I/O; a timeout comes back as a failed run (returncode 1), with a warning."""
     try:
         return subprocess.run(cmd, input=input, capture_output=True, encoding="utf-8",
-                              timeout=GIT_TIMEOUT_S)
+                              timeout=GIT_TIMEOUT_S, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         log.warning("vault git timed out after %d s: %s", GIT_TIMEOUT_S, " ".join(cmd[1:]))
         return subprocess.CompletedProcess(cmd, 1, "", f"git timed out after {GIT_TIMEOUT_S} s")

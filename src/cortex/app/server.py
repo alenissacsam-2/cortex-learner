@@ -45,6 +45,14 @@ CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action '
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
            b"key. Open the link that <code>cortex app</code> printed, or run it again.</p>")
+EXPIRED_INSTALLED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link "
+                     b"has no valid key. Open Cortex from the Start menu again.</p>")
+
+
+def reopen() -> str:
+    """How this user reopens the app (A12): the Start menu for an installer install."""
+    return ("Open Cortex from the Start menu to reopen it." if update.mode() == "installer"
+            else "Run cortex app again to reopen it.")
 _open = webbrowser.open  # tests replace this
 
 
@@ -53,11 +61,50 @@ def _checkout() -> Path:
     return cli.CHECKOUT
 
 
+def extension_dir() -> Path:
+    """The browser extension: shipped in the package (an installed wheel), else the source
+    checkout's extension/ (an editable install)."""
+    from importlib.resources import files
+    p = Path(str(files("cortex") / "assets" / "extension"))
+    return p if p.is_dir() else _checkout() / "extension"
+
+
+def skill_url() -> str:
+    """The Chat skill attached to the latest release (installer/build.py makes it)."""
+    from cortex import cli
+    return f"{cli.RELEASES}/latest/download/cortex-skill.zip"
+
+
 def _open_path(p: Path) -> None:
     if sys.platform == "win32" and _open is webbrowser.open:
         os.startfile(p)  # noqa: S606  (a folder or file Cortex chose, never the page's)
     else:
         _open(p.as_uri())
+
+
+def _obsidian() -> bool:  # tests replace this
+    """An obsidian:// handler is registered (Windows); elsewhere assume Obsidian is there."""
+    if sys.platform != "win32":
+        return True
+    import winreg
+    for hive, key in ((winreg.HKEY_CURRENT_USER, r"Software\Classes\obsidian"),
+                      (winreg.HKEY_CLASSES_ROOT, "obsidian")):
+        try:
+            winreg.CloseKey(winreg.OpenKey(hive, key))
+            return True
+        except OSError:
+            pass
+    return False
+
+
+def _open_note(p: Path) -> dict:
+    """A vault page or folder in Obsidian; without Obsidian, with this computer's default app
+    (Explorer for a folder)."""
+    if _obsidian():
+        _open("obsidian://open?path=" + quote(str(p), safe=""))
+        return {"ok": True, "obsidian": True}
+    _open_path(p)
+    return {"ok": True, "obsidian": False}
 
 
 # ---- jobs -------------------------------------------------------------------------------------
@@ -192,6 +239,7 @@ class App:
             "/api/vault/doctor": self.doctor, "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
             "/api/setup/index": self.setup_index, "/api/setup/install": self.setup_install,
+            "/api/setup/git": self.setup_git,
             "/api/setup/pull": self.setup_pull, "/api/setup/test": self.setup_test,
             "/api/setup/start": self.setup_start, "/api/setup/model": self.setup_model,
             "/api/browse/setup": self.extension_setup, UPLOAD: None,  # do_POST streams it
@@ -226,14 +274,15 @@ class App:
     def connect(self) -> dict:
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,
                 "skill_zip": str(_checkout() / "dist" / "cortex-skill.zip"),
-                "skill_zip_found": (_checkout() / "dist" / "cortex-skill.zip").is_file()}
+                "skill_zip_found": (_checkout() / "dist" / "cortex-skill.zip").is_file(),
+                "skill_url": skill_url()}
 
     def llm(self) -> dict:
         return {**status.llm(), "models": status.lms_models()}
 
     def browse(self) -> dict:
         b = status.browse(self.root if self.entry() else None, self.receiver.status())
-        return {**b, "extension": str(_checkout() / "extension"),
+        return {**b, "extension": str(extension_dir()),
                 "history": status.history(self.root if self.entry() else None, self.scanned),
                 "cloud": status.cloud(self.root if self.entry() else None)}
 
@@ -253,7 +302,7 @@ class App:
                 "guides": {**chats.GUIDES, **importers.GUIDES},
                 "imports": status.imports(),
                 "extension": {"paired": bool(token and token.is_file()),
-                              "folder": str(_checkout() / "extension")}}
+                              "folder": str(extension_dir())}}
 
     # ---- POST ----
     def _want(self, body: dict) -> dict:
@@ -422,7 +471,7 @@ class App:
         token = actions.pair(root)
         if self.receiver.srv is None and status.receiver_probe(root)[0] != "running":
             self.receiver.start(root)
-        folder = _checkout() / "extension"
+        folder = extension_dir()
         if folder.is_dir():
             _open_path(folder)
         return {"token": token, "folder": str(folder), "opened": folder.is_dir()}
@@ -479,10 +528,9 @@ class App:
                     or p.suffix != ".md" or not p.is_file() \
                     or p.relative_to(root).parts[0].startswith("."):
                 raise ValueError("not a page in this vault")
-            _open("obsidian://open?path=" + quote(str(p), safe=""))
-            return {"ok": True}
+            return _open_note(p)
         if what in ("skill_zip", "extension"):
-            p = _checkout() / ("dist" if what == "skill_zip" else "extension")
+            p = _checkout() / "dist" if what == "skill_zip" else extension_dir()
             if not p.is_dir():
                 raise ValueError(f"{p} is not there; build it first.")
             _open_path(p)
@@ -500,7 +548,9 @@ class App:
                 p = p.parent
                 if not p.is_dir():
                     raise ValueError("There are no private browse pages yet.")
-            _open("obsidian://open?path=" + quote(str(p), safe=""))
+            return _open_note(p)
+        elif what == "folder":  # the plain folder, in Explorer or Finder
+            _open_path(root)
         else:
             raise ValueError("unknown thing to open")
         return {"ok": True}
@@ -543,6 +593,9 @@ class App:
     def setup_install(self, body: dict) -> dict:
         return self.jobs.start("Installing Ollama", "setup", wizard.install_ollama,
                                cancellable=True)
+
+    def setup_git(self, body: dict) -> dict:
+        return self.jobs.start("Installing Git", "setup", wizard.install_git, cancellable=True)
 
     def _model_runner(self, body: dict) -> tuple[str, str]:
         m, r = body.get("model"), body.get("runner")
@@ -642,6 +695,7 @@ class App:
                "size": info["exe_size"]}
         if out["mode"] == "dev":
             out["command"] = update.command(info["tag"])
+        actions.sweep_updates(update.dest_dir(info) if out["newer"] else None)
         return info, out
 
     def update_check(self, body: dict) -> dict:
@@ -671,6 +725,8 @@ class App:
         return self.jobs.start("Updating Cortex", "update", run, cancellable=True)
 
     def quit(self, body: dict) -> dict:
+        if self.jobs.running():  # "Running jobs are cancelled": a download's process too
+            self.jobs.cur.cancel()
         self.stop.set()
         return {"ok": True}
 
@@ -723,7 +779,8 @@ def _handler(app: App):
             given = self.headers.get("X-Cortex-Token") or query_token or ""
             if not hmac.compare_digest(given.encode(), app.token.encode()):
                 if self.command == "GET" and urlsplit(self.path).path == "/":
-                    self._send(401, EXPIRED, "text/html; charset=utf-8")
+                    self._send(401, EXPIRED_INSTALLED if update.mode() == "installer"
+                               else EXPIRED, "text/html; charset=utf-8")
                 else:
                     self._send(401, {"error": "token"})
                 return False
@@ -741,7 +798,8 @@ def _handler(app: App):
                 data = (ASSETS / name).read_bytes()
                 if name == "index.html":  # the key goes only into a page opened with it
                     ok = bool(qt) and hmac.compare_digest(qt.encode(), app.token.encode())
-                    data = data.replace(b"{{T}}", app.token.encode() if ok else b"")
+                    data = data.replace(b"{{T}}", app.token.encode() if ok else b"") \
+                        .replace(b"{{REOPEN}}", reopen().encode())
                 self._send(200, data, ctype)
             elif url.path in app.get:
                 self._run(app.get[url.path])
@@ -853,16 +911,68 @@ def make_server(root: Path | None, port: int = 0) -> tuple[ThreadingHTTPServer, 
     """The app's server on 127.0.0.1 only (port 0 picks a free one)."""
     app = App(root)
     actions.sweep_uploads()  # left by an app that was killed before its `finally` ran
+    actions.sweep_updates()  # installers an update already ran
     srv = ThreadingHTTPServer((HOST, port), _handler(app))
     srv.daemon_threads = True
     app.port = srv.server_address[1]
     return srv, app
 
 
+def state_file() -> Path:
+    return Path.home() / ".cortex" / "app.json"
+
+
+def _save_state(app: App) -> None:
+    """~/.cortex/app.json {port, token, pid}, owner-only: a second launch opens this app."""
+    p = state_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".app-{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"port": app.port, "token": app.token, "pid": os.getpid()}, f)
+    os.replace(tmp, p)
+
+
+def _drop_state(app: App) -> None:
+    try:
+        if json.loads(state_file().read_text(encoding="utf-8")).get("token") == app.token:
+            state_file().unlink()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def running_url() -> str | None:
+    """The link of a Cortex app that runs now (app.json names it and it answers with that
+    key), else None: a stale or unreadable file is ignored."""
+    import http.client
+    try:
+        s = json.loads(state_file().read_text(encoding="utf-8"))
+        port, token = int(s["port"]), str(s["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    c = http.client.HTTPConnection(HOST, port, timeout=2)
+    try:
+        c.request("GET", "/api/job", headers={"Host": f"{HOST}:{port}", "X-Cortex-Token": token})
+        ok = c.getresponse().status == 200
+    except OSError:
+        return None
+    finally:
+        c.close()
+    return f"http://{HOST}:{port}/?t={token}" if ok else None
+
+
 def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=print) -> None:
     """Serve until Quit, Ctrl+C or 30 minutes with no request and no job."""
     srv, app = make_server(root, port)
     url = f"http://{HOST}:{app.port}/?t={app.token}"
+    try:
+        _save_state(app)
+    except OSError:  # no single-instance file: a second launch starts its own app
+        traceback.print_exc(limit=1)
+    try:
+        actions.migrate_login(app.root if app.entry() else None)
+    except Exception:  # noqa: BLE001  (Start at login stays as it was; the app still opens)
+        traceback.print_exc(limit=3)
 
     def watch():
         while not app.stop.wait(5):
@@ -883,6 +993,7 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
         pass
     finally:
         app.stop.set()
+        _drop_state(app)
         app.receiver.stop()
         for uid in list(app.uploads):  # exports added but never imported
             app._drop(uid)

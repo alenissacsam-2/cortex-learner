@@ -87,6 +87,8 @@
 
   /* ---- talking to the app ---- */
   let dead = false;
+  // how this user reopens the app: the server says (the Start menu for an installer install)
+  const REOPEN = $('gone').getAttribute('data-reopen') || 'Run cortex app again to reopen it.';
   function gone(text) {
     dead = true;
     const g = $('gone');
@@ -106,7 +108,7 @@
     }
     let data = {};
     try { data = await r.json(); } catch (e) { /* no body */ }
-    if (r.status === 401) gone('This page lost its key. Open the link that cortex app printed, or run it again.');
+    if (r.status === 401) gone('This page lost its key. ' + REOPEN);
     if (!r.ok) throw new Error(data.error || `The app answered ${r.status}.`);
     return data;
   }
@@ -167,7 +169,7 @@
     clearTimeout(hideTimer);
     const r = j.result || {};
     $('jobline').classList.remove('idle');
-    $('job-name').textContent = j.running ? j.name : `${j.name}: ${j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : 'done'}`;
+    $('job-name').textContent = j.running ? j.name : `${j.name}: ${j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done'}`;
     $('job-line').textContent = j.running ? j.line : (j.error || '');
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
@@ -206,10 +208,16 @@
       upd = j;
       if (j.result && j.result.launched) gone('Cortex is closing to install the update. It reopens by itself when it is done; you can close this tab.');
     }
-    else outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error };
+    else {
+      const r = j.result || {};  // a command that stopped with an error (ok: false) failed too
+      outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error || (r.ok === false && !r.cancelled && !r.need) };
+      if (desktopChanged(j)) toast(RESTART_DESKTOP, true);
+    }
     hideTimer = setTimeout(idle, 8000);
     if (current) load(current);
   }
+  const RESTART_DESKTOP = 'Claude Desktop loads Cortex only when it starts, and closing its window does not stop it: right-click the Claude icon near the clock (the tray; on a Mac, the menu bar), choose Quit, then open Claude again.';
+  const desktopChanged = (j) => j.section === 'connect' && !!j.result && (j.result.rows || []).some((x) => x.id === 'claude-desktop' && x.change !== 'error');
   const OPS = { add: 'Add', update: 'Update', remove: 'Remove', ran: 'Ran', error: 'Error', none: '' };
   function changeList(rows) {
     return h('div', { class: 'pad' }, rows.map((r) => h('div', { class: 'chg' },
@@ -240,6 +248,7 @@
     if (j.error) out.push(row('Failed', null, j.error, null));
     if (r.cancelled) out.push(row('Cancelled', null, 'Stopped before it finished; run it again any time.', null));
     if (j.section === 'connect' && r.rows) out.push(r.rows.length ? changeList(r.rows) : note('Nothing changed.'));
+    if (desktopChanged(j)) out.push(row('Next: restart Claude Desktop', null, RESTART_DESKTOP, null));
     if (r.kind === 'scan') out.push(r.rows.length ? scanTable(r.rows) : note('No browser history found on this computer.'));
     if (r.counts) out.push(countsTable(r.counts));
     if (r.answer) out.push(row('Answer', `${r.answer} in ${r.seconds} s`, r.runner, null));
@@ -395,9 +404,8 @@
       });
     };
     const skill = board('Claude Desktop skill', {},
-      row('cortex-skill.zip', d.skill_zip, 'Skills cannot be installed by file. In Claude Desktop, open Settings → Capabilities → Skills and upload this zip; then /cortex works in Chat.',
-        d.skill_zip_found ? [btn('Open folder', () => post('/api/open', { what: 'skill_zip' }))] : null),
-      d.skill_zip_found ? null : note('Not built yet. In the Cortex folder run: uv run python scripts/build_skills.py'));
+      row('cortex-skill.zip', d.skill_zip_found ? d.skill_zip : null, 'Skills cannot be installed by file. In Claude Desktop, open Settings → Capabilities → Skills and upload this zip; then /cortex works in Chat.',
+        [d.skill_zip_found ? btn('Open folder', () => post('/api/open', { what: 'skill_zip' })) : ext(d.skill_url, 'Download cortex-skill.zip')]));
     put('connect', board('AI apps', { note: `${found} found · ${on} connected`, btn: ['Apply…', apply] }, ...rows,
       h('div', { class: 'foot', text: d.vault ? 'Apply shows the exact files first. Backups are named <file>.cortex-<date>.bak, next to each file.' : 'Set up a vault first (Setup); each entry points at it.' })), skill);
   }
@@ -672,7 +680,7 @@
       h('div', { class: 'field' }, h('label', { for: 'c-model', text: 'Model' }), model),
       h('div', { class: 'field' }, h('label', { for: 'c-env', text: 'Name of the environment variable that holds your API key' }), env,
         h('p', { class: 'help', text: c.api_key_env ? `${c.api_key_env} is ${c.key_set ? 'set' : 'not set'} for this app.` : 'No variable named yet.' }),
-        h('p', { class: 'help', text: 'Cortex never asks for the key itself and never stores it. Set the variable yourself, then restart cortex app:' }),
+        h('p', { class: 'help', text: `Cortex never asks for the key itself and never stores it. Set the variable yourself as below, then click Quit (top right). ${REOPEN}` }),
         h('ol', { class: 'how' },
           h('li', {}, 'Windows: in PowerShell run ', h('code', { text: `setx ${name} "your-key"` }), ', then open a new terminal.'),
           h('li', {}, 'macOS: add ', h('code', { text: `export ${name}="your-key"` }), ' to ~/.zshrc, then open a new terminal.')))),
@@ -720,7 +728,7 @@
         [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
           : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast('Receiver started.'); load('browse'); }))]),
       d.login.supported
-        ? row('Start at login', d.login.exists ? 'on' : 'off', 'Adds or removes a login entry (Task Scheduler on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
+        ? row('Start at login', d.login.exists ? 'on' : 'off', 'Adds or removes a login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
           [btn(d.login.exists ? 'Remove' : 'Add', () => job('/api/browse/login', { on: !d.login.exists }))])
         : row('Start at login', 'not on this system', 'Windows only: start the receiver from your login items instead.'),
       d.login.command ? h('div', { class: 'pad' }, h('pre', { text: d.login.command })) : null);
@@ -743,18 +751,20 @@
     const acts = board('Actions', { note: `${d.queued} waiting · processed ${d.last_processed || 'never'}` },
       row('Process now', null, 'Turns waiting visits and new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
       row('Self-test', null, 'Runs the whole import on made-up history in a temp folder; your vault and browsers are not touched.', [btn('Run self-test', () => job('/api/browse/selftest', {}))]),
-      row('Private pages', null, 'Your browsing pages are for you only: open them in Obsidian.', [btn('Open private folder in Obsidian', () => post('/api/open', { what: 'private' }))]));
+      row('Private pages', null, 'Your browsing pages are for you only: open them in Obsidian.', [btn('Open private folder in Obsidian', () => post('/api/open', { what: 'private' }, noObsidian))]));
     put('browse', ...parts, ...(d.cloud ? cloudBoard(d.cloud) : []), past, recv, extn, acts);
   }
 
   /* Dashboard and vault */
+  const noObsidian = (r) => { if (r.obsidian === false) toast('Obsidian is not installed, so it opened with this computer’s own app.', true); };
   function renderVault(d) {
     if (!d.ok) {
       put('vault', board('Vault', {}, row('No vault yet', d.path || '', 'Set one up first.', [btn('Open Setup', () => show('setup', true))])));
       return;
     }
     put('vault', board('Vault', {},
-      row('Folder', d.path, 'Your notes live here as Markdown files.', [btn('Open vault in Obsidian', () => post('/api/open', { what: 'vault' }))]),
+      row('Folder', d.path, 'Your notes live here as Markdown files.', [btn('Open vault in Obsidian', () => post('/api/open', { what: 'vault' }, noObsidian)),
+        btn('Open folder', () => post('/api/open', { what: 'folder' }))]),
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
         h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
       row('Dashboard', d.dashboard ? `built ${d.dashboard}` : 'not built', 'An offline page of your notes and the 3D brain.',
@@ -798,11 +808,16 @@
     if (!pick.runner) pick.runner = rn.ollama.found || rn.ollama.serving ? 'ollama' : rn.lmstudio.found ? 'lmstudio' : 'ollama';
     const m = md.options.find((o) => o.id === pick.model) || md.options[0];
 
-    const path = h('input', { type: 'text', id: 'vault-path', value: d.vault.path || d.vault.default, 'aria-label': 'Vault folder', spellcheck: 'false' });
+    // moved: the config names a folder that is gone; ask, never prefill (that would make a new, empty vault)
+    const moved = d.vault.moved, gi = d.git;
+    const path = h('input', { type: 'text', id: 'vault-path', value: moved ? '' : d.vault.path || d.vault.default, placeholder: moved ? 'The folder’s new location' : null, 'aria-label': 'Vault folder', spellcheck: 'false' });
     const sVault = step('vault', 'Vault', d.vault.done, d.vault.path, [
+      moved ? row('Did you move your vault?', null, `Cortex used ${d.vault.path}, which is not there any more. Paste the folder’s new location below, or a new folder to start an empty vault.`, null) : null,
       h('div', { class: 'field' }, h('label', { for: 'vault-path', text: 'The folder for your notes' }),
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
-        h('p', { class: 'help', text: 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault.' }))], first);
+        h('p', { class: 'help', text: 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
+      gi && !gi.found ? row('Git (history and undo)', 'not installed', 'Without git, Cortex keeps no history of your vault, so undo does nothing. Free.',
+        [gi.install.run ? btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})) : ext(gi.install.page, 'Get Git')]) : null], first);
 
     const e = d.embed;
     const sEmbed = step('embed', 'Search model', e.done, 'downloaded', [
@@ -871,7 +886,7 @@
       d.vault.done ? historyBoard(d) : [note('Set up the vault first.')], first);
 
     const sFinish = step('finish', 'Try it', false, '', [
-      h('div', { class: 'pad' }, h('p', { class: 'ink-2', text: on.length ? `Restart ${names(on)} first, so it loads Cortex. Then try these in Claude:` : 'Connect an AI app first (above) and restart it. Then try these in Claude:' }),
+      h('div', { class: 'pad' }, h('p', { class: 'ink-2', text: on.length ? `Restart ${names(on)} first, so it loads Cortex.${on.some((t) => t.id === 'claude-desktop') ? ' ' + RESTART_DESKTOP : ''} Then try these in Claude:` : 'Connect an AI app first (above) and restart it. Then try these in Claude:' }),
         h('ol', { class: 'how' }, d.first_prompts.map((x) => h('li', {}, h('code', { text: x }))))),
       row('Browsing', null, 'Capture new browsing with the extension, privately.', [btn('Open', () => show('browse', true))])], first);
     const steps = { vault: sVault, embed: sEmbed, connect: sConnect, history: sHistory, llm: sLlm };

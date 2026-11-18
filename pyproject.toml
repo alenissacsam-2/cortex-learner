@@ -19,6 +19,7 @@ cortex = "cortex.taint:main"
 
 [project.gui-scripts]
 cortex-app = "cortex.app.launch:main"
+cortex-receiver = "cortex.app.launch:receiver"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
@@ -29,6 +30,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cortex"]
+
+# the browser extension ships inside the package (the repo keeps its one copy at extension/)
+[tool.hatch.build.targets.wheel.force-include]
+"extension" = "cortex/assets/extension"
 
 [tool.ruff]
 line-length = 100

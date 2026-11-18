@@ -309,3 +309,26 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["updAfter"]["gone"].startswith("Cortex is closing to install the update.")
     assert out["quit"] == {"title": "Stop Cortex?", "ok": "Quit", "before": False, "after": True,
                            "body": "Running jobs are cancelled; your vault is not affected."}
+
+
+def test_a_command_that_failed_shows_as_failed(tmp_path):
+    """A4: a job whose command stopped with an error ({"ok": false}) reads "failed", not
+    "done" (app.js's showJob, run alone under node)."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    fn = re.search(r"\n  function showJob\(j\) \{.*?\n  \}\n", APP_JS.read_text(encoding="utf-8"),
+                   re.S)[0]
+    script = tmp_path / "show.cjs"
+    script.write_text(
+        "const els = {};\nconst $ = (id) => els[id] || (els[id] = { classList: { remove() {} }, "
+        "textContent: '', hidden: false });\nlet hideTimer;\n" + fn
+        + "const name = (r) => { showJob({ name: 'Job', running: false, seconds: 1, "
+          "error: null, result: r }); return $('job-name').textContent; };\n"
+          "console.log(JSON.stringify([name({ ok: false, lines: ['no network'] }), "
+          "name({ ok: true }), name({ ok: false, cancelled: true }), "
+          "name({ ok: false, need: 'embed', lines: [] })]));\n", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["Job: failed", "Job: done", "Job: cancelled",
+                                    "Job: stopped: needs the search model"]

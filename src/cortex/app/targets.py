@@ -21,6 +21,8 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
+from cortex._proc import NO_WINDOW
+
 NAME = "cortex"
 
 
@@ -32,7 +34,8 @@ def _run(args: list[str], timeout: float = 300) -> tuple[bool, str]:
     """Run a command (tests replace this); (ok, its output, trimmed)."""
     try:
         r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", stdin=subprocess.DEVNULL, timeout=timeout)
+                           errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
+                           creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as e:
         return False, str(e)
     return r.returncode == 0, (r.stdout + r.stderr).strip()[-2000:]
@@ -184,9 +187,9 @@ class ClaudeDesktop(JsonTarget):
 
     def __init__(self):
         super().__init__("claude-desktop", "Claude Desktop", None,
-                         note="Restart Claude Desktop after a change. For /cortex in Chat, "
-                              "upload dist/cortex-skill.zip under Settings → Capabilities "
-                              "(it cannot be installed by file).")
+                         note="Quit Claude Desktop from the tray and open it again after a "
+                              "change. For /cortex in Chat, upload cortex-skill.zip (below) "
+                              "under Settings → Capabilities (it cannot be installed by file).")
 
     def paths(self) -> list[Path]:
         from cortex import clients

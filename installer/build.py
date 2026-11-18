@@ -1,8 +1,9 @@
 """Build dist/CortexSetup.exe (Windows only): `uv run python installer/build.py`.
 
-uv build --wheel, then stage the wheel and this machine's uv.exe as the exe's payload, then
-PyInstaller (fetched by uvx at build time, never a project dependency) packs
-installer/setup_app.py into one windowed exe. Staging lives in dist/ (git-ignored)."""
+uv build --wheel, then stage the wheel, uv.lock's versions as constraints.txt and this machine's
+uv.exe as the exe's payload, then PyInstaller (fetched by uvx at build time, never a project
+dependency) packs installer/setup_app.py into one windowed exe. It also writes
+dist/cortex-skill.zip (the Chat skill) for the release. Staging lives in dist/ (git-ignored)."""
 
 import os
 import shutil
@@ -22,7 +23,15 @@ def main() -> None:
     shutil.rmtree(stage, ignore_errors=True)
     payload = stage / "payload"
     subprocess.run([uv, "build", "--wheel", "--out-dir", str(payload)], cwd=ROOT, check=True)
+    # uv.lock's versions, so every install of this exe gets the same dependencies (-c at install)
+    subprocess.run([uv, "export", "--frozen", "--no-dev", "--no-emit-project", "--no-hashes",
+                    "--quiet", "-o", str(payload / "constraints.txt")], cwd=ROOT, check=True)
     shutil.copy2(uv, payload / "uv.exe")
+    # the Chat skill, beside the exe: the release attaches it as cortex-skill.zip
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import build_skills
+    _, zpath = build_skills.build(ROOT / "skills" / "cortex" / "SKILL.md", stage / "skill")
+    shutil.copy2(zpath, ROOT / "dist" / "cortex-skill.zip")
     subprocess.run([uv, "tool", "run", "--python", "3.12", "--from", PYINSTALLER, "pyinstaller",
                     "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "CortexSetup",
                     "--add-data", f"{payload}{os.pathsep}payload",
@@ -30,7 +39,7 @@ def main() -> None:
                     "--specpath", str(stage), str(ROOT / "installer" / "setup_app.py")],
                    cwd=ROOT, check=True)
     exe = ROOT / "dist" / "CortexSetup.exe"
-    print(f"built {exe} ({exe.stat().st_size / 1e6:.1f} MB)")
+    print(f"built {exe} ({exe.stat().st_size / 1e6:.1f} MB) and {zpath.name} beside it")
 
 
 if __name__ == "__main__":

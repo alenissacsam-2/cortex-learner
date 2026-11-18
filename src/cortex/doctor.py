@@ -57,6 +57,11 @@ def check_onedrive(root: Path) -> tuple[str, str, str, str]:
 def check_git(root: Path) -> tuple[str, str, str, str]:
     name = "Vault git: no remote, push blocked"
     root = Path(root).resolve()
+    if not (root / ".git").is_dir() and shutil.which("git") is None:
+        return ("WARN", name, "git is not installed, so the vault has no history and undo does "
+                "nothing", "Install git (Windows: Setup → Vault → Install Git, or `winget "
+                "install --id Git.Git -e`; else git-scm.com), restart Cortex, then use the "
+                "vault folder again in Setup (or run `cortex init <vault>`).")
     if not (root / ".git").is_dir():
         return "FAIL", name, "the vault has no git repo", "Run `cortex init <vault>`."
     if not (root / ".git" / "hooks" / "pre-push").is_file():
@@ -83,14 +88,41 @@ def check_git_identity(root: Path) -> tuple[str, str, str, str]:
     return "PASS", name, email, ""
 
 
+MODEL_READY = ".complete"  # `cortex model download` writes it into models_dir() when it is done
+
+
+def search_model_ready() -> bool:
+    """The search model is whole: the download finished. Older downloads have no marker; they
+    count when no file is left half-written (Hugging Face's `*.incomplete`)."""
+    from cortex import semantic
+
+    d = semantic.models_dir()
+    if (d / MODEL_READY).is_file():
+        return True
+    return d.is_dir() and any(d.iterdir()) and not any(d.rglob("*.incomplete"))
+
+
+def installer() -> bool:
+    """Cortex runs from a CortexSetup.exe install (no terminal commands for its user)."""
+    from cortex import update  # update imports cli, which imports this module
+
+    return update.mode() == "installer"
+
+
+def app_hint() -> str:
+    """How this user opens the app: the Start menu for an installer install, else the command."""
+    return "open Cortex from the Start menu" if installer() else "run `cortex app`"
+
+
 def check_search_model() -> tuple[str, str, str, str]:
     from cortex import semantic
 
     d = semantic.models_dir()
-    if d.is_dir() and any(d.iterdir()):
+    if search_model_ready():
         return "PASS", "Search model", str(d), ""
     return ("WARN", "Search model", "not downloaded: recall uses keywords only and a history "
             "import files every page under Other",
+            "In the Cortex app (Start menu), Setup → Download search model." if installer() else
             "Run `cortex model download` (about 150 MB, once) or use `cortex app` → Setup.")
 
 
@@ -99,7 +131,10 @@ def check_on_path() -> tuple[str, str, str, str]:
     if found := shutil.which("cortex"):
         return "PASS", "`cortex` on PATH", found, ""
     return ("WARN", "`cortex` on PATH", "not found: the Claude Code plugin's server and hooks "
-            "cannot start it", "Run `uv tool update-shell`, then open a new terminal.")
+            "cannot start it",
+            "Sign out of Windows and in again (setup added Cortex to your PATH), or run "
+            "CortexSetup.exe again." if installer() else
+            "Run `uv tool update-shell`, then open a new terminal.")
 
 
 def check_ai_apps() -> tuple[str, str, str, str]:
@@ -109,6 +144,8 @@ def check_ai_apps() -> tuple[str, str, str, str]:
     if on:
         return "PASS", name, ", ".join(on), ""
     return ("WARN", name, "no AI app runs Cortex yet, so nothing reads or records anything",
+            "Open Cortex from the Start menu and tick an app under Connect AI apps."
+            if installer() else
             "Run `cortex app` and tick an app under Connect, or `cortex setup`.")
 
 

@@ -38,6 +38,19 @@ def _no_real_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_run_key(monkeypatch):
+    """Tests never read or write the real HKCU Run key (Start at login on Windows): an
+    in-memory value instead. Returns the dict holding it."""
+    from cortex.app import status
+
+    run: dict = {}
+    monkeypatch.setattr(status, "run_get", lambda: run.get("v"))
+    monkeypatch.setattr(status, "run_set", lambda v: run.__setitem__("v", v))
+    monkeypatch.setattr(status, "run_delete", lambda: run.pop("v", None))
+    return run
+
+
+@pytest.fixture(autouse=True)
 def _no_real_chat_export(tmp_path_factory, monkeypatch):
     """Tests never see the user's imported Claude Chat conversations."""
     monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path_factory.mktemp("chat-export")))
