@@ -6,6 +6,7 @@ downloads: every subprocess, opener and runner probe is faked."""
 import http.client
 import io
 import json
+import os
 import socket
 import threading
 import time
@@ -979,7 +980,7 @@ def test_browsing_privacy_defaults_and_categories(app, home):
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 NEW_POSTS = ("/api/import/upload", "/api/import/preview", "/api/import/run", "/api/setup/start",
-             "/api/setup/model", "/api/browse/setup")
+             "/api/setup/model", "/api/browse/setup", "/api/update/check", "/api/update/apply")
 
 
 def upload(app, data: bytes, name: str, *, length: int | None = None,
@@ -1460,3 +1461,97 @@ def test_google_activity_html_says_how_many_rows_were_skipped(app, monkeypatch):
     call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": str(path)})
     err = wait_job(app)["error"]
     assert "only English Takeouts are read" in err and "JSON" not in err
+
+
+# ---- updates: only on a click; the network and the installer are faked ----------------------
+
+
+def _release(version=(9, 0, 0)):
+    tag = "v" + ".".join(map(str, version))
+    return {"tag": tag, "version": version, "exe_url": "u", "sha_url": "s",
+            "notes_url": f"https://github.com/o/r/releases/tag/{tag}", "exe_size": 32 * 2**20}
+
+
+@pytest.fixture
+def github(monkeypatch):
+    from cortex import update
+    launched = []
+    monkeypatch.setattr(update, "current", lambda: "0.1.0")
+    monkeypatch.setattr(update, "latest", _release)
+    monkeypatch.setattr(update, "launch", lambda *a: launched.append(a))
+    return launched
+
+
+def test_update_state_and_status_ask_no_one(app, monkeypatch):
+    from cortex import update
+    monkeypatch.setattr(update, "latest", lambda: pytest.fail("a GET went to GitHub"))
+    monkeypatch.setattr(update, "current", lambda: "0.1.0")
+    assert call(app, "GET", "/api/update")[1] == {"current": "0.1.0", "mode": "dev"}
+    assert call(app, "GET", "/api/status")[1]["update"] == {"current": "0.1.0", "mode": "dev"}
+
+
+def test_update_check_newer_same_and_errors(app, github, monkeypatch):
+    from cortex import update
+    assert call(app, "POST", "/api/update/check", {})[0] == 200
+    j = wait_job(app)
+    r = j["result"]
+    assert j["section"] == "update" and r["newer"] and r["latest"] == "9.0.0"
+    assert r["current"] == "0.1.0" and r["mode"] == "dev" and r["size"] == 32 * 2**20
+    assert r["notes_url"].endswith("/v9.0.0") and r["command"] == update.command("v9.0.0")
+    monkeypatch.setattr(update, "latest", lambda: _release((0, 1, 0)))
+    call(app, "POST", "/api/update/check", {})
+    assert wait_job(app)["result"]["newer"] is False
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    call(app, "POST", "/api/update/check", {})
+    assert "command" not in wait_job(app)["result"]
+
+    def offline():
+        raise update.UpdateError("Could not reach GitHub.")
+    monkeypatch.setattr(update, "latest", offline)
+    call(app, "POST", "/api/update/check", {})
+    assert wait_job(app)["error"] == "Could not reach GitHub."
+    assert github == []
+
+
+def test_update_apply_refuses_a_dev_install_with_the_command(app, github):
+    code, js, _, _ = call(app, "POST", "/api/update/apply", {})
+    assert code == 400 and "CortexSetup.exe" in js["error"] and "uv tool install" in js["error"]
+    assert github == [] and app.jobs.cur is None
+
+
+def test_update_apply_downloads_launches_and_quits(app, github, monkeypatch, tmp_path):
+    from cortex import update
+    got = {}
+
+    def download(info, dest, on_progress, cancel):
+        got.update(dest=dest, cancel=cancel)
+        on_progress(12 * 2**20, 32 * 2**20)
+        time.sleep(0.3)  # long enough for a poll to see the progress line
+        exe = tmp_path / "CortexSetup.exe"
+        exe.write_bytes(b"MZ")
+        return exe
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    monkeypatch.setattr(update, "install_dir", lambda: tmp_path / "Cortex")
+    monkeypatch.setattr(update, "download", download)
+    seen: list = []
+    assert call(app, "POST", "/api/update/apply", {})[0] == 200
+    j = wait_job(app, seen)
+    assert j["result"]["launched"] is True and j["cancellable"] and j["error"] is None
+    assert any(b"downloaded 12 of 32 MB" in raw for raw in seen)
+    assert got["dest"] == Path.home() / ".cortex" / "tmp" / "update-9.0.0"
+    assert got["cancel"] is app.jobs.cur.cancelled
+    assert github == [(tmp_path / "CortexSetup.exe", os.getpid(), tmp_path / "Cortex")]
+    assert app.stop.wait(5)  # the app quits so the installer can replace its files
+
+
+def test_update_apply_when_already_latest_or_cancelled(app, github, monkeypatch):
+    from cortex import update
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    monkeypatch.setattr(update, "download", lambda *a: None)  # Cancel
+    call(app, "POST", "/api/update/apply", {})
+    assert wait_job(app)["result"] == {"cancelled": True}
+    monkeypatch.setattr(update, "latest", lambda: _release((0, 1, 0)))
+    monkeypatch.setattr(update, "download", lambda *a: pytest.fail("downloaded the same version"))
+    call(app, "POST", "/api/update/apply", {})
+    assert wait_job(app)["result"]["launched"] is False
+    assert github == [] and not app.stop.is_set()

@@ -77,6 +77,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(setup_app, "register", lambda d, v: seen.append(("reg", v)))
     monkeypatch.setattr(setup_app, "unregister", lambda: seen.append(("unreg",)))
     monkeypatch.setattr(setup_app, "shortcut_paths", lambda: [])
+    monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: [])
     return seen
 
 
@@ -148,6 +149,73 @@ def test_quiet_main_reports_failure_by_exit_code(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_app, "LOG", tmp_path / "setup.log")
     assert setup_app.main(["--quiet", "--uninstall", "--dir", str(tmp_path / "none")]) == 1
     assert "nothing was removed" in (tmp_path / "setup.log").read_text()
+
+
+def test_parse_args_update_and_wait_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_app, "installed_dir", lambda: tmp_path / "reg")
+    a = setup_app.parse_args(["--update", "--wait-pid", "4242"])
+    assert a.update and a.wait_pid == 4242 and a.dir == (tmp_path / "reg").resolve()
+    assert a.no_shortcuts and a.no_path and not a.no_registry  # the version in Apps & Features
+    a = setup_app.parse_args(["--update", "--dir", str(tmp_path / "x")])
+    assert a.dir == (tmp_path / "x").resolve() and a.wait_pid is None
+    assert setup_app.parse_args([]).wait_pid is None
+    with pytest.raises(SystemExit):
+        setup_app.parse_args(["--wait-pid", "app"])
+
+
+def test_in_use_lists_only_programs_inside_the_folder(tmp_path):
+    d = tmp_path / "Cortex"
+    procs = [(101, str(d / "bin" / "cortex.exe")),
+             (102, str(d / "TOOLS" / "cortex-learner" / "Scripts" / "python.exe").upper()),
+             (103, str(tmp_path / "Cortex2" / "bin" / "cortex.exe")),  # a sibling, not inside
+             (104, str(tmp_path / "Cortex.exe")),
+             (105, r"C:\Windows\explorer.exe"),
+             (os.getpid(), str(d / "CortexSetup.exe")),  # this setup and its one-file parent
+             (os.getppid(), str(d / "CortexSetup.exe"))]
+    got = setup_app.in_use(d, procs)
+    assert [pid for pid, _ in got] == ([101, 102] if os.name == "nt" else [101])
+    assert setup_app.in_use(d, []) == []
+    assert setup_app.in_use_text(got[:1]).startswith("Cortex is in use by 1 program (")
+
+
+def test_install_refuses_while_cortex_runs_and_kills_nothing(tmp_path, payload, calls,
+                                                             monkeypatch):
+    d = tmp_path / "Cortex"
+    d.mkdir()
+    (d / setup_app.MARKER).write_text("x")
+    busy = [(7, str(d / "bin" / "cortex.exe"))]
+    monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: busy)
+    monkeypatch.setattr(setup_app, "terminate", lambda pids: pytest.fail("killed without asking"))
+    opts = setup_app.parse_args(["--quiet", "--update", "--dir", str(d)])
+    with pytest.raises(setup_app.SetupError, match=r"by 1 program .*cortex\.exe \(process 7\)"):
+        setup_app.install(d, opts, lambda s: None, src=payload)
+    assert calls == []
+
+
+def test_update_needs_an_install_and_keeps_shortcuts_and_path(tmp_path, payload, calls):
+    d = tmp_path / "Cortex"
+    opts = setup_app.parse_args(["--update", "--dir", str(d)])
+    with pytest.raises(setup_app.SetupError, match="not installed"):
+        setup_app.install(d, opts, lambda s: None, src=payload)
+    d.mkdir()
+    (d / setup_app.MARKER).write_text("x")
+    said = []
+    setup_app.install(d, opts, said.append, src=payload)
+    assert [c[0] for c in calls] == ["run", "reg"]
+    assert said[-1] == ("Cortex is updated. AI apps connected to Cortex reconnect when you "
+                        "restart them.")
+
+
+def test_quiet_update_waits_for_the_app_then_reopens_it(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(setup_app, "LOG", tmp_path / "setup.log")
+    monkeypatch.setattr(setup_app, "wait_pid", lambda pid: seen.append(("wait", pid)))
+    monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: [])
+    monkeypatch.setattr(setup_app, "install", lambda d, o, say: seen.append(("install", o.update)))
+    monkeypatch.setattr(setup_app, "start_app", lambda d: seen.append(("open", d)))
+    d = tmp_path / "Cortex"
+    assert setup_app.main(["--quiet", "--update", "--wait-pid", "9", "--dir", str(d)]) == 0
+    assert seen == [("wait", 9), ("install", True), ("open", d.resolve())]
 
 
 def test_launcher_logs_without_a_console(monkeypatch):

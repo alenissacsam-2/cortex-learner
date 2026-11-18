@@ -202,6 +202,10 @@
       else if (w === 'preview') guide.preview = j.result;
       else Object.assign(guide, { done: j, upload: j.result && j.result.need ? guide.upload : null });
     } else if (j.section === 'ask') asked = j;  // shown in the Ask board itself
+    else if (j.section === 'update') {  // shown in the Updates board
+      upd = j;
+      if (j.result && j.result.launched) gone('Cortex is closing to install the update. It reopens by itself when it is done; you can close this tab.');
+    }
     else outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error };
     hideTimer = setTimeout(idle, 8000);
     if (current) load(current);
@@ -283,7 +287,31 @@
       h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
         r.action ? btn(r.action.label, () => show(r.action.go, true)) : null)));
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-    put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] }, ...rows));
+    put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] }, ...rows),
+      d.update ? updatesBoard(d.update) : null);
+  }
+
+  /* Updates: GitHub is asked only on a click, never in the background */
+  let upd = null;  // the last check or update job
+  function updatesBoard(u) {
+    const r = upd && upd.result;
+    const out = [row(`Cortex ${u.current}`, null, null, [btn('Check for updates', () => { upd = null; job('/api/update/check', {}); })])];
+    if (upd && upd.error) out.push(row('That did not work', null, upd.error, null));
+    else if (r && r.cancelled) out.push(row('Cancelled', null, 'Nothing was installed; update again any time.', null));
+    else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
+    else if (r) {
+      const mb = Math.max(1, Math.round(r.size / 2 ** 20));
+      const now = () => confirmDialog('Update Cortex?', 'Update now',
+        [h('p', { class: 'ink-2', text: `Cortex will download the update (about ${mb} MB), close, and reopen when it's done. AI apps connected to Cortex may need a restart.` })],
+        () => job('/api/update/apply', {}));
+      out.push(row(`Cortex ${r.latest} is available`, null, r.command ? 'Run this in a terminal to update:' : null,
+        [ext(r.notes_url, 'What’s new'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
+      if (r.command) {
+        out.push(h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: r.command }),
+          btn('Copy', () => navigator.clipboard.writeText(r.command).then(() => toast('Copied.'), () => toast('Copy failed; select the command and copy it.'))))));
+      }
+    }
+    return board('Updates', { note: 'checked only when you click' }, ...out);
   }
 
   /* Ask your archive: the local model answers from your notes and browsing; never a cloud model */

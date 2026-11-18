@@ -187,6 +187,29 @@ const out = {};
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
     await tick();
     out.llmText = $('llm').textContent;
+    // Status → Updates: Check asks GitHub only on the click; Update now asks first, then the
+    // page says Cortex is closing to install it
+    DATA.routes['/api/status'] = { first_run: false, rows: [], vault: 'V', land: 'status', update: { current: '0.1.0', mode: 'installer' } };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    const updRows = () => $('status').querySelectorAll('.brow').map((r) => r.querySelector('.ttl').textContent);
+    out.updBefore = { rows: updRows(), asked: fetched.some((f) => f.path.startsWith('/api/update')) };
+    const checked = { current: '0.1.0', latest: '0.2.0', newer: true, notes_url: 'https://github.com/o/r/releases/tag/v0.2.0', mode: 'installer', size: 31 * 2 ** 20 };
+    DATA.routes['/api/job'] = { seq: 3, job: { name: 'Checking for updates', section: 'update', running: false, cancellable: false, line: '', seconds: 1, error: null, result: checked } };
+    rowBtn('Cortex 0.1.0', 'Check for updates').fire('click');
+    await tick();
+    const avail = $('status').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Cortex 0.2.0 is available');
+    const a = avail.querySelector('a');
+    out.avail = { rows: updRows(), link: [a.getAttribute('href'), a.getAttribute('rel'), a.getAttribute('target'), a.textContent],
+      buttons: avail.querySelectorAll('button').map((b) => b.textContent) };
+    avail.querySelectorAll('button').find((b) => b.textContent === 'Update now').fire('click');
+    await tick();
+    out.updConfirm = { title: $('confirm-title').textContent, ok: $('confirm-ok').textContent,
+      body: $('confirm-body').textContent, applied: fetched.some((f) => f.path === '/api/update/apply') };
+    DATA.routes['/api/job'] = { seq: 4, job: { name: 'Updating Cortex', section: 'update', running: false, cancellable: true, line: '', seconds: 9, error: null, result: { ...checked, launched: true } } };
+    $('confirm-ok').onclick();
+    await tick();
+    out.updAfter = { posts: fetched.filter((f) => f.path.startsWith('/api/update')).map((f) => f.path), gone: $('gone').hidden ? '' : $('gone').textContent };
     // Quit asks first in the page's own dialog; only its OK posts /api/quit
     $('quit').fire('click');
     await tick();
@@ -273,5 +296,16 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["skipNote"] == "Skipped"
     assert out["skips"] == [{"skipped": True}, {"skipped": False}]
     assert "Not used: localllm: a cloud model is refused" in out["llmText"]
+    assert out["updBefore"] == {"rows": ["Cortex 0.1.0"], "asked": False}
+    assert out["avail"] == {"rows": ["Cortex 0.1.0", "Cortex 0.2.0 is available"],
+                            "link": ["https://github.com/o/r/releases/tag/v0.2.0",
+                                     "noopener noreferrer", "_blank", "What’s new"],
+                            "buttons": ["Update now"]}
+    assert out["updConfirm"] == {
+        "title": "Update Cortex?", "ok": "Update now", "applied": False,
+        "body": "Cortex will download the update (about 31 MB), close, and reopen when it's "
+                "done. AI apps connected to Cortex may need a restart."}
+    assert out["updAfter"]["posts"] == ["/api/update/check", "/api/update/apply"]
+    assert out["updAfter"]["gone"].startswith("Cortex is closing to install the update.")
     assert out["quit"] == {"title": "Stop Cortex?", "ok": "Quit", "before": False, "after": True,
                            "body": "Running jobs are cancelled; your vault is not affected."}
