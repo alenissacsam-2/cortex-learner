@@ -94,6 +94,8 @@
     const g = $('gone');
     if (text) g.textContent = text;
     g.hidden = false;
+    for (const id of ['top', 'jobline', 'shell']) $(id).inert = true;  // only the banner stays live
+    $('confirm').close();
   }
   async function api(path, body) {
     let r;
@@ -228,7 +230,7 @@
   function countsTable(obj) {
     const keys = Object.keys(obj).sort();
     return h('div', { class: 'table-scroll' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', { text: 'Count' }), h('th', { class: 'n', text: 'Value' }))),
+      h('thead', {}, h('tr', {}, h('th', { text: 'What' }), h('th', { class: 'n', text: 'Count' }))),
       h('tbody', {}, keys.map((k) => h('tr', {}, h('td', { text: k.replace(/_/g, ' ') }), h('td', { class: 'n', text: String(obj[k]) }))))));
   }
   function scanTable(rows) {
@@ -277,12 +279,20 @@
     }
   }
   async function load(s) {
-    if (!$(s).firstChild) $(s).append(note('Checking…'));
+    const box = $(s);
+    if (!box.firstChild) box.append(note('Checking…'));
+    else {  // the old boards stay up, dimmed, until the new answer replaces them
+      box.classList.add('refreshing');
+      box.setAttribute('aria-busy', 'true');
+    }
     try {
       const d = await api('/api/' + s);
       if (current === s) RENDER[s](d);
     } catch (e) {
       if (!dead) fail(s, e.message);
+    } finally {
+      box.classList.remove('refreshing');
+      box.setAttribute('aria-busy', 'false');
     }
   }
   const put = (s, ...nodes) => $(s).replaceChildren(...nodes.filter(Boolean), outputBoard(s) || '');
@@ -500,11 +510,11 @@
 
     const log = h('div', { class: 'chat-log', id: 'chat-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
     for (const m of chatS.msgs) log.append(m.role === 'user' ? userMsg(m) : botMsg(m).el);
-    if (!chatS.msgs.length) {
-      log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
-        h('div', { class: 'inline' }, EXAMPLES.map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
-    }
     const missing = d.missing || [];
+    if (!chatS.msgs.length) {  // the examples fill the message box, so only with one
+      log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
+        missing.length ? null : h('div', { class: 'inline' }, EXAMPLES.map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
+    }
     let foot;
     if (missing.length) foot = missingRows(missing, d.llm_error ? `The local model is not used: ${d.llm_error}` : null);
     else {
@@ -619,8 +629,8 @@
       const sub = !t.detected && !t.connected ? 'Not found on this computer.'
         : t.connected ? 'Cortex is connected.' : 'Found on this computer; not connected.';
       const what = h('details', { class: 'what' }, h('summary', { text: 'What this changes' }),
-        h('p', { text: 'Files:' }), h('ul', { class: 'files' }, t.files.map((f) => h('li', { class: 'mono', text: f }))),
-        t.snippet ? [h('p', { text: 'The entry Cortex adds:' }), h('pre', { text: t.snippet })]
+        t.files.length ? [h('p', { text: 'Files:' }), h('ul', { class: 'files' }, t.files.map((f) => h('li', { class: 'mono', text: f })))] : null,
+        t.snippet ? [h('p', { text: t.commands ? 'Commands Cortex runs:' : 'The entry Cortex adds:' }), h('pre', { text: t.snippet })]
           : h('p', { text: 'Set up a vault first; the entry points at it.' }),
         t.note ? h('p', { text: t.note }) : null);
       return h('div', { class: 'brow trow' + (t.detected || t.connected ? '' : ' off') }, cb,
@@ -660,10 +670,12 @@
 
   /* Local model */
   const gb = (b) => (b ? `${(b / 1e9).toFixed(1)} GB` : '');
+  // a runner's state in the same words on this page and in Setup (wizard.runner_state)
+  const RSTATE = { running: 'running', stopped: 'installed, not running', not_installed: 'not installed' };
   function renderLlm(d) {
     if (!d.available) { put('llm', board('Local model', {}, note('Not available in this version yet.'))); return; }
     const runner = board('Runner', {},
-      row('Ollama', d.ollama === null ? 'not answering' : `${d.ollama.length} models`, 'Recommended. Cortex uses it whenever it answers on this computer; set it up under Setup → Local model.'),
+      row('Ollama', d.ollama === null ? RSTATE[d.ollama_state] : `${d.ollama.length} models`, 'Recommended. Cortex uses it whenever it answers on this computer; set it up under Setup → Local model.'),
       row('LM Studio', d.lms ? 'found' : 'not found', d.lms || 'The alternative runner, with its own model library.',
         d.lms ? null : [ext('https://lmstudio.ai/download', 'Get LM Studio')]),
       row('LM Studio server', d.server_port ? `on, port ${d.server_port}` : 'off', 'Starts by itself when a model loads.'),
@@ -681,16 +693,21 @@
     sel.value = at < 0 ? '' : String(at);
     const chosen = () => (sel.value === '' ? null : choices[Number(sel.value)] || null);
     const loadBtn = btn('Load', () => job('/api/llm/load', { model: chosen().model }));
-    const sync = () => { const c = chosen(); loadBtn.disabled = !c || c.runner !== 'lmstudio'; };
+    const save = () => { const c = chosen(); post('/api/llm/settings', { model: c.model, runner: c.runner }, () => { toast('Saved.'); load('llm'); }); };
+    const saveBtn = btn('Save choice', save), testBtn = btn('Test', () => job('/api/llm/test', {}));
+    const sync = () => {  // nothing chosen: nothing to save, load or test
+      const c = chosen();
+      saveBtn.disabled = testBtn.disabled = !c;
+      loadBtn.disabled = !c || c.runner !== 'lmstudio';
+    };
     sel.addEventListener('change', sync);
     sync();
     const enabled = h('input', { type: 'checkbox', id: 'llm-on', checked: d.enabled });
     enabled.addEventListener('change', () => post('/api/llm/settings', { enabled: enabled.checked }, () => { toast(enabled.checked ? 'Local model on.' : 'Local model off.'); load('llm'); }));
-    const save = () => { const c = chosen(); post('/api/llm/settings', c ? { model: c.model, runner: c.runner } : { model: null }, () => { toast('Saved.'); load('llm'); }); };
     const model = board('Model', { note: d.model ? `chosen: ${d.model}` : 'none chosen' },
       d.error ? note(`Not used: ${d.error}`) : null,
       h('div', { class: 'field' }, h('label', { for: 'llm-model', text: 'Model (installed in Ollama or LM Studio)' }),
-        h('div', { class: 'inline' }, sel, btn('Save choice', save), loadBtn, btn('Test', () => job('/api/llm/test', {}))),
+        h('div', { class: 'inline' }, sel, saveBtn, loadBtn, testBtn),
         h('p', { class: 'help' }, 'Load is for LM Studio models: it starts LM Studio and loads the model. Ollama loads its models by itself. Test sends one made-up sentence and shows the answer and time. ',
           ext('https://lmstudio.ai/models', 'Get models'), ' in LM Studio, or download an Ollama model below.')),
       h('div', { class: 'field' }, h('label', { class: 'check' }, enabled, h('span', { text: 'Use the local model' })),
@@ -756,12 +773,16 @@
       });
     }, 'btn lit');
   }
+  // the browsers extension/README.md names; Setup and Browsing say the same
+  const EXT_BROWSERS = 'Comet, Chrome, Edge or Brave';
+  const extPage = () => h('li', {}, 'Open the extensions page: ', h('code', { text: 'chrome://extensions' }), ' (Chrome, Comet), ',
+    h('code', { text: 'edge://extensions' }), ' or ', h('code', { text: 'brave://extensions' }), '.');
   function extensionSetup(x) {
     return [row('Set up the extension', x.paired ? 'paired' : 'not set up', 'One click pairs it, starts the receiver and opens the extension folder. Start at login is under Browsing.', [extensionBtn(x.paired)]),
       tokenBox(),
-      h('div', { class: 'pad' }, h('strong', { text: 'Then, in Chrome or Comet' }),
-        h('ol', { class: 'how' },
-          h('li', {}, 'Open ', h('code', { text: 'chrome://extensions' }), ' and turn on Developer mode.'),
+      h('div', { class: 'pad' }, h('strong', { text: `Then, in ${EXT_BROWSERS}` }),
+        h('ol', { class: 'how' }, extPage(),
+          h('li', { text: 'Turn on Developer mode.' }),
           h('li', {}, 'Click Load unpacked and choose the folder that opened: ', h('code', { text: x.folder })),
           h('li', { text: 'Open the Cortex capture popup, paste the key and press Save and test.' })))];
   }
@@ -995,9 +1016,8 @@
     const extn = board('Extension', {},
       row('Pairing', d.paired ? 'paired' : 'not paired', d.last_contact ? `Last contact ${d.last_contact}.` : 'No contact recorded yet.', [extensionBtn(d.paired), pairBtn]),
       tokenBox(),
-      h('div', { class: 'pad' }, h('strong', { text: 'Load it in Comet, Chrome, Edge or Brave' }),
-        h('ol', { class: 'how' },
-          h('li', {}, 'Open the extensions page: ', h('code', { text: 'chrome://extensions' }), ' (Chrome, Comet), ', h('code', { text: 'edge://extensions' }), ' or ', h('code', { text: 'brave://extensions' }), '.'),
+      h('div', { class: 'pad' }, h('strong', { text: `Load it in ${EXT_BROWSERS}` }),
+        h('ol', { class: 'how' }, extPage(),
           h('li', { text: 'Turn on Developer mode.' }),
           h('li', {}, 'Click Load unpacked and choose this folder: ', h('code', { text: d.extension }), ' ',
             btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn')),
@@ -1048,8 +1068,8 @@
         done ? summary || 'Done' : skipped.has(id) ? 'Skipped' : cur ? dm('NEXT', 2, 'Next') : 'Later'),
       collapsed ? btn(done ? 'Edit' : 'Open', () => { opened.add(id); if (id === 'connect') skip(id, false); else load('setup'); }, 'band-btn',
         { 'aria-label': `${done ? 'Edit' : 'Open'}: ${title}` })
-        : !done && id !== 'finish' ? btn('Skip', () => { opened.delete(id); skip(id, true); }, 'band-btn')
-          : done ? btn('Hide', () => { opened.delete(id); load('setup'); }, 'band-btn') : null);
+        : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); skip(id, true); }, 'band-btn')
+          : done || skipped.has(id) ? btn('Hide', () => { opened.delete(id); load('setup'); }, 'band-btn') : null);
     return h('div', { class: 'board step' + (collapsed ? ' collapsed' : '') + (cur ? ' current' : '') }, band, ...body);
   }
   function renderSetup(d) {
@@ -1084,7 +1104,6 @@
         [btn('Index my notes', () => job('/api/setup/index', {}), 'btn', { disabled: !(e.done && d.vault.done) })])], first);
 
     const inst = rn.install;
-    const RSTATE = { running: 'running', stopped: 'installed, not running', not_installed: 'not installed' };
     const start = (id) => btn('Start', () => job('/api/setup/start', { runner: id }), 'btn lit');
     const oll = row('Ollama', RSTATE[rn.ollama.state], 'Runs AI models on this computer. Free.',
       rn.ollama.state === 'stopped' ? [start('ollama')] : rn.ollama.found ? null
@@ -1143,7 +1162,9 @@
 
     const sFinish = step('finish', 'Try it', false, '', [
       h('div', { class: 'pad' }, h('p', { class: 'ink-2', text: on.length ? `Restart ${names(on)} first, so it loads Cortex.${on.some((t) => t.id === 'claude-desktop') ? ' ' + RESTART_DESKTOP : ''} Then try these in Claude:` : 'Connect an AI app first (above) and restart it. Then try these in Claude:' }),
-        h('ol', { class: 'how' }, d.first_prompts.map((x) => h('li', {}, h('code', { text: x }))))),
+        h('ol', { class: 'how' }, d.first_prompts.map((x) => h('li', {}, h('code', { text: x })))),
+        h('p', { class: 'help', text: 'This step never gets a check mark: Cortex cannot see your chats in Claude. When Claude answers one of these using Cortex, you are set.' })),
+      row('Chat', null, 'Or ask about your notes here, with a model on this computer.', [btn('Open Chat', () => show('chat', true))]),
       row('Browsing', null, 'Capture new browsing with the extension, privately.', [btn('Open', () => show('browse', true))])], first);
     const steps = { vault: sVault, embed: sEmbed, connect: sConnect, history: sHistory, llm: sLlm };
     put('setup', ...d.order.map((k) => steps[k]), sFinish);

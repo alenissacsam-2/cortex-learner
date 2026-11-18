@@ -526,6 +526,8 @@ def describe(base: dict | None) -> list[dict]:
                        files=[str(p) for p in t.paths()], private=lms and t.private())
             if base is not None:
                 row["snippet"] = t.snippet(base)
+                # Claude Code's plugin route shows the commands Cortex runs, not an entry
+                row["commands"] = isinstance(t, ClaudeCode) and t._plugin_route()
         except Exception as e:  # noqa: BLE001  (one broken config never hides the others)
             row["error"] = str(e)[:300]
         out.append(row)

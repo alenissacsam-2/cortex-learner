@@ -567,6 +567,7 @@ def test_empty_vault_is_a_first_run_not_done(tmp_path):
     d = dashboard.build_data(Vault(_empty_vault(tmp_path)), now=NOW)
     assert d["today"] == [] and d["first_run"] is True and d["plan_cleared"] is False
     assert "Start here" in JS and "Add a test date" in JS and "Import your notes or chats" in JS
+    assert "In the Cortex app: Setup → Add your history." in JS  # the app's guided imports
 
 
 def test_empty_plan_is_done_only_after_work_today(tmp_path):

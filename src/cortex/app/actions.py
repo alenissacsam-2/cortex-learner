@@ -92,9 +92,24 @@ def run_proc(job, args: list[str]) -> dict:
 # ---- dashboard and vault (the existing CLI commands) ------------------------------------------
 
 
+# the doctor's fixes that say to open the app, as the app says them (the CLI is unchanged)
+APP_FIX = {"Search model": "Setup → Search model → Download search model.",
+           "AI app connected": "Setup → Connect AI apps.",
+           "Local model": "Setup → Local model → Start.",
+           "Vault": "Setup → Vault."}
+
+
 def doctor(job, root: Path | None) -> dict:
     from cortex import cli
-    return capture(job, cli.doctor, vault=root)
+    out = capture(job, cli.doctor, vault=root)
+    lines, name = [], ""
+    for line in out["lines"]:
+        if not line.startswith(" "):  # "WARN  Search model: ..." names the check
+            name = line[6:].split(":", 1)[0]
+        elif name in APP_FIX and ("cortex app" in line or "Start menu" in line):
+            line = line[:line.index("fix:")] + "fix: in this app, " + APP_FIX[name]
+        lines.append(line)
+    return {**out, "lines": lines}
 
 
 def backup(job, root: Path) -> dict:
@@ -332,6 +347,13 @@ def _s(n: int) -> str:
     return "s" * (n != 1)
 
 
+def _notes(flavor: str, n: int) -> str:
+    """"Obsidian notes", "Notion note"; a plain folder is just "notes", never "Notes notes"."""
+    from cortex import importers
+    label = importers.LABELS[flavor]
+    return ("" if label == "Notes" else label + " ") + "note" + _s(n)
+
+
 def _skipped_rows(rows) -> str:
     """The count of HTML rows takeout.records skipped for an unreadable time, as a sentence."""
     n = rows.skipped
@@ -376,7 +398,7 @@ def import_preview(job, source: str, path: Path, root: Path | None = None) -> di
         r = _readable(importers.import_notes, _vault(root), path, None, True)
         new, same, skipped = r["new"], r["same"], r["skipped"]
         return {"ok": True, "kind": "import-preview", "found": new, "lines": [
-            f"Found {new:,} new {importers.LABELS[r['source']]} note{_s(new)}"
+            f"Found {new:,} new {_notes(r['source'], new)}"
             + (f", {same:,} already imported" if same else "")
             + (f"; {skipped:,} file{_s(skipped)} skipped (hidden, not text or over 5 MB)"
                if skipped else "") + "."]}
@@ -415,7 +437,7 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
         r = _readable(importers.import_notes, v, path)
         _commit(v, "notes")
         return {"ok": True, "kind": "import", "counts": {"notes": r["new"]}, "lines": [
-            f"Imported {r['new']:,} {importers.LABELS[r['source']]} note{_s(r['new'])} into "
+            f"Imported {r['new']:,} {_notes(r['source'], r['new'])} into "
             f"{root / 'resources'}" + (f"; {r['same']:,} were already in." if r["same"]
                                        else "."),
             importers.report_line(importers.LABELS[r["source"]], r)]}

@@ -1499,6 +1499,96 @@ def test_notes_and_calendar_cards_go_through_importers(app, home, vault):
     assert wait_job(app)["result"]["found"] == 0  # every event is already in
 
 
+def test_notes_and_calendar_imports_count_and_mark_history(app, home, vault, tmp_path):
+    """QA 5 and 8: notes and calendar imports show on their cards like chat imports do (the
+    page marks Add your history done from any count); a plain folder is "notes", once."""
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["imports"]["notes"] == {"count": 0, "when": None}
+    assert s["imports"]["calendar"] == {"count": 0, "when": None}
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    for n in ("one", "two"):
+        (plain / f"{n}.md").write_text(f"# {n}\n\nbody {n}\n", encoding="utf-8")
+    call(app, "POST", "/api/import/preview", {"source": "notes", "path": str(plain)})
+    assert wait_job(app)["result"]["lines"] == ["Found 2 new notes."]
+    call(app, "POST", "/api/import/run", {"source": "notes", "path": str(plain)})
+    assert wait_job(app)["result"]["lines"][0].startswith("Imported 2 notes into ")
+    call(app, "POST", "/api/import/run", {"source": "calendar",
+                                          "path": str(EXPORTS / "calendar.ics")})
+    wait_job(app)
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["imports"]["notes"]["count"] == 2 and s["imports"]["calendar"]["count"] == 3
+    assert s["imports"]["notes"]["when"] and s["imports"]["calendar"]["when"]
+    assert s["imports"]["chatgpt"]["count"] == 0  # chat cards unchanged
+
+
+def test_last_indexed_is_one_answer(app, vault):
+    """QA 4: Setup's "Index my notes", Status and Dashboard and vault read the same file (the
+    vector cache Index my notes writes), so they never disagree."""
+    from cortex import semantic
+
+    def seen():
+        _, s, _, _ = call(app, "GET", "/api/setup")
+        _, v, _, _ = call(app, "GET", "/api/vault")
+        _, st, _, _ = call(app, "GET", "/api/status")
+        row = next(r for r in st["rows"] if r["id"] == "vault")
+        return s["embed"]["indexed"], v["last_index"], row["detail"]
+
+    (vault / ".cortex" / "index-snapshot.json").write_text("{}", encoding="utf-8")
+    assert seen() == (None, None, f"{status.notes(vault)} notes; last indexed not yet")
+    (vault / semantic.CACHE).write_bytes(b"x")
+    a, b, detail = seen()
+    assert a and a == b and detail.endswith(f"last indexed {a}")
+
+
+def test_doctor_in_the_app_points_at_setup_not_at_cortex_app(app, vault):
+    """QA 8: inside the app, "Run `cortex app`" is circular; the fix names the Setup step.
+    The CLI's own doctor output keeps its wording."""
+    from cortex import doctor
+
+    class Job:
+        def say(self, line):
+            pass
+
+    lines = actions.doctor(Job(), vault)["lines"]
+    assert not any("cortex app" in x or "Start menu" in x for x in lines), lines
+    assert "      fix: in this app, Setup → Search model → Download search model." in lines
+    assert "cortex app" in doctor.check_search_model()[3]
+
+
+def test_llm_settings_refuse_no_model_but_keep_the_switch(app):
+    """QA 6: Save with no model is refused (never `model: null`); the on/off switch alone
+    still saves; the page gets Ollama's state in Setup's words."""
+    from cortex import taint
+    call(app, "POST", "/api/llm/settings", {"model": "qwen3.5:4b", "runner": "ollama"})
+    for bad in ({"model": None}, {"model": ""}, {"model": None, "runner": "ollama"}):
+        code, body, _, _ = call(app, "POST", "/api/llm/settings", bad)
+        assert code == 400 and body["error"] == "Choose a model first.", bad
+    assert call(app, "POST", "/api/llm/settings", {"enabled": False})[0] == 200
+    assert taint.config()["localllm"] == {"model": "qwen3.5:4b", "runner": "ollama",
+                                          "enabled": False}
+
+
+@pytest.mark.parametrize("exe,want", [(None, "not_installed"), ("C:/ollama.exe", "stopped")])
+def test_llm_page_says_ollama_state_like_setup(app, monkeypatch, exe, want):
+    monkeypatch.setattr(status, "ollama_models", lambda: None)
+    monkeypatch.setattr(wizard, "ollama_exe", lambda: exe)
+    _, llm, _, _ = call(app, "GET", "/api/llm")
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert llm["ollama_state"] == s["runner"]["ollama"]["state"] == want
+
+
+def test_claude_code_plugin_route_is_labelled_as_commands(vault, monkeypatch):
+    """QA 8: Claude Code's plugin route shows commands, not a config entry."""
+    from cortex import clients
+    monkeypatch.setattr(targets.ClaudeCode, "_plugin_route", lambda self: True)
+    base = clients.server_entry("cortex", vault)
+    rows = {t["id"]: t for t in targets.describe(base)}
+    assert rows["claude-code"]["commands"] is True
+    assert rows["claude-code"]["snippet"].startswith("claude plugin ")
+    assert not any(t.get("commands") for i, t in rows.items() if i != "claude-code")
+
+
 @pytest.mark.parametrize("source,name,card", [
     ("claude", "notion", "Notes card"), ("perplexity", "obsidian", "Notes card"),
     ("chatgpt", "calendar.ics", "Calendar card"),

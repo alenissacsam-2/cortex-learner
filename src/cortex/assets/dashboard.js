@@ -1139,7 +1139,7 @@
     const steps = [
       ['Add a test date', 'Tell any Claude chat about a test and its date, or add one in assessments/.', null],
       ['Run /cortex in Claude', 'Your home card, what is due and what is waiting for you.', '/cortex'],
-      ['Import your notes or chats', 'In a terminal: cortex import <your export, notes folder or .ics>.', null]];
+      ['Import your notes or chats', 'In the Cortex app: Setup → Add your history. Or in a terminal: cortex import <file>.', null]];
     steps.forEach(([title, sub, prompt], i) => b.body.append(brow({ title, sub, prompt,
       left: el('span', 'code', String(i + 1)) })));
     return b.root;
