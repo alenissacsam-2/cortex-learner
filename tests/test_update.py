@@ -131,6 +131,34 @@ def test_latest_errors_say_what_happened(route, match):
         update.latest(opener=fake({} if route is None else {API: route}))
 
 
+PAGE = f"https://github.com/{REPO}/releases/latest"
+
+
+def test_a_rate_limited_api_falls_back_to_the_latest_page(tmp_path):
+    """A campus network shares 60 API calls an hour; the page's redirect names the tag."""
+    for code in (403, 429):
+        got = update.latest(opener=fake({API: code,
+                                         PAGE: (302, f"/{REPO}/releases/tag/v0.2.0")}))
+        assert got == {**info(), "notes_url": f"https://github.com/{REPO}/releases/tag/v0.2.0",
+                       "exe_size": 0}
+    # the download then works as usual: the size comes from the response, the hash is checked
+    assert update.download(got, tmp_path, opener=fake(files())).read_bytes() == EXE
+
+
+@pytest.mark.parametrize("page,match", [
+    (None, "limiting"),  # the page is unreachable too
+    (b"<html>", "limiting"),  # no redirect: no release
+    ((302, "https://github.com/someone/else/releases/tag/v9.9.9"), "limiting"),
+    ((302, f"https://evil.example/{REPO}/releases/tag/v9.9.9"), "limiting"),
+    ((302, f"https://github.com/{REPO}/releases/tag/v0.3.0-rc1"), "not a release version"),
+    ((302, f"https://github.com/{REPO}/releases/tag/..%2F..%2Fx"), "not a release version"),
+])
+def test_the_latest_page_takes_only_this_repos_release_tags(page, match):
+    routes = {API: 403, **({} if page is None else {PAGE: page})}
+    with pytest.raises(update.UpdateError, match=match):
+        update.latest(opener=fake(routes))
+
+
 def test_update_error_is_a_value_error():  # the app shows its text, not a traceback
     assert issubclass(update.UpdateError, ValueError)
 

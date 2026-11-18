@@ -318,9 +318,9 @@
     else if (r && r.cancelled) out.push(row('Cancelled', null, 'Nothing was installed; update again any time.', null));
     else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
     else if (r) {
-      const mb = Math.max(1, Math.round(r.size / 2 ** 20));
+      const mb = r.size ? ` (about ${Math.max(1, Math.round(r.size / 2 ** 20))} MB)` : '';  // unknown when the API was busy
       const now = () => confirmDialog('Update Cortex?', 'Update now',
-        [h('p', { class: 'ink-2', text: `Cortex will download the update (about ${mb} MB), close, and reopen when it's done. AI apps connected to Cortex may need a restart.` })],
+        [h('p', { class: 'ink-2', text: `Cortex will download the update${mb}, close, and reopen when it's done. AI apps connected to Cortex may need a restart.` })],
         () => job('/api/update/apply', {}));
       out.push(row(`Cortex ${r.latest} is available`, null, r.command ? 'Run this in a terminal to update:' : null,
         [ext(r.notes_url, 'What’s new'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));

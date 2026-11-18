@@ -18,7 +18,7 @@ import urllib.request
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 from cortex.cli import CHECKOUT, REPO
 
@@ -90,9 +90,8 @@ def latest(opener=None, api: str = API) -> dict:
                   "application/vnd.github+json") as r:
             data = json.loads(r.read(2**20))
     except HTTPError as e:
-        if e.code in (403, 429):
-            raise UpdateError("GitHub is limiting update checks from this network right now. "
-                              "Try again in an hour.") from None
+        if e.code in (403, 429):  # 60 API calls an hour per address: a campus network runs out
+            return _latest_from_page(opener)
         if e.code == 404:
             raise UpdateError("GitHub has no Cortex release yet.") from None
         raise UpdateError(f"GitHub answered {e.code}. Try again later.") from None
@@ -123,6 +122,30 @@ def latest(opener=None, api: str = API) -> dict:
     return {"tag": tag, "version": ver, "notes_url": notes,
             "exe_url": want, "sha_url": want + ".sha256",
             "exe_size": int(exe.get("size") or 0)}
+
+
+def _latest_from_page(opener) -> dict:
+    """The latest release without the API: github.com/<repo>/releases/latest redirects to its
+    tag (never a draft or a pre-release), and the asset links follow from the tag. The size is
+    unknown until the download; the .sha256 check is the same."""
+    page = f"https://github.com/{REPO}/releases/latest"
+    limited = UpdateError("GitHub is limiting update checks from this network right now. Try "
+                          "again in an hour.")
+    try:
+        with _get(page, opener, "text/html"):
+            raise limited  # no redirect: no release to go to
+    except HTTPError as e:
+        loc = urljoin(page, e.headers.get("Location") or "") if e.code in _REDIRECTS else ""
+    except (URLError, OSError):
+        raise limited from None
+    m = re.fullmatch(rf"https://github\.com/{re.escape(REPO)}/releases/tag/([^/?#]+)", loc)
+    if not m:
+        raise limited
+    tag = unquote(m[1])
+    ver = parse_version(tag)
+    want = f"{DOWNLOADS}{tag}/{EXE}"
+    return {"tag": tag, "version": ver, "exe_url": want, "sha_url": want + ".sha256",
+            "notes_url": f"https://github.com/{REPO}/releases/tag/{tag}", "exe_size": 0}
 
 
 def dest_dir(info: dict) -> Path:
