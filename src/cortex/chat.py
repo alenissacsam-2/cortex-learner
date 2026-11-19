@@ -17,7 +17,7 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
-from cortex import ask, chat_study, localllm, semantic, taint
+from cortex import ask, chat_study, events, localllm, semantic, taint
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
 from cortex.index import STOPWORDS
 from cortex.vault import Vault
@@ -133,19 +133,41 @@ def _monday(t: date) -> date:
     return t - timedelta(days=t.weekday())
 
 
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _weekday(m, t: date) -> tuple[date, date]:
+    """The most recent such day on or before `t`; "last Monday" on a Monday is a week ago."""
+    back = (t.weekday() - _WEEKDAYS.index(m[2].lower())) % 7 or 7 * (m[1].lower() == "last")
+    return t - back * _D, t - back * _D
+
+
+def _weekend(t: date) -> tuple[date, date]:
+    sat = t - (t.weekday() - 5) % 7 * _D  # the last Saturday, today on a Saturday
+    return sat, min(sat + _D, t)
+
+
+def _last(n: int, unit: str, t: date) -> tuple[date, date]:
+    """The last `n` units ending today: "last 3 days" is 3 days, today the third."""
+    return t - (n * _UNIT[unit.lower()] - 1) * _D, t
+
+
 _D = timedelta(days=1)
 _RULES = [  # first match wins
     (rf"\bsince\s+({_DATE})", lambda m, t: (_day(m[1], t), t)),
     (r"\b(?:the\s+)?day\s+before\s+yesterday\b", lambda m, t: (t - 2 * _D, t - 2 * _D)),
-    (r"\byesterday\b", lambda m, t: (t - _D, t - _D)),
+    (r"\b(?:yesterday|last\s+night)\b", lambda m, t: (t - _D, t - _D)),
+    (r"\btomorrow\b", lambda m, t: (t + _D, t + _D)),  # "what is due tomorrow?"
     (r"\b(?:today|tonight|this\s+morning|this\s+afternoon|this\s+evening)\b",
      lambda m, t: (t, t)),
     (rf"\b{_NUM}\s+(day|week|month)s?\s+ago\b", _ago),
     (rf"\b(?:last|past|previous)\s+{_NUM}\s*(?:to|-|–|or)\s*{_NUM}\s+(day|week|month)s?\b",
-     lambda m, t: (t - max(_n(m[1]), _n(m[2])) * _UNIT[m[3].lower()] * _D, t)),  # the wider
+     lambda m, t: _last(max(_n(m[1]), _n(m[2])), m[3], t)),  # the wider
     (rf"\b(?:last|past|previous)\s+{_NUM}\s+(day|week|month)s?\b",
-     lambda m, t: (t - _n(m[1]) * _UNIT[m[2].lower()] * _D, t)),
-    (r"\bpast\s+(week|month)\b", lambda m, t: (t - _UNIT[m[1].lower()] * _D, t)),
+     lambda m, t: _last(_n(m[1]), m[2], t)),
+    (r"\bpast\s+(week|month)\b", lambda m, t: _last(1, m[1], t)),
+    (r"\b(?:this|last|over\s+the)\s+weekend\b", lambda m, t: _weekend(t)),
+    (rf"\b(on|last|this|past)\s+({'|'.join(_WEEKDAYS)})\b", _weekday),
     (r"\bthis\s+week\b", lambda m, t: (_monday(t), t)),
     (r"\blast\s+week\b", lambda m, t: (_monday(t) - 7 * _D, _monday(t) - _D)),
     (r"\bthis\s+month\b", lambda m, t: (t.replace(day=1), t)),
@@ -317,7 +339,16 @@ _SITES_Q = re.compile(r"\b(?:sites?|websites?|domains?)\b", re.I)
 # browsing, never "the domain of every function" or "the binding sites used by hemoglobin"
 _LIST_Q = re.compile(r"\b(?:i|i've|ive|me|my)\b[\w\s',-]{0,40}?\b(?:visit\w*|went|go|gone|been"
                      r"|open\w*|brows\w*|use[ds]?|surf\w*)\b", re.I)
-_BROWSER = re.compile(r"\b(chrome|edge|brave|comet|firefox|opera|vivaldi|arc)\b", re.I)
+# a browser filter only as "in Comet", "on Edge": "sites to learn edge detection" is no browser
+_BROWSER = re.compile(r"\b(?:in|on|using|from|with)\s+(?:the\s+)?(?:google\s+|microsoft\s+)?"
+                      r"(chrome|edge|brave|comet|firefox|opera|vivaldi|arc)\b", re.I)
+# "what's a good site to practise SQL?", "can you suggest websites I could use?": advice
+_SUGGEST = re.compile(r"\b(?:good|best|better|suggest\w*|recommend\w*|should\s+i\s+use"
+                      r"|could\s+use)\b", re.I)
+# words a plain "list my sites" question holds besides its date and browser; any other word is
+# a topic ("which sites do I use for DSA?"), for the passages
+_LIST_WORDS = frozenset("list all unique distinct every most top many often frequently usually "
+                        "visits use used using been ve s go gone surf surfed browser".split())
 NOTES_OFF = ("Notes and mistakes are switched off in Chat settings, so I can't read your study "
              "plan.")
 SITES_SHOWN = 2000  # "all the sites": every one, short of a runaway answer
@@ -363,19 +394,26 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
     return seen, unknown, days, llm, settings
 
 
-def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
+def site_list(vault: Vault, text: str, got, sources: dict,
+              today: date | None = None) -> str | None:
     """The answer to a question asking for a list of sites, or None for any other question:
     every site visited in `got`'s days (None: all days), most visits first, with its category
     and the local model's one-line description, under Chat's own source switches (`browsing`,
     `private`) and the browsing settings (a denied or Don't save site is never stored)."""
-    if not (_SITES_Q.search(text) and _LIST_Q.search(text)):
+    today = today or _today()
+    if not (_SITES_Q.search(text) and _LIST_Q.search(text)) or _SUGGEST.search(text):
+        return None
+    b = _BROWSER.search(text)
+    rest = text[:b.start()] + " " + text[b.end():] if b else text
+    dated = _when(rest, today)
+    if set(topic(rest, dated[2] if dated else (0, 0)).split()) - _LIST_WORDS:
         return None
     if not (sources.get("browsing") or sources.get("private")):
         return "Browsing is switched off in Chat settings, so I cannot list sites."
-    browser = m[1].lower() if (m := _BROWSER.search(text)) else None
+    browser = b[1].lower() if b else None
     seen, unknown, days, llm, settings = _site_counts(vault, got, sources, browser)
     lo = got[0].isoformat() if got else ""
-    when = f"from {_span(got[0], got[1])}" if got else "in everything Cortex has stored"
+    when = f"from {_span(got[0], got[1], today)}" if got else "in everything Cortex has stored"
     if browser:
         when = f"in {browser.title()} {when}"
     notes = []
@@ -445,12 +483,17 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     return sorted(out, key=lambda p: (p[0], p[3]))
 
 
-def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date) -> str:
+def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
+           unit: str | None = None) -> str:
     """What Cortex holds about the days `lo` to `hi`, read from its own data with no model: what
     was studied (chat_study's range answer), the most visited sites (`_site_counts`), notes and
     saved AI chats written or changed, and journal lines, each section capped and only when it
-    has something, then one line on what is left out."""
-    when = f"on {_span(lo, hi)}" if lo == hi else f"from {_span(lo, hi)}"
+    has something, then one line on what is left out. `unit`: "day", "week" or "days" for the
+    heading (chat_study.digest_days), else by the range."""
+    when = f"on {_span(lo, hi, today)}" if lo == hi else f"from {_span(lo, hi, today)}"
+    unit = unit or ("day" if lo == hi else "days")
+    if unit == "week" and (lo, hi) == (_monday(today), today):
+        unit = "week so far"  # on a Monday too, when it is one day so far
     sections = []
     studied = chat_study.answer(vault, "range", (lo, hi, None), today) \
         if sources.get("notes") else chat_study.NO_STUDY
@@ -475,7 +518,7 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date) -> str:
     chats = [p[3] for p in reversed(pages) if p[5]]
     if chats:
         sections.append(_capped(f"**{_plural(len(chats), 'saved AI chat')}**:", chats))
-    journal = [(_span(d := date.fromisoformat(p[0]), d) + " " if lo != hi else "")
+    journal = [(_span(d := date.fromisoformat(p[0]), d, today) + " " if lo != hi else "")
                + chat_study._title(ln[2:].strip())
                for p in pages if p[1] == "journal"
                for ln in p[4].splitlines() if _JOURNAL_LINE.match(ln)]
@@ -491,7 +534,7 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date) -> str:
     tail = "Not included: " + "; ".join(left) + "."
     if not sections:
         return f"Cortex has nothing recorded {when}. {tail}"
-    out = [f"**Your {'day' if lo == hi else 'days'}** {when}:"]
+    out = [f"**Your {unit}** {when}:"]
     for sec in sections:
         out += ["", *sec]
     return "\n".join([*out, "", tail])
@@ -515,9 +558,16 @@ def _once(text: str) -> str:
     return "\n".join(out)
 
 
-def _span(a: date, b: date) -> str:
-    """'17 Nov' or '10 Nov to 16 Nov', for the progress line."""
-    return f"{a.day} {a:%b}" if a == b else f"{a.day} {a:%b} to {b.day} {b:%b}"
+def _today(now: datetime | None = None) -> date:
+    """The local day as events, site days and the dashboard count it: it starts at 04:00."""
+    return date.fromisoformat(events.local_day(now or datetime.now(UTC)))
+
+
+def _span(a: date, b: date, today: date | None = None) -> str:
+    """'17 Nov', '10 Nov to 16 Nov' or '11 Sep 2001' (a year other than `today`'s)."""
+    today = today or _today()
+    day = chat_study._day
+    return day(a, today) if a == b else f"{day(a, today)} to {day(b, today)}"
 
 
 def _local(runner) -> bool:
@@ -569,31 +619,31 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     s = settings or get_settings()
     convo_id = convo_id or new()
     msgs = load(vault, convo_id)  # validates the id
-    t0, today = time.monotonic(), today or date.today()
+    t0, today = time.monotonic(), today or _today()
     prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
     got, said = _when(text, today), text
     leans = follow_up(text, got)
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
     query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
-    span = f" from {_span(got[0], got[1])}" if got else ""
+    span = f" from {_span(got[0], got[1], today)}" if got else ""
     # a site list or a study answer is read from Cortex's own data with no model, so it needs
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
     # borrowed ones are for passages only)
     own = got if said is text else None
     step = None
-    if (listed := site_list(vault, text, own, s["sources"])) is not None:
+    if (listed := site_list(vault, text, own, s["sources"], today)) is not None:
         step = "Counting the sites you visited" + span
-    elif (asked := chat_study.kind(text, own)) == "digest":
-        lo, hi = chat_study.digest_days(text, own, today)
-        step = "Putting together your " + (
-            ("day" if lo == today else f"day on {_span(lo, hi)}") if lo == hi else
-            f"{'week' if (hi - lo).days < 7 else 'days'} from {_span(lo, hi)}")
-        listed = digest(vault, lo, hi, s["sources"], today)
+    elif (asked := chat_study.kind(text, own, today, not prev)) == "digest":
+        lo, hi, unit = chat_study.digest_days(text, own, today)
+        step = "Putting together your " + ("day" if (unit, lo) == ("day", today) else
+                                           f"{unit} {'on' if lo == hi else 'from'} "
+                                           f"{_span(lo, hi, today)}")
+        listed = digest(vault, lo, hi, s["sources"], today, unit)
     elif asked is not None:
         step = chat_study.STEP[asked] + (span if asked == "range" else "")
-        listed = chat_study.answer(vault, asked, own, today) if s["sources"].get("notes") \
-            else NOTES_OFF
+        listed = chat_study.study_answer(vault, text, own, today, not prev) \
+            if s["sources"].get("notes") else NOTES_OFF
     if listed is None and semantic.load_embedder() is None:
         emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
         return convo_id

@@ -5,7 +5,7 @@ include local-only browsing. Passages are untrusted page text, wrapped as data."
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import chain, zip_longest
 from pathlib import PurePosixPath
 
@@ -14,7 +14,7 @@ import numpy as np
 from cortex import harvest, localllm, semantic
 from cortex.browse import vectors
 from cortex.catalog import Catalog
-from cortex.events import EventLog
+from cortex.events import EventLog, local_day
 from cortex.index import Index, _wrap
 from cortex.topics import page_date
 from cortex.vault import Vault
@@ -50,14 +50,14 @@ def _browse_day(path: str) -> str:
 
 def _note_day(vault: Vault, id: str, n: dict, path: str) -> str:
     """`page_date`, else for a note or resource with none (what cortex_add writes) the local day
-    its file last changed, as the dashboard's Recent ideas shows it. Other kinds stay undated:
-    tool-owned properties rewrite concept and mistake files."""
+    its file last changed (a day starts at 04:00, as events and Chat's `today`). Other kinds
+    stay undated: tool-owned properties rewrite concept and mistake files."""
     if d := page_date(id, n["fields"], n["body"]):
         return d
     if n["fields"].get("kind") not in ("note", "resource"):
         return ""
     try:
-        return datetime.fromtimestamp((vault.root / path).stat().st_mtime).date().isoformat()
+        return local_day(datetime.fromtimestamp((vault.root / path).stat().st_mtime, UTC))
     except OSError:
         return ""
 

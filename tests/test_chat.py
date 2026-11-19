@@ -244,8 +244,19 @@ def test_lms_is_not_asked_when_ollama_answers(stream, monkeypatch):
     ("in December", "2025-12-01", "2025-12-31"),
     ("since 1 Nov", "2026-11-01", "2026-11-18"),
     ("since 2026-11-10", "2026-11-10", "2026-11-18"),
-    ("in the last 3 days", "2026-11-15", "2026-11-18"),
-    ("past week", "2026-11-11", "2026-11-18"),
+    ("in the last 3 days", "2026-11-16", "2026-11-18"),  # 3 days, today the third
+    ("past week", "2026-11-12", "2026-11-18"),
+    ("the last 2 weeks", "2026-11-05", "2026-11-18"),
+    ("past 2 to 3 days", "2026-11-16", "2026-11-18"),
+    ("last night", "2026-11-17", "2026-11-17"),
+    ("what is due tomorrow?", "2026-11-19", "2026-11-19"),
+    ("what did I do on Monday?", "2026-11-16", "2026-11-16"),  # TODAY is a Wednesday
+    ("last Monday", "2026-11-16", "2026-11-16"),
+    ("on Wednesday", "2026-11-18", "2026-11-18"),  # today
+    ("last Wednesday", "2026-11-11", "2026-11-11"),  # "last": never today
+    ("on friday", "2026-11-13", "2026-11-13"),
+    ("this weekend", "2026-11-14", "2026-11-15"),
+    ("what did I read over the weekend", "2026-11-14", "2026-11-15"),
     ("Sept 3", "2026-09-03", "2026-09-03"),
     ("on 5 Nov. 2026", "2026-11-05", "2026-11-05"),
     ("my marks 90 on 12 Nov", "2026-11-12", "2026-11-12"),  # a bad first match, then a real one
@@ -260,7 +271,8 @@ def test_when(text, lo, hi):
                                   # words that start like a month are not months
                                   "what did I learn in market research?",
                                   "summarize my 3 decisions", "the novel 2 chapters",
-                                  "in decent shape", "2 junior roles", "4 octaves", "8 augments"])
+                                  "in decent shape", "2 junior roles", "4 octaves", "8 augments",
+                                  "Cyber Monday deals", "the weekend effect in markets"])
 def test_when_none(text):
     assert chat.when(text, TODAY) is None
 
@@ -594,7 +606,7 @@ def test_a_site_question_lists_every_site_once_with_its_counts(vault):
         "2026-10-01": {"old.example||0": {"n": 50}},
     }, llm={"miruro.tv": {"h": {"desc": "An **anime** streaming [site](x)"}}})
     got = (date(2026, 11, 16), date(2026, 11, 17), "")
-    out = chat.site_list(vault, "list all the unique sites I visited", got, ALL_ON)
+    out = chat.site_list(vault, "list all the unique sites I visited", got, ALL_ON, TODAY)
     assert out.startswith("**2 sites** from 16 Nov to 17 Nov")
     lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert lines == ["- **github.com** · programming · 9 visits on 1 day",
@@ -616,7 +628,7 @@ def test_a_named_browser_counts_only_its_visits(vault):
         "2026-11-16": {"old.example||0": {"n": 7}},  # imported before browsers were kept
     })
     got = (date(2026, 11, 16), date(2026, 11, 17), "")
-    out = chat.site_list(vault, "which sites did I visit in Comet?", got, ALL_ON)
+    out = chat.site_list(vault, "which sites did I visit in Comet?", got, ALL_ON, TODAY)
     assert out.startswith("**2 sites** in Comet from 16 Nov to 17 Nov")
     lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert lines == ["- **miruro.tv** · video · 3 visits on 1 day",
@@ -627,9 +639,10 @@ def test_a_named_browser_counts_only_its_visits(vault):
 def test_a_site_question_before_the_stored_days_says_so(vault):
     _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
     got = chat._when("which sites did I visit in the past 4 to 5 months?", date(2026, 11, 19))
-    assert got[0] == date(2026, 6, 22)
-    out = chat.site_list(vault, "which sites did I visit in the past 4 to 5 months?", got, ALL_ON)
-    assert "**1 site** from 22 Jun to 19 Nov" in out and "from 2026-11-17 on" in out
+    assert got[0] == date(2026, 6, 23)  # 150 days, today the last
+    out = chat.site_list(vault, "which sites did I visit in the past 4 to 5 months?", got, ALL_ON,
+                         date(2026, 11, 19))
+    assert "**1 site** from 23 Jun to 19 Nov" in out and "from 2026-11-17 on" in out
 
 
 def test_reply_answers_a_site_question_without_the_model(vault, stream):
@@ -664,7 +677,10 @@ def test_a_looping_answer_is_cut_to_its_lines_once():
     ("How am I doing?", "progress"), ("how's my progress so far", "progress"),
     ("what is my progress", "progress"),
     ("What is Dijkstra's algorithm?", None), ("What did I read about car motors yesterday?", None),
-    ("What did I study about graphs yesterday?", None), ("What did I learn yesterday?", None),
+    ("what is due this week?", "due"), ("What's due tomorrow?", "due"),
+    ("what should I review tomorrow", "due"), ("is anything due this week", "due"),
+    ("What did I study about graphs yesterday?", None),
+    ("What did I learn yesterday?", "digest"),  # studied and browsed: the digest has both
     ("what should I study for heaps", None), ("what's the plan for the Rust rewrite?", None),
     ("What is due process?", None), ("what are weak references in Java?", None),
     ("How am I doing on two pointers?", None), ("what did I study", None),
@@ -672,7 +688,13 @@ def test_a_looping_answer_is_cut_to_its_lines_once():
     ("plan a trip to Goa", None), ("how is progress measured in agile?", None),
 ])
 def test_study_questions_caught_and_not(text, want):
-    assert chat_study.kind(text, chat._when(text, TODAY)) == want
+    assert chat_study.kind(text, chat._when(text, TODAY), TODAY) == want
+
+
+@pytest.mark.parametrize("text", ["What's next?", "what next", "so what next?"])
+def test_what_next_is_the_plan_only_when_it_opens_the_chat(text):
+    assert chat_study.kind(text, None, TODAY) == "plan"
+    assert chat_study.kind(text, None, TODAY, first=False) is None
 
 
 def _study_events(vault):
@@ -756,18 +778,29 @@ def test_a_data_answer_needs_no_model(vault, monkeypatch):
     ("what did I do on reddit yesterday?", None), ("what happened", None),
     ("summarize", None), ("what did I do", None), ("recap the French revolution", None),
     ("what happened in the news yesterday?", None),
+    ("what did I learn yesterday?", "digest"), ("what have I learnt this week?", "digest"),
+    ("What did I learn last night?", "digest"), ("what did I do on Monday?", "digest"),
+    ("recap last weekend", "digest"), ("what happened on 12 Dec 2025?", "digest"),
+    ("what did I learn about Dijkstra?", None), ("what did I learn", None),
+    # history, not the learner's days: the model answers
+    ("what happened on 11 September 2001?", None), ("what happened in November 1918?", None),
+    ("recap of 1 May 1886", None), ("what happened on 12 Nov 2025?", None),
 ])
 def test_digest_questions_caught_and_not(text, want):
-    assert chat_study.kind(text, chat._when(text, TODAY)) == want
+    assert chat_study.kind(text, chat._when(text, TODAY), TODAY) == want
 
 
 def test_digest_days_default_to_today_or_this_week():
     def days(q):
         return chat_study.digest_days(q, chat._when(q, TODAY), TODAY)
-    assert days("summarize my day") == (TODAY, TODAY)
+    assert days("summarize my day") == (TODAY, TODAY, "day")
     assert days("what have I been up to?") == days("summarize my week") == (date(2026, 11, 16),
-                                                                            TODAY)
-    assert days("recap last week") == (date(2026, 11, 9), date(2026, 11, 15))
+                                                                            TODAY, "week")
+    assert days("recap last week") == (date(2026, 11, 9), date(2026, 11, 15), "week")
+    assert days("summarize the last 3 days") == (date(2026, 11, 16), TODAY, "days")
+    assert days("what did I do 2 days ago?")[2] == "days"
+    assert days("what did I do two weeks ago?")[2] == "days"
+    assert days("what did I do yesterday?")[2] == "day"
     assert days("what is Dijkstra's algorithm?") is None
     q = "what did I do yesterday?"  # chat.digest answers it, under the source switches
     assert chat.study_answer(None, q, chat._when(q, TODAY), TODAY) is None
@@ -837,7 +870,13 @@ def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch)
     ("which sites did I visit yesterday?", True), ("list all the unique sites I visited", True),
     ("what websites did I go to?", True), ("sites I've been on this week", True),
     ("my most visited sites", True), ("What is the domain of every rational function?", False),
-    ("List the binding sites used by hemoglobin", False), ("what is a website?", False)])
+    ("List the binding sites used by hemoglobin", False), ("what is a website?", False),
+    ("which sites did I visit in Comet last week?", True), ("which sites did I use on Edge?", True),
+    ("how many sites did I visit in the past 4 to 5 months?", True),
+    ("what's a good site I can use to practise SQL?", False),
+    ("can you suggest websites I could use for revision?", False),
+    ("which sites should I use?", False), ("which sites do I use for DSA?", False),
+    ("which sites did I visit to learn edge detection?", False)])
 def test_only_a_first_person_browsing_question_gets_the_site_list(vault, q, caught):
     _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
     assert (chat.site_list(vault, q, None, ALL_ON) is not None) is caught
@@ -874,3 +913,84 @@ def test_the_runner_is_only_looked_up_when_the_model_is_needed(vault):
     assert asked == [1]
     assert [(e["code"], e["message"]) for e in events if e["t"] == "err"] == [
         ("no_local_model", "only a loopback runner")]
+
+
+
+def test_a_browser_is_a_filter_only_after_in_or_on(vault):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 4, "w": {"chrome": 4}}}})
+    assert chat.site_list(vault, "which sites did I visit on Edge?", None, ALL_ON).startswith(
+        "No sites are stored in Edge")
+    assert chat.site_list(vault, "which sites did I use in Google Chrome?", None,
+                          ALL_ON).startswith("**1 site** in Chrome")
+
+
+def test_today_starts_at_four_in_the_morning(vault, monkeypatch):
+    assert chat._today(datetime(2026, 11, 20, 1, 30).astimezone()) == date(2026, 11, 19)
+    assert chat._today(datetime(2026, 11, 20, 4, 30).astimezone()) == date(2026, 11, 20)
+    _study_events(vault)
+    monkeypatch.setattr(chat, "_today", lambda now=None: date(2026, 11, 17))  # 01:30 on the 18th
+    events = []
+    chat.reply(vault, None, "What did I study today?", None, events.append, threading.Event(),
+               chat.get_settings())
+    assert [e["s"] for e in events if e["t"] == "step"] == ["Reading what you studied from 17 Nov"]
+    assert "**2 concepts** studied on 17 Nov" in "".join(e["s"] for e in events if e["t"] == "tok")
+
+
+def test_an_undated_note_changed_before_four_counts_on_the_day_before(vault):
+    import os
+    note(vault.root, "notes/late.md", "kind: note\ntitle: Late\n", "# Late\n\nCar motor gears.")
+    t = datetime(2026, 11, 16, 1, 30).timestamp()
+    os.utime(vault.root / "notes/late.md", (t, t))
+    found = ask._passages(vault, "car motor", 8, between=("2026-11-15", "2026-11-15"),
+                          topic="car motor")
+    assert next(p for p in found if p["path"] == "notes/late.md")["day"] == "2026-11-15"
+
+
+def test_a_date_in_another_year_shows_its_year():
+    assert chat._span(date(2001, 9, 11), date(2001, 9, 11), TODAY) == "11 Sep 2001"
+    assert chat._span(date(2025, 12, 28), date(2026, 1, 3), TODAY) == "28 Dec 2025 to 3 Jan"
+    assert chat._span(date(2026, 11, 10), date(2026, 11, 16), TODAY) == "10 Nov to 16 Nov"
+    q = "what did I study on 3 Dec?"  # last year's 3 Dec
+    assert chat_study.kind(q, chat._when(q, TODAY), TODAY) == "range"
+
+
+def test_due_for_a_range_counts_reviews_due_by_its_last_day(vault):
+    _study_events(vault)
+
+    def ask_(q):
+        return chat.study_answer(vault, q, chat._when(q, TODAY), TODAY)
+    assert ask_("what's due?").startswith("**1 concept due for review** today:")
+    assert ask_("what is due tomorrow?").startswith("**2 concepts due for review** by 19 Nov:")
+    assert ask_("what is due this week?").startswith("**2 concepts due for review** by 22 Nov:")
+
+
+def test_a_week_digest_on_a_monday_is_your_week_so_far(vault, monkeypatch):
+    monday = date(2026, 11, 16)
+    _site_days(vault, {"2026-11-16": {"github.com||0": {"n": 1}},
+                       "2026-11-10": {"github.com||0": {"n": 1}}})
+    assert chat.digest(vault, monday, monday, ALL_ON, monday, "week").startswith(
+        "**Your week so far** on 16 Nov:")  # the fixture's Kitchen day note and the site
+    assert chat.digest(vault, date(2026, 11, 9), date(2026, 11, 15), ALL_ON, monday,
+                       "week").startswith("**Your week** from 9 Nov to 15 Nov:")
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
+
+    def steps(q, today=TODAY):
+        events = []
+        chat.reply(vault, None, q, None, events.append, threading.Event(), chat.get_settings(),
+                   today=today)
+        return [e["s"] for e in events if e["t"] == "step"]
+    assert steps("summarize this week", monday) == ["Putting together your week on 16 Nov"]
+    assert steps("summarize the last 3 days") == [
+        "Putting together your days from 16 Nov to 18 Nov"]
+    assert steps("what did I do 2 days ago?") == [
+        "Putting together your days from 15 Nov to 17 Nov"]
+    assert steps("what did I do the day before yesterday?") == [
+        "Putting together your day on 16 Nov"]
+
+
+def test_what_next_mid_chat_goes_to_the_model(vault, stream):
+    s = stream("ollama", ["Then the inner loop [1]."])
+    cid, events = _turn(vault, None, "What's next?", s.runner())
+    assert [e["model"] for e in events if e["t"] == "start"] == ["Cortex"]
+    _, events = _turn(vault, cid, "what next?", s.runner())
+    assert [e["model"] for e in events if e["t"] == "start"] == [s.runner().model]

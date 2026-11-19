@@ -29,7 +29,7 @@ _ASKS = {
         r"what is (?:my|the) (?:study )?plan",
         r"(?:show|give|tell)(?: me)? (?:my|the) (?:study )?plan",
         r"(?:my |the )?(?:study )?plan|today'?s (?:study )?plan",
-        r"what is next|what next|what is on (?:my|the) plan",
+        r"what is on (?:my|the) plan",
     ],
     "due": [
         r"what is due(?: for (?:review|revision))?",
@@ -70,11 +70,15 @@ _RANGE = re.compile(_LEAD + r"(?:what|which (?:topics|concepts)) (?:did|have) i 
 _DIGEST = re.compile(
     _LEAD + r"(?:(?P<upto>what (?:have|had) i been (?:up to|doing)|what was i (?:up to|doing))"
     r"|what did i do|what (?:have|had) i done|what happened"
+    r"|what (?:did|have|had) i (?:learn|learned|learnt)"  # studied and browsed: the digest
     r"|(?:can you |could you )?(?:summari[sz]e|recap|sum up)(?: for me)?"
     r"|(?:give|show|tell)(?: me)? (?:a |my )?(?:quick |short |brief )?(?:summary|recap|rundown"
     r"|digest)|(?:a |my )?(?:quick |short |brief )?(?:summary|recap|digest))"
     r"(?: (?:of|in|on|over|during|for|from|across|with))?(?: (?:my|the))?(?: (?P<unit>day|week))?"
     + _TAIL)
+# "what's next?" opens a chat with the plan; mid-chat it asks about the last answer
+_NEXT = re.compile(_LEAD + r"what (?:is )?next" + _TAIL)
+_RECENT = timedelta(days=366)  # a digest ends within the last year; older is history
 NO_STUDY = "Cortex has no study recorded"
 STEP = {"plan":"Reading your study plan", "due": "Reading your due reviews",
         "weak": "Reading your weak spots and mistakes", "range": "Reading what you studied",
@@ -96,25 +100,41 @@ def _digest(text: str, got):
     return m if m and (got or m["unit"] or m["upto"]) else None
 
 
-def digest_days(text: str, got, today: date) -> tuple[date, date] | None:
-    """The (first, last) day a digest question asks about, or None for any other question."""
+def digest_days(text: str, got, today: date) -> tuple[date, date, str] | None:
+    """(first day, last day, "day", "week" or "days") a digest question asks about, or None
+    for any other question."""
     if not (m := _digest(text, got)):
         return None
-    if got:
-        return got[0], got[1]
-    return (today, today) if m["unit"] == "day" else (today - timedelta(today.weekday()), today)
+    if got:  # "last week", "past week": a week; "two weeks ago", "last 3 days": days
+        week = re.search(r"\bweek\b(?!\s+ago)", text[got[2][0]:got[2][1]], re.I)
+        return got[0], got[1], "week" if week else "day" if got[0] == got[1] else "days"
+    if m["unit"] == "day":
+        return today, today, "day"
+    return today - timedelta(today.weekday()), today, "week"
 
 
-def kind(text: str, got=None) -> str | None:
+def _due_by(text: str, got) -> date:
+    """The last day of a due question's range: "this week" runs to Sunday."""
+    phrase = text[got[2][0]:got[2][1]]
+    return got[0] + timedelta(6) if re.fullmatch(r"this\s+week", phrase, re.I) else got[1]
+
+
+def kind(text: str, got=None, today: date | None = None, first: bool = True) -> str | None:
     """Which study question `text` is (plan, due, weak, range, progress), "digest" for a
-    question about everything done on some days (chat.digest answers it), or None. `got` is
-    chat._when's (first, last, span) for its own date phrase; a range question needs one."""
+    question about everything done on some days within the last year (chat.digest answers
+    it), or None. `got` is chat._when's (first, last, span) for its own date phrase; a range
+    question needs one. `first`: the chat's first question ("what's next?" is the plan only
+    then)."""
     rest = _norm(text[:got[2][0]] + " " + text[got[2][1]:]) if got else ""
     if got and _RANGE.fullmatch(rest):
         return "range"
-    if _digest(text, got):
-        return "digest"
+    if got and _ASKS["due"].fullmatch(rest):
+        return "due"
+    if _digest(text, got) and not (got and today and got[1] < today - _RECENT):
+        return "digest"  # "what happened on 11 September 2001?" is history: the model's
     s = _norm(text)
+    if _NEXT.fullmatch(s):
+        return "plan" if first else None
     return next((k for k, rx in _ASKS.items() if rx.fullmatch(s)), None)
 
 
@@ -126,8 +146,9 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'s' * (n != 1)}"
 
 
-def _day(d: date) -> str:
-    return f"{d.day} {d:%b}"  # as chat._span
+def _day(d: date, today: date) -> str:
+    """'17 Nov', or '11 Sep 2001' in a year other than `today`'s (chat._span uses it too)."""
+    return f"{d.day} {d:%b}" + (f" {d.year}" if d.year != today.year else "")
 
 
 def _state(st) -> str:
@@ -135,10 +156,12 @@ def _state(st) -> str:
     return f"{levels.GLYPH[s]} {levels.LABEL[s]}"
 
 
-def study_answer(vault: Vault, text: str, got, today: date) -> str | None:
+def study_answer(vault: Vault, text: str, got, today: date, first: bool = True) -> str | None:
     """The answer to a study question about the learner's own plan, due reviews, weak spots,
     a date range's study, or progress; None for any other question."""
-    k = kind(text, got)
+    k = kind(text, got, today, first)
+    if k == "due" and got:
+        got = (got[0], _due_by(text, got), got[2])
     return None if k in (None, "digest") else answer(vault, k, got, today)  # digest: chat.digest
 
 
@@ -170,17 +193,19 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
             lines.append(f"- and {len(items) - SHOWN} more in Today.md")
         return "\n".join(lines)
 
-    if k == "due":
+    if k == "due":  # by today, or by the last day of `got` ("what is due this week?")
+        by = got[1] if got else today
+        when = "today" if by == today else f"by {_day(by, today)}"
         due = sorted(((c, st) for c, st in states.items()
-                      if c not in hide and planner.is_due(st, day)),  # as the home card
+                      if c not in hide and planner.is_due(st, by.isoformat())),  # as home card
                      key=lambda kv: (kv[1].state != "needs_refresh", str(kv[1].next_due or ""),
                                      kv[0]))
         if not due:
             later = min((str(st.next_due)[:10] for c, st in states.items()
                          if c not in hide and st.next_due), default=None)
-            return "Nothing is due for review today." + (
+            return f"Nothing is due for review {when}." + (
                 f" The next review is due on {later}." if later else "")
-        lines = [f"**{_plural(len(due), 'concept')} due for review** today:", ""]
+        lines = [f"**{_plural(len(due), 'concept')} due for review** {when}:", ""]
         lines += [f"- {_state(st)}: **{name(c)}**" for c, st in due[:SHOWN]]
         if len(due) > SHOWN:
             lines.append(f"- and {len(due) - SHOWN} more")
@@ -220,7 +245,8 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
 
     if k == "range":
         lo, hi = got[0].isoformat(), got[1].isoformat()
-        when = f"on {_day(got[0])}" if lo == hi else f"from {_day(got[0])} to {_day(got[1])}"
+        when = f"on {_day(got[0], today)}" if lo == hi else \
+            f"from {_day(got[0], today)} to {_day(got[1], today)}"
         did: dict[str, Counter] = {}
         pc = levels.problem_concepts(vault)
         for it in levels._items(events, pc):  # void, regrade and remap applied, as the fold
