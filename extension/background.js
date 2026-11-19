@@ -179,14 +179,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ---- flushing to the receiver ----
 
-// The token and visits go only to a listener that proved it holds the token: checked once per
-// worker start and again after any failure, so a program squatting on the port gets nothing.
-let proven = "";
-async function trusted(s) {
-  const key = `${s.port}:${s.token}`;
-  if (proven !== key) proven = (await proveReceiver(s.port, s.token)) ? key : "";
-  return proven === key;
-}
+// The token and visits go only to a listener that proves it holds the token, asked afresh at
+// the start of every flush and list sync (one small request, never cached): a program that
+// took the port since the last send gets nothing.
+const trusted = async (s) => (await proveReceiver(s.port, s.token)) === true;
 
 function takeBatch(queue) {
   const enc = new TextEncoder();
@@ -219,7 +215,7 @@ async function syncLists() {
     const list = (v) => (Array.isArray(v) ? v.filter((d) => typeof d === "string") : []);
     await chrome.storage.local.set({ serverDeny: list(b.deny_domains) });
     await chrome.storage.local.remove("serverPrivate"); // stored by older versions
-  } catch { proven = ""; /* receiver down: keep the last lists */ }
+  } catch { /* receiver down: keep the last lists */ }
 }
 
 // Send the queue. With `end` (or a session end still owed from a failed try) the last batch,
@@ -260,7 +256,6 @@ async function flush(end = false) {
     await chrome.storage.local.set({ queue, sent, backoff: 0, nextTry: 0, status,
       ...(ended ? { endOwed: false, pendingEnd: false } : {}) });
   } catch {
-    proven = "";
     const backoff = Math.min(Math.max(1, st.backoff * 2), MAX_BACKOFF_MIN); // minutes
     await chrome.storage.local.set({ queue, sent, backoff, status: "down",
       nextTry: Date.now() + backoff * 60000 });

@@ -107,6 +107,24 @@ def test_git_off_untrack_leaves_the_repo_alone(root):
     assert head(root) == before and git(root, "ls-files", PRIV.as_posix())
 
 
+def test_git_off_doctor_still_warns_about_the_old_repos_remote_and_history(root):
+    """Off with a .git left: identity is PASS by choice, but a remote and private pages in
+    history still WARN with the same fixes (read-only checks)."""
+    page(root)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "an old vault")
+    git(root, "remote", "add", "origin", "https://example.invalid/v.git")
+    choose(enabled=False)
+    remote, identity, private = doctor_git(root)
+    assert remote[0] == "WARN" and "origin" in remote[2] and "off in your settings" in remote[2]
+    assert "git remote remove" in remote[3]
+    assert identity[0] == "PASS" and "off in your settings" in identity[2]
+    assert private[0] == "WARN" and "1 commit in the vault's git history" in private[2]
+    assert "git filter-repo" in private[3]
+    git(root, "remote", "remove", "origin")
+    assert doctor.check_git(root)[0] == "PASS"
+
+
 # ---- private browsing kept in git ---------------------------------------------------------
 
 def test_private_on_drops_only_cortexs_line_and_commits_the_pages(root, monkeypatch):

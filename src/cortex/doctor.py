@@ -54,10 +54,25 @@ def check_onedrive(root: Path) -> tuple[str, str, str, str]:
     return "PASS", name, str(root), ""
 
 
+def _old_repo(root: Path) -> bool:
+    """git is off but the vault still has a repo git can read: its remotes and history still
+    matter for privacy, so those read-only checks still run."""
+    return (root / ".git").exists() and shutil.which("git") is not None
+
+
+def _remote_warn(name: str, remotes: list[str], off: bool) -> tuple[str, str, str, str]:
+    return ("WARN", name, ("git is off in your settings, but the vault's repo still has "
+                           if off else "") + f"remotes: {', '.join(remotes)}",
+            "Remove them with `git remote remove <name>`; a push would publish private "
+            "people pages and voice samples. The vault stays local.")
+
+
 def check_git(root: Path) -> tuple[str, str, str, str]:
     name = "Vault git: no remote, push blocked"
     root = Path(root).resolve()
     if not git_choice()[0]:
+        if _old_repo(root) and (remotes := _git(root, "remote").stdout.split()):
+            return _remote_warn(name, remotes, off=True)
         return ("PASS", name, "git is off in your settings (your choice): Cortex keeps no "
                 "history of the vault and `cortex undo` is off", "")
     if not (root / ".git").is_dir() and shutil.which("git") is None:
@@ -71,9 +86,7 @@ def check_git(root: Path) -> tuple[str, str, str, str]:
         return "FAIL", name, "no pre-push hook", "Run `cortex init <vault>` to add it."
     remotes = _git(root, "remote").stdout.split()
     if remotes:
-        return ("WARN", name, f"remotes: {', '.join(remotes)}",
-                "Remove them with `git remote remove <name>`; a push would publish private "
-                "people pages and voice samples. The vault stays local.")
+        return _remote_warn(name, remotes, off=False)
     return "PASS", name, "no remote; pre-push hook present", ""
 
 
@@ -86,6 +99,8 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
     root = Path(root)
     git_on, kept = git_choice()
     if not git_on:
+        if _old_repo(root) and (n := forget.private_in_history(root)):
+            return _history_warn(name, n)
         return "PASS", name, "git is off in your settings (see Vault git)", ""
     if kept:
         return "PASS", name, "private browsing pages are kept in git by your choice", ""
@@ -103,15 +118,19 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
                 f"Run `cortex init {root}` or `cortex browse import`; either adds the line.")
     n = forget.private_in_history(root)
     if n:
-        return ("WARN", name, f"{n} commit{'s' * (n != 1)} in the vault's git history hold "
-                "private browse pages",
-                "They are no longer committed, but old commits keep them. To remove them, "
-                "back up the vault, then in it run `git filter-repo --path browse/private "
-                "--invert-paths` (or `git filter-branch --index-filter \"git rm -r -q --cached "
-                "--ignore-unmatch browse/private\" -- --all`), then `git reflog expire "
-                "--expire=now --all` and `git gc --prune=now`. Cortex never rewrites history "
-                "itself.")
+        return _history_warn(name, n)
     return "PASS", name, "browse/private/ is ignored and in no commit", ""
+
+
+def _history_warn(name: str, n: int) -> tuple[str, str, str, str]:
+    return ("WARN", name, f"{n} commit{'s' * (n != 1)} in the vault's git history hold "
+            "private browse pages",
+            "They are no longer committed, but old commits keep them. To remove them, "
+            "back up the vault, then in it run `git filter-repo --path browse/private "
+            "--invert-paths` (or `git filter-branch --index-filter \"git rm -r -q --cached "
+            "--ignore-unmatch browse/private\" -- --all`), then `git reflog expire "
+            "--expire=now --all` and `git gc --prune=now`. Cortex never rewrites history "
+            "itself.")
 
 
 def check_git_identity(root: Path) -> tuple[str, str, str, str]:

@@ -35,15 +35,15 @@
     return e;
   }
   // a click whose handler returns a promise (post, job, api, a copy) marks its button busy
-  // until it settles: aria-busy, disabled and the dots in app.css; a second click is ignored
+  // until it settles: aria-busy and the dots in app.css; a second click is ignored. Never
+  // disabled: that would drop keyboard focus to the page
   function pressable(b, fn) {
     return (ev) => {
       if (b.getAttribute('aria-busy') === 'true') return undefined;
       const r = fn(ev);
       if (!r || typeof r.then !== 'function') return r;
       b.setAttribute('aria-busy', 'true');
-      b.disabled = true;
-      const done = () => { b.removeAttribute('aria-busy'); b.disabled = false; };
+      const done = () => b.removeAttribute('aria-busy');
       r.then(done, done);
       return r;
     };
@@ -128,6 +128,7 @@
     let data = {};
     try { data = await r.json(); } catch (e) { /* no body */ }
     if (r.status === 401) gone('This page lost its key. ' + REOPEN);
+    if (r.status === 409) poll(true);  // busy: show the job this page did not start (an automatic import)
     if (!r.ok) throw new Error(data.error || `The app answered ${r.status}.`);
     return data;
   }
@@ -235,7 +236,7 @@
 
   /* ---- jobs: one at a time, a progress line under the header ---- */
   const outputs = {};
-  let polling = false, hideTimer;
+  let polling = false, pollAgain = false, hideTimer;
   async function job(path, body) {
     const r = await post(path, body);
     if (r) poll();
@@ -253,11 +254,14 @@
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
   }
+  // initial: only a job still running (on open, the periodic look, a busy refusal); a job this
+  // page started while a look is under way is followed once that look ends, never dropped
   async function poll(initial) {
-    if (polling) return;
+    if (polling) { if (!initial) pollAgain = true; return; }
     polling = true;
     try {
       for (;;) {
+        if (pollAgain) { pollAgain = false; initial = false; }
         const v = await api('/api/job');
         const j = v.job;
         if (!j || (initial && !j.running)) break;  // on open: only a job still running
@@ -266,7 +270,10 @@
         if (!j.running) { finish(j); break; }
         await sleep(600);
       }
-    } catch (e) { /* the app stopped: gone() said so */ } finally { polling = false; }
+    } catch (e) { /* the app stopped: gone() said so */ } finally {
+      polling = false;
+      if (pollAgain && !dead) { pollAgain = false; poll(); }
+    }
   }
   function idle() {
     $('jobline').classList.remove('running', 'ok', 'bad', 'ended');
@@ -915,11 +922,13 @@
       return post('/api/browse/setup', {}, (r) => {
         pairToken = r.token;
         toast(r.receiver === 'busy' ? 'Paired, but the receiver could not start: port 8799 is used by another program. Close it, then press Start under Browsing.'
+          : r.receiver === 'old' ? `Paired, but ${RECEIVER_OLD}.`
           : r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
         load(current);
       });
     }, 'btn lit');
   }
+  const RECEIVER_OLD = 'an older Cortex receiver is running: restart it (or restart the computer)';  // status.RECEIVER_OLD
   // the browsers extension/README.md names; Setup and Browsing say the same
   const EXT_BROWSERS = 'Comet, Chrome, Edge or Brave';
   const extPage = () => h('li', {}, 'Open the extensions page: ', h('code', { text: 'chrome://extensions' }), ' (Chrome, Comet), ',
@@ -1148,7 +1157,8 @@
     }
     const recv = board('Receiver', {},
       row('Receiver', d.receiver === 'running' ? (d.in_app ? 'running in this app' : 'running')
-        : d.receiver === 'busy' ? 'port 8799 is used by another program' : 'stopped',
+        : d.receiver === 'busy' ? 'port 8799 is used by another program'
+          : d.receiver === 'old' ? RECEIVER_OLD : 'stopped',
         'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
         [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
           : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }))]),
@@ -1368,4 +1378,6 @@
   else api('/api/status').then((d) => show(d.land), () => show('status'));
   idle();
   poll(true);
+  // the app starts the automatic history import by itself: the job line shows it within 15 s
+  setInterval(() => { if (!dead && !document.hidden) poll(true); }, 15000);
 })();

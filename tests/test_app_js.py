@@ -132,6 +132,7 @@ Object.assign(globalThis, {
     fetched.push({ path, method: o.method || 'GET', token: (o.headers || {})['X-Cortex-Token'], body: o.body ? JSON.parse(o.body) : null });
     if (o.method === 'POST' && DATA.hold) await new Promise((r) => held.push(r));  // until release()
     if (o.method === 'POST' && DATA.fail) return { status: 500, ok: false, json: async () => ({ error: 'boom ' + path }) };
+    if (o.method === 'POST' && DATA.busy) return { status: 409, ok: false, json: async () => ({ error: DATA.busy }) };
     if (path === '/api/chat' && o.method === 'POST') {  // the NDJSON stream, in pieces
       // DATA.streamOpen: the stream stays open after its parts; stream.push adds more, Stop aborts it
       const parts = DATA.stream.slice();
@@ -546,6 +547,52 @@ def test_a_command_that_failed_shows_as_failed(tmp_path):
                                     "Job: stopped: needs the search model"]
 
 
+BUSY = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    out.before = $('job-name').textContent;
+    // the app started the automatic import by itself; this page's own post is refused as busy
+    DATA.routes['/api/job'] = { seq: 2, job: { name: 'Importing new history', section: 'browse', running: true,
+      cancellable: true, line: 'chrome/Default: 120 visits read', seconds: 4, error: null, result: null } };
+    DATA.busy = 'Wait: Importing new history is still running.';
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'vault').fire('click');
+    await tick();
+    $('vault').querySelectorAll('button').find((b) => b.textContent === 'Back up vault').fire('click');
+    await tick();
+    out.after = { name: $('job-name').textContent, line: $('job-line').textContent,
+      cancel: !$('job-cancel').hidden, toast: $('toast-msg').textContent };
+    DATA.busy = null;
+    $('job-cancel').fire('click');
+    await tick();
+    out.cancelled = fetched.some((f) => f.path === '/api/job/cancel' && f.method === 'POST');
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_a_job_the_page_did_not_start_shows_with_cancel(root_committed, tmp_path, monkeypatch):
+    """The automatic history import takes the one job slot by itself: a post refused as busy
+    names it in the toast, and the job line shows it (its progress, Cancel) though this page
+    never started it."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    out = _run(node, tmp_path, "busy", BUSY,
+               {"routes": _sweep_routes(root_committed, monkeypatch), "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["before"] == "Nothing running"
+    assert out["after"] == {"name": "Importing new history", "cancel": True,
+                            "line": "chrome/Default: 120 visits read",
+                            "toast": "Wait: Importing new history is still running."}
+    assert out["cancelled"]
+
+
 # ---- every control, clicked: the QA sweep (A3, B5, B6) ----------------------------------------
 
 SWEEP = HARNESS[:HARNESS.index("const out = {};")] + r"""
@@ -592,11 +639,11 @@ async function hit(s, key, fail) {
   $('toast-msg').textContent = '';
   $('confirm').open = false;
   $('jobline').className = 'jobline idle';
-  const text0 = $(s).textContent, ui0 = ui(s, e);
+  const text0 = $(s).textContent, ui0 = ui(s, e), disabled0 = !!e.disabled;
   DATA.hold = true;
   if (c.kind === 'click') { e.fire('click'); e.fire('click'); } else change(e);  // a double click
   await tick();
-  const r = { busyMid: e.getAttribute('aria-busy') === 'true', disabledMid: !!e.disabled };
+  const r = { busyMid: e.getAttribute('aria-busy') === 'true', disabledMid: !!e.disabled, disabledBefore: disabled0 };
   DATA.hold = false;
   release();
   await tick();
@@ -810,7 +857,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
         root_committed, tmp_path, monkeypatch):
     """QA: every button and every input/select with a change handler in every section, clicked
     twice (a double click) while the app holds the answer, then with the app saying yes, then
-    with the app failing. It sends the expected request once, is busy (aria-busy, disabled)
+    with the app failing. It sends the expected request once, is busy (aria-busy, not disabled)
     only while waiting, says what happened (toast, Saved mark, job line, dialog or a redrawn
     section) and turns a failure into an error toast. Past history and the import guides are
     left out (another change owns them; the test data has no browser history)."""
@@ -834,8 +881,10 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
             posts = [json.dumps(x) for x in ok["posts"]]
             assert len(posts) == len(set(posts)), where  # a double click sends once
             if posts and v["kind"] == "click" and not ok["dialog"]:  # busy only while waiting
-                assert ok["busyMid"] and ok["disabledMid"], where
-                assert not ok["busyAfter"] and not ok["disabledAfter"], where
+                # aria-busy; never disabled by it (a disabled button drops keyboard focus to
+                # the page), nor enabled when it settles
+                assert ok["busyMid"] and ok["disabledMid"] == ok["disabledBefore"], where
+                assert not ok["busyAfter"] and ok["disabledAfter"] == ok["disabledBefore"], where
             told = ("on" in ok["toast"][0] or ok["saved"] or ok["jobline"] != "jobline idle"
                     or ok["dialog"] or ok["reloaded"] or ok["nav"] or ok["changed"]
                     or ok["clipboard"])
