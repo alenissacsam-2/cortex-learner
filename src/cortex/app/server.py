@@ -617,10 +617,11 @@ class App:
         root, keys = self.need_root(), body.get("sources")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
             raise ValueError("Tick at least one browser.")
-        skip = body.get("skip", [])
-        if not isinstance(skip, list) or not all(isinstance(k, str) for k in skip):
-            raise ValueError("skip must list profile keys")
-        self._skip_profiles(skip, keys)
+        if "skip" in body:  # only the tick list sends it; Status's button must not clear it
+            skip = body["skip"]
+            if not isinstance(skip, list) or not all(isinstance(k, str) for k in skip):
+                raise ValueError("skip must list profile keys")
+            self._skip_profiles(skip, keys)
         return self.jobs.start("Importing past history", self._section(body),
                                lambda job: actions.history_import(job, root, set(keys)),
                                cancellable=True, quiet_errors=True)

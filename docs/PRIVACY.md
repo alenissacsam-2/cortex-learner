@@ -64,7 +64,7 @@ These measures lower the risk; they do not remove it. Review changes to your `me
 
 Cortex can turn your browser history into pages. It is off until you run an import or start the receiver, and [GUIDE.md section 6](GUIDE.md#6-your-browsing) explains every step and setting.
 
-**After your first import, new history comes in by itself.** While the app or the receiver runs, Cortex imports new visits every `browse.auto_import_hours` (default 6; 0 turns it off). It reads only the browsers and profiles you imported before; a profile you untick in the app is remembered and left out of every import you did not click. Nothing is read before your first import.
+**After your first import, new history comes in by itself.** While the app or the receiver runs, Cortex imports new visits every `browse.auto_import_hours` (default 6; 0 turns it off). It reads only the browsers and profiles you imported before; a profile you untick in the app is remembered and left out of every import until you tick it again. Nothing is read before your first import.
 
 **Who may see each category.** Every browsing category (news, video, health, money and so on) has one of three settings:
 

@@ -847,10 +847,16 @@ def _sweep_routes(root, monkeypatch):
     return routes
 
 
-def _stale_import(root, last="2026-01-01T00:00:00Z"):
+def _stale_import(root, monkeypatch, last="2026-01-01T00:00:00Z"):
+    """chrome/Default imported at `last`, the Status button's source (the Browsing list stays
+    empty: no browser is discovered)."""
+    from cortex import browse_serve
+    from cortex.browse import sources
+    monkeypatch.setattr(browse_serve, "auto_sources", lambda v: [
+        sources.Source("chrome", "Default", root / "History")])
     f = root / ".cortex" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"last_run": last, "sources": {"chrome:Default": {}}}),
+    f.write_text(json.dumps({"last_run": last, "sources": {"chrome/Default": {}}}),
                  encoding="utf-8")
 
 
@@ -859,7 +865,7 @@ CHAT_ID = "01KA0000000000000000000000"
 # control not named here is a local action (a section, a guide, a filled field) and sends nothing
 SENDS = {
     "status": {"Check for updates": [["/api/update/check", {}]],
-               "Import new history now": [["/api/browse/import", {"sources": ["chrome:Default"],
+               "Import new history now": [["/api/browse/import", {"sources": ["chrome/Default"],
                                                                  "from": "browse"}]],
                "Start at login": [["/api/browse/login", {"on": True}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
@@ -926,7 +932,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    _stale_import(root_committed)  # Status: the stale-import warning's two buttons
+    _stale_import(root_committed, monkeypatch)  # Status: the stale-import warning's two buttons
     data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [], "skip": [],
             "sections": ["status", "connect", "llm", "browse", "vault", "chat", "setup"]}
     out = _run(node, tmp_path, "sweep", SWEEP, data)
@@ -1021,11 +1027,11 @@ def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, mon
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    _stale_import(root_committed)
+    _stale_import(root_committed, monkeypatch)
     routes = _sweep_routes(root_committed, monkeypatch)
     routes["/api/browse"]["history"] = {
         "available": True, "imported": "2026-01-01T00:00:00Z", "scanned": False,
-        "sources": [{"key": "chrome:Default", "browser": "chrome", "profile": "Default"}]}
+        "sources": [{"key": "chrome/Default", "browser": "chrome", "profile": "Default"}]}
     out = _run(node, tmp_path, "hist", HIST, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     st = out["status"]
@@ -1039,7 +1045,7 @@ def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, mon
     assert any(re.fullmatch(r"\d+ days ago", v) for v in out["browse"]["last"]), out["browse"]
     assert out["browse"]["hint"] is True
     assert out["posts"] == [["/api/browse/login", {"on": True}],
-                            ["/api/browse/import", {"sources": ["chrome:Default"],
+                            ["/api/browse/import", {"sources": ["chrome/Default"],
                                                     "from": "browse"}],
                             ["/api/browse/login", {"on": True}]]
     assert out["browseOn"] == [False, False]
