@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 
 from cortex import chats, render
 from cortex.catalog import slugify
-from cortex.vault import Vault, VaultError
+from cortex.vault import Vault, VaultError, truthy
 
 MAX_BYTES = 5 * 1024 * 1024  # bigger files are attachments or dumps, not notes
 MAX_ENTRY = 200 * 1024 * 1024  # one export file read whole (a calendar, a JSON non-list)
@@ -245,9 +245,6 @@ def _is_note(name: str) -> bool:
     return name.lower().endswith(NOTE_SUFFIXES) and not any(p.startswith(".") for p in parts)
 
 
-_TRUE = {"true", "yes", "y", "on", "1"}
-
-
 def _is_private(front: str) -> bool:
     """C4: a note is private when its frontmatter sets `private` to anything truthy (true,
     "true", yes, on, 1) or tags it `private`; frontmatter that does not parse is private too,
@@ -262,7 +259,7 @@ def _is_private(front: str) -> bool:
     if not isinstance(fm, dict):
         return True
     flag = fm.get("private")
-    if flag is True or str(flag).strip().casefold() in _TRUE:
+    if truthy(flag):
         return True
     tags = fm.get("tags", fm.get("tag"))
     tags = tags.replace(",", " ").split() if isinstance(tags, str) else \

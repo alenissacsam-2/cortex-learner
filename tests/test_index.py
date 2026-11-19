@@ -218,9 +218,10 @@ def test_refresh_edit_and_delete(vault, idx):
     assert idx.refresh() == 0
 
 
-def test_refresh_note_turning_private(vault, idx):
+@pytest.mark.parametrize("flag", ["true", "yes", '"True"', "on", "1"])
+def test_refresh_note_turning_private(vault, idx, flag):
     p = vault.root / "problems" / "lc-1.md"
-    p.write_text(p.read_text(encoding="utf-8").replace('status:', 'private: true\nstatus:'),
+    p.write_text(p.read_text(encoding="utf-8").replace('status:', f'private: {flag}\nstatus:'),
                  encoding="utf-8")
     _bump(p)
     idx.refresh()

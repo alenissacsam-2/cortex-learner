@@ -415,6 +415,24 @@ def test_bom_crlf_private_note_keeps_frontmatter_and_bytes(v):
     assert is_private(v.read("problem", "lc-1"))
 
 
+def _flag(v, flag: str):
+    path = v.path_for("problem", "lc-1")
+    path.write_bytes(path.read_bytes().replace(b"---\n", f"---\nprivate: {flag}\n".encode(), 1))
+    return v.read("problem", "lc-1")
+
+
+@pytest.mark.parametrize("flag", ["true", "True", "yes", "Yes", "YES", "y", "on", "ON", "1",
+                                  '"true"', "'yes'", '"1"', '" on "'])
+def test_private_in_any_truthy_form_is_private(v, flag):
+    # privacy: `private: yes` (and friends) used to read as public
+    assert is_private(_flag(v, flag))
+
+
+@pytest.mark.parametrize("flag", ["false", "no", "off", "0", '"false"', "maybe", "null", "2"])
+def test_private_falsy_or_unknown_is_public(v, flag):
+    assert not is_private(_flag(v, flag))
+
+
 def test_replace_always_failing_is_vault_locked(v, monkeypatch):
     def locked(src, dst):
         raise PermissionError("locked by another program")
