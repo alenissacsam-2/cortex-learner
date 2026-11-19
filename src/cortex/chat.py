@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from cortex import ask, chat_study, localllm, semantic, taint
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
 from cortex.index import STOPWORDS
-from cortex.vault import Vault, VaultError
+from cortex.vault import Vault
 
 DIR = ".cortex/browse/chat"
 ID_RE = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")  # a ULID, so a path can never leave DIR
@@ -418,22 +418,16 @@ def _capped(head: str, items: list, more: str = "more") -> list:
 def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     """[(day, kind, id, title, body, is_chat)] of notes, saved AI chats and journal pages dated
     in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's `notes` and
-    `chats` switches; a private page (its own `private: true`, or under a private subject) only
-    when `private` is on too."""
+    `chats` switches. Private pages (their own `private: true`, or under a private subject)
+    never appear: the index keeps them out of Chat's search too, and the `private` switch is
+    about private browsing, not notes (whether Chat may read private notes is the owner's
+    open decision)."""
     from cortex.catalog import Catalog
     from cortex.index import Index
 
     idx = Index(vault, Catalog.load(vault))  # the pages ask._passages searches
     paths = {i: p for p, i in idx._ids.items()}
     pages = [*idx._notes.items()]  # chat.list shadows the builtin
-    if sources.get("private"):  # the index keeps private pages out: read those few here
-        for i in idx._private & paths.keys():
-            try:
-                n = vault.read_path(paths[i])
-            except VaultError:
-                continue
-            pages.append((i, {"kind": n.kind, "title": n.fields.get("title") or i,
-                              "fields": n.fields, "body": n.body}))
     out = []
     for i, n in pages:
         if n["kind"] not in (*_NOTE_KINDS, "journal") or i not in paths:
@@ -484,8 +478,8 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date) -> str:
     off = [label for k, label in (("notes", "notes and journal"), ("chats", "saved AI chats"),
                                   ("browsing", "browsing"), ("private", "private pages"))
            if not sources.get(k)]
-    left = ["private study subjects"] + ([f"{', '.join(off)} (switched off in Chat settings)"]
-                                         if off else [])
+    left = ["private notes and study subjects"]
+    left += [f"{', '.join(off)} (switched off in Chat settings)"] if off else []
     if skipped:
         left.append(f"site categories set to Don't save ({', '.join(skipped)}), never stored")
     tail = "Not included: " + "; ".join(left) + "."

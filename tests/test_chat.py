@@ -800,13 +800,14 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     assert "- **miruro.tv** · video · 30 visits" in out
     assert "- and 3 more sites" in out and "site10.example" not in out  # capped at 10
     assert "old.example" not in out
-    assert "**2 notes** written or changed:" in out
-    assert "- Rust ownership" in out and "- Diary entry" in out  # markdown stripped
+    assert "**1 note** written or changed:" in out
+    assert "- Rust ownership" in out  # markdown stripped
+    assert "Diary entry" not in out  # a private note never shows, whatever the switches
     assert "**1 saved AI chat**:\n\n- Heaps chat" in out
     assert "**Journal** (2 lines):\n\n- 09:30 Started graphs revision\n- 21:00 Tired" in out
     assert "Private concept" not in out  # D1: the private concept's study stays hidden
-    assert out.endswith("Not included: private study subjects; site categories set to Don't "
-                        "save (adult), never stored.")
+    assert out.endswith("Not included: private notes and study subjects; site categories set "
+                        "to Don't save (adult), never stored.")
     shut = chat.digest(vault, d, d, dict(ALL_ON, private=False), TODAY)
     assert "Diary entry" not in shut and "miruro" not in shut and "Rust ownership" in shut
     assert "private pages (switched off in Chat settings)" in shut
