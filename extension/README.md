@@ -104,6 +104,11 @@ One record per visit, sent when you leave the page (switch tab, navigate or clos
 
 ## What happens on the receiver
 
+Before the extension or the Cortex app sends the token or any visit, the receiver must prove
+it holds the token: it answers `GET /v1/hello?n=<random nonce>` (asked without the token) with
+HMAC-SHA256(token, nonce). Another program listening on the port fails that check and gets
+nothing; the popup and the app then say the port is used by another program.
+
 The receiver checks the token and drops any request from a web page (only
 `chrome-extension://` and `moz-extension://` origins are accepted). It runs the same privacy
 filter again before storing anything: dropped records are never written. Kept ones go to

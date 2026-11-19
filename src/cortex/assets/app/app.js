@@ -785,7 +785,8 @@
       if (paired && !window.confirm('Set it up again? The key the extension has now stops working.')) return;
       post('/api/browse/setup', {}, (r) => {
         pairToken = r.token;
-        toast(r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
+        toast(r.receiver === 'busy' ? 'Paired, but the receiver could not start: port 8799 is used by another program. Close it, then press Start under Browsing.'
+          : r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
         load(current);
       });
     }, 'btn lit');
@@ -1017,7 +1018,8 @@
           list('b-private', 'Private only', 'Kept, but only on your private pages.', s.private))));
     }
     const recv = board('Receiver', {},
-      row('Receiver', d.receiver === 'running' ? (d.in_app ? 'running in this app' : 'running') : 'stopped',
+      row('Receiver', d.receiver === 'running' ? (d.in_app ? 'running in this app' : 'running')
+        : d.receiver === 'busy' ? 'port 8799 is used by another program' : 'stopped',
         'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
         [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
           : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast('Receiver started.'); load('browse'); }))]),

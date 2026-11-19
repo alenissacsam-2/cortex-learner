@@ -540,12 +540,15 @@ class App:
         The page shows the key with Copy; Start at login stays its own click."""
         root = self.need_root()
         token = actions.pair(root)
-        if self.receiver.srv is None and status.receiver_probe(root)[0] != "running":
+        state = "running" if self.receiver.srv is not None else status.receiver_probe(root)[0]
+        if state == "stopped":
             self.receiver.start(root)
+            state = "running"
         folder = extension_dir()
         if folder.is_dir():
             _open_path(folder)
-        return {"token": token, "folder": str(folder), "opened": folder.is_dir()}
+        return {"token": token, "folder": str(folder), "opened": folder.is_dir(),
+                "receiver": state}
 
     def process(self, body: dict) -> dict:
         root = self.need_root()

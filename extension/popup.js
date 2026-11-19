@@ -1,10 +1,13 @@
-import { dayKey } from "./lib.js";
+import { dayKey, proveReceiver } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { paused: false, deny: [], port: 8799, token: "", queue: [],
   sent: { day: "", n: 0 } };
 
 async function ping(port, token) {
+  const who = await proveReceiver(port, token); // the token goes only to the real receiver
+  if (who === null) return [false, "Receiver not running: start it with cortex browse serve"];
+  if (!who) return [false, `Port ${port} answers, but not as your Cortex receiver (another program, or an old key)`];
   try {
     const r = await fetch(`http://127.0.0.1:${port}/v1/ping`, {
       headers: { Authorization: `Bearer ${token}` }, cache: "no-store", credentials: "omit",
@@ -51,8 +54,9 @@ async function render() {
   if (document.activeElement !== $("token")) $("token").value = s.token;
   if (!s.token) return setStatus(false, "Not paired: paste the token from cortex browse pair");
   if (s.paused) return setStatus(false, "Paused: nothing is timed, read or sent");
-  setStatus(...(await ping(s.port, s.token)));
-  $("processed").textContent = await processed(s.port, s.token);
+  const [ok, msg] = await ping(s.port, s.token);
+  setStatus(ok, msg);
+  $("processed").textContent = ok ? await processed(s.port, s.token) : "";
 }
 
 $("process").addEventListener("click", async () => {

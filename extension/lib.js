@@ -164,3 +164,31 @@ export function dayKey(ms) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+// ---- receiver identity: the token goes only to a listener that proves it holds it ----
+
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+// Asks GET /v1/hello?n=<fresh nonce> WITHOUT the token and checks the answer is
+// HMAC-SHA256(token, nonce). true: the Cortex receiver; false: another program answers on the
+// port (or a receiver from an older Cortex); null: nothing answers.
+export async function proveReceiver(port, token) {
+  const nonce = hex(crypto.getRandomValues(new Uint8Array(32)));
+  let r;
+  try {
+    r = await fetch(`http://127.0.0.1:${Number(port)}/v1/hello?n=${nonce}`, {
+      cache: "no-store", credentials: "omit", redirect: "error",
+      signal: AbortSignal.timeout(3000) });
+  } catch {
+    return null;
+  }
+  try {
+    const { proof } = r.ok ? await r.json() : {};
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", enc.encode(token),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return proof === hex(await crypto.subtle.sign("HMAC", key, enc.encode(nonce)));
+  } catch {
+    return false;
+  }
+}
