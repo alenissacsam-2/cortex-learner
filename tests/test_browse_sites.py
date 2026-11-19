@@ -200,6 +200,15 @@ def test_deepen_respects_the_budget_and_resumes_from_the_cache(vault, hist):
     assert r2["left"] == 0
     done = FakeLLM()
     assert sites.deepen(Vault(vault), done, localllm.Budget(100), OWNER, tz=UTC)["asked"] == 0
+    # a description made with an older prompt is made again
+    old = json.loads((vault / sites.CACHE).read_text(encoding="utf-8"))
+    for side in old["llm"]["lichess.org"].values():
+        if isinstance(side, dict):
+            side.pop("pv", None)
+    (vault / sites.CACHE).write_text(json.dumps(old), encoding="utf-8")
+    redo = FakeLLM()
+    sites.deepen(Vault(vault), redo, localllm.Budget(100), OWNER, tz=UTC)
+    assert [a[0] for a in redo.asked] == ["lichess.org"]
     # a visible page's call heard only visible titles and visible candidate sites
     for name, titles, cands in llm.asked + again.asked:
         if not any("ADULT" in t for t in titles):  # a visible page

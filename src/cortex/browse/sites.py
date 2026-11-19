@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 DIR = "browse"
 HIDDEN = DIR + "/private"  # never read by the index, the dashboard or any chat
 CACHE = ".cortex/browse/sites.json"  # the local LLM's output and the page hashes
+# a description made with an older prompt is made again on the next deepen
+DESC_PROMPT = 2
 DAYS = ".cortex/browse/site-days.json"  # per day and site key: the counts pages are made of
 VERDICTS = ".cortex/browse/verdicts.json"  # C1: the local model's label per text hash
 SITES_DIR, HIDDEN_SITES_DIR = DIR + "/sites", HIDDEN + "/sites"
@@ -774,8 +776,9 @@ def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=Non
             now[2][q.id] = all(now[1](d, k) is False for d, k in q.src)
         return now[2][q.id]
     order = sorted(allp.values(), key=lambda p: (-p.visits, p.site, p.hidden))
-    todo = [p for p in order if _valid_desc((llm.get(p.site) or {}).get(
-        "h" if p.hidden else "v"), p) is None and p.titles(1)]
+    todo = [p for p in order if p.titles(1) and (
+        _valid_desc(e := (llm.get(p.site) or {}).get("h" if p.hidden else "v"), p) is None
+        or e.get("pv") != DESC_PROMPT)]
     say(f"deepen: {len(order)} site pages, {len(todo)} to describe")
     c: Counter = Counter()
     for n, p in enumerate(todo):
@@ -817,6 +820,7 @@ def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=Non
         entry["h" if p.hidden else "v"] = {
             "desc": _clean(got.get("description")) or "",
             "fed": [_h(t) for t in titles],
+            "pv": DESC_PROMPT,
             "related": list(dict.fromkeys(by[x.strip().lower()] for x in rel
                                           if isinstance(x, str) and x.strip().lower() in by)
                             )[:3],
