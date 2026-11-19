@@ -466,34 +466,38 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     s = settings or get_settings()
     convo_id = convo_id or new()
     msgs = load(vault, convo_id)  # validates the id
-    if semantic.load_embedder() is None:
-        emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
-        return convo_id
-    if not _local(runner):
-        emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
-        return convo_id
     t0, today = time.monotonic(), today or date.today()
     prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
-    msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
-    _save(vault, convo_id, msgs, s["history"])
-    emit({"t": "start", "id": convo_id, "model": runner.model})
     got, said = _when(text, today), text
     leans = follow_up(text, got)
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
     query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
     span = f" from {_span(got[0], got[1])}" if got else ""
+    # a site list or a study answer is read from Cortex's own data with no model, so it needs
+    # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
+    # borrowed ones are for passages only)
+    own = got if said is text else None
+    step = None
+    if (listed := site_list(vault, text, own, s["sources"])) is not None:
+        step = "Counting the sites you visited" + span
+    elif (asked := chat_study.kind(text, own)) is not None:
+        step = chat_study.STEP[asked] + (span if asked == "range" else "")
+        listed = chat_study.answer(vault, asked, own, today)
+    if listed is None and semantic.load_embedder() is None:
+        emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
+        return convo_id
+    if listed is None and not _local(runner):
+        emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
+        return convo_id
+    model = runner.model if _local(runner) else "Cortex"
+    msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
+    _save(vault, convo_id, msgs, s["history"])
+    emit({"t": "start", "id": convo_id, "model": model})
     found: list = []
     parts: list = []
-    # a site list keeps to its own dates: a follow-up's borrowed ones are for passages only
-    own = got if said is text else None
-    if (listed := site_list(vault, text, own, s["sources"])) is not None:
-        emit({"t": "step", "s": "Counting the sites you visited" + span})
-        parts.append(listed)
-        emit({"t": "tok", "s": listed})
-    elif (asked := chat_study.kind(text, own)) is not None:  # from the learner model, no model
-        emit({"t": "step", "s": chat_study.STEP[asked] + (span if asked == "range" else "")})
-        listed = chat_study.answer(vault, asked, own, today)
+    if listed is not None:
+        emit({"t": "step", "s": step})
         parts.append(listed)
         emit({"t": "tok", "s": listed})
     else:
@@ -545,9 +549,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                    for p in found[:SEARCHED]]
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
-                 "model": runner.model, **({"stopped": True} if stopped else {})})
+                 "model": model, **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched})
-    emit({"t": "done", "id": convo_id, "model": runner.model, "stopped": stopped,
+    emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1)})
     return convo_id

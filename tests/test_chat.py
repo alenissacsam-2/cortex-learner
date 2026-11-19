@@ -730,3 +730,14 @@ def test_reply_answers_a_study_question_without_the_model(vault, stream):
     saved = chat.load(vault, cid)
     assert saved[-1]["role"] == "assistant" and saved[-1]["text"] == text
     assert saved[-1]["sources"] == [] and "searched" not in saved[-1]
+
+
+def test_a_data_answer_needs_no_model(vault, monkeypatch):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 3}}})
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
+    _, events = _turn(vault, None, "which sites did I visit yesterday?", None)
+    assert not [e for e in events if e["t"] == "err"]
+    assert "github.com" in "".join(e["s"] for e in events if e["t"] == "tok")
+    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Cortex", "Cortex"]
+    _, events = _turn(vault, None, "what is Dijkstra's algorithm?", None)
+    assert [e["code"] for e in events if e["t"] == "err"] == ["not_set_up"]
