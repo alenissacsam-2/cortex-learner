@@ -593,6 +593,59 @@ def test_a_job_the_page_did_not_start_shows_with_cancel(root_committed, tmp_path
     assert out["cancelled"]
 
 
+NEWS = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const card = () => $('whats-new');
+const lines = (b) => b.querySelectorAll('li').map((l) => l.textContent);
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    out.first = $('status').childNodes[0] === card();
+    out.shown = [card().querySelector('h2').textContent, lines(card())];
+    card().querySelectorAll('button').find((b) => b.textContent === 'Got it').fire('click');
+    await tick();
+    out.posted = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
+    out.hidden = card() === null;
+    out.toast = $('toast-msg').textContent;
+    // any time: Updates' What's new opens this version's card, with Close and no Got it
+    $('status').querySelectorAll('button').find((b) => b.textContent === 'What’s new').fire('click');
+    out.reopened = [card().querySelectorAll('button').map((b) => b.textContent), lines(card()),
+      document.activeElement === card().querySelector('h2')];
+    card().querySelectorAll('button').find((b) => b.textContent === 'Close').fire('click');
+    out.closed = card() === null;
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_whats_new_card_shows_got_it_records_and_the_link_reopens_it(
+        root_committed, tmp_path, monkeypatch):
+    """After an update Status leads with the What's new card (text, never HTML); Got it posts
+    once, hides it and says where to find it; Updates' What's new opens it again with Close."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    new = {"version": "0.2.3", "items": ["Faster <b>lists</b>.", "Dates."], "do": ["Reload it."]}
+    old = {"version": "0.2.2", "items": ["Chat steps."], "do": []}
+    routes["/api/status"]["whats_new"] = {"show": [new, old], "current": new}
+    out = _run(node, tmp_path, "news", NEWS, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["first"]
+    assert out["shown"] == ["What’s new in Cortex 0.2.3",
+                            ["Faster <b>lists</b>.", "Dates.", "Reload it.", "Chat steps."]]
+    assert out["posted"] == [["/api/whats_new/seen", {}]] and out["hidden"]
+    assert out["toast"] == "Read it again any time: Updates, What’s new."
+    assert out["reopened"] == [["Close"], ["Faster <b>lists</b>.", "Dates.", "Reload it."], True]
+    assert out["closed"]
+
+
 # ---- every control, clicked: the QA sweep (A3, B5, B6) ----------------------------------------
 
 SWEEP = HARNESS[:HARNESS.index("const out = {};")] + r"""
@@ -639,7 +692,7 @@ async function hit(s, key, fail) {
   $('toast-msg').textContent = '';
   $('confirm').open = false;
   $('jobline').className = 'jobline idle';
-  const text0 = $(s).textContent, ui0 = ui(s, e), disabled0 = !!e.disabled;
+  const focus0 = document.activeElement, text0 = $(s).textContent, ui0 = ui(s, e), disabled0 = !!e.disabled;
   DATA.hold = true;
   if (c.kind === 'click') { e.fire('click'); e.fire('click'); } else change(e);  // a double click
   await tick();
@@ -660,6 +713,7 @@ async function hit(s, key, fail) {
   r.clipboard = clipboard.slice(clip0);
   r.nav = replaced.slice(hash0).filter((u) => u.startsWith('push '));
   r.changed = $(s).textContent !== text0 || ui(s, e) !== ui0;
+  r.focused = document.activeElement !== focus0 && document.activeElement !== e;  // took the reader somewhere on the page
   return r;
 }
 (async () => {
@@ -793,6 +847,9 @@ def _sweep_routes(root, monkeypatch):
                              "seconds": 1, "error": None, "result": {"ok": True}}},
     }
     routes["/api/status"]["update"] = {"current": "0.1.0", "mode": "installer"}
+    news = {"version": "0.1.0", "items": ["Chat <b>shows</b> its steps."],
+            "do": ["Reload the extension."]}
+    routes["/api/status"]["whats_new"] = {"show": [news], "current": news}
     return routes
 
 
@@ -800,7 +857,8 @@ CHAT_ID = "01KA0000000000000000000000"
 # what each control sends when the app says yes (a confirm dialog's OK included); every
 # control not named here is a local action (a section, a guide, a filled field) and sends nothing
 SENDS = {
-    "status": {"Check for updates": [["/api/update/check", {}]]},
+    "status": {"Check for updates": [["/api/update/check", {}]],
+               "Got it": [["/api/whats_new/seen", {}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
                            ["/api/connect/apply", {"want": {}}]],
                 "Open folder": [["/api/open", {"what": "skill_zip"}]]},
@@ -888,7 +946,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
                 assert not ok["busyAfter"] and ok["disabledAfter"] == ok["disabledBefore"], where
             told = ("on" in ok["toast"][0] or ok["saved"] or ok["jobline"] != "jobline idle"
                     or ok["dialog"] or ok["reloaded"] or ok["nav"] or ok["changed"]
-                    or ok["clipboard"])
+                    or ok["clipboard"] or ok["focused"])
             # opening a folder or a page shows the file explorer or Obsidian, not the page;
             # New text is hidden until an answer streams (the chat checks below click it)
             assert told or (posts and ok["posts"][0][0] == "/api/open") or k == "↓ New text", where

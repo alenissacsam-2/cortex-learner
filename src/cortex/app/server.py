@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from cortex import update
-from cortex.app import actions, status, targets, wizard
+from cortex.app import actions, news, status, targets, wizard
 
 HOST = "127.0.0.1"
 IDLE_S = 30 * 60
@@ -254,7 +254,7 @@ class App:
             "/api/import/preview": self.import_preview, "/api/import/run": self.import_run,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
-            "/api/update/apply": self.update_apply}
+            "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -277,6 +277,7 @@ class App:
             t["connected"] for t in targets.describe(self.entry())))
         return {"rows": status.rows(self.root, self.receiver.status()),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
+                "whats_new": news.card(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def connect(self) -> dict:
@@ -828,6 +829,11 @@ class App:
         actions.sweep_updates(update.dest_dir(info) if out["newer"] else None)
         return info, out
 
+    def news_seen(self, body: dict) -> dict:
+        """Got it on the What's new card: this version's news is not shown again."""
+        news.record()
+        return {"ok": True}
+
     def update_check(self, body: dict) -> dict:
         return self.jobs.start("Checking for updates", "update", lambda job: self._check(job)[1])
 
@@ -1161,6 +1167,10 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
         _save_state(app)
     except OSError:  # no single-instance file: a second launch starts its own app
         traceback.print_exc(limit=1)
+    try:
+        news.start()  # a fresh install remembers this version, so it shows no What's new
+    except Exception:  # noqa: BLE001  (an unwritable config only means no card; the app opens)
+        traceback.print_exc(limit=3)
     try:
         actions.migrate_login(app.root if app.entry() else None)
     except Exception:  # noqa: BLE001  (Start at login stays as it was; the app still opens)

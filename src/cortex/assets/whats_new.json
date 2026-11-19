@@ -1,0 +1,29 @@
+{
+  "0.2.3": {
+    "items": [
+      "The dashboard feels like the app: buttons react, keyboard focus is easy to see, and copy buttons confirm with a check.",
+      "Status warns when your browsing history has not been imported for a while, with Import new history now.",
+      "Chat lists the sites you visited and sums up a day or week in about a second, even on a big history.",
+      "Browser profiles you untick in the history list stay unticked in every automatic import.",
+      "Chat understands more dates (\"on Monday\", \"last night\", \"the last 3 days\") and a day starts at 04:00, as in Today.",
+      "Sites filed under a category you set to Don't save never show in Chat's site lists or summaries."
+    ],
+    "do": [
+      "Your first browsing import after this update rebuilds every day your browsers still hold, once, so it takes longer than usual."
+    ]
+  },
+  "0.2.2": {
+    "items": [
+      "Chat shows what it is doing while an answer is on its way, and how long the answer took.",
+      "Esc stops an answer, every answer has Copy, and scrolling up no longer drags you back down.",
+      "\"Which sites did I visit?\" lists every site once, most visited first; name a browser to see only its visits.",
+      "New browser history comes in by itself every 6 hours while the app or the receiver runs (Browsing, Past history).",
+      "Chat answers \"What should I study today?\", \"what's due?\" and \"summarize my week\" from your own plan and records.",
+      "The browser extension only sends its key to your own Cortex receiver, never to another program on that port."
+    ],
+    "do": [
+      "Reload the Cortex browser extension: open your browser's Extensions page and click the reload arrow on Cortex.",
+      "To keep history coming in without the app open, turn on Start at login under Browsing."
+    ]
+  }
+}
