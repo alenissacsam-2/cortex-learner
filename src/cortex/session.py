@@ -295,6 +295,18 @@ def _session_md(sid, mode, started, ended, counts, rows, unchecked, summary,
     return "\n".join(lines)
 
 
+def git_choice(config: dict | None = None) -> tuple[bool, bool]:
+    """`git:` in ~/.cortex/config.yaml as (enabled, private_browsing). enabled (default true):
+    Cortex keeps the vault's history in git. private_browsing (default false): browse/private/
+    is committed too, and only counts while enabled. Anything but a real true/false is its
+    default."""
+    from cortex import taint
+    g = (taint.config() if config is None else config).get("git")
+    g = g if isinstance(g, dict) else {}
+    on = g.get("enabled") is not False
+    return on, on and g.get("private_browsing") is True
+
+
 GIT_TIMEOUT_S = 60  # a hung git (pinentry, a hook, antivirus) must not hold the vault lock
 
 
@@ -394,9 +406,12 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
     changed go in, and every other change, less `exclude`, first gets its own commit `before`
     (with no `before` it stays uncommitted); with no `mine`, every change goes in. A changed
     file that matches a secret pattern stays uncommitted and is named in `withheld`. Returns
-    the `message` commit, or None if not a repo, none of ours changed, a revert/merge is in
-    progress, or git failed."""
+    the `message` commit, or None if git is off in settings, not a repo, none of ours changed,
+    a revert/merge is in progress, or git failed."""
     withheld = [] if withheld is None else withheld
+    enabled, keep_private = git_choice()
+    if not enabled:  # the owner's choice: no history; an existing .git is left as it is
+        return None
     with vault.lock():
         top = _gitz(vault.root, "rev-parse", "--show-toplevel")
         if top.returncode:
@@ -407,9 +422,10 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
         status = _gitz(top, "status", "--porcelain", "-z", "--untracked-files=all")
         pre = _gitz(vault.root, "rev-parse", "--show-prefix").stdout.strip()
         # C3: a private browse page still in the index (staged, or tracked before the ignore
-        # line) is never committed; `untrack_private` takes it out of the index
+        # line) is never committed; `untrack_private` takes it out of the index. With
+        # `git.private_browsing` on, the owner chose to commit it like any other page.
         changed = [c for c in _status_paths(status.stdout)
-                   if not c.startswith(pre + PRIVATE_IGNORE)]
+                   if keep_private or not c.startswith(pre + PRIVATE_IGNORE)]
         if status.returncode or not changed:
             return None
         if busy := git_busy(vault.root):

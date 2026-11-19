@@ -361,13 +361,20 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
         else:
             vault.write_text(root / rel, text)
             did.append(rel)
+    git_on, private_kept = session_mod.git_choice()
     ignore = root / ".gitignore"
     old = ignore.read_text(encoding="utf-8")
-    for line in (WORKSPACE_IGNORE, PRIVATE_BROWSE_IGNORE):  # older vaults: append if missing
+    # older vaults: append if missing; the private line only while private browsing stays out
+    # of git (the default)
+    for line in (WORKSPACE_IGNORE, *(() if private_kept else (PRIVATE_BROWSE_IGNORE,))):
         if line not in old.splitlines():
             old += ("" if old.endswith("\n") or not old else "\n") + line + "\n"
             vault.write_text(ignore, old)
             did.append(".gitignore line")
+    if private_kept:
+        from cortex.browse.forget import drop_private_ignore
+        if drop_private_ignore(vault):
+            did.append(".gitignore: browse/private/ kept in git (your choice)")
     _obsidian(vault, did, skipped)
     for rel, text in ME_PAGES.items():
         if (root / rel).exists():
@@ -376,6 +383,9 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
             vault.write_text(root / rel, text)
             did.append(rel)
     warned = []
+    if not git_on:  # the owner's choice; an existing .git is left as it is
+        skipped.append("git (off in settings)")
+        return _init_pointer(root, default, did, skipped, warned)
     if (root / ".git").exists():
         skipped.append("git init")
     elif shutil.which("git") is None:
@@ -403,6 +413,12 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
         # the starter pages get a first version, so `cortex undo` has one to go back to
         if session_mod._commit(vault, "cortex: init", vault.wrote_since(0)):
             did.append("git commit cortex: init")
+    return _init_pointer(root, default, did, skipped, warned)
+
+
+def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
+                  warned: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """The last step of `_init`: point ~/.cortex at the vault when it names none (or `default`)."""
     current = taint.config().get("vault")
     if default or not current:
         did.append(f"pointer {_write_config(vault=str(root))}")
@@ -513,7 +529,7 @@ def setup(
     if status == "FAIL":
         typer.echo(f"      fix: {fix}")
         raise typer.Exit(1)
-    if shutil.which("git") is None:
+    if shutil.which("git") is None and session_mod.git_choice()[0]:
         typer.echo("WARN  git not found: the vault gets no history or push block until you "
                    "install git and rerun `cortex setup`.")
     if shutil.which("cortex") is None:
@@ -1473,6 +1489,13 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
     if not SESSION_ID_RE.fullmatch(session_id):
         raise VaultError("invalid_argument", "The session id looks like s_<26-char ULID>.")
     v = _vault(vault)
+    git_on, private_kept = session_mod.git_choice()
+    if not git_on:
+        raise VaultError("invalid_argument", "Undo needs the vault's git history, and git is "
+                         "off in your settings, so no session was saved to go back to. Turn on "
+                         "\"Keep the vault's history in git\" under Vault in the app (or set "
+                         "`git: {enabled: true}` in ~/.cortex/config.yaml); sessions closed "
+                         "after that can be undone.")
     with v.lock():
         # anchored: `cortex: other changes before session <id>` is not that session's commit
         found = _git(v.root, "log", "-E", f"--grep=^cortex: (session|undo) {session_id}",
@@ -1501,10 +1524,12 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
 
         # C3: a private browse page the commit holds (an older vault) is never reverted,
         # committed or deleted: git may overwrite an ignored file, so what is on disk now is
-        # put back, and the index left as HEAD has it, after each step that may touch it
-        private = [p for p in _git(v.root, "diff-tree", "-r", "--name-only", "--no-commit-id",
-                                   "--relative", commit).stdout.splitlines()
-                   if p.startswith(PRIVATE_IGNORE)]
+        # put back, and the index left as HEAD has it, after each step that may touch it.
+        # With `git.private_browsing` on they are ordinary tracked pages and revert as such.
+        private = [] if private_kept else [
+            p for p in _git(v.root, "diff-tree", "-r", "--name-only", "--no-commit-id",
+                            "--relative", commit).stdout.splitlines()
+            if p.startswith(PRIVATE_IGNORE)]
         saved = {p: (v.root / p).read_bytes() for p in private if (v.root / p).is_file()}
 
         def keep_private():

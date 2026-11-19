@@ -242,7 +242,8 @@ class App:
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/dashboard": self.dashboard, "/api/vault/backup": self.backup,
-            "/api/vault/doctor": self.doctor, "/api/open": self.open,
+            "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
+            "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
             "/api/setup/index": self.setup_index, "/api/setup/install": self.setup_install,
             "/api/setup/git": self.setup_git,
@@ -303,7 +304,12 @@ class App:
                 "cloud": status.cloud(self.root if self.entry() else None)}
 
     def vault(self) -> dict:
-        return {**status.vault(self.root), "embed": status.embedding()}
+        from cortex.session import git_choice
+        g = status.config().get("git")
+        # the saved private choice, shown (greyed out) even while git is off
+        private = isinstance(g, dict) and g.get("private_browsing") is True
+        return {**status.vault(self.root), "embed": status.embedding(),
+                "git": {"enabled": git_choice()[0], "private_browsing": private}}
 
     def chat_state(self) -> dict:
         """What the Chat page needs to open: the missing pieces (search model, local model),
@@ -575,6 +581,20 @@ class App:
         root = self.need_root()
         return self.jobs.start("Backing up the vault", "vault",
                                lambda job: actions.backup(job, root))
+
+    def git_settings(self, body: dict) -> dict:
+        """Save `git:` (enabled, private_browsing), keeping its other keys, then apply the
+        private-browsing choice to the vault's .gitignore (and index) now, not at the next
+        browse import."""
+        from cortex import cli
+        from cortex.browse import forget
+        old = status.config().get("git")
+        new = {**(old if isinstance(old, dict) else {}), "enabled": _bool(body, "enabled"),
+               "private_browsing": _bool(body, "private_browsing")}
+        cli._write_config(git=new)
+        if self.entry() is not None:
+            forget.sync_private(self._vault())
+        return {"ok": True}
 
     def doctor(self, body: dict) -> dict:
         root = self.root

@@ -772,7 +772,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         report.update({f"refiltered_{k}": n for k, n in forget.purge(
             vault, forget.Rule.of(settings), write=False).items()})
     if not dry_run:
-        forget.untrack_private(vault)
+        forget.sync_private(vault)
     visits, cursors, first = [], {}, None
     for s in srcs:
         tell(f"{s.key}: reading its history")
