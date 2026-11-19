@@ -324,6 +324,14 @@ SITES_SHOWN = 2000  # "all the sites": every one, short of a runaway answer
 _MD = re.compile(r"[*_`\[\]<>#|]")  # a model-written description stays plain text
 
 
+def _count(x) -> int | None:
+    """A stored count as an int (missing: 0), or None when it is not a number."""
+    try:
+        return int(x or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
     """(seen {site: {n, days, hidden, cat}}, visits left out for want of a stored browser,
     days, llm cache, browse settings) for `got`'s days (None: all days), under Chat's
@@ -331,12 +339,13 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
     behind the site list and the digest."""
     from cortex.browse import load_settings, sites
 
-    days, _ = sites.load_days(vault)
+    days = sites.lean_days(vault)
     llm = sites.load_cache(vault)["llm"]
     settings = load_settings()
     side, scat = sites._sides(settings, llm, days)
     lo, hi = (got[0].isoformat(), got[1].isoformat()) if got else ("", "9999")
     seen: dict[str, dict] = {}
+    meta: dict[str, tuple[str, str]] = {}  # key -> (site, category)
     unknown = 0  # visits of a named browser's range stored before Cortex kept the browser
     for day, keys in days.items():
         if not lo <= day <= hi or not isinstance(keys, dict):
@@ -345,22 +354,33 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
             h = side(day, key) if isinstance(a, dict) else None
             if h is None or not sources.get("private" if h else "browsing"):
                 continue
-            n = int(a.get("n", 0) or 0)
+            n = a.get("n", 0)
+            if type(n) is not int and (n := _count(n)) is None:
+                continue  # a malformed entry is skipped, never the whole answer
             if browser:
                 w = a.get("w")
                 if not isinstance(w, dict):
                     unknown += n
                     continue
-                n = min(n, int(w.get(browser, 0) or 0))  # a forget lowers "n" only
+                if (b := _count(w.get(browser))) is None:
+                    continue
+                n = min(n, b)  # a forget lowers "n" only
                 if n <= 0:
                     continue
-            site, cat, _pd = sites._split(key)
-            e = seen.setdefault(site, {"n": 0, "days": set(), "hidden": False,
-                                       "cat": cat or scat(site)})
+            if (m := meta.get(key)) is None:
+                site, cat, _pd = sites._split(key)
+                m = meta[key] = (site, cat or scat(site))
+            if (e := seen.get(m[0])) is None:
+                e = seen[m[0]] = {"n": 0, "days": set(), "hidden": False, "cat": m[1]}
             e["n"] += n
             e["days"].add(day)
             e["hidden"] |= bool(h)
     return seen, unknown, days, llm, settings
+
+
+def asks_sites(text: str) -> bool:
+    """Whether `text` asks for a list of the sites the person visited (`site_list`)."""
+    return bool(_SITES_Q.search(text) and _LIST_Q.search(text))
 
 
 def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
@@ -368,7 +388,7 @@ def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
     every site visited in `got`'s days (None: all days), most visits first, with its category
     and the local model's one-line description, under Chat's own source switches (`browsing`,
     `private`) and the browsing settings (a denied or Don't save site is never stored)."""
-    if not (_SITES_Q.search(text) and _LIST_Q.search(text)):
+    if not asks_sites(text):
         return None
     if not (sources.get("browsing") or sources.get("private")):
         return "Browsing is switched off in Chat settings, so I cannot list sites."
@@ -399,7 +419,8 @@ def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
         entry = llm.get(site) if isinstance(llm.get(site), dict) else {}
         # a visible site never shows what the model wrote from private titles ("h")
         said = (entry.get("h") or entry.get("v")) if e["hidden"] else entry.get("v")
-        desc = _MD.sub("", str((said or {}).get("desc") or "")).strip()
+        said = said if isinstance(said, dict) else {}
+        desc = _MD.sub("", str(said.get("desc") or "")).strip()
         cat = "" if e["cat"] in ("", "other") else f" · {e['cat']}"
         nd = len(e["days"])
         lines.append(f"- **{site}**{cat} · {e['n']} visit{'s' * (e['n'] != 1)} on {nd} "
@@ -413,6 +434,9 @@ DIGEST_SHOWN = 10  # lines per digest section
 _plural = chat_study._plural
 _NOTE_KINDS = ("note", "resource", "decision", "project", "loop")  # resource: chats too
 _JOURNAL_LINE = re.compile(r"- (?:\d\d:\d\d|—) ")  # as reflect.portrait; — is back-dated
+_INDEX: dict = {}  # vault root -> the digest's Index, kept between answers
+_INDEX_LOCK = threading.Lock()  # two chat streams may digest at once
+_DAYS: dict = {}  # vault root -> {(path, its stat): (ask._note_day, semantic.is_chat)}
 
 
 def _capped(head: str, items: list, more: str = "more") -> list:
@@ -430,18 +454,30 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     from cortex.catalog import Catalog
     from cortex.index import Index
 
-    idx = Index(vault, Catalog.load(vault))  # the pages ask._passages searches
-    paths = {i: p for p, i in idx._ids.items()}
-    pages = [*idx._notes.items()]  # chat.list shadows the builtin
+    catalog = Catalog.load(vault)
+    with _INDEX_LOCK:  # the pages ask._passages searches; refreshed, not rebuilt (~3 s a build)
+        idx = _INDEX.get(vault.root)
+        if idx is None:
+            idx = _INDEX[vault.root] = Index(vault, catalog)
+        else:
+            idx.catalog = catalog
+            idx.refresh()
+        paths = {i: p for p, i in idx._ids.items()}
+        stats = dict(idx._stats)
+        pages = [*idx._notes.items()]  # chat.list shadows the builtin
+    # (day, is_chat) per file version: both read the whole body (~1 ms a note), so they are
+    # kept between answers for the files that did not change
+    old, memo = _DAYS.get(vault.root, {}), {}
     out = []
     for i, n in pages:
         if n["kind"] not in (*_NOTE_KINDS, "journal") or i not in paths:
             continue
-        is_chat = semantic.is_chat(n)
-        if not sources.get("chats" if is_chat else "notes"):
-            continue
-        if lo <= (d := ask._note_day(vault, i, n, paths[i])) <= hi:
+        k = (paths[i], stats.get(paths[i]))
+        d, is_chat = memo[k] = old.get(k) or (ask._note_day(vault, i, n, paths[i]),
+                                              semantic.is_chat(n))
+        if lo <= d <= hi and sources.get("chats" if is_chat else "notes"):
             out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat))
+    _DAYS[vault.root] = memo
     return sorted(out, key=lambda p: (p[0], p[3]))
 
 
@@ -581,19 +617,29 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
     # borrowed ones are for passages only)
     own = got if said is text else None
-    step = None
-    if (listed := site_list(vault, text, own, s["sources"])) is not None:
+    # which data answer, if any, is decided first and cheaply; it is read after `start` and its
+    # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
+    step = data = None
+    if asks_sites(text):
         step = "Counting the sites you visited" + span
+
+        def data():
+            return site_list(vault, text, own, s["sources"])
     elif (asked := chat_study.kind(text, own)) == "digest":
         lo, hi = chat_study.digest_days(text, own, today)
         step = "Putting together your " + (
             ("day" if lo == today else f"day on {_span(lo, hi)}") if lo == hi else
             f"{'week' if (hi - lo).days < 7 else 'days'} from {_span(lo, hi)}")
-        listed = digest(vault, lo, hi, s["sources"], today)
+
+        def data():
+            return digest(vault, lo, hi, s["sources"], today)
     elif asked is not None:
         step = chat_study.STEP[asked] + (span if asked == "range" else "")
-        listed = chat_study.answer(vault, asked, own, today) if s["sources"].get("notes") \
-            else NOTES_OFF
+
+        def data():
+            return chat_study.answer(vault, asked, own, today) if s["sources"].get("notes") \
+                else NOTES_OFF
+    listed = None if data is None else ""  # a data answer: filled in after its step
     if listed is None and semantic.load_embedder() is None:
         emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
         return convo_id
@@ -614,8 +660,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     parts: list = []
     if listed is not None:
         emit({"t": "step", "s": step})
-        parts.append(listed)
-        emit({"t": "tok", "s": listed})
+        listed = data()
+        if not (cancel is not None and cancel.is_set()):  # Stop while counting: nothing shown
+            parts.append(listed)
+            emit({"t": "tok", "s": listed})
     else:
         emit({"t": "step", "s": "Searching your notes and browsing" + span})
         found = ask._passages(vault, query, s["passages"],
