@@ -452,13 +452,14 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
             f"pages in {root / 'resources'}.", importers.report_line("Calendar", r)]}
     if kind == "takeout":
         from cortex.browse import load_settings, sources, takeout
+        from cortex.vault import PRIVATE_BROWSE_DIR
         rows = _readable(takeout.records, path)
         # S2: only the browsers `browse.browsers` allows
         out = history_import(job, root, {s.key for s in sources.chosen(load_settings())},
                              takeout=rows)
         if out.get("ok"):
             out["lines"] = [f"Your Google activity is in the private day pages under "
-                            f"{root / 'browse' / 'private'}. Rows on days your browsers "
+                            f"{root / PRIVATE_BROWSE_DIR}. Rows on days your browsers "
                             "already hold were skipped: the browsers have them."
                             + _skipped_rows(rows), GOOGLE_NOTE]
         return out

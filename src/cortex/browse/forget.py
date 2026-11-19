@@ -25,7 +25,7 @@ from cortex._proc import NO_WINDOW
 from cortex.browse import privacy, sites
 from cortex.browse.privacy import Settings
 from cortex.render import esc
-from cortex.vault import Vault, VaultError
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 log = logging.getLogger(__name__)
 ARCHIVE = ".cortex/browse/inbox-archive"  # the consumed extension inbox (review C5)
@@ -368,7 +368,7 @@ def prune_vectors(vault: Vault) -> Counter:
     return c
 
 
-PRIVATE_IGNORE = "browse/private/"
+PRIVATE_IGNORE = PRIVATE_BROWSE_DIR + "/"
 UNTRACK_MESSAGE = "cortex: stop tracking private browse pages"
 
 
@@ -401,14 +401,14 @@ def untrack_private(vault: Vault) -> bool:
     from cortex.session import git_choice
     if not git_choice()[0]:  # git off in settings: the repo, if any, is left alone
         return False
-    tracked = _gitz(root, "ls-files", "-z", "--", "browse/private")
+    tracked = _gitz(root, "ls-files", "-z", "--", PRIVATE_BROWSE_DIR)
     if tracked.returncode or not tracked.stdout.strip("\0"):
         return False
     with vault.lock():
         if git_busy(root):
             return False
         top = _gitz(root, "rev-parse", "--show-toplevel").stdout.strip()
-        spec = _gitz(root, "rev-parse", "--show-prefix").stdout.strip() + "browse/private"
+        spec = _gitz(root, "rev-parse", "--show-prefix").stdout.strip() + PRIVATE_BROWSE_DIR
         made = False
         if _gitz(top, "rev-parse", "--verify", "-q", "HEAD").returncode == 0:
             with tempfile.TemporaryDirectory() as d:
@@ -465,7 +465,7 @@ def private_in_history(root) -> int:
     repo)."""
     from cortex.session import _gitz
 
-    r = _gitz(root, "log", "--all", "--format=%h", "--", "browse/private")
+    r = _gitz(root, "log", "--all", "--format=%h", "--", PRIVATE_BROWSE_DIR)
     return 0 if r.returncode else len(r.stdout.split())
 
 

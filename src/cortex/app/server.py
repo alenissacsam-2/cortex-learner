@@ -701,7 +701,8 @@ class App:
                 raise ValueError("Build the dashboard first.")
             _open(p.as_uri())
         elif what in ("vault", "private"):
-            p = root / "browse" / "private" / "browse-private-index.md" if what == "private" \
+            from cortex.vault import PRIVATE_BROWSE_DIR
+            p = root / PRIVATE_BROWSE_DIR / "browse-private-index.md" if what == "private" \
                 else root
             if what == "private" and not p.is_file():
                 p = p.parent

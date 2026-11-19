@@ -19,7 +19,7 @@ from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.index import Index, _wrap
 from cortex.topics import page_date
-from cortex.vault import Vault, VaultError
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 BUDGET = 6000  # passage characters, so a 2B model's context is not overrun
 PASSAGE = 1500
@@ -46,7 +46,7 @@ def _switch(p: dict) -> str:
         return "private"
     if p["kind"] != "browse":
         return "notes" if p["kind"] == "note" else "chats"
-    return "private" if p["path"].startswith("browse/private/") else "browsing"
+    return "private" if p["path"].startswith(PRIVATE_BROWSE_DIR + "/") else "browsing"
 
 
 def _browse_day(path: str) -> str:

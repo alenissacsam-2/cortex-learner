@@ -42,11 +42,18 @@ from cortex.browse import forget, lists, privacy, sites, sources
 from cortex.browse.privacy import Kept, Settings
 from cortex.events import EventLog, live, local_day, void_event
 from cortex.render import esc, plain
-from cortex.vault import Vault, VaultError, _dump_fm, _to_yaml, secret_pattern
+from cortex.vault import (
+    PRIVATE_BROWSE_DIR,
+    Vault,
+    VaultError,
+    _dump_fm,
+    _to_yaml,
+    secret_pattern,
+)
 
 log = logging.getLogger(__name__)
 
-DIR, PRIVATE_DIR = "browse", "browse/private"
+DIR, PRIVATE_DIR = "browse", PRIVATE_BROWSE_DIR
 EXPIRING_DAYS = 85  # a browser's oldest day this old is being expired (Chromium keeps 90)
 STATE = ".cortex/browse/state.json"
 INDEX_ID, PRIVATE_INDEX_ID = "browse-index", "browse-private-index"

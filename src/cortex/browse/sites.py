@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 
 from cortex.browse import lists, privacy
 from cortex.browse.privacy import Settings
+from cortex.events import local_day
 from cortex.render import esc
 from cortex.vault import Vault, VaultError, secret_pattern
 
@@ -518,7 +519,7 @@ def _dur(secs: float) -> str:
 
 
 def _day(ts: int, tz) -> str:
-    return datetime.fromtimestamp(ts, UTC).astimezone(tz).strftime("%Y-%m-%d")
+    return local_day(datetime.fromtimestamp(ts, UTC), tz)  # the 04:00 study day, as Item.day
 
 
 def _valid_desc(entry: dict | None, p: Page) -> str | None:
