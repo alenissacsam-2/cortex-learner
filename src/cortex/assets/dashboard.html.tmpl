@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="{{CSP}}">
+{{CSPMETA}}
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cortex</title>
-<style>{{CSS}}</style>
+{{STYLE}}
 </head>
 <body>
 <header class="top" id="top">
@@ -162,9 +162,6 @@
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <p class="sr-only" id="announce" aria-live="polite"></p>
 <div class="tip" id="tip" role="tooltip" hidden></div>
-<script type="application/json" id="data">{{DATA}}</script>
-<script>{{D3}}</script>
-<script>{{BRAIN}}</script>
-<script>{{APP}}</script>
+{{SCRIPTS}}
 </body>
 </html>

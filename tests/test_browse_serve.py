@@ -776,7 +776,7 @@ def test_connections_over_the_cap_are_closed_at_once(vault, home, monkeypatch, w
         for _ in range(50):  # the handlers see EOF and give their slots back
             c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             try:
-                c.request("GET", "/v1/ping" if which == "browse" else "/")
+                c.request("GET", "/v1/ping" if which == "browse" else "/manage")
                 status = c.getresponse().status
                 break
             except (ConnectionResetError, ConnectionAbortedError, http.client.HTTPException):

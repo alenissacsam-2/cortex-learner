@@ -10,10 +10,13 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from test_brainmap import made  # noqa: F401  (a fixture: topic hubs, pages and vectors)
 
 from cortex import dashboard, taint
 from cortex.cli import _init
@@ -100,7 +103,7 @@ setTimeout(() => {
   await send('Page.addScriptToEvaluateOnNewDocument', { source: fs.readFileSync(cfg.helpers, 'utf8') });
   await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
   if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
-  const url = 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
+  const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
   async function load() {
     const loaded = new Promise((r) => once.push((m) => m.method === 'Page.loadEventFired' && (r(), true)));
     await send('Page.navigate', { url });
@@ -149,6 +152,12 @@ setTimeout(() => {
   }
   if (cfg.checks) { await load(); cur = 'checks'; out.checks = await ev('__T.checks()'); }
   if (cfg.texts) { await load(); cur = 'texts'; out.texts = await ev('__T.texts()'); }
+  if (cfg.live) {  // the page as loaded: move the camera, let the test add a note, watch
+    cur = 'live';
+    const before = await ev('__L.before()');
+    fs.writeFileSync(cfg.ready, '1');
+    out.live = { before, after: await ev(`__L.after(${J(cfg.live)})`), leak: await ev('__L.leak(30)') };
+  }
   const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
   const bws = new WebSocket(v.webSocketDebuggerUrl);
   await new Promise((r) => bws.addEventListener('open', r));
@@ -311,7 +320,64 @@ window.__T = (() => {
 """.replace("CHECK", CHECK).replace("COPY", COPY)  # noqa: E501  (JavaScript)
 
 
-def _run(tmp_path, page: Path, **cfg) -> dict:
+# the live page's extras: every brain mounted (through window.CortexBrain), camera and feed probes
+LIVE = r"""
+window.__L = (() => {
+  const mounts = [], sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let real = null, opts = null;
+  Object.defineProperty(window, 'CortexBrain', { configurable: true, get: () => real, set(v) {
+    real = v;
+    const mount = v.mount;
+    v.mount = (c, o) => { opts = o; const b = mount(c, o); mounts.push(b); return b; };
+  } });
+  const cam = () => mounts[mounts.length - 1].camera;
+  const same = (a, b) => Object.keys(a).every((k) => Math.abs(a[k] - b[k]) < 1e-6);
+  const feed = () => (document.querySelector('.feed') || {}).textContent || '';
+  async function settle() {  // until the camera stops moving
+    let a = cam();
+    for (let i = 0; i < 50; i++) { await sleep(150); const b = cam(); if (same(a, b)) return b; a = b; }
+    return a;
+  }
+  async function before() {
+    for (let i = 0; i < 200 && !mounts.length; i++) await sleep(100);
+    const start = await settle();
+    const box = document.querySelector('.brain-host').firstElementChild, r = box.getBoundingClientRect();
+    box.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, clientX: r.left + r.width / 3,
+      clientY: r.top + r.height / 3, bubbles: true, cancelable: true }));
+    const cam = await settle();
+    return { moved: !same(start, cam), cam, feed: feed() };
+  }
+  async function after(title) {
+    const n = mounts.length, t0 = Date.now();
+    while (Date.now() - t0 < 20000 && !(feed().includes(title) && mounts.length > n)) await sleep(100);
+    const waited = Date.now() - t0;
+    await sleep(400);
+    return { waited, feed: feed().includes(title), mounts: mounts.length - n, cam: cam(),
+      fresh: [...document.querySelectorAll('.feed .brow.fresh')].map((e) => e.textContent),
+      stale: document.getElementById('stale').hidden,
+      llm: !!document.querySelector('.quick-chat a[href="/manage#llm"]'),
+      settings: !!document.querySelector('a[aria-label="Settings"][href="/manage"]') };
+  }
+  async function leak(n) {  // n more mounts and destroys must not cost the page its WebGL context
+    const cv = document.querySelector('.brain-host canvas'), gl = cv && cv.getContext('webgl2');
+    const box = document.createElement('div');
+    box.style.width = '320px'; box.style.height = '240px';
+    document.body.append(box);
+    for (let i = 0; i < n; i++) {
+      const b = real.mount(box, { brain: opts.brain, pages: opts.pages, today: opts.today });
+      await sleep(20);
+      b.destroy();
+    }
+    box.remove();
+    await sleep(300);
+    return { webgl2: !!gl, lost: gl ? gl.isContextLost() : null, connected: !!(cv && cv.isConnected) };
+  }
+  return { before, after, leak };
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def _run(tmp_path, page: Path | None, **cfg) -> dict:
     node = shutil.which("node")
     if node is None or BROWSER is None:
         pytest.skip("needs node and a Chromium browser (Chrome or Edge)")
@@ -321,9 +387,9 @@ def _run(tmp_path, page: Path, **cfg) -> dict:
     run = tmp_path / ("run-" + "-".join(sorted(cfg)))
     run.mkdir()
     (run / "driver.cjs").write_text(DRIVER, encoding="utf-8")
-    (run / "helpers.js").write_text(HELPERS, encoding="utf-8")
+    (run / "helpers.js").write_text(HELPERS + (LIVE if cfg.get("live") else ""), encoding="utf-8")
     (run / "cfg.json").write_text(json.dumps({
-        "browser": BROWSER, "profile": str(run / "profile"), "page": str(page),
+        "browser": BROWSER, "profile": str(run / "profile"), "page": str(page or ""),
         "helpers": str(run / "helpers.js"), **cfg}), encoding="utf-8")
     r = subprocess.run([node, str(run / "driver.cjs"), str(run / "cfg.json")], capture_output=True,
                        text=True, encoding="utf-8", timeout=600, env=BROWSER_ENV)
@@ -445,3 +511,55 @@ def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
         assert T[s], s
     assert any("Import your chats or notes" in x for x in T["library"])
     assert any("No topics yet" in x for x in T["brain list"])
+
+
+def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeypatch):  # noqa: F811
+    """`/` on the app server: a note added while the page is open reaches the feed within a few
+    seconds and pops into the brain, which is remounted where the camera was; 30 more mounts
+    leave the page's WebGL context alive."""
+    from test_app import _free_port, _serve
+
+    from cortex import localllm
+    from cortex.app import server, status
+    from cortex.events import local_day
+
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(localllm, "_request", no_runner)  # never this computer's LM Studio
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
+    root = made[0]
+    (root / ".cortex").mkdir(exist_ok=True)
+    srv, app = _serve(root)
+    ready, title = tmp_path / "ready", "Live test note"
+
+    def add_note():
+        for _ in range(3000):
+            if ready.exists():
+                break
+            time.sleep(0.1)
+        else:
+            return
+        (root / "notes" / "live-test-note.md").write_bytes(
+            f'---\nkind: note\ntitle: "{title}"\ndate: "{local_day(datetime.now(UTC))}"\n'
+            f'related: ["[[hub-0]]"]\n---\nSee [[hub-0]].\n'.encode())
+
+    adder = threading.Thread(target=add_note, daemon=True)
+    adder.start()
+    try:
+        out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   ready=str(ready), live=title)
+    finally:
+        app.receiver.stop()
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == []
+    before, after, leak = out["live"]["before"], out["live"]["after"], out["live"]["leak"]
+    assert before["moved"] and title not in before["feed"]
+    assert after["feed"] and after["mounts"] >= 1 and after["waited"] < 10000, after
+    assert all(abs(after["cam"][k] - v) < 1e-6 for k, v in before["cam"].items()), after["cam"]
+    assert any(title in f for f in after["fresh"])
+    assert after["stale"] and after["llm"] and after["settings"]
+    assert leak["connected"] and leak["lost"] is not True, leak

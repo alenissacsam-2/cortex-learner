@@ -43,6 +43,7 @@ def fakes(monkeypatch):
     monkeypatch.setattr(actions, "_popen", no_proc)
     monkeypatch.setattr(server, "_open", lambda url: None)
     monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
+    monkeypatch.setattr(server, "PORT", 0)  # never the owner's app port
 
 
 @pytest.fixture

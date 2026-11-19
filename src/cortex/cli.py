@@ -2322,8 +2322,8 @@ def export_context_cmd(out: Annotated[Path | None, typer.Argument(
 def app_cmd(vault: VaultOpt = None,
             no_open: Annotated[bool, typer.Option("--no-open", help="Print the link only.")]
             = False,
-            port: Annotated[int, typer.Option(help="Port on 127.0.0.1 (0 picks a free one).")]
-            = 0,
+            port: Annotated[int, typer.Option(
+                help="Port on 127.0.0.1 (0: 47615 if free, else any free one).")] = 0,
             window: Annotated[bool, typer.Option(
                 "--window", help="Its own window and a tray icon (Windows), as the Start menu's "
                 "Cortex opens it; runs until Quit in the tray.")] = False) -> None:

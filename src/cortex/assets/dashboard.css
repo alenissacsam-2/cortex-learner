@@ -189,6 +189,25 @@ section:focus { outline: none; }
 .home-row { display: grid; gap: 24px; margin-top: 24px; align-items: start; }
 .home-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .home-row.two { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+/* the live home: the feed, quick chat, the Settings link */
+.band h2 + .band-tools { margin-left: auto; }
+a.band-btn { text-decoration: none; color: var(--band-ink); }
+a.icon-btn { color: inherit; }
+.feed .board-body { max-height: 440px; overflow-y: auto; }
+.feed-subj { font-size: 12px; color: var(--ink-2); margin: 0; padding: 10px 12px 2px; }
+.ftime { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; }
+.brow.fresh { animation: fresh 1.5s ease-out; }
+@keyframes fresh { from { background: var(--unlit); } }
+.quick-chat .board-body { padding: 10px 12px 12px; }
+.qc-label { display: block; color: var(--ink-2); font-size: 12.5px; margin-bottom: 4px; }
+.qc-row { display: flex; gap: 6px; }
+.qc-row input {
+  flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--edge); border-radius: 2px;
+  padding: 6px 10px; color: var(--ink);
+}
+.qc-need { color: var(--ink-2); font-size: 12.5px; margin: 8px 0 0; }
+.qc-out { margin-top: 6px; overflow-wrap: anywhere; }
+.qc-out p { margin: 6px 0; }
 .brain-slot { position: relative; background: var(--stage); overflow: hidden; }
 .brain-host { position: absolute; inset: 0; }
 .ready { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; }  /* a long label wraps under the bar */
