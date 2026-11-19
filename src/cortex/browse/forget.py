@@ -373,10 +373,10 @@ UNTRACK_MESSAGE = "cortex: stop tracking private browse pages"
 
 
 def _git_env(top: str, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    from cortex.session import GIT_TIMEOUT_S
+    from cortex.session import GIT_TIMEOUT_S, git_exe
 
     try:
-        return subprocess.run(["git", "--literal-pathspecs", "-C", top, *args],
+        return subprocess.run([git_exe() or "git", "--literal-pathspecs", "-C", top, *args],
                               capture_output=True, encoding="utf-8", env=env,
                               timeout=GIT_TIMEOUT_S, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:

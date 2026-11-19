@@ -18,6 +18,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -496,9 +497,14 @@ def _cfg(config: dict | None) -> tuple[dict, dict]:
 
 
 def _lms_exe(cfg: dict) -> Path | None:
-    p = cfg.get("lms") or (Path(os.environ.get("USERPROFILE") or Path.home())
-                           / ".lmstudio" / "bin" / "lms.exe")
-    return Path(str(p)) if Path(str(p)).is_file() else None
+    """`localllm.lms`, else LM Studio's own bin folder (`lms.exe` on Windows, `lms` on macOS
+    and Linux), else `lms` on PATH."""
+    if p := cfg.get("lms"):
+        return Path(str(p)) if Path(str(p)).is_file() else None
+    bin_ = Path(os.environ.get("USERPROFILE") or Path.home()) / ".lmstudio" / "bin"
+    if found := next((x for x in (bin_ / "lms.exe", bin_ / "lms") if x.is_file()), None):
+        return found
+    return Path(found) if (found := shutil.which("lms")) else None
 
 
 def _lms(exe: Path, *args: str, timeout: float = 20, parse: bool = True):

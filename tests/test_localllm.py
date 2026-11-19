@@ -643,3 +643,23 @@ def test_status_asks_lms_only_for_lmstudio(serve, lms, monkeypatch):
     assert got["runner"].kind == "openai" and got["lmstudio"]["port"] and calls()
     cfg, calls = lms(runner="ollama")
     assert localllm.status(cfg, lms=True)["lmstudio"] is not None and calls()
+
+
+def test_lms_is_found_without_exe_and_on_path(tmp_path, monkeypatch):
+    """Deps A10: macOS and Linux have `~/.lmstudio/bin/lms` (no .exe); else `lms` on PATH;
+    a configured `localllm.lms` that is gone is not replaced by a guess."""
+    import shutil
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
+    assert localllm._lms_exe({}) is None
+    on_path = tmp_path / "elsewhere" / "lms"
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: str(on_path) if c == "lms" else None)
+    assert localllm._lms_exe({}) == on_path
+    plain = tmp_path / ".lmstudio" / "bin" / "lms"
+    plain.parent.mkdir(parents=True)
+    plain.write_bytes(b"")
+    assert localllm._lms_exe({}) == plain
+    (plain.parent / "lms.exe").write_bytes(b"")
+    assert localllm._lms_exe({}) == plain.parent / "lms.exe"
+    assert localllm._lms_exe({"lms": str(tmp_path / "gone" / "lms.exe")}) is None

@@ -512,6 +512,7 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                     "detail": (f"{v['notes']} notes; last indexed {v['last_index'] or 'not yet'}"
                                if v["ok"] else "This folder is not a Cortex vault yet."),
                     "action": None if v["ok"] else _go("setup", "Set up")})
+    out.append(git_row())
     e = embedding(root if v["ok"] else None)
     out.append({"id": "embed", "label": "Search model", "state": "ok" if e["downloaded"] else "off",
                 "value": "downloaded" if e["downloaded"] else "not downloaded",
@@ -525,16 +526,7 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "detail": "They read and record through Cortex." if on else
                 "Without one, nothing reads or records anything.",
                 "action": _go("connect", "Open" if on else "Connect")})
-    m = llm()
-    loaded = [x for x in m["loaded"] if m["model"] and x.lower() == str(m["model"]).lower()]
-    runner = ("LM Studio" if m["lms"] else "") or ("Ollama" if m["ollama"] is not None else "")
-    out.append({"id": "llm", "label": "Local model",
-                "state": "off" if not m["enabled"] else "ok" if (loaded or m["ollama"]) else "warn",
-                "value": f"{runner or 'no runner'}, {m['model'] or 'no model chosen'}",
-                "detail": ("On: sorts your browsing on this computer. "
-                           + ("Loaded now." if loaded else "Loads when needed."))
-                if m["enabled"] else "Off. Optional: a small AI that runs on this computer.",
-                "action": _go("llm", "Open")})
+    out.append(llm_row())
     b = browse(root if v["ok"] else None, in_app)
     out.append({"id": "receiver", "label": "Browse receiver",
                 "state": "ok" if b["receiver"] == "running" else "off",
@@ -558,6 +550,58 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "detail": "Your notes as a page you can browse, offline.",
                 "action": _go("vault", "Open")})
     return out
+
+
+def git_row() -> dict:
+    """Git keeps the vault's history (undo). Missing: the same Install Git as Setup's."""
+    from cortex import session
+    from cortex.app import wizard
+    row = {"id": "git", "label": "Git", "action": None}
+    if not session.git_choice()[0]:
+        return {**row, "state": "off", "value": "off in settings",
+                "detail": "Your choice: Cortex keeps no history of the vault, so undo is off.",
+                "action": _go("vault", "Open")}
+    if session.git_exe():
+        return {**row, "state": "ok", "value": "installed",
+                "detail": "Keeps your vault's history, so undo works."}
+    plan = wizard.git_plan()
+    return {**row, "state": "off", "value": "not installed",
+            "detail": "Without git, Cortex keeps no history of your vault, so undo does "
+                      "nothing. Free.",
+            "install": {"label": f"Install Git ({plan['size']}, via {plan['source']})",
+                        "license": plan["license"]} if plan["run"] else None,
+            "page": None if plan["run"] else plan["page"]}
+
+
+def llm_row() -> dict:
+    """The configured runner by name, "ok" only when that runner holds the chosen model
+    (runner auto: whichever does)."""
+    from cortex import localllm
+    m = llm()
+    want = str(m["model"] or "")
+    loaded = [x for x in m["loaded"] if want and x.lower() == want.lower()]
+    in_ollama = bool(want and localllm._local_name(m["ollama"] or [], want))
+    if m["runner"] == "ollama":
+        name, ready = "Ollama", in_ollama
+    elif m["runner"] == "lmstudio":
+        name = "LM Studio"
+        ready = bool(m["lms"] and want and (loaded or any(
+            want.lower() in (r["key"].lower(), r["name"].lower()) for r in lms_models())))
+    else:
+        name = "Ollama" if in_ollama else "LM Studio" if loaded else ""
+        ready = bool(name)
+    if not m["enabled"]:
+        detail = "Off. Optional: a small AI that runs on this computer."
+    elif ready:
+        detail = ("On: sorts your browsing on this computer. "
+                  + ("Loaded now." if loaded else "Loads when needed."))
+    else:
+        detail = (f"On, but {name or 'no runner'} does not have {want or 'a model'} ready. "
+                  "Open Local model to start it or choose another model.")
+    return {"id": "llm", "label": "Local model",
+            "state": "off" if not m["enabled"] else "ok" if ready else "warn",
+            "value": f"{name or 'no runner'}, {want or 'no model chosen'}",
+            "detail": detail, "action": _go("llm", "Open")}
 
 
 def history_row(root: Path | None, b: dict, now: datetime | None = None) -> dict:

@@ -239,6 +239,11 @@
   let polling = false, pollAgain = false, hideTimer;
   async function job(path, body) {
     const r = await post(path, body);
+    if (r && r.disk) {  // too little free space: nothing started; the owner may continue anyway
+      confirmDialog('Not enough free space', 'Continue anyway', [h('p', { class: 'ink-2', text: r.disk })],
+        () => job(path, { ...body, override: true }));
+      return null;
+    }
     if (r) poll();
     return r;
   }
@@ -341,6 +346,8 @@
     if (r.kind === 'scan') out.push(r.rows.length ? scanTable(r.rows) : note('No browser history found on this computer.'));
     if (r.counts) out.push(Object.keys(r.counts).length ? countsTable(r.counts) : note('Nothing to count.'));
     if (r.answer) out.push(row('Answer', `${r.answer} in ${r.seconds} s`, r.runner, null));
+    if (r.admin) out.push(row('Install Git for everyone on this computer', null, r.admin,
+      [btn('Install Git for all users (Windows will ask for admin permission)', () => job('/api/setup/git', { scope: 'machine', from: j.section }), 'btn lit'), ext(r.license, 'License')]));
     if (r.need === 'embed') out.push(row('Search model needed', null, r.lines[0], [btn('Download the search model', () => job('/api/setup/embed', {}), 'btn lit')]));
     else if (r.lines && r.lines.length) out.push(h('pre', { class: 'out', text: r.lines.join('\n') }));
     return out;
@@ -411,6 +418,9 @@
         h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
           r.import && r.import.length ? btn('Import new history now', () => job('/api/browse/import', { sources: r.import, from: 'browse' }), 'btn lit') : null,
           r.login_hint ? loginBtn() : null,
+          r.install ? btn(r.install.label, () => job('/api/setup/git', { from: 'status' }), 'btn lit') : null,
+          r.install ? ext(r.install.license, 'License') : null,
+          r.page ? ext(r.page, 'Get Git') : null,
           r.action ? btn(r.action.label, () => show(r.action.go, true)) : null));
     });
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
@@ -905,11 +915,17 @@
         h('p', { class: 'help', text: 'Browsing imports and site descriptions run while you are away, so a larger, slower model can do them better (for example a 9B model while Chat uses a 2B one). If it does not answer, the model above is used. Two models can sit in memory at once, so with 8 GB of graphics memory or less, leave this as the same model.' })));
     // download another Ollama model by name; the list above reloads when the job ends
     const name = h('input', { type: 'text', id: 'llm-pull', placeholder: 'qwen3.5:4b', spellcheck: 'false', autocomplete: 'off' });
-    const pull = () => { const v = name.value.trim(); if (v) return job('/api/llm/pull', { name: v }); toast('Type a model name first.'); return null; };
+    const pull = () => {
+      const v = name.value.trim();
+      if (!v) { toast('Type a model name first.'); return null; }
+      return post('/api/llm/size', { name: v }, (r) => confirmDialog(`Download ${r.name}?`, 'Download',
+        [h('p', { class: 'ink-2', text: `${r.size}, from ${r.source}.` })],
+        () => job('/api/llm/pull', { name: r.name })));
+    };
     const rec = d.recommend, hw = d.hardware;
     const download = board('Download an Ollama model', {},
       hw && rec ? row('This computer', `${hw.label} → ${rec.label} suits it`, null,
-        [btn(`Use ${rec.ollama}`, () => { name.value = rec.ollama; name.focus(); })]) : null,
+        [btn(`Use ${rec.ollama} (${rec.size})`, () => { name.value = rec.ollama; name.focus(); })]) : null,
       h('div', { class: 'field' }, h('label', { for: 'llm-pull', text: 'Model name' }),
         h('div', { class: 'inline' }, name, btn('Download', pull)),
         h('p', { class: 'help' }, 'A name from ', ext('https://ollama.com/library', 'ollama.com/library'), ', like qwen3.5:4b. Ollama must be running. Cloud models are refused.')));
@@ -1329,7 +1345,7 @@
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
         h('p', { class: 'help', text: 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
       gi && !gi.found && gi.enabled !== false ? row('Git (history and undo)', 'not installed', 'Without git, Cortex keeps no history of your vault, so undo does nothing. Free.',
-        [gi.install.run ? btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})) : ext(gi.install.page, 'Get Git')]) : null], first);
+        gi.install.run ? [btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})), ext(gi.install.license, 'License')] : [ext(gi.install.page, 'Get Git')]) : null], first);
 
     const e = d.embed;
     const sEmbed = step('embed', 'Search model', e.done, 'downloaded', [
@@ -1343,7 +1359,7 @@
     const start = (id, name) => btn('Start', () => job('/api/setup/start', { runner: id }), 'btn lit', { 'aria-label': `Start: ${name}` });
     const oll = row('Ollama', RSTATE[rn.ollama.state], 'Runs AI models on this computer. Free.',
       rn.ollama.state === 'stopped' ? [start('ollama', 'Ollama')] : rn.ollama.found ? null
-        : [inst.run ? btn(`Install Ollama (${inst.size}, via ${inst.source})`, () => job('/api/setup/install', {}), 'btn lit') : ext(inst.page, 'Get Ollama')]);
+        : inst.run ? [btn(`Install Ollama (${inst.size}, via ${inst.source})`, () => job('/api/setup/install', {}), 'btn lit'), inst.license ? ext(inst.license, 'License') : null] : [ext(inst.page, 'Get Ollama')]);
     oll.querySelector('.line1').append(h('span', { class: 'rec', text: 'RECOMMENDED' }));
     const runnerRows = [
       oll,
