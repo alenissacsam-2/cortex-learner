@@ -393,8 +393,13 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
                 if not isinstance(w, dict):
                     unknown += n
                     continue
-                if (b := _count(w.get(browser))) is None:
+                unknown += _count(w.get(sites.UNKNOWN)) or 0  # kept by a rebuild, no source
+                # ids are source keys ("comet/Default"); a bare browser name is accepted too
+                got = [_count(c) for k, c in w.items()
+                       if isinstance(k, str) and k.split("/")[0] == browser]
+                if None in got:
                     continue
+                b = sum(got)
                 n = min(n, b)  # a forget lowers "n" only
                 if n <= 0:
                     continue

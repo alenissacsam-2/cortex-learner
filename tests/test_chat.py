@@ -622,10 +622,13 @@ def test_a_site_question_lists_every_site_once_with_its_counts(vault):
 
 def test_a_named_browser_counts_only_its_visits(vault):
     _site_days(vault, {
-        "2026-11-17": {"miruro.tv||0": {"n": 5, "w": {"comet": 3, "chrome": 2}},
-                       "github.com||0": {"n": 4, "w": {"chrome": 4}},
+        # ids are source keys, as sources.read stamps them; one profile per browser or several
+        "2026-11-17": {"miruro.tv||0": {"n": 5, "w": {"comet/Default": 2, "comet/Work": 1,
+                                                        "chrome/Default": 2}},
+                       "github.com||0": {"n": 4, "w": {"chrome/Default": 4}},
                        "x.example||0": {"n": 2, "w": {"comet": 9}}},  # a forget lowered n
-        "2026-11-16": {"old.example||0": {"n": 7}},  # imported before browsers were kept
+        "2026-11-16": {"old.example||0": {"n": 7},  # imported before browsers were kept
+                       "kept.example||0": {"n": 3, "w": {"?": 3}}},  # a rebuild kept: no source
     })
     got = (date(2026, 11, 16), date(2026, 11, 17), "")
     out = chat.site_list(vault, "which sites did I visit in Comet?", got, ALL_ON, TODAY)
@@ -633,7 +636,7 @@ def test_a_named_browser_counts_only_its_visits(vault):
     lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert lines == ["- **miruro.tv** · video · 3 visits on 1 day",
                      "- **x.example** · 2 visits on 1 day"]
-    assert "7 visits in this range were imported before" in out
+    assert "10 visits in this range were imported before" in out
 
 
 def test_a_site_question_before_the_stored_days_says_so(vault):
