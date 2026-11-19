@@ -488,11 +488,11 @@ def _capped(head: str, items: list, more: str = "more") -> list:
 
 
 def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
-    """[(day, kind, id, title, body, is_chat)] of notes, saved AI chats and journal pages dated
-    in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's `notes` and
-    `chats` switches. Private pages (`ask.private_pages`: their own `private: true`, or under a
-    private subject) come under the `private` switch instead: the local model may read them
-    (owner's decision, 19 Nov 2026)."""
+    """[(day, kind, id, title, body, is_chat, is_private)] of notes, saved AI chats and journal
+    pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's
+    `notes` and `chats` switches. Private pages (`ask.private_pages`: their own `private: true`,
+    or under a private subject) come under the `private` switch instead: the local model may
+    read them (owner's decision, 19 Nov 2026)."""
     from cortex.catalog import Catalog
     from cortex.index import Index
 
@@ -520,7 +520,8 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
         d, is_chat = memo[k] = old.get(k) or (ask._note_day(vault, i, n, paths[i]),
                                               semantic.is_chat(n))
         if lo <= d <= hi and (i in private or sources.get("chats" if is_chat else "notes")):
-            out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat))
+            out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat,
+                        i in private))
     _DAYS[vault.root] = memo
     return sorted(out, key=lambda p: (p[0], p[3]))
 
@@ -528,10 +529,10 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
 def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
            unit: str | None = None) -> str:
     """What Cortex holds about the days `lo` to `hi`, read from its own data with no model: what
-    was studied (chat_study's range answer), the most visited sites (`_site_counts`), notes and
-    saved AI chats written or changed, and journal lines, each section capped and only when it
-    has something, then one line on what is left out. `unit`: "day", "week" or "days" for the
-    heading (chat_study.digest_days), else by the range."""
+    was studied (chat_study's range answer), the most visited sites (`_site_counts`), notes,
+    saved AI chats and private notes written or changed, and journal lines, each section capped
+    and only when it has something, then one line on what is left out. `unit`: "day", "week" or
+    "days" for the heading (chat_study.digest_days), else by the range."""
     when = f"on {_span(lo, hi, today)}" if lo == hi else f"from {_span(lo, hi, today)}"
     unit = unit or ("day" if lo == hi else "days")
     if unit == "week" and (lo, hi) == (_monday(today), today):
@@ -555,19 +556,24 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
                 [f"**{s}**" + ("" if e["cat"] in ("", "other") else f" · {e['cat']}")
                  + f" · {_plural(e['n'], 'visit')}" for s, e in order], "more sites"))
     pages = _pages_in(vault, lo.isoformat(), hi.isoformat(), sources)
-    notes = [p[3] for p in reversed(pages) if p[1] != "journal" and not p[5]]
+    notes = [p[3] for p in reversed(pages) if p[1] != "journal" and not p[5] and not p[6]]
     if notes:
         sections.append(_capped(f"**{_plural(len(notes), 'note')}** written or changed:", notes))
-    chats = [p[3] for p in reversed(pages) if p[5]]
+    chats = [p[3] for p in reversed(pages) if p[5] and not p[6]]
     if chats:
         sections.append(_capped(f"**{_plural(len(chats), 'saved AI chat')}**:", chats))
+    private = [p[3] for p in reversed(pages) if p[6]]  # any kind: under the private switch only
+    if private:
+        sections.append(_capped(f"**{_plural(len(private), 'private note')}** written or "
+                                "changed:", private))
     journal = [(_span(d := date.fromisoformat(p[0]), d, today) + " " if lo != hi else "")
                + chat_study._title(ln[2:].strip())
-               for p in pages if p[1] == "journal"
+               for p in pages if p[1] == "journal" and not p[6]
                for ln in p[4].splitlines() if _JOURNAL_LINE.match(ln)]
     if journal:
         sections.append(_capped(f"**Journal** ({_plural(len(journal), 'line')}):", journal))
-    off = [label for k, label in (("notes", "notes and journal"), ("chats", "saved AI chats"),
+    off = [label for k, label in (("notes", "notes, studying and journal"),
+                                  ("chats", "saved AI chats"),
                                   ("browsing", "browsing"),
                                   ("private", "private notes, subjects and browsing"))
            if not sources.get(k)]

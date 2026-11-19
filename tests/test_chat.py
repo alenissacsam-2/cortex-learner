@@ -309,7 +309,7 @@ def _paths(found):
 
 def test_a_range_keeps_only_pages_dated_inside_it(vault):
     found = ask._passages(vault, "car motor 3 days ago", 8, between=("2026-11-14", "2026-11-16"),
-                          topic="car motor")
+                          sources=ask.SOURCES, topic="car motor")
     assert set(_paths(found)) == {"browse/private/browse-private-2026-11-15.md",
                                   "browse/private/browse-private-2026-11-14.md",
                                   "notes/kitchen-day.md"}
@@ -317,7 +317,7 @@ def test_a_range_keeps_only_pages_dated_inside_it(vault):
     assert {p["day"] for p in found} <= {"2026-11-14", "2026-11-15", "2026-11-16"}
     # no range: the undated note and the older day come back
     assert {"notes/engines.md", "browse/private/browse-private-2026-11-10.md"} <= set(
-        _paths(ask._passages(vault, "car motor", 8)))
+        _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES)))
 
 
 def test_an_undated_note_counts_on_the_day_its_file_changed(vault):
@@ -341,7 +341,7 @@ def test_an_undated_note_counts_on_the_day_its_file_changed(vault):
 
 def test_no_topic_lists_the_days_newest_first(vault):
     found = ask._passages(vault, "which sites did I visit", 8,
-                          between=("2026-11-14", "2026-11-15"), topic="")
+                          between=("2026-11-14", "2026-11-15"), sources=ask.SOURCES, topic="")
     assert _paths(found) == ["browse/private/browse-private-2026-11-15.md",
                              "browse/private/browse-private-2026-11-14.md"]
 
@@ -350,8 +350,8 @@ def test_source_switches(vault):
     off = {"private": False}
     assert not any(p.startswith("browse/private/")
                    for p in _paths(ask._passages(vault, "car motor", 8, sources=off)))
-    only_private = ask._passages(vault, "car motor", 8,
-                                 sources={"notes": False, "chats": False, "browsing": False})
+    only_private = ask._passages(vault, "car motor", 8, sources={
+        "notes": False, "chats": False, "browsing": False, "private": True})
     assert only_private and all(p["kind"] == "browse" for p in only_private)
 
 
@@ -366,13 +366,14 @@ def _secret(vault):
 
 def test_the_private_switch_covers_private_notes(vault, stream):
     _secret(vault)
-    found = ask._passages(vault, "car motor", 8)
+    found = ask._passages(vault, "car motor", 8, sources=ask.SOURCES)
     hit = next(p for p in found if p["path"] == SECRET)
     assert hit["kind"] == "note" and "zanzibarquux" in hit["text"]
     assert SECRET not in _paths(ask._passages(vault, "car motor", 8, sources={"private": False}))
-    assert SECRET not in _paths(ask._passages(vault, "pasta recipe", 8))  # under MIN_COS
-    only = ask._passages(vault, "car motor", 8,
-                         sources={"notes": False, "chats": False, "browsing": False})
+    # under MIN_COS
+    assert SECRET not in _paths(ask._passages(vault, "pasta recipe", 8, sources=ask.SOURCES))
+    only = ask._passages(vault, "car motor", 8, sources={
+        "notes": False, "chats": False, "browsing": False, "private": True})
     assert SECRET in _paths(only)
     s = stream("ollama", ["It is in [1]."])
     _turn(vault, None, "car motor", s.runner())
@@ -380,6 +381,52 @@ def test_the_private_switch_covers_private_notes(vault, stream):
     off = dict(chat.get_settings(), sources=dict(ask.SOURCES, private=False))
     _turn(vault, None, "car motor", s.runner(), settings=off)
     assert "zanzibarquux" not in json.dumps(s.bodies[-1])
+
+
+def test_passages_leave_private_pages_out_unless_asked(vault):
+    _secret(vault)
+    got = _paths(ask._passages(vault, "car motor", 8))  # a caller that does not say
+    assert "notes/engines.md" in got and SECRET not in got
+    assert not any(p.startswith("browse/private/") for p in got)
+
+
+def test_private_vectors_are_kept_while_a_file_is_unchanged(vault, monkeypatch):
+    _secret(vault)
+    reads = []
+    page = ask._page
+    monkeypatch.setattr(ask, "_page", lambda v, p, i: reads.append(p) or page(v, p, i))
+    embed = semantic._embedder
+    assert SECRET in _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES))
+    memo = ask._PRIVATE[vault.root]
+    assert vault.root / SECRET in memo
+    assert all(e[2].base is None for e in memo.values())  # copies: no batch array kept alive
+    reads.clear()
+    embed.texts.clear()
+    assert SECRET in _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES))
+    assert reads == [vault.root / SECRET]  # only the hit is read again, for its text
+    assert not any("zanzibarquux" in t for t in embed.texts)  # nothing re-embedded
+    (vault.root / SECRET).unlink()
+    assert SECRET not in _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES))
+    assert vault.root / SECRET not in ask._PRIVATE[vault.root]  # a deleted page drops out
+
+
+def test_the_first_private_pass_keeps_to_its_time_cap(vault, monkeypatch):
+    _secret(vault)
+    monkeypatch.setattr(semantic, "HEAD_BUDGET", 0)  # no time for chunk 0 this question
+    assert SECRET not in _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES))
+    assert ask._PRIVATE[vault.root] == {}
+    monkeypatch.setattr(semantic, "HEAD_BUDGET", 1.0)  # a later question embeds it
+    assert SECRET in _paths(ask._passages(vault, "car motor", 8, sources=ask.SOURCES))
+    long = "## Part\n\nCar motor zanzibarquux.\n\n" * 400  # several chunks
+    note(vault.root, "notes/secret-long.md", "title: Secret long\nprivate: true\n", long)
+    monkeypatch.setattr(semantic, "RECALL_BUDGET", 0)  # chunk 0 only, the rest later
+    ask._passages(vault, "car motor", 8, sources=ask.SOURCES)
+    _, starts, _, full = ask._PRIVATE[vault.root][vault.root / "notes/secret-long.md"]
+    assert starts == [0] and not full
+    monkeypatch.setattr(semantic, "RECALL_BUDGET", 1.0)
+    ask._passages(vault, "car motor", 8, sources=ask.SOURCES)
+    _, starts, _, full = ask._PRIVATE[vault.root][vault.root / "notes/secret-long.md"]
+    assert len(starts) > 1 and full
 
 
 def test_chat_private_notes_never_reach_mcp_or_the_dashboard(vault):
@@ -390,7 +437,7 @@ def test_chat_private_notes_never_reach_mcp_or_the_dashboard(vault):
     from cortex import dashboard
 
     _secret(vault)
-    assert SECRET in _paths(ask._passages(vault, "car motor zanzibarquux", 8))
+    assert SECRET in _paths(ask._passages(vault, "car motor zanzibarquux", 8, sources=ask.SOURCES))
     marks = ("secret-garage", "Secret garage", "zanzibarquux")
     got = []
 
@@ -965,9 +1012,8 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     assert "- **miruro.tv** · video · 30 visits" in out
     assert "- and 3 more sites" in out and "site10.example" not in out  # capped at 10
     assert "old.example" not in out
-    assert "**2 notes** written or changed:" in out
-    assert "- Rust ownership" in out  # markdown stripped
-    assert "- Diary entry" in out  # a private note, under the private switch
+    assert "**1 note** written or changed:\n\n- Rust ownership" in out  # markdown stripped
+    assert "**1 private note** written or changed:\n\n- Diary entry" in out  # its own section
     assert "**1 saved AI chat**:\n\n- Heaps chat" in out
     assert "**Journal** (2 lines):\n\n- 09:30 Started graphs revision\n- 21:00 Tired" in out
     assert out.endswith("Not included: site categories set to Don't save (adult), never stored.")
@@ -976,7 +1022,12 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     assert "**2 concepts** studied on 17 Nov" in shut and "Private concept" not in shut  # D1
     assert "private notes, subjects and browsing (switched off in Chat settings)" in shut
     only_private = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False), TODAY)
-    assert "- Diary entry" in only_private and "Rust" not in only_private
+    assert "**1 private note** written or changed:\n\n- Diary entry" in only_private
+    assert "**1 note**" not in only_private and "Rust" not in only_private
+    assert "studied" not in only_private and "Journal" not in only_private
+    assert only_private.endswith("Not included: notes, studying and journal, saved AI chats "
+                                 "(switched off in Chat settings); site categories set to "
+                                 "Don't save (adult), never stored.")
     bare = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False, browsing=False,
                                          private=False), TODAY)
     assert "sites" not in bare and "Rust" not in bare and "Journal" not in bare

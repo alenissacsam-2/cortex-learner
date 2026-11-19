@@ -1,11 +1,12 @@
 """Retrieval and answers for `cortex ask` and the app's Chat: passages from the private browse
-search, the main recall and a search of private notes (`private_pages`), and answer with a
-local model only. Never cloudllm: the passages include local-only browsing and private notes.
-Passages are untrusted page text, wrapped as data."""
+search, the main recall and, only when the caller asks, a search of private notes
+(`_private_hits`), and answer with a local model only. Never cloudllm: the passages can include
+local-only browsing and private notes. Passages are untrusted page text, wrapped as data."""
 
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime
 from itertools import chain, zip_longest
 from pathlib import PurePosixPath
@@ -32,9 +33,10 @@ SYSTEM = (
     "passages. If they hold part of the answer, give that part and say what is missing. Only "
     "when no passage bears on the question, say just: I don't know from your archive. Cite the "
     "passages you use by number, as [1], [2]. Be brief.")
-SOURCES = {"notes": True, "chats": True, "browsing": True, "private": True}
+SOURCES = {"notes": True, "chats": True, "browsing": True, "private": True}  # Chat's defaults
 _CITE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")  # 3 digits: int() of a huge one raises
-_PRIVATE: dict = {}  # (vault root, path) -> (chunk texts, starts, vectors): memory only, never disk
+# vault root -> {file: (its (mtime_ns, size), chunk starts, vectors, every chunk in)}: memory only
+_PRIVATE: dict = {}
 
 
 def _switch(p: dict) -> str:
@@ -107,59 +109,85 @@ def private_pages(vault: Vault, idx: Index) -> dict[str, tuple[str, dict]]:
     """{id: (path, page shaped as `idx._notes` keeps one)} of the pages `idx` leaves out as
     private (`vault.is_private`, or under a private subject). For the local model only: the
     shared index and its vectors, so the MCP server and the dashboard, never hold them."""
-    out = {}
-    for path, i in [*idx._ids.items()]:
-        if i not in idx._private:
+    return {i: (path.relative_to(vault.root).as_posix(), n) for path, i in [*idx._ids.items()]
+            if i in idx._private and (n := _page(vault, path, i)) is not None}
+
+
+def _page(vault: Vault, path, id: str) -> dict | None:
+    """The page at `path` shaped as `Index._notes` keeps one, or None when it cannot be read."""
+    try:
+        note = vault.read_path(path)
+    except VaultError:
+        return None
+    return {"kind": note.kind, "title": str(note.fields.get("title") or id),
+            "fields": note.fields, "body": note.body}
+
+
+def _private_vectors(vault: Vault, idx: Index, embed, dim: int) -> dict:
+    """{file: (stat, chunk starts, vectors, every chunk in)} of the private pages, kept in
+    `_PRIVATE` while a file's (mtime_ns, size) holds; gone and changed files drop out. As
+    semantic.vectors, a call embeds chunk 0 of new files for at most HEAD_BUDGET seconds, then
+    further chunks for RECALL_BUDGET; a file without chunk 0 waits for a later question."""
+    files = {p: i for p, i in [*idx._ids.items()] if i in idx._private}
+    memo = {p: e for p, e in _PRIVATE.get(vault.root, {}).items()
+            if p in files and e[0] == idx._stats.get(p) and e[2].shape[1] == dim}
+    todo, t0 = [p for p in files if p not in memo], time.monotonic()
+    for s in range(0, len(todo), semantic.TAIL_BATCH):
+        if time.monotonic() - t0 >= semantic.HEAD_BUDGET:
+            break
+        if batch := [(p, n) for p in todo[s:s + semantic.TAIL_BATCH]
+                     if (n := _page(vault, p, files[p])) is not None]:
+            vecs = semantic._embed(embed, [semantic._text(n) for _, n in batch])
+            for (p, n), v in zip(batch, vecs, strict=True):  # a copy: the batch is not kept
+                memo[p] = (idx._stats.get(p), [0], v[None].copy(), len(semantic._chunks(n)) == 1)
+    t0 = time.monotonic()
+    for p in [p for p, e in memo.items() if not e[3]]:
+        if time.monotonic() - t0 >= semantic.RECALL_BUDGET:
+            break
+        if (n := _page(vault, p, files[p])) is None:
             continue
-        try:
-            note = vault.read_path(path)
-        except VaultError:
-            continue
-        out[i] = (path.relative_to(vault.root).as_posix(),
-                  {"kind": note.kind, "title": str(note.fields.get("title") or i),
-                   "fields": note.fields, "body": note.body})
-    return out
+        stat, starts, vecs, _ = memo[p]
+        rest = [c for c in semantic._chunks(n) if c[0] not in starts]
+        while rest and time.monotonic() - t0 < semantic.RECALL_BUDGET:
+            part, rest = rest[:semantic.TAIL_BATCH], rest[semantic.TAIL_BATCH:]
+            starts = starts + [s for s, _ in part]
+            vecs = np.concatenate([vecs, semantic._embed(embed, [t for _, t in part])])
+        memo[p] = (stat, starts, vecs, not rest)
+    _PRIVATE[vault.root] = memo
+    return memo
 
 
 def _private_hits(vault: Vault, idx: Index, question: str, k: int) -> list[dict]:
     """Up to `k` private pages whose best chunk scores semantic.MIN_COS or more against
-    `question`, best first, as passages. Their vectors stay in memory (`_PRIVATE`)."""
+    `question`, best first, as passages. Only the hits are read: the rest is `_PRIVATE`."""
     embed = semantic.load_embedder()
-    pages = private_pages(vault, idx) if embed is not None and question.strip() else {}
-    if not pages:
+    if embed is None or not question.strip() or not idx._private:
         return []
     q = semantic._embed(embed, [semantic.QUERY_PREFIX + question.strip()])[0]
-    chunks = {i: semantic._chunks(n) for i, (_, n) in pages.items()}
-    todo = [i for i, (p, _) in pages.items()
-            if (hit := _PRIVATE.get((vault.root, p))) is None
-            or hit[0] != [t for _, t in chunks[i]] or hit[2].shape[1] != len(q)]
-    vecs, at = semantic.embed_all(embed, [t for i in todo for _, t in chunks[i]]), 0
-    for i in todo:
-        c = chunks[i]
-        _PRIVATE[(vault.root, pages[i][0])] = ([t for _, t in c], [s for s, _ in c],
-                                               vecs[at:at + len(c)])
-        at += len(c)
     scored = []
-    for i, (p, _) in pages.items():
-        _, starts, v = _PRIVATE[(vault.root, p)]
+    for p, (_, starts, v, _) in _private_vectors(vault, idx, embed, len(q)).items():
         sims = v @ q
         if sims[b := int(np.argmax(sims))] >= semantic.MIN_COS:
-            scored.append((-float(sims[b]), p, i, starts[b]))
-    return [{"path": p, "title": pages[i][1]["title"], "text": dict(chunks[i])[s],
-             "kind": "chat" if semantic.is_chat(pages[i][1]) else "note",
-             "day": _note_day(vault, i, pages[i][1], p), "private": True}
-            for _, p, i, s in sorted(scored)[:k]]
+            scored.append((-float(sims[b]), p.relative_to(vault.root).as_posix(), p, starts[b]))
+    out = []
+    for _, rel, p, at in sorted(scored)[:k]:
+        if (n := _page(vault, p, i := idx._ids[p])) is not None:
+            out.append({"path": rel, "title": n["title"], "text": semantic._chunk_text(n, at),
+                        "kind": "chat" if semantic.is_chat(n) else "note",
+                        "day": _note_day(vault, i, n, rel), "private": True})
+    return out
 
 
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
               sources: dict | None = None, topic: str = "") -> list[dict]:
     """[{path, title, text, kind (note|chat|browse), day}]: browse pages, recalled notes and
     private notes (`_private_hits`, under the `private` switch) taken in turn, deduped by path,
-    at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off one by one. With
+    at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off one by one;
+    `private` is off unless the caller turns it on (Chat's switch, ask's `private`). With
     `between` (first and last ISO day) only pages dated inside it, then the pages of those days
     by `topic` (`_dated`); undated pages drop out. shortcut: `_dated` lists no private note (only
     a search hit dated in range comes back); add them there if dated questions miss them."""
-    src = {**SOURCES, **(sources or {})}
+    src = {**SOURCES, "private": False, **(sources or {})}
     want = k if between is None else vectors.MAX_K  # the range filters after the search
     browse = [{"path": h["path"], "title": h["title"], "text": h["text"], "kind": "browse",
                "day": _browse_day(h["path"])}
