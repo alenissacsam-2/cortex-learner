@@ -18,6 +18,9 @@ own computer (`http://127.0.0.1:<port>`). There is no server, no account and no 
 
 The extension is set to `"incognito": "not_allowed"`, so it can never run in private windows.
 
+**After updating Cortex, reload the extension:** on the extensions page, click the reload arrow
+on Cortex capture. The browser keeps running the old copy until you do.
+
 ## Pair it with Cortex
 
 1. In a terminal, run `cortex browse pair` (from a source checkout, prefix `uv run`). It
@@ -106,8 +109,11 @@ One record per visit, sent when you leave the page (switch tab, navigate or clos
 
 Before the extension or the Cortex app sends the token or any visit, the receiver must prove
 it holds the token: it answers `GET /v1/hello?n=<random nonce>` (asked without the token) with
-HMAC-SHA256(token, nonce). Another program listening on the port fails that check and gets
-nothing; the popup and the app then say the port is used by another program.
+HMAC-SHA256(token, nonce). The extension asks again at the start of every send and every
+deny-list fetch, never trusting an earlier answer. Another program listening on the port fails
+that check and gets nothing: the app then says the port is used by another program, and the
+popup says the port answers, but not as your Cortex receiver. An older Cortex receiver (from
+before an update) is named as such in both: restart it, or restart the computer.
 
 The receiver checks the token and drops any request from a web page (only
 `chrome-extension://` and `moz-extension://` origins are accepted). It runs the same privacy

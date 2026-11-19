@@ -19,7 +19,7 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 **Servers on this computer only.** These listen on 127.0.0.1 (loopback), so no other computer can reach them:
 
 - `cortex app`: the app page. Every request needs a key that changes each launch, and it stops after 30 minutes idle or when you click Quit.
-- `cortex browse serve`: the receiver for the browser extension, on port 8799. It accepts only the paired extension's token.
+- `cortex browse serve`: the receiver for the browser extension, on port 8799. It accepts only the paired extension's token. Before the app or the extension sends that token or any visit, the receiver must prove it holds the token (a keyed hash of a fresh random value), checked again before every send, so another program listening on the port gets nothing.
 - The MCP server (`cortex mcp`) talks to Claude through standard input and output, not the network.
 
 **Local model calls.** When you turn on a local model, Cortex talks to Ollama (127.0.0.1:11434) or LM Studio on this computer only. It refuses any address that is not loopback, ignores proxy settings, and refuses cloud models that a local runner can forward to (Ollama `-cloud` models, for example).
@@ -64,9 +64,11 @@ These measures lower the risk; they do not remove it. Review changes to your `me
 
 Cortex can turn your browser history into pages. It is off until you run an import or start the receiver, and [GUIDE.md section 6](GUIDE.md#6-your-browsing) explains every step and setting.
 
+**After your first import, new history comes in by itself.** While the app or the receiver runs, Cortex imports new visits every `browse.auto_import_hours` (default 6; 0 turns it off). It reads only the browsers and profiles you imported before; a profile you untick in the app is remembered and left out of every import you did not click. Nothing is read before your first import.
+
 **Who may see each category.** Every browsing category (news, video, health, money and so on) has one of three settings:
 
-- **Skip:** never saved at all. Adult is skipped by default.
+- **Skip** (Don't save in the app): never saved at all. Adult is skipped by default. A site the local model files under a skipped category after it was stored is dropped the same way, so Chat never lists it.
 - **Local models only:** saved on private pages in `browse/private/`. Only a local model on this computer (Ollama or LM Studio) may read them. They never appear in search, the dashboard or any cloud chat. Every sensitive category (health, money, betting, dating, sexuality, drugs and self-harm) starts here.
 - **Cloud AI apps can read:** saved on normal pages that Claude, Gemini, ChatGPT, Cursor and other AI apps can read through Cortex. Nothing is in this group until you turn on `browse.visible_to_claude`. For these categories the site pages include the **page titles, the search terms and the site names**, so those apps can read them, not only your topics and time. The setting is stored as an allowlist, `browse.cloud_categories`: a category Cortex adds later starts as local-only until you choose otherwise. (Older configs that list `hidden_from_claude` keep working, and categories they did not know are local.)
 
@@ -76,14 +78,14 @@ Cortex can turn your browser history into pages. It is off until you run an impo
 
 **Private pages stay out of git.** The vault's `.gitignore` lists `browse/private/`. A vault made before this release may have committed them: the next browse import stops tracking them (once, keeping the files), and `cortex doctor` warns if older commits still hold them, with the commands to rewrite that history. Cortex never rewrites history itself.
 
-**Your choice: git on or off, private pages in or out.** Two settings on the app's Vault page (`git:` in `~/.cortex/config.yaml`) decide this. *Keep the vault's history in git* is on by default; off, Cortex makes no commits at all, so nothing new enters the history, `cortex undo` is off, and an existing `.git` folder is left untouched (delete it yourself if you want the old history gone). *Include private browsing pages in git history* is off by default, which is what this section describes. On, Cortex removes its own `browse/private/` line from `.gitignore` and your private pages are committed like any other page: the history then holds every version of them, and `cortex browse forget` removes what it forgets from the files on disk but not from old commits (it never rewrites history, for any page). Both histories use more disk space as the vault grows; that is the trade-off for being able to undo.
+**Your choice: git on or off, private pages in or out.** Two settings on the app's Vault page (`git:` in `~/.cortex/config.yaml`) decide this. *Keep the vault's history in git* is on by default; off, Cortex makes no commits at all, so nothing new enters the history, `cortex undo` is off, and an existing `.git` folder is left untouched (delete it yourself if you want the old history gone; until then `cortex doctor` still warns if it has a remote or private pages in old commits). *Include private browsing pages in git history* is off by default, which is what this section describes. On, Cortex removes its own `browse/private/` line from `.gitignore` and your private pages are committed like any other page: the history then holds every version of them, and `cortex browse forget` removes what it forgets from the files on disk but not from old commits (it never rewrites history, for any page). Both histories use more disk space as the vault grows; that is the trade-off for being able to undo.
 
 **Processing.** Sorting sites into categories and writing their one-line summaries uses your local model, unless you turn on cloud processing (below) for the "Cloud AI apps can read" categories. Sign-in, payment and bank pages are dropped and never stored.
 
 **Also built in this release:**
 
 - **Cloud processing**, which lets a cloud model sort and summarise the "Cloud AI apps can read" categories. It is opt-in and off by default, for everyone. It never sees a skipped or local-only category, and if no local model is available, local-only data is skipped, never sent to the cloud.
-- **A local chat** (Chat in the app, and `cortex ask`) that answers questions about your archive, private pages included, with your local model only. It never uses the cloud model, whatever the cloud settings say. Chat history stays on this computer, in `<vault>/.cortex/browse/chat/` inside the private browse folder: it is never served to Claude or any other AI app, never on the dashboard and never logged. Delete it in Chat settings, or turn Keep chat history off to write nothing.
+- **A local chat** (Chat in the app, and `cortex ask`) that answers questions about your archive, private pages included, with your local model only. It never uses the cloud model, whatever the cloud settings say. Chat history stays on this computer, in `<vault>/.cortex/browse/chat/` inside the private browse folder: it is never served to Claude or any other AI app, never on the dashboard and never logged. Delete it in Chat settings, or turn Keep chat history off to write nothing. Questions about your sites, your studying and your days are answered from Cortex's own records with no model at all. A site list includes private browsing only while the Private browsing switch in Chat settings is on, and a day or week summary never shows private notes or private subjects.
 - In the app, the cloud settings never take an API key: you name the environment variable that holds it, and the page shows only whether that variable is set.
 
 **Two things to know:**

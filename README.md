@@ -49,17 +49,17 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ![Add your history with the ChatGPT guide open](docs/images/app-import.png)
 
-**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only. After your first import, new history comes in by itself every few hours while the app or the receiver runs, since browsers keep only about 90 days.
+**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only. After your first import, new history comes in by itself every 6 hours (you can change it) while the app or the receiver runs, from the browsers you imported before, since browsers keep only about 90 days. **Status** warns when the last import gets old.
 
 ![Browsing privacy: the cloud switch is off and each sensitive category has its own three-way choice](docs/images/app-privacy.png)
 
-**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. Questions about your own record are answered straight from Cortex's data, even with no model running: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week".
+**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. Questions about your own record are answered straight from Cortex's data, even with no local model or search model: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week". Esc stops an answer, and every answer has Copy.
 
 ![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips](docs/images/app-chat.png)
 
 *A real run on the demo vault with Qwen 3.5 2B and the search model. A model this small can still get a detail wrong, so check the cited pages; a bigger model (4B, 9B) does better if your computer can run it.*
 
-**Local model** shows the runner (Ollama or LM Studio) and the chosen model, with **Save choice**, **Load** and **Test**, and downloads another Ollama model by name.
+**Local model** shows the runner (Ollama or LM Studio) and the chosen model, with **Save choice**, **Load** and **Test**, and downloads another Ollama model by name. An optional **Model for background work** lets browsing imports and site descriptions use a larger, slower model than Chat; with 8 GB of graphics memory or less, keep it the same model.
 
 ![Local model: Ollama with two models, LM Studio not found, the chosen model, the on switch and the Download board with the size this computer suits](docs/images/app-local-model.png)
 
@@ -252,7 +252,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
 ### Browsing
 
-`cortex browse scan` shows counts of your browser history without writing anything; `cortex browse import` turns it into pages, private by default. The optional browser extension (Chrome, Edge, Brave) adds time on screen and short excerpts; see [extension/README.md](extension/README.md). [docs/GUIDE.md](docs/GUIDE.md) section 6 covers every step and setting.
+`cortex browse scan` shows counts of your browser history without writing anything; `cortex browse import` turns it into pages, private by default. The optional browser extension (Chrome, Edge, Brave, Comet) adds time on screen and short excerpts; see [extension/README.md](extension/README.md). [docs/GUIDE.md](docs/GUIDE.md) section 6 covers every step and setting.
 
 ## Local models
 
