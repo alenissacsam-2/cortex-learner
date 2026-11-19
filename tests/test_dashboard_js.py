@@ -61,6 +61,12 @@ const proc = spawn(cfg.browser, ['--headless=new', '--remote-debugging-port=0', 
   '--disable-background-networking', '--mute-audio', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
 const out = { errors: [], scopes: {}, walk: {} };
 let cur = 'load';
+// a page that hangs must not hold node and the browser until pytest's timeout: kill both
+setTimeout(() => {
+  try { proc.kill(); } catch (e) { /* already gone */ }
+  console.log(J({ fatal: `watchdog: no finish in ${cfg.limit || 300} s (at ${cur})` }));
+  process.exit(3);
+}, (cfg.limit || 300) * 1000).unref();
 (async () => {
   let port = null;
   for (let i = 0; i < 400 && !port; i++) {
@@ -309,6 +315,9 @@ def _run(tmp_path, page: Path, **cfg) -> dict:
     node = shutil.which("node")
     if node is None or BROWSER is None:
         pytest.skip("needs node and a Chromium browser (Chrome or Edge)")
+    major = subprocess.run([node, "--version"], capture_output=True, text=True).stdout
+    if int((major.strip().lstrip("v").split(".") or ["0"])[0] or 0) < 22:
+        pytest.skip("needs node 22 or newer (a global WebSocket)")
     run = tmp_path / ("run-" + "-".join(sorted(cfg)))
     run.mkdir()
     (run / "driver.cjs").write_text(DRIVER, encoding="utf-8")
@@ -318,7 +327,7 @@ def _run(tmp_path, page: Path, **cfg) -> dict:
         "helpers": str(run / "helpers.js"), **cfg}), encoding="utf-8")
     r = subprocess.run([node, str(run / "driver.cjs"), str(run / "cfg.json")], capture_output=True,
                        text=True, encoding="utf-8", timeout=600, env=BROWSER_ENV)
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 0, r.stderr or r.stdout[-2000:]
     (run / "out.json").write_text(r.stdout, encoding="utf-8")  # kept for a failing run
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert "fatal" not in out, out["fatal"]
