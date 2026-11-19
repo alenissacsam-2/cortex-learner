@@ -1,7 +1,7 @@
 {
   "name": "cortex",
   "displayName": "Cortex",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Cortex, the learner's always-on local knowledge graph: MCP server, /cortex study skill, a UserPromptSubmit prime hook, a SessionEnd sweep hook and a PostToolUse taint hook.",
   "author": {
     "name": "alenissacsam-2"
