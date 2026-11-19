@@ -1981,8 +1981,8 @@ def topics_attach(dry_run: DryRun = False,
     typer.echo(f"attached {len(done)} of {n} (area {by[1]}, subtopic {by[2]}, leaf {by[3]}); "
                f"left unfiled {n - len(done)}")
     for p, a in done[:max(10, limit or 0)]:
-        typer.echo(f"  {p} -> {a.hub} ({a.score:.3f}): {idx._notes[p]['title']} -> "
-                   f"{tree.title[a.hub]}")
+        typer.echo(f"  {p} -> {a.hub} ({a.score:.3f}): {render.term(idx._notes[p]['title'])} -> "
+                   f"{render.term(tree.title[a.hub])}")
     if not dry_run:
         for p, a in done:
             topics.place(v, p, [a.hub])
@@ -2051,7 +2051,7 @@ def topics_split(hub: Annotated[str | None, typer.Argument(help="The hub to spli
     res = topics.apply_split(v, idx, embed, hub, prop["hash"], topics.auto_children(prop),
                              provisional=True)
     for c in res["children"]:
-        typer.echo(f"  {c['id']} ({c['n']} pages): {c['title']}")
+        typer.echo(f"  {c['id']} ({c['n']} pages): {render.term(c['title'])}")
     typer.echo(f"created {len(res['children'])} provisional sub-topics; {res['stayed']} pages "
                "stay on the parent")
 

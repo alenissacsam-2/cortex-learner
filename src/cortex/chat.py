@@ -315,7 +315,7 @@ _SITES_Q = re.compile(r"\b(?:sites?|websites?|domains?)\b", re.I)
 _LIST_Q = re.compile(r"\b(?:all|list|unique|every|distinct|visit\w*|went|go|gone|open\w*"
                      r"|brows\w*|used?)\b", re.I)
 _BROWSER = re.compile(r"\b(chrome|edge|brave|comet|firefox|opera|vivaldi|arc)\b", re.I)
-SITES_SHOWN = 150
+SITES_SHOWN = 2000  # "all the sites": every one, short of a runaway answer
 _MD = re.compile(r"[*_`\[\]<>#|]")  # a model-written description stays plain text
 
 

@@ -554,7 +554,8 @@ def test_cli_llm_test_sends_only_the_synthetic_prompt(serve, monkeypatch):
 
     f = serve({("POST", "/v1/chat/completions"): openai_reply(
         '{"label":"programming","confidence":0.9}')})
-    monkeypatch.setattr(localllm, "find", lambda config=None: Runner("openai", f.base, "qwen-x"))
+    monkeypatch.setattr(localllm, "find",
+                        lambda config=None, background=False: Runner("openai", f.base, "qwen-x"))
     out = CliRunner().invoke(app, ["llm", "test"])
     assert out.exit_code == 0, out.output
     assert "answer: programming (confidence 0.90)" in out.output and "time: " in out.output

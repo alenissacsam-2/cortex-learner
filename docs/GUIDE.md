@@ -332,4 +332,4 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
 
-**One catch:** the Claude desktop **Chat tab** uses a separately uploaded copy of the skill, which predates `harvest`, `sweep` and `mock`. To get them there, run `uv run python scripts/build_skills.py` and upload `dist/cortex-skill.zip` again in Chat's skill settings. Claude Code already has them after a restart.
+**One catch:** the Claude desktop **Chat tab** uses a separately uploaded copy of the skill, which predates `harvest`, `sweep` and `mock`. To get them there, download `cortex-skill.zip` from the latest release (github.com/alenissacsam-2/cortex-learner/releases) and upload it again in Chat's skill settings (from a source checkout: `uv run python scripts/build_skills.py` builds it into `dist/`). Claude Code already has them after a restart.
