@@ -331,7 +331,7 @@ def embed_all(embed, texts: list[str], batch: int = BATCH, say=None,
 
 def vectors(index: Index, embed, dim: int, budget: float | None = None,
             save_every: float | None = None, progress=None, heads: float | None = None,
-            only: set[str] | None = None):
+            only: set[str] | None = None, save: bool = True):
     """Bring the vault's cache up to date and return (page ids, row -> page index, row chunk
     start, unit row vectors), rows grouped by page.
 
@@ -343,7 +343,8 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
     With `save_every` (seconds) the build saves as it goes, so an interrupted one resumes;
     `progress(done, total)` counts the chunks built in this call. With `only` (page ids) the
     missing chunk 0 of no other page is embedded in this call (the browse import needs the hub
-    members only; recall and `cortex model build` embed the rest)."""
+    members only; recall and `cortex model build` embed the rest). With `save=False` (a dry
+    run) nothing is written and the in-memory cache is left as it was."""
     root = index.vault.root
     pages = _pages(index)
     sig, cache, stack = _MEM.get(root, (None, {}, None))
@@ -383,13 +384,14 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
             cache[i], dirty, done = (meta, not rest, have, vecs), True, done + len(part)
             if progress:
                 progress(done, total)
-            if save_every is not None and time.monotonic() - last >= save_every:
+            if save and save_every is not None and time.monotonic() - last >= save_every:
                 cache, sig = _save(index, pages, cache, sig, dim)
                 last = time.monotonic()
         if budget is not None and time.monotonic() - t0 >= budget:
             break
-    if dirty:
+    if dirty and save:
         cache, sig = _save(index, pages, cache, sig, dim)
+    if dirty:
         stack = None
     if stack is None:
         ids = list(cache)
@@ -397,7 +399,8 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
         stack = (ids, np.repeat(np.arange(len(ids), dtype=np.int32), [len(e[2]) for e in rows]),
                  np.concatenate([e[2] for e in rows] or [np.zeros(0, np.int32)]),
                  np.concatenate([e[3] for e in rows] or [np.zeros((0, dim), np.float32)]))
-    _MEM[root] = (sig, cache, stack)
+    if save:
+        _MEM[root] = (sig, cache, stack)
     return stack
 
 

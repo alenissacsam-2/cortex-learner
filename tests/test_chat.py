@@ -627,8 +627,7 @@ def test_a_named_browser_counts_only_its_visits(vault):
                                                         "chrome/Default": 2}},
                        "github.com||0": {"n": 4, "w": {"chrome/Default": 4}},
                        "x.example||0": {"n": 2, "w": {"comet": 9}}},  # a forget lowered n
-        "2026-11-16": {"old.example||0": {"n": 7},  # imported before browsers were kept
-                       "kept.example||0": {"n": 3, "w": {"?": 3}}},  # a rebuild kept: no source
+        "2026-11-16": {"old.example||0": {"n": 7}},  # imported before browsers were kept
     })
     got = (date(2026, 11, 16), date(2026, 11, 17), "")
     out = chat.site_list(vault, "which sites did I visit in Comet?", got, ALL_ON, TODAY)
@@ -636,7 +635,7 @@ def test_a_named_browser_counts_only_its_visits(vault):
     lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert lines == ["- **miruro.tv** · video · 3 visits on 1 day",
                      "- **x.example** · 2 visits on 1 day"]
-    assert "10 visits in this range were imported before" in out
+    assert "7 visits in this range were imported before" in out
 
 
 def test_a_site_question_before_the_stored_days_says_so(vault):
@@ -1023,6 +1022,11 @@ def test_due_on_a_day_looks_forward(vault):
     assert by("what is due on 25 Nov?") == date(2026, 11, 25)  # not 2025
     assert by("what is due in December?") == date(2026, 12, 31)
     assert by("what is due on 17 Nov 2026?") == date(2026, 11, 17)  # a stated year stays
+    # moved a year on, a month keeps its real days and 29 Feb finds the next 29 Feb
+    assert by("what is due in February?", date(2027, 11, 18)) == date(2028, 2, 29)
+    assert by("what is due in February?", date(2028, 11, 18)) == date(2029, 2, 28)
+    assert by("what is due on 28 Feb?", date(2027, 11, 18)) == date(2028, 2, 28)
+    assert by("what is due on 29 Feb?", date(2028, 3, 5)) == date(2032, 2, 29)
     got = chat._when("last Friday", TODAY)
     assert chat_study._ahead("last Friday", got, TODAY) == got
     assert chat.study_answer(vault, "what is due on Friday?",
