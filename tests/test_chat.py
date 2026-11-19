@@ -472,6 +472,35 @@ def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, mo
     assert len(chat.load(vault, cid)) == 4
 
 
+def test_history_leaves_out_answers_made_with_a_switch_now_off(vault, stream):
+    s = stream("ollama", ["Answer [1]."])
+    cid, _ = _turn(vault, None, "car motor", s.runner())  # every switch on
+    assert chat.load(vault, cid)[1]["switches"] == ask.SOURCES
+    _turn(vault, cid, "car motor torque", s.runner())
+    no_private = {**chat.get_settings(), "sources": {**ask.SOURCES, "private": False}}
+    _turn(vault, cid, "car motor gearbox", s.runner(), settings=no_private)
+    assert [m["role"] for m in s.bodies[2]["messages"]] == ["system", "user"]  # both left out
+    _turn(vault, cid, "car motor engines", s.runner(), settings=no_private)
+    msgs = s.bodies[3]["messages"]  # the answer made with Private off is kept
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+    assert msgs[1]["content"] == "car motor gearbox"
+    _turn(vault, cid, "car motor again", s.runner())  # turning a switch on hides nothing
+    assert [m["content"] for m in s.bodies[4]["messages"][1:-1:2]] == [
+        "car motor torque", "car motor gearbox", "car motor engines"]
+
+
+def test_history_treats_an_old_answer_as_made_with_every_switch_on():
+    old = [{"role": "user", "text": "q1"}, {"role": "user", "text": "q1 again"},
+           {"role": "assistant", "text": "private site"},
+           {"role": "user", "text": "q2"},
+           {"role": "assistant", "text": "a2", "switches": {**ask.SOURCES, "private": False}}]
+    assert [m["content"] for m in chat.history(old, ask.SOURCES)] == ["q1\n\nq1 again",
+                                                                      "private site", "q2", "a2"]
+    off = {**ask.SOURCES, "private": False}
+    assert [m["content"] for m in chat.history(old, off)] == ["q2", "a2"]
+    assert chat.history(old, {**ask.SOURCES, "notes": False}) == []
+
+
 def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
     s = stream("ollama", ["Answer [1]."])
     cid, _ = _turn(vault, None, "car motor", s.runner())
