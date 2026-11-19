@@ -233,7 +233,8 @@ _SITES = {
             "news18.com economist.com ft.com bloomberg.com forbes.com",
     "video": "youtube.com youtu.be netflix.com primevideo.com hotstar.com jiocinema.com "
              "vimeo.com twitch.tv dailymotion.com sonyliv.com zee5.com crunchyroll.com "
-             "disneyplus.com hulu.com max.com mxplayer.in",
+             "disneyplus.com hulu.com max.com mxplayer.in miruro.tv hianime.to aniwatch.to "
+             "9anime.to gogoanime.to animepahe.ru animekai.to",
     "social": "reddit.com twitter.com x.com facebook.com instagram.com linkedin.com "
               "threads.net bsky.app mastodon.social discord.com whatsapp.com web.whatsapp.com "
               "telegram.org web.telegram.org snapchat.com pinterest.com tumblr.com quora.com "
