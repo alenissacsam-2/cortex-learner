@@ -91,12 +91,27 @@ RESTART_NEEDED = ("Cortex was updated after this server started; restart Claude 
                   "new tools.")
 
 
+RESTART_ERROR = {"error": "restart_needed", "message": RESTART_NEEDED,
+                 "next": "Tell the user to restart Claude; nothing was recorded."}
+CODE_SCAN_EVERY = 5.0  # seconds between two mtime scans of the package
+
+
 def _code_mtime() -> float:
-    """Newest mtime of the cortex package's .py files."""
-    return max((p.stat().st_mtime for p in Path(__file__).parent.glob("*.py")), default=0.0)
+    """Newest mtime of the cortex package's .py files, subpackages included."""
+    return max((p.stat().st_mtime for p in Path(__file__).parent.rglob("*.py")), default=0.0)
 
 
 CODE_MTIME = _code_mtime()  # the code this process loaded
+_scan = [float("-inf"), 0.0]  # [monotonic time of the last scan, its result]
+
+
+def _code_changed(fresh: bool = False) -> bool:
+    """True when the package on disk is newer than the code this process loaded (an editable
+    install updated under a running server: lazy imports would mix old and new modules)."""
+    now = time.monotonic()
+    if fresh or now - _scan[0] >= CODE_SCAN_EVERY:
+        _scan[:] = [now, _code_mtime()]
+    return _scan[1] > CODE_MTIME + 1
 # SPEC §15a.2 note formats: the frontmatter cortex_add accepts per note kind
 ADD_FIELDS = {
     "problem": {"url", "platform", "difficulty", "concepts", "status", "solved_on", "summary"},
@@ -143,6 +158,7 @@ ERROR_NEXT = {
     "already_harvested": "Those chats are logged already; take the next bundle.",
     "harvesting": "Do not retry while harvesting: old chats are no learning evidence and "
                   "harvest names no one. After cortex_end it works again.",
+    "restart_needed": RESTART_ERROR["next"],
 }
 # SEC-1: me/ pages that steer study sessions, and the modes where editing them is expected
 WATCHED_PAGES = {"teaching-contract": "contract", "profile": "profile"}
@@ -478,6 +494,8 @@ class Cortex:
         # the SDK fills client_params from a request's _meta envelope too (stateless MCP)
         if params is not None and params.client_info is not None and params.client_info.name:
             self.sessions.client = params.client_info.name
+        if _code_changed():  # run no tool on mixed old and new modules
+            return dict(RESTART_ERROR)
         perm, label = _action(name, kwargs)
         if refused := self._gate(name, kwargs) or self._harvest_gate(name, kwargs, label):
             return refused
@@ -516,9 +534,10 @@ class Cortex:
                 out["did_you_mean"] = list(e.did_you_mean)
             out["next"] = ERROR_NEXT.get(e.code, "Fix the call as the message says and retry.")
             return out
-        if name in ("cortex_start", "cortex_context", "cortex_prime") \
-                and _code_mtime() > CODE_MTIME + 1:
-            out["restart_needed"] = RESTART_NEEDED
+        except (ImportError, AttributeError, NameError):
+            if _code_changed(fresh=True):  # the code changed inside the 5 s scan window
+                return dict(RESTART_ERROR)
+            raise
         if key is not None:
             self._done[(perm, key)] = (out, self.log.has_key(key))
         return out

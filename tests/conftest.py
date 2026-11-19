@@ -97,6 +97,8 @@ def _no_real_embedder(monkeypatch):
     from cortex import mcp_server, semantic
 
     monkeypatch.setattr(mcp_server, "WARM_EMBEDDER", False)
+    # a source edit during the run must not turn every tool into restart_needed
+    monkeypatch.setattr(mcp_server, "CODE_MTIME", float("inf"))
     monkeypatch.setattr(semantic, "_embedder", None)
     real = semantic.load_embedder
     monkeypatch.setattr(semantic, "load_embedder", lambda download=False: (
@@ -107,9 +109,7 @@ def _no_real_embedder(monkeypatch):
 def home(tmp_path, monkeypatch):
     """A home folder at tmp_path/home, for tests that look inside it: HOME, Path.home(),
     APPDATA and LOCALAPPDATA (doctor and clients never read the real Claude configs), no
-    XDG_CONFIG_HOME, and no restart_needed noise from source edits during the run."""
-    from cortex import mcp_server
-
+    XDG_CONFIG_HOME."""
     h = tmp_path / "home"
     h.mkdir()
     for var in ("HOME", "USERPROFILE"):
@@ -118,7 +118,6 @@ def home(tmp_path, monkeypatch):
     for var in ("LOCALAPPDATA", "APPDATA"):
         monkeypatch.setenv(var, str(h / var))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.setattr(mcp_server, "CODE_MTIME", float("inf"))
     return h
 
 
