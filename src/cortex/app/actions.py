@@ -61,13 +61,13 @@ def capture(job, fn, *args, **kwargs) -> dict:
     return {"ok": ok, "lines": lines[-300:]}
 
 
-def run_proc(job, args: list[str]) -> dict:
+def run_proc(job, args: list[str], env: dict | None = None) -> dict:
     """Run a command (a download or an install) with its output as the progress line; Cancel
-    terminates it. {"ok", "cancelled", "lines"}."""
+    terminates it. {"ok", "cancelled", "lines"}. `env`: the child's environment (default ours)."""
     job.say("running: " + subprocess.list2cmdline(args))
     try:
         p = _popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env)
     except OSError as e:
         raise ValueError(f"could not start {args[0]}: {e}") from None
     job.proc = p

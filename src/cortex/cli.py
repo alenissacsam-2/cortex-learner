@@ -24,7 +24,7 @@ from cortex import dashboard as dashboard_mod
 from cortex import doctor as doctor_mod
 from cortex import levels, planner, render, taint
 from cortex import session as session_mod
-from cortex._proc import NO_WINDOW
+from cortex._proc import NO_WINDOW, proxy_env
 from cortex.catalog import Catalog, resolve_or_inbox, slugify
 from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
@@ -1721,6 +1721,76 @@ def _dir_mb(d: Path) -> float:
                if p.is_file() and not p.is_symlink()) / 1e6
 
 
+# Trying again restarts the unfinished file: huggingface_hub deletes a partial download (only
+# whole files are kept), so no message promises it continues where it stopped.
+_AGAIN = " Then try again: the download starts over."
+_DOWNLOAD_ERRORS = (  # (words in the error, in lower case; the plain sentence), first match wins
+    (("no space left", "errno 28", "os error 112", "winerror 112", "not enough space"),
+     "Your disk is full: the search model needs about 150 MB free. Free up some space, then "
+     "try again."),
+    (("407", "proxy"),
+     "Your network's proxy refused the download from huggingface.co (it may need you to sign "
+     "in first). Try a phone hotspot or another network." + _AGAIN),
+    (("certificate", "ssl"),
+     "Your network blocked huggingface.co (common on campus Wi-Fi). Try a phone hotspot or "
+     "another network." + _AGAIN),
+    (("timed out", "timeout"),
+     "The download from huggingface.co took too long and stopped. Try a faster or steadier "
+     "network." + _AGAIN),
+    (("getaddrinfo", "name or service", "nodename", "11001", "resolve", "connect",
+      "unreachable", "network"),
+     "Could not reach huggingface.co. Check that you are online, or try another network."
+     + _AGAIN),
+)
+
+
+def _download_error(e: BaseException, seen: list[str]) -> str:
+    """One plain sentence for a failed model download. fastembed swallows the network error and
+    raises a bare ValueError, so `seen` (its logged errors) is read along with the chain."""
+    if isinstance(e, OSError) and (e.errno == 28 or getattr(e, "winerror", None) == 112):
+        return _DOWNLOAD_ERRORS[0][1]
+    parts, x = [*seen], e
+    while x is not None and len(parts) < 20:
+        parts.append(f"{type(x).__name__} {x}")
+        x = x.__cause__ or x.__context__
+    text = " ".join(parts).lower()
+    for words, sentence in _DOWNLOAD_ERRORS:
+        if any(w in text for w in words):
+            return sentence
+    return "The search model download stopped. Try again later or on another network." + _AGAIN
+
+
+def _log_download_error(e: BaseException, seen: list[str]) -> Path:
+    """The full error, for whoever helps: ~/.cortex/logs/model-download.log (never printed)."""
+    import logging
+
+    path = Path.home() / ".cortex" / "logs" / "model-download.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    h = logging.FileHandler(path, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    log = logging.getLogger("cortex.model_download")
+    log.propagate = False
+    log.addHandler(h)
+    try:
+        log.error("model download failed; fastembed said: %s", " | ".join(seen) or "-",
+                  exc_info=e)
+    finally:
+        log.removeHandler(h)
+        h.close()
+    return path
+
+
+def _download_setup() -> None:
+    """For this download only: the OS certificate store (campus TLS inspection) and the system
+    proxy for hf_xet, which reads only the env."""
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001  (certifi's certificates still work off campus)
+        pass
+    os.environ.update(proxy_env())
+
+
 @model_app.command("download")
 @_errors
 def model_download(vault: VaultOpt = None) -> None:
@@ -1728,12 +1798,32 @@ def model_download(vault: VaultOpt = None) -> None:
     from cortex import semantic
 
     d = semantic.models_dir()
-    (d / doctor_mod.MODEL_READY).unlink(missing_ok=True)  # back only once this run finishes
-    typer.echo(f"model {semantic.MODEL}: downloading if missing into {d} ...")
-    embed = semantic.load_embedder(download=True)
-    typer.echo(f"reranker {semantic.RERANK_MODEL}: downloading if missing ...")
-    semantic.load_reranker(download=True)
-    (d / doctor_mod.MODEL_READY).write_text("downloaded\n", encoding="utf-8")
+    seen: list[str] = []
+    try:
+        from loguru import logger  # fastembed's logger, where its download errors go
+        sink = logger.add(lambda m: seen.append(m.record["message"]), level="ERROR")
+    except Exception:  # noqa: BLE001
+        logger = sink = None
+    try:
+        _download_setup()
+        (d / doctor_mod.MODEL_READY).unlink(missing_ok=True)  # back only once this run finishes
+        typer.echo(f"model {semantic.MODEL}: downloading if missing into {d} ...")
+        embed = semantic.load_embedder(download=True)
+        typer.echo(f"reranker {semantic.RERANK_MODEL}: downloading if missing ...")
+        semantic.load_reranker(download=True)
+        (d / doctor_mod.MODEL_READY).write_text("downloaded\n", encoding="utf-8")
+    except Exception as e:  # noqa: BLE001  (a plain sentence, never a traceback)
+        sentence = _download_error(e, seen)
+        try:
+            log = _log_download_error(e, seen)
+            sentence += f" Details are in the log: {log}"
+        except OSError:  # a full disk may refuse the log too
+            pass
+        typer.echo(sentence, err=True)
+        raise typer.Exit(1) from None
+    finally:
+        if sink is not None:
+            logger.remove(sink)
     typer.echo(f"model ready: {_dir_mb(d):.0f} MB in {d}")
     try:
         v = _vault(vault)

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from cortex import session
+from cortex._proc import proxy_env
 from cortex.app import actions, status, targets
 
 # The models Setup offers: edit tags and sizes here. Sizes are approximate (4-bit downloads).
@@ -272,7 +273,7 @@ def _cortex() -> str:
 def embed(job, root: Path | None) -> dict:
     """`cortex model download` (the only path that fetches the search model)."""
     return actions.run_proc(job, [_cortex(), "model", "download",
-                                  *(["--vault", str(root)] if root else [])])
+                                  *(["--vault", str(root)] if root else [])], env=proxy_env())
 
 
 def index(job, root: Path) -> dict:
@@ -326,7 +327,7 @@ def pull_ollama(job, name: str) -> dict:
         raise ValueError("Ollama is not installed yet: install it under Setup → Local model.")
     if status.ollama_models() is None:  # `ollama pull` needs the server
         raise ValueError(STOPPED.format("Ollama"))
-    return actions.run_proc(job, [exe, "pull", name])
+    return actions.run_proc(job, [exe, "pull", name], env=proxy_env())
 
 
 def pull(job, id: str, runner: str) -> dict:
@@ -336,7 +337,7 @@ def pull(job, id: str, runner: str) -> dict:
     if runner == "lmstudio":
         if (exe := status.lms_path()) is None:
             raise ValueError("LM Studio's `lms` was not found (step 3).")
-        return actions.run_proc(job, [exe, "get", m["lms"], "--yes"])
+        return actions.run_proc(job, [exe, "get", m["lms"], "--yes"], env=proxy_env())
     raise ValueError("runner must be ollama or lmstudio")
 
 
