@@ -34,6 +34,7 @@ from cortex.vault import (
     _split,
     _to_yaml,
     is_private,
+    truthy,
 )
 
 TOPIC_MAP = "my-topic-map"  # the imported topic hub (notes/); month pages link it if it exists
@@ -413,7 +414,7 @@ def run(vault: Vault, dry_run: bool = True) -> dict:
             f = _load_fm(sp[1]) if sp else None
         except (ValueError, YAMLError):
             continue
-        if f is None or f.get("private") is True:
+        if f is None or truthy(f.get("private")):
             continue
         if p.parent.name == "domains":
             fields[f"domain:{p.stem}"] = f

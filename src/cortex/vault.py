@@ -122,10 +122,19 @@ class Note:
     body: str
 
 
+TRUTHY = {"true", "yes", "y", "on", "1"}
+
+
+def truthy(v) -> bool:
+    """A frontmatter flag set in any truthy form a person might type: true, yes, y, on, 1
+    (any case, quoted or not)."""
+    return v is True or str(v).strip().casefold() in TRUTHY
+
+
 def is_private(note: Note) -> bool:
     # v5 PHASE4 V4: people pages are private unless their frontmatter says `private: false`
     p = note.fields.get("private")
-    return p is True or (note.kind == "person" and p is not False)
+    return truthy(p) or (note.kind == "person" and p is not False)
 
 
 def secret_pattern(text: str) -> str | None:
