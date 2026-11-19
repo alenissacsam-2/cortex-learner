@@ -623,10 +623,29 @@ def _local(runner) -> bool:
     return True
 
 
-def history(msgs: list) -> list:
+def _made_with_off(m: dict, sources: dict) -> bool:
+    """Was answer `m` made with a source switch on that `sources` now has off? An answer saved
+    before switches were recorded counts as made with every switch on."""
+    was = m.get("switches")
+    was = was if isinstance(was, dict) else {}
+    return any(was.get(k, True) and not on for k, on in sources.items())
+
+
+def history(msgs: list, sources: dict | None = None) -> list:
     """The last TURNS messages as plain {role, content}, oldest dropped first to fit
     HISTORY_BUDGET, same-role neighbours joined (a failed turn leaves two user messages; some
-    chat templates refuse that), starting with a user message."""
+    chat templates refuse that), starting with a user message. With `sources` (the switches
+    now), an answer made with a switch now off is left out with the question(s) before it, so
+    a private site listed earlier never reaches the model after Private is turned off."""
+    if sources is not None:
+        kept: list = []
+        for m in msgs:
+            if m["role"] == "assistant" and _made_with_off(m, sources):
+                while kept and kept[-1]["role"] == "user":
+                    kept.pop()
+                continue
+            kept.append(m)
+        msgs = kept
     out, left = [], HISTORY_BUDGET
     for m in reversed(msgs[-TURNS:]):
         text = m["text"].strip()
@@ -739,7 +758,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                 f"{runner.model}"})
         messages = [{"role": "system",
                      "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}")},
-                    *history(msgs[:-1]),
+                    *history(msgs[:-1], s["sources"]),
                     {"role": "user", "content": ask.prompt(found, text) + CITE}]
         thought = []
 
@@ -773,7 +792,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                    for p in found[:SEARCHED]]
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
-                 "model": model, **({"stopped": True} if stopped else {})})
+                 "model": model, "switches": dict(s["sources"]),
+                 **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
