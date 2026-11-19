@@ -253,6 +253,29 @@ def test_dev_command_matches_the_install_guide(tmp_path, monkeypatch):
         f'cd "{tmp_path}"; git pull; uv tool install --editable . --reinstall'
 
 
+def test_fixed_tool_copy_updates_from_its_source_folder(tmp_path, monkeypatch):
+    tool = tmp_path / "uv" / "tools" / "cortex-learner"
+    here = tool / "Lib" / "site-packages" / "cortex" / "update.py"
+    monkeypatch.setattr(update, "HERE", here)
+    monkeypatch.setattr(update, "CHECKOUT", here.parents[2])  # site-packages has no .git
+    src = tmp_path / "K-Graph"
+    (src / ".git").mkdir(parents=True)
+    git_cmd = f"uv tool install --force git+https://github.com/{REPO}@v0.2.0"
+    assert update.command("v0.2.0") == git_cmd  # no receipt yet
+    tool.mkdir(parents=True)
+    receipt = tool / "uv-receipt.toml"
+    receipt.write_text("[tool]\nrequirements = [{ name = \"cortex-learner\", editable = "
+                       f"'{src}' }}]\n", encoding="utf-8")
+    assert update.command("v0.2.0") == git_cmd  # editable receipts are not a fixed copy
+    receipt.write_text("[tool]\nrequirements = [{ name = \"cortex-learner\", directory = "
+                       f"'{src}' }}]\n", encoding="utf-8")
+    assert update.tool_source() == src
+    assert update.command("v0.2.0") == \
+        f'cd "{src}"; git pull; uv tool install --force --reinstall "{src}"'
+    receipt.write_text("not toml [", encoding="utf-8")
+    assert update.command("v0.2.0") == git_cmd
+
+
 def test_launch_starts_the_installer_detached(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(subprocess, "Popen", lambda args, **k: seen.update(args=args, **k))

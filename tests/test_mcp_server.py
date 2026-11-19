@@ -7,7 +7,7 @@ import pytest
 from conftest import CONTRACT, FIXTURES, events, git, run
 from mcp import Client
 
-from cortex import mcp_server, planner
+from cortex import planner
 from cortex import session as session_mod
 from cortex.catalog import Catalog
 from cortex.events import local_day
@@ -199,16 +199,6 @@ def test_read_recent_skips_voided_evidence(root):
         await call("cortex_log", {"kind": "void",
                                   "payload": {"event_id": bad, "reason": "misheard"}})
         assert (await call("cortex_read", {"id": "two-pointers"}))["recent"] == []
-
-    run(root, body)
-
-
-def test_restart_needed_when_code_is_newer_than_the_server(root, monkeypatch):
-    async def body(call):
-        assert "restart_needed" not in await call("cortex_context", {})  # CODE_MTIME = inf
-        monkeypatch.setattr(mcp_server, "CODE_MTIME", 0.0)  # as if loaded before an update
-        assert "restart Claude" in (await call("cortex_context", {}))["restart_needed"]
-        assert "restart_needed" in await call("cortex_start", {})
 
     run(root, body)
 

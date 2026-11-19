@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from importlib.metadata import version as _dist_version
 from pathlib import Path
@@ -23,7 +24,8 @@ from urllib.parse import unquote, urljoin, urlsplit
 from cortex._proc import proxy_env
 
 REPO = "alenissacsam-2/cortex-learner"  # the GitHub repo that holds the plugin marketplace
-CHECKOUT = Path(__file__).resolve().parents[2]  # the source checkout of an editable install
+HERE = Path(__file__).resolve()
+CHECKOUT = HERE.parents[2]  # the source checkout of an editable install
 
 API = "https://api.github.com"
 EXE = "CortexSetup.exe"
@@ -75,10 +77,27 @@ def mode() -> str:
     return "installer" if install_dir() else "dev"
 
 
+def tool_source() -> Path | None:
+    """The local folder a non-editable `uv tool install <folder>` built this copy from (read
+    from the tool's uv-receipt.toml), else None."""
+    receipt = next((d / "uv-receipt.toml" for d in HERE.parents
+                    if (d / "uv-receipt.toml").is_file()), None)
+    try:
+        reqs = tomllib.loads(receipt.read_text(encoding="utf-8"))["tool"]["requirements"]
+    except (AttributeError, OSError, ValueError, KeyError, TypeError):  # no or odd receipt
+        return None
+    src = next((r.get("directory") for r in reqs
+                if isinstance(r, dict) and r.get("name") == "cortex-learner"), None)
+    return Path(src) if isinstance(src, str) else None
+
+
 def command(tag: str) -> str:
     """What a dev install runs to update, as docs/INSTALL.md says (a clone, else from git)."""
     if (CHECKOUT / ".git").exists():
         return f'cd "{CHECKOUT}"; git pull; uv tool install --editable . --reinstall'
+    if (src := tool_source()) is not None:  # a fixed copy of a folder: rebuild it from there
+        pull = f'cd "{src}"; git pull; ' if (src / ".git").exists() else ""
+        return f'{pull}uv tool install --force --reinstall "{src}"'
     return f"uv tool install --force git+https://github.com/{REPO}@{tag}"
 
 
