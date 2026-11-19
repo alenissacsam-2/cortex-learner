@@ -639,11 +639,11 @@ async function hit(s, key, fail) {
   $('toast-msg').textContent = '';
   $('confirm').open = false;
   $('jobline').className = 'jobline idle';
-  const text0 = $(s).textContent, ui0 = ui(s, e);
+  const text0 = $(s).textContent, ui0 = ui(s, e), disabled0 = !!e.disabled;
   DATA.hold = true;
   if (c.kind === 'click') { e.fire('click'); e.fire('click'); } else change(e);  // a double click
   await tick();
-  const r = { busyMid: e.getAttribute('aria-busy') === 'true', disabledMid: !!e.disabled };
+  const r = { busyMid: e.getAttribute('aria-busy') === 'true', disabledMid: !!e.disabled, disabledBefore: disabled0 };
   DATA.hold = false;
   release();
   await tick();
@@ -857,7 +857,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
         root_committed, tmp_path, monkeypatch):
     """QA: every button and every input/select with a change handler in every section, clicked
     twice (a double click) while the app holds the answer, then with the app saying yes, then
-    with the app failing. It sends the expected request once, is busy (aria-busy, disabled)
+    with the app failing. It sends the expected request once, is busy (aria-busy, not disabled)
     only while waiting, says what happened (toast, Saved mark, job line, dialog or a redrawn
     section) and turns a failure into an error toast. Past history and the import guides are
     left out (another change owns them; the test data has no browser history)."""
@@ -881,8 +881,10 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
             posts = [json.dumps(x) for x in ok["posts"]]
             assert len(posts) == len(set(posts)), where  # a double click sends once
             if posts and v["kind"] == "click" and not ok["dialog"]:  # busy only while waiting
-                assert ok["busyMid"] and ok["disabledMid"], where
-                assert not ok["busyAfter"] and not ok["disabledAfter"], where
+                # aria-busy; never disabled by it (a disabled button drops keyboard focus to
+                # the page), nor enabled when it settles
+                assert ok["busyMid"] and ok["disabledMid"] == ok["disabledBefore"], where
+                assert not ok["busyAfter"] and ok["disabledAfter"] == ok["disabledBefore"], where
             told = ("on" in ok["toast"][0] or ok["saved"] or ok["jobline"] != "jobline idle"
                     or ok["dialog"] or ok["reloaded"] or ok["nav"] or ok["changed"]
                     or ok["clipboard"])

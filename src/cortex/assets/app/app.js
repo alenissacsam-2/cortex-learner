@@ -35,15 +35,15 @@
     return e;
   }
   // a click whose handler returns a promise (post, job, api, a copy) marks its button busy
-  // until it settles: aria-busy, disabled and the dots in app.css; a second click is ignored
+  // until it settles: aria-busy and the dots in app.css; a second click is ignored. Never
+  // disabled: that would drop keyboard focus to the page
   function pressable(b, fn) {
     return (ev) => {
       if (b.getAttribute('aria-busy') === 'true') return undefined;
       const r = fn(ev);
       if (!r || typeof r.then !== 'function') return r;
       b.setAttribute('aria-busy', 'true');
-      b.disabled = true;
-      const done = () => { b.removeAttribute('aria-busy'); b.disabled = false; };
+      const done = () => b.removeAttribute('aria-busy');
       r.then(done, done);
       return r;
     };
