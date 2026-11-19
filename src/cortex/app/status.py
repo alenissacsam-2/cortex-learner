@@ -338,30 +338,31 @@ def login_task() -> dict:
 
 # Windows: HKCU ...\Run starts the no-console `cortex-receiver` at login. It replaced a Task
 # Scheduler entry (LOGIN_TASK) that opened a console and stopped on battery; `actions.login`
-# and the uninstaller delete that old task.
+# and the uninstaller delete that old task. The desktop app's Start with Windows is another value
+# under the same key (desktop.AUTOSTART).
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
-def run_get() -> str | None:  # tests replace run_get/run_set/run_delete (conftest)
+def run_get(name: str = LOGIN_TASK) -> str | None:  # tests replace run_get/set/delete (conftest)
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            return winreg.QueryValueEx(k, LOGIN_TASK)[0]
+            return winreg.QueryValueEx(k, name)[0]
     except OSError:
         return None
 
 
-def run_set(value: str) -> None:
+def run_set(value: str, name: str = LOGIN_TASK) -> None:
     import winreg
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-        winreg.SetValueEx(k, LOGIN_TASK, 0, winreg.REG_SZ, value)
+        winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
 
 
-def run_delete() -> None:
+def run_delete(name: str = LOGIN_TASK) -> None:
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.DeleteValue(k, LOGIN_TASK)
+            winreg.DeleteValue(k, name)
     except FileNotFoundError:
         pass
 

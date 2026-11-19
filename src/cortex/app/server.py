@@ -6,7 +6,8 @@ Security, because the app changes other apps' config files:
 - the Host must be the app's own loopback address (DNS rebinding), and any Origin its own;
 - GET never changes anything; changes are POST with `Content-Type: application/json`;
 - CSP `default-src 'self'`, no inline script; the page builds its DOM without innerHTML;
-- it stops after 30 minutes idle, or on Quit.
+- in the browser it stops after 30 minutes idle, or on Quit; the desktop app (desktop.py: its
+  own window and a tray icon) runs until Quit.
 Long actions run as background jobs, one at a time, with a progress line (`Jobs`).
 """
 
@@ -31,6 +32,7 @@ from cortex.app import actions, news, status, targets, wizard
 
 HOST = "127.0.0.1"
 IDLE_S = 30 * 60
+WATCH_S = 5  # seconds between idle checks
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
@@ -149,6 +151,7 @@ class Jobs:
         self.lock = threading.Lock()
         self.cur: Job | None = None
         self.seq = 0
+        self.on_end = None  # called with each job once it ends (the desktop app's notifier)
 
     def start(self, name: str, section: str, fn, *, cancellable: bool = False,
               quiet_errors: bool = False) -> dict:
@@ -172,6 +175,11 @@ class Jobs:
                     traceback.print_exc(limit=3)
             finally:
                 job.running, job.ended = False, time.time()
+                if self.on_end is not None:
+                    try:
+                        self.on_end(job)
+                    except Exception:  # noqa: BLE001  (a notification never fails the job)
+                        traceback.print_exc(limit=3)
 
         threading.Thread(target=body, daemon=True, name=f"cortex-app-{name}").start()
         return {"job": name, "seq": self.seq}
@@ -232,7 +240,9 @@ class App:
         self.chatting = threading.Lock()  # one chat answer at a time, beside any job
         self.last = time.monotonic()
         self.stop = threading.Event()
+        self.desktop = None  # desktop.Desktop (window and tray) in the desktop app, else None
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
+                    "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
@@ -262,7 +272,9 @@ class App:
             "/api/import/preview": self.import_preview, "/api/import/run": self.import_run,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
-            "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen}
+            "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
+            "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
+            "/api/app/notify": self.notify_set}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -939,6 +951,30 @@ class App:
         self.stop.set()
         return {"ok": True}
 
+    # ---- the desktop app: window, Start with Windows, notifications ----
+    def window_show(self, body: dict) -> dict:
+        """A second `cortex-app` launch brings this app's window up (False: the browser app)."""
+        return {"shown": self.desktop is not None and self.desktop.show()}
+
+    def autostart(self) -> dict:
+        from cortex.app import desktop
+        return desktop.autostart_state()
+
+    def autostart_set(self, body: dict) -> dict:
+        from cortex.app import desktop
+        out = desktop.set_autostart(_bool(body, "enabled"))
+        if self.desktop is not None:
+            self.desktop.refresh_tray()  # its Start with Windows tick
+        return out
+
+    def notify(self) -> dict:
+        from cortex.app import desktop
+        return desktop.notify_settings()
+
+    def notify_set(self, body: dict) -> dict:
+        from cortex.app import desktop
+        return desktop.save_notify(body)
+
 
 # ---- HTTP -----------------------------------------------------------------------------------
 
@@ -1226,8 +1262,29 @@ def running_url() -> str | None:
     return f"http://{HOST}:{port}/?t={token}" if ok else None
 
 
-def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=print) -> None:
-    """Serve until Quit, Ctrl+C or 30 minutes with no request and no job."""
+def show_window(url: str) -> bool:
+    """Ask the app at `url` (from running_url) to bring its window up; False when it has no
+    window (the browser app) or does not answer."""
+    import http.client
+    u = urlsplit(url)
+    token = (parse_qs(u.query).get("t") or [""])[0]
+    c = http.client.HTTPConnection(HOST, u.port, timeout=10)
+    try:
+        c.request("POST", "/api/window/show", body=b"{}", headers={
+            "Host": u.netloc, "X-Cortex-Token": token, "Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status == 200 and json.loads(r.read()).get("shown") is True
+    except (OSError, ValueError):
+        return False
+    finally:
+        c.close()
+
+
+def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
+          ) -> tuple[ThreadingHTTPServer, App, str]:
+    """The app's server, app.json and its watch and auto-import threads, not yet serving: the
+    caller runs `srv.serve_forever` and then `finish`. `idle`: stop after 30 minutes with no
+    request and no job (the browser app; the desktop app runs until Quit)."""
     try:
         srv, app = make_server(root, port)
     except OSError as e:
@@ -1250,8 +1307,8 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
         traceback.print_exc(limit=3)
 
     def watch():
-        while not app.stop.wait(5):
-            if time.monotonic() - app.last > IDLE_S and not app.jobs.running():
+        while not app.stop.wait(WATCH_S):
+            if idle and time.monotonic() - app.last > IDLE_S and not app.jobs.running():
                 echo("cortex app: 30 minutes idle; stopping.")
                 break
         app.stop.set()
@@ -1269,6 +1326,22 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
 
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=auto, daemon=True, name="cortex-app-auto-import").start()
+    return srv, app, url
+
+
+def finish(srv: ThreadingHTTPServer, app: App) -> None:
+    """After serving: app.json, the in-app receiver and unused uploads go; the port closes."""
+    app.stop.set()
+    _drop_state(app)
+    app.receiver.stop()
+    for uid in list(app.uploads):  # exports added but never imported
+        app._drop(uid)
+    srv.server_close()
+
+
+def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=print) -> None:
+    """Serve until Quit, Ctrl+C or 30 minutes with no request and no job."""
+    srv, app, url = start(root, port=port, echo=echo)
     echo(f"Cortex app: {url}")
     echo("It runs on this computer only. Close it with Quit on the page or Ctrl+C here.")
     if open_browser:
@@ -1278,9 +1351,4 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
     except KeyboardInterrupt:
         pass
     finally:
-        app.stop.set()
-        _drop_state(app)
-        app.receiver.stop()
-        for uid in list(app.uploads):  # exports added but never imported
-            app._drop(uid)
-        srv.server_close()
+        finish(srv, app)

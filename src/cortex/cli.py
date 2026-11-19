@@ -2322,11 +2322,18 @@ def app_cmd(vault: VaultOpt = None,
             no_open: Annotated[bool, typer.Option("--no-open", help="Print the link only.")]
             = False,
             port: Annotated[int, typer.Option(help="Port on 127.0.0.1 (0 picks a free one).")]
-            = 0) -> None:
+            = 0,
+            window: Annotated[bool, typer.Option(
+                "--window", help="Its own window and a tray icon (Windows), as the Start menu's "
+                "Cortex opens it; runs until Quit in the tray.")] = False) -> None:
     """Open the Cortex app in your browser: setup, AI apps, local model, browsing, vault.
     Runs on 127.0.0.1 only and stops after 30 minutes idle."""
     from cortex.app import server
 
+    if window:
+        from cortex.app import desktop
+        desktop.run(vault or taint._vault_root(), hidden=no_open, port=port, echo=typer.echo)
+        return
     server.run(vault or taint._vault_root(), open_browser=not no_open, port=port,
                echo=typer.echo)
 

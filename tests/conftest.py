@@ -52,14 +52,15 @@ def _no_real_installs(tmp_path_factory, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_run_key(monkeypatch):
-    """Tests never read or write the real HKCU Run key (Start at login on Windows): an
-    in-memory value instead. Returns the dict holding it."""
+    """Tests never read or write the real HKCU Run key (Start at login, Start with Windows): an
+    in-memory dict of value name -> command instead. Returns the dict."""
     from cortex.app import status
 
     run: dict = {}
-    monkeypatch.setattr(status, "run_get", lambda: run.get("v"))
-    monkeypatch.setattr(status, "run_set", lambda v: run.__setitem__("v", v))
-    monkeypatch.setattr(status, "run_delete", lambda: run.pop("v", None))
+    monkeypatch.setattr(status, "run_get", lambda name=status.LOGIN_TASK: run.get(name))
+    monkeypatch.setattr(status, "run_set",
+                        lambda v, name=status.LOGIN_TASK: run.__setitem__(name, v))
+    monkeypatch.setattr(status, "run_delete", lambda name=status.LOGIN_TASK: run.pop(name, None))
     return run
 
 
