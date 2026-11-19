@@ -17,7 +17,7 @@ import secrets
 import shlex
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cortex.vault import VaultError
@@ -549,9 +549,48 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "value": b["last_processed"] or "never", "count": b["queued"],
                 "detail": f"{b['queued']} visits waiting to be processed.",
                 "action": _go("browse", "Open")})
+    out.append(history_row(root if v["ok"] else None, b))
     out.append({"id": "dashboard", "label": "Dashboard",
                 "state": "ok" if v.get("dashboard") else "off",
                 "value": f"built {v['dashboard']}" if v.get("dashboard") else "not built",
                 "detail": "Your notes as a page you can browse, offline.",
                 "action": _go("vault", "Open")})
     return out
+
+
+def history_row(root: Path | None, b: dict, now: datetime | None = None) -> dict:
+    """Is the automatic import keeping up? Warns when the last import is older than twice
+    `browse.auto_import_hours` (browsers keep ~90 days, so missed days are lost). `at` is the
+    import time the page shows in words where "{ago}" stands; `import` the sources imported
+    before (the automatic import's); `login_hint` that only a running Cortex imports."""
+    row = {"id": "history", "label": "Browsing history", "action": _go("browse", "Open")}
+    state: dict = {}
+    if root is not None and b.get("available"):
+        try:
+            from cortex.browse import build
+            from cortex.vault import Vault
+            state = build.load_state(Vault(root))
+        except (OSError, ValueError, VaultError):
+            pass
+        except Exception:  # noqa: BLE001
+            log.exception("browse state read failed")
+    last = state.get("last_run")
+    try:
+        t = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except (TypeError, ValueError):  # never imported (the automatic import waits for a first)
+        return {**row, "state": "off", "value": "never imported",
+                "detail": "Import your past history once under Browsing; after that Cortex "
+                          "keeps it up to date."}
+    hours = (b.get("settings") or {}).get("auto_import_hours") or 0
+    row |= {"at": last, "value": "last import {ago}"}
+    if not hours:
+        return {**row, "state": "off",
+                "detail": "Automatic import is off: new visits come in only when you import "
+                          "them. Turn it on under Browsing."}
+    login = b.get("login") or {}
+    row["login_hint"] = bool(login.get("supported") and not login.get("exists"))
+    if (now or datetime.now(UTC)) - t > timedelta(hours=2 * hours):
+        return {**row, "state": "warn",
+                "detail": "Last import {ago}: newer visits are not in Cortex yet.",
+                "import": [k for k in state.get("sources") or {} if isinstance(k, str)]}
+    return {**row, "state": "ok", "detail": f"New visits come in every {hours:g} hours."}
