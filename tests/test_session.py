@@ -320,6 +320,35 @@ def test_commit_refused_mid_revert(root):
     assert git(root, "rev-parse", "HEAD") == head
 
 
+def test_commit_runs_git_add_and_commit_outside_the_vault_lock(root, monkeypatch):
+    """B12: other writers wait only for the status snapshot, never for git add/commit."""
+    real, held = sm_mod._commit_paths, []
+
+    def spy(top, paths, message):
+        held.append((root / ".cortex" / "lock").exists())
+        Vault(root).write_text(root / "inbox.md", "written while git runs\n")  # no wait
+        return real(top, paths, message)
+
+    monkeypatch.setattr(sm_mod, "_commit_paths", spy)
+    (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
+    sha = sm_mod._commit(Vault(root), "cortex: test")
+    assert held == [False]
+    assert sha == git(root, "rev-parse", "HEAD").strip()
+    assert git(root, "show", "--name-only", "--format=", sha).split() == ["clean.md"]
+    assert git(root, "status", "--porcelain").strip() == "M inbox.md"  # not in the snapshot
+
+
+def test_commit_fails_cleanly_when_another_git_holds_the_index(root, caplog):
+    (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
+    (root / ".git/index.lock").write_text("", encoding="utf-8")  # a commit running elsewhere
+    head = git(root, "rev-parse", "HEAD")
+    assert sm_mod._commit(Vault(root), "cortex: test") is None
+    assert "index.lock" in caplog.text and git(root, "rev-parse", "HEAD") == head
+    assert not (root / ".cortex" / "lock").exists()
+    (root / ".git/index.lock").unlink()
+    assert sm_mod._commit(Vault(root), "cortex: test")  # the next commit takes it
+
+
 def test_budget_flags_only(mgr):
     s = mgr.start()
     for _ in range(41):
@@ -585,3 +614,22 @@ def test_two_open_sessions_each_commit_only_their_own_notes(tmp_path, clock):
     assert "notes/note-b.md" in second and "notes/note-a.md" not in second
     assert any(p.endswith(f"/{sb}.jsonl") for p in second)
     assert git(root, "status", "--porcelain") == ""
+
+
+def test_a_new_file_deleted_before_the_commit_does_not_fail_it(tmp_path):
+    import subprocess
+
+    from cortex import session as s
+    top = tmp_path / "r"
+    top.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=top, check=True)
+    (top / "keep.md").write_text("a", encoding="utf-8")
+    (top / "old.md").write_text("b", encoding="utf-8")
+    assert s._commit_paths(str(top), ["old.md"], "first")
+    (top / "old.md").unlink()  # a tracked file deleted: its deletion is committed
+    assert s._commit_paths(str(top), ["keep.md", "gone.md", "old.md"], "second")
+    files = subprocess.run(["git", "ls-files"], cwd=top, capture_output=True, text=True).stdout
+    assert files.split() == ["keep.md"]
+    assert not s._commit_paths(str(top), ["gone.md"], "nothing")

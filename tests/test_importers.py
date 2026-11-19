@@ -1,6 +1,7 @@
 """`cortex import`: notes folders and zips (Obsidian, Notion, plain), calendars (.ics), and the
 kind detection that sends every export to its importer."""
 
+import json
 import re
 import shutil
 import zipfile
@@ -170,6 +171,7 @@ def test_zip_bomb_entries_are_refused_before_they_are_read(root_plain, tmp_path,
     from cortex.browse import takeout
     monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
     monkeypatch.setattr(importers, "MAX_ENTRY", 1000)
+    monkeypatch.setattr(importers, "MAX_STREAM", 1000)  # the JSON lists stream (C11)
     pad = " " * 5000
     bomb = _zip(tmp_path / "bomb.zip", {
         "conversations.json": f"[{pad}]",
@@ -181,6 +183,7 @@ def test_zip_bomb_entries_are_refused_before_they_are_read(root_plain, tmp_path,
             call()
         assert "too big" in str(e.value)
     monkeypatch.setattr(importers, "MAX_ENTRY", 10_000)
+    monkeypatch.setattr(importers, "MAX_STREAM", 10_000)
     monkeypatch.setattr(importers, "MAX_TOTAL", 8000)  # two 5 KB files are over the total
     two = _zip(tmp_path / "two.zip", {f"Takeout/My Activity/{p}/MyActivity.json": f"[{pad}]"
                                       for p in ("Search", "YouTube")})
@@ -325,3 +328,70 @@ def test_notes_import_ends_with_the_import_report(root_plain, tmp_path):
     out = runner.invoke(app, ["import", str(EXPORTS / "calendar.ics"), "--private",
                               "--vault", str(root_plain)]).output
     assert "calendar: read 3, imported 3, private 3, duplicate 0, skipped 0" in out
+
+
+# ---- C11: a big chat or activity JSON list streams --------------------------------------
+
+
+def _reader(tmp_path, text: str):
+    p = tmp_path / "conversations.json"
+    p.write_bytes(text.encode("utf-8"))
+    ((_, _, _, read),) = importers._files(p)
+    return read
+
+
+def test_a_json_list_streams_element_by_element_and_matches_json_loads(tmp_path, monkeypatch):
+    rows = [{"id": i, "n": 12345 + i, "f": -1.5e3, "s": "ä€😀 \"q\" \\ \n", "ok": i % 2 == 0,
+             "none": None, "deep": [[], {}, [1, {"x": "]"}]]} for i in range(60)]
+    rows += [7, "plain", None, [1, 2], 3.25]
+    text = "﻿ \n[ " + " ,\r\n ".join(json.dumps(r, ensure_ascii=False) for r in rows) + " ]\n"
+    monkeypatch.setattr(importers, "STREAM_CHUNK", 7)  # chunk edges split numbers and UTF-8
+    monkeypatch.setattr(importers, "MAX_ENTRY", 100)  # too big to be read whole
+    got = importers.json_value(_reader(tmp_path, text))
+    assert not isinstance(got, list)  # the streamed path, lazy
+    assert list(got) == json.loads(text.lstrip("﻿")) == rows
+    assert list(importers.json_value(_reader(tmp_path, " [ ] "))) == []
+    with pytest.raises(VaultError, match="too big"):  # a non-list is still read whole, capped
+        importers.json_value(_reader(tmp_path, json.dumps({"conversations": rows})))
+
+
+@pytest.mark.parametrize("bad", ['[{"a": 1}, {"a": ', "[1, 2", "[1 2]", "[1,]", "[", "  ",
+                                 '["unterminated', '{"a": 1}'])
+def test_a_truncated_or_malformed_json_list_fails_cleanly(tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(importers, "STREAM_CHUNK", 3)
+    with pytest.raises(ValueError):
+        list(_reader(tmp_path, bad)(items=True))
+
+
+def test_a_big_chat_export_streams_through_import_and_matches_a_whole_read(tmp_path,
+                                                                           monkeypatch):
+    src = EXPORTS / "chatgpt_conversations.json"
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "whole"))
+    whole = importers.chats.import_export(src)
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "streamed"))
+    # over the whole-file cap (which also caps one streamed item), under MAX_STREAM
+    monkeypatch.setattr(importers, "MAX_ENTRY", src.stat().st_size - 1)
+    monkeypatch.setattr(importers, "STREAM_CHUNK", 64)
+    assert importers.chats.import_export(src) == whole
+    a, b = (sorted((p.name, p.read_bytes()) for p in (tmp_path / d).rglob("*.jsonl"))
+            for d in ("whole", "streamed"))
+    assert a == b and a
+    cut = tmp_path / "conversations.json"
+    cut.write_bytes(src.read_bytes().rstrip()[:-40])  # cut short: refused, nothing written
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "cut"))
+    with pytest.raises(VaultError, match="Cannot read conversations.json"):
+        importers.chats.import_export(cut)
+    assert not list((tmp_path / "cut").rglob("*.jsonl"))
+
+
+def test_a_big_activity_file_streams_and_a_cut_one_is_refused_by_name(tmp_path, monkeypatch):
+    from cortex.browse import takeout
+    src = EXPORTS / "takeout_MyActivity.json"
+    whole = [(v.url, v.start, v.title) for v in takeout.records(src)]
+    monkeypatch.setattr(importers, "MAX_ENTRY", src.stat().st_size - 1)
+    monkeypatch.setattr(importers, "STREAM_CHUNK", 50)
+    assert [(v.url, v.start, v.title) for v in takeout.records(src)] == whole and whole
+    cut = tmp_path / "MyActivity.json"
+    cut.write_bytes(src.read_bytes().rstrip()[:-30])
+    with pytest.raises(VaultError, match="Cannot read MyActivity.json"):
+        takeout.records(cut)

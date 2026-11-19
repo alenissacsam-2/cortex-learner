@@ -502,14 +502,40 @@ def _handler(v: Vault, port_ref: list[int], proc: Processor):
     return H
 
 
+MAX_CONNECTIONS = 32  # open connections per server (the app's too): one thread each
+
+
 class _Server(ThreadingHTTPServer):
-    """No port sharing: a second receiver would split one state.json between two Processors."""
+    """No port sharing: a second receiver would split one state.json between two Processors.
+    At most MAX_CONNECTIONS connections at once: a local program opening thousands of idle
+    ones would otherwise start a thread for each; one over the cap is closed at once. Each
+    handler's `timeout` bounds how long an idle one keeps its slot."""
     allow_reuse_address = False
+
+    def __init__(self, *a, **kw):
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        super().__init__(*a, **kw)
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows binds a used port without it
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:  # no thread started, so none will release the slot
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def make_server(vault, port: int = PORT, *, host: str = HOST) -> ThreadingHTTPServer:

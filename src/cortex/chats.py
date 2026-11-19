@@ -17,8 +17,9 @@ import os
 import re
 import time
 import zipfile
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
-from itertools import islice
+from itertools import chain, islice
 from pathlib import Path
 
 from cortex.events import live
@@ -160,7 +161,7 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
     if source is not None and source not in EXPORT_DIRS:
         raise VaultError("invalid_argument", f"--source must be one of {', '.join(EXPORT_DIRS)}.")
     from cortex.browse import takeout
-    from cortex.importers import _files  # importers imports this module
+    from cortex.importers import _files, json_value  # importers imports this module
     files = _files(src)
     if src.suffix.lower() == ".zip" or src.is_dir():
         files = [f for f in files if _wanted(f[0])]
@@ -169,7 +170,7 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
     js = [f for f in files if not f[0].lower().endswith(".md")]
     pplx = not js or (source == "perplexity" and len(js) < len(files))  # Markdown threads
     name = src.name if pplx or len(js) > 1 else js[0][0]
-    skipped, data, got = 0, [], Got()
+    skipped, parts, got = 0, [], Got()
     try:
         if pplx:
             mds = [(n, read().decode("utf-8"), mtime) for n, _, mtime, read in files
@@ -177,13 +178,13 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
         # C6: every JSON (or Takeout HTML) file of the export, not only the first one
         for name, _, _, read in [] if pplx else js:
             html_file = name.lower().endswith((".html", ".htm"))  # Takeout's HTML Gemini rows
-            part, n = takeout.html_rows(read(), name) if html_file else (json.loads(read()), 0)
+            part, n = takeout.html_rows(read(), name) if html_file else (json_value(read), 0)
             skipped += n
             if isinstance(part, dict) and isinstance(part.get("conversations"), list):
                 part = part["conversations"]  # Perplexity's account export wraps its threads
-            if not isinstance(part, list):
+            if not isinstance(part, list | Iterator):
                 raise VaultError("invalid_argument", f"{name} should hold a list. {EXPECTED}")
-            data += part
+            parts.append(part if isinstance(part, list) else _named(name, part))
             got.files += 1
     except (OSError, ValueError, zipfile.BadZipFile) as e:
         raise VaultError("invalid_argument", f"Cannot read {name}: {e}") from None
@@ -193,10 +194,15 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
         out = Got(_save("perplexity", _latest(_perplexity(mds), got), dry_run, got))
         out.__dict__.update(got.__dict__)
         return out
-    source = source or _detect(data)
+    rows = chain.from_iterable(parts)  # C11: a big file's rows stream in as they convert
+    head = list(islice(rows, 1))
+    data = chain(head, rows)
+    source = source or _detect(head)
     if source is None:
         raise VaultError("invalid_argument", f"Cannot tell which service {name} comes from "
                          f"(is it empty?); add --source {'|'.join(EXPORT_DIRS)}. {EXPECTED}")
+    if source == "gemini":
+        data = list(data)  # _gemini keeps each of its rows anyway
     if source == "gemini" and data and not any(map(_is_gemini, data)):
         raise VaultError("invalid_argument", f"{name} holds no Gemini Apps activity (Search, "
                          "YouTube or Chrome rows are browsing, not chats); import it as "
@@ -206,6 +212,14 @@ def import_export(src: Path, source: str | None = None, dry_run: bool = False) -
     out = Got(_save(source, _latest(convs, got), dry_run, got))
     out.__dict__.update(got.__dict__, skipped=skipped)
     return out
+
+
+def _named(name: str, rows):
+    """A streamed file's rows: an error midway names the file, as for one read whole."""
+    try:
+        yield from rows
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        raise VaultError("invalid_argument", f"Cannot read {name}: {e}") from None
 
 
 def _wanted(name: str) -> bool:

@@ -367,6 +367,13 @@ def _rel(vault: Vault, paths) -> set[str]:
 
 def _commit_paths(top: str, paths: list[str], message: str) -> bool:
     """Stage and commit exactly `paths` (a pathspec commit leaves anything else in the index)."""
+    if gone := [p for p in paths if not (Path(top) / p).exists()]:
+        # a new file deleted since the snapshot (B12: we run outside the lock) matches no
+        # pathspec and would fail the whole add; a tracked one's deletion is committed
+        tracked = set(_gitz(top, "ls-files", "-z").stdout.split("\0"))
+        paths = [p for p in paths if p not in gone or p in tracked]
+        if not paths:
+            return False
     spec = "\0".join(paths)
     for args in (("add", "-A"), ("commit", "-q", "-m", message)):
         r = _gitz(top, *args, "--pathspec-from-file=-", "--pathspec-file-nul", input=spec)
@@ -437,13 +444,23 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
             skip = {pre + r for r in _rel(vault, exclude)}
             ours = [c for c in changed if c in keys]
             other = [c for c in changed if c not in keys and c not in skip] if before else []
-        ours = _withhold_secrets(top, ours, withheld)
-        other = _withhold_secrets(top, other, withheld)
-        if other and not _commit_paths(top, other, before):
-            return None
-        if not ours or not _commit_paths(top, ours, message):
-            return None
-        return _gitz(top, "rev-parse", "HEAD").stdout.strip() or None
+    # B12: the lock covered only the snapshot and the path lists; the scan, add and commit run
+    # on those exact paths outside it, so other writers never wait on git. A file written
+    # meanwhile goes in at its newer, whole state (writes are atomic replaces, and git reads
+    # an appended event file up to the size it stat'ed), the same as a write made just before
+    # the snapshot; ownership is by path, so `exclude` still holds. A revert or merge begun
+    # meanwhile makes git refuse the pathspec commit, and a second commit's index.lock fails
+    # the add or commit: either way a logged warning and None.
+    ours = _withhold_secrets(top, ours, withheld)
+    other = _withhold_secrets(top, other, withheld)
+    if other and not _commit_paths(top, other, before):
+        return None
+    if not ours or not _commit_paths(top, ours, message):
+        return None
+    # HEAD may already be another process's later commit: the newest with our message
+    shas = _gitz(top, "log", "-z", "-n", "20", "--format=%H %B").stdout.split("\0")
+    return next((h for h, _, b in (s.partition(" ") for s in shas) if b.strip() == message),
+                None)
 
 
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

@@ -644,3 +644,40 @@ console.log(JSON.stringify(out));
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [True, False, None]
     assert squatter.got and not any(srv.token in g for g in squatter.got)
+
+@pytest.mark.parametrize("which", ["browse", "app"])
+def test_connections_over_the_cap_are_closed_at_once(vault, home, monkeypatch, which):
+    """A local program cannot exhaust threads with idle connections (both servers)."""
+    from cortex.app import server as app_server
+    monkeypatch.setattr(bs, "MAX_CONNECTIONS", 4)
+    s = bs.make_server(vault, 0) if which == "browse" else app_server.make_server(None)[0]
+    threading.Thread(target=lambda: s.serve_forever(0.05), daemon=True).start()
+    port = s.server_address[1]
+    try:
+        idle = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(4)]
+        extra = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(3)]
+        for x in extra:  # closed by the server without a byte sent
+            try:
+                assert x.recv(1) == b""
+            except (ConnectionResetError, ConnectionAbortedError):
+                pass
+        idle[0].settimeout(0.3)
+        with pytest.raises(TimeoutError):  # a connection under the cap stays open
+            idle[0].recv(1)
+        for x in idle + extra:
+            x.close()
+        status = None
+        for _ in range(50):  # the handlers see EOF and give their slots back
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                c.request("GET", "/v1/ping" if which == "browse" else "/")
+                status = c.getresponse().status
+                break
+            except (ConnectionResetError, ConnectionAbortedError, http.client.HTTPException):
+                threading.Event().wait(0.1)
+            finally:
+                c.close()
+        assert status in (200, 401)
+    finally:
+        s.shutdown()
+        s.server_close()
