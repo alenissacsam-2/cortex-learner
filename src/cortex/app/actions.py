@@ -14,7 +14,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from cortex._proc import NO_WINDOW
+from cortex._proc import NO_WINDOW, Tree
 from cortex.app import status
 
 TEST_TEXT = "Dijkstra shortest path tutorial"  # synthetic: never the owner's data
@@ -63,28 +63,33 @@ def capture(job, fn, *args, **kwargs) -> dict:
 
 def run_proc(job, args: list[str], env: dict | None = None) -> dict:
     """Run a command (a download or an install) with its output as the progress line; Cancel
-    terminates it. {"ok", "cancelled", "lines"}. `env`: the child's environment (default ours)."""
+    terminates it and everything it started (`_proc.Tree`). {"ok", "cancelled", "lines"}.
+    `env`: the child's environment (default ours)."""
     job.say("running: " + subprocess.list2cmdline(args))
     try:
         p = _popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env)
+                   stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, env=env,
+                   start_new_session=True)  # POSIX: its own process group, for Cancel
     except OSError as e:
         raise ValueError(f"could not start {args[0]}: {e}") from None
-    job.proc = p
+    tree = job.proc = Tree(p)
     lines, buf = [], b""
     read = getattr(p.stdout, "read1", None) or p.stdout.read
-    while True:
-        chunk = read(4096)
-        buf += chunk or b"\n"
-        *done, buf = re.split(rb"[\r\n]", buf)
-        for raw in done:
-            line = _ANSI.sub("", raw.decode("utf-8", "replace")).strip()
-            if line:
-                job.say(line)
-                lines.append(line)
-        if not chunk:
-            break
-    rc = p.wait()
+    try:
+        while True:
+            chunk = read(4096)
+            buf += chunk or b"\n"
+            *done, buf = re.split(rb"[\r\n]", buf)
+            for raw in done:
+                line = _ANSI.sub("", raw.decode("utf-8", "replace")).strip()
+                if line:
+                    job.say(line)
+                    lines.append(line)
+            if not chunk:
+                break
+        rc = p.wait()
+    finally:
+        tree.close()
     cancelled = job.cancelled.is_set()
     return {"ok": rc == 0 and not cancelled, "cancelled": cancelled, "lines": lines[-50:]}
 
