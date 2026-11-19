@@ -25,6 +25,7 @@ import random
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -314,6 +315,7 @@ def alias(s: str, n: int = 80) -> str:
     return " ".join(str(s).translate(str.maketrans("[]|", "()/")).split())[:n]
 
 
+@lru_cache(maxsize=1 << 15)  # the app's home asks for the same unchanged bodies on every build
 def _timeline(body: str) -> str:
     m = TL_RE.search(body)
     return m.group(0) if m else ""

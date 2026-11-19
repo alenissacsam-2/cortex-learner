@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import operator
 import re
 import string
 from collections import Counter
@@ -20,6 +21,7 @@ from types import SimpleNamespace
 
 from cortex import (
     brainmap,
+    claims,
     index,
     know,
     learning_eval,
@@ -76,16 +78,25 @@ def _plans(vault, catalog, hidden, pc) -> list[dict]:
             for p in planner.plans(vault, catalog, hidden, pc)]
 
 
-def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
+def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
+               auto_relayout: bool = True, memo: dict | None = None) -> dict:
     """The dashboard blob; private notes never enter it.
-    `relayout` lays the brain out from scratch (brainmap)."""
+    `relayout` lays the brain out from scratch (brainmap); `auto_relayout=False` never does it
+    by itself. `memo`, a dict the caller keeps between builds (the app's home), reuses the pages
+    and the brain while their notes are the same objects, and receives the build's pieces
+    under "parts" for the home's own sections."""
     catalog = Catalog.load(vault)
     day = local_day(now)
     today_d = date.fromisoformat(day)
     events = list(EventLog(vault).iter_events())
     notes = {k: list(vault.iter_notes(k)) for k in Vault.KIND_DIRS}  # parsing dominates; once
     pc = levels.problem_concepts(vault)
-    states, mstates = levels.fold(events, day, pc, planner.exam_concepts(vault, catalog, day))
+    if memo is not None and memo.get("events") != events:  # a generation per event log content
+        memo["events"], memo["gen"] = events, memo.get("gen", 0) + 1
+    gen = memo["gen"] if memo is not None else None
+    exam = planner.exam_concepts(vault, catalog, day)
+    states, mstates = _once(memo, "fold", (gen, day, pc, exam),
+                            lambda: levels.fold(events, day, pc, exam))
     private = {n.id for ns in notes.values() for n in ns if is_private(n)}
     hidden = planner.hidden(vault, catalog, private)
     entries = [e for e in catalog.entries.values() if e.id not in hidden]
@@ -106,7 +117,8 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
               "state": i["state"], "why": plain(i["why"])} for i in items]
 
     scores = {n.id: n.fields.get("score") for n in notes["assessment"]}
-    pairs, calibrated = learning_eval.calibrated(events, pc)
+    pairs, calibrated = _once(memo, "calibrated", (gen, pc),
+                              lambda: learning_eval.calibrated(events, pc))
 
     def assessment(a):
         d = planner._day(a["date"]) if a["date"] else None
@@ -172,21 +184,25 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         n["degree"] = degree[n["id"]]
 
     # concept details
-    asks = {e["id"]: e for e in events if e.get("kind") == "ask"}
-    trail: dict[str, list[dict]] = {}
-    answers = Counter()
-    for it in levels._items(events, pc):  # void and remap applied, as in the levels fold
-        ev = it.ev
-        if ev.get("kind") == "grade" and it.concept not in hidden:
-            answers[ev.get("day")] += 1
-        if it.concept in visible and it.verdict is not None:
-            payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-            kind = (ev.get("item_type") or asks.get(ev.get("ref"), {}).get("item_type")
-                    or ITEM_TYPE.get(payload.get("kind")))
-            trail.setdefault(it.concept, []).append({
-                "day": ev.get("day"), "verdict": it.verdict,
-                "item_type": plain(kind) if kind else None,
-                "source": plain(ev.get("source") or "") or None})
+    def evidence():
+        asks = {e["id"]: e for e in events if e.get("kind") == "ask"}
+        trail: dict[str, list[dict]] = {}
+        answers = Counter()
+        for it in levels._items(events, pc):  # void and remap applied, as in the levels fold
+            ev = it.ev
+            if ev.get("kind") == "grade" and it.concept not in hidden:
+                answers[ev.get("day")] += 1
+            if it.concept in visible and it.verdict is not None:
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                kind = (ev.get("item_type") or asks.get(ev.get("ref"), {}).get("item_type")
+                        or ITEM_TYPE.get(payload.get("kind")))
+                trail.setdefault(it.concept, []).append({
+                    "day": ev.get("day"), "verdict": it.verdict,
+                    "item_type": plain(kind) if kind else None,
+                    "source": plain(ev.get("source") or "") or None})
+        return trail, answers
+
+    trail, answers = _once(memo, "evidence", (gen, pc, hidden, visible), evidence)
     required_by: dict[str, list[str]] = {}
     for lk in links:
         if lk["type"] == "requires":
@@ -220,25 +236,34 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         weeks.append({"start": start.isoformat(),
                       "answers": sum(n for d, n in answers.items() if d in week)})
     cut = (today_d - timedelta(days=MISTAKE_DAYS)).isoformat()
-    _, before = levels.fold([e for e in events if str(e.get("day", "")) <= cut], cut, pc,
-                            planner.exam_concepts(vault, catalog, cut))
+    old = [e for e in events if str(e.get("day", "")) <= cut]
+    exam_cut = planner.exam_concepts(vault, catalog, cut)
+    _, before = _once(memo, "before", (old, cut, pc, exam_cut),
+                      lambda: levels.fold(old, cut, pc, exam_cut))
 
     def moved(status):
         return sum(1 for m in mstates.values() if m.id not in private and m.status == status
                    and getattr(before.get(m.id), "status", None) != status)
 
-    pages, clusters = _pages(vault, notes, hidden, catalog, pc)
+    pages, clusters = _pages(vault, notes, hidden, catalog, pc, memo)
+    if memo is not None:
+        memo["parts"] = {"notes": notes, "events": events, "states": states, "hidden": hidden,
+                         "private": private, "catalog": catalog, "items": items}
     parsed = _Parsed(vault.root, notes)  # loops and know read notes through this: parsed once
+    created = _created(memo)
     loop_notes = {n.id: n for n in notes["loop"]}
     open_needs = [_plained(r, "question", "area", "task")
                   | {"options": [plain(o) for o in r["options"]]
                      if isinstance(r["options"], list) else []}
                   for r in needs.open(events, day)]
-    known = know.report(parsed, events, day)
-    known["needs"] = open_needs
-    for pg in known["pages"]:
-        if "contested" in pg:
-            pg["contested"] = [plain(t, 200) for t in pg["contested"]]
+    # it reads only the events, the me notes and the claim pages' text (even one that won't parse)
+    claimed = [p.read_bytes() if p.is_file() else None
+               for p in (vault.root / "me" / f"{c}.md" for c in claims.PAGES)]
+    known = _once(memo, "know", (gen, day, notes["me"], claimed),
+                  lambda: know.report(parsed, events, day))
+    known = known | {"needs": open_needs, "pages": [
+        pg | {"contested": [plain(t, 200) for t in pg["contested"]]} if "contested" in pg
+        else pg for pg in known["pages"]]}
     profile = next((n for n in notes["me"] if n.id == "profile" and not is_private(n)), None)
     m = _NAME_RE.search(profile.body) if profile else None
     name = plain(m.group(1).strip(string.punctuation)) if m else ""
@@ -261,22 +286,50 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
         "history": {"weeks": weeks, "assessments": rows,
                     "mistakes": {"opened": moved("open"), "resolved": moved("resolved")}},
         # how often each stated confidence (1-4) was right; display-only
-        "confidence": learning_eval.confidence_mirror(events, pc, hidden),
+        "confidence": _once(memo, "mirror", (gen, pc, hidden),
+                            lambda: learning_eval.confidence_mirror(events, pc, hidden)),
         "owner": {"name": name} if name else None,
         "clusters": clusters,
-        "brain": brainmap.build(vault, pages, clusters, relayout=relayout),
+        "brain": brainmap.build(vault, pages, clusters, relayout=relayout,
+                                auto_relayout=auto_relayout,
+                                memo=None if memo is None else memo.setdefault("brain", {})),
         "counts_by_kind": dict(Counter(p["kind"] for p in pages)),
         "loops": [_plained(r, "title", "summary", "loop_type")
-                  | {"created": loops.created(loop_notes[r["id"]]).isoformat()}
+                  | {"created": created(loop_notes[r["id"]]).isoformat()}
                   for r in loops.loops(parsed)],
         "follow_ups": [_plained(r, "title") for r in loops.follow_ups(parsed, day)],
         "resurface": [_plained(r, "title", "summary")
-                      for r in loops.resurface(parsed, day, limit=5, events=events)],
+                      for r in loops.resurface(parsed, day, limit=5, events=events,
+                                               created_of=created)],
         "needs": open_needs,
         "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0],
-                "probes": probes.summary(events)},
+                "probes": _once(memo, "probes", gen, lambda: probes.summary(events))},
         "help": _help(),
     }
+
+
+def _once(memo: dict | None, name: str, key, fn):
+    """fn() once per `key` while the caller keeps `memo` (the app's home); without it, fn()."""
+    if memo is None:
+        return fn()
+    hit = memo.get(name)
+    if hit is None or hit[0] != key:
+        hit = memo[name] = (key, fn())
+    return hit[1]
+
+
+def _created(memo: dict | None):
+    """loops.created (a file stat each), once per note object while the caller keeps `memo`."""
+    if memo is None:
+        return loops.created
+    old, new = memo.get("created", {}), {}
+    memo["created"] = new
+
+    def created(n):
+        hit = old.get(n.path)
+        new[n.path] = hit = hit if hit is not None and hit[0] is n else (n, loops.created(n))
+        return hit[1]
+    return created
 
 
 class _Parsed(SimpleNamespace):
@@ -314,7 +367,7 @@ def _help() -> dict:
             "glossary_md": "\n".join(rows) or None}
 
 
-def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict
+def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict, facts: dict | None = None
            ) -> tuple[dict[str, str], list[dict]]:
     """Page id -> its brain lobe id, and the lobes [{id, title, kind, count}], biggest first.
     A lobe is a top hub (no parent, or a child of the topic map; never the map itself) under its
@@ -323,8 +376,10 @@ def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict
     domain of its first visible concept; journal, me, session, placement and browse pages in
     their group; any other page in the lobe of its first hub under a top hub, else (projects,
     decisions, loops, people, media and chat resources) in a group; the rest are unfiled.
-    A group lobe id that a hub already uses gets a `-group` suffix."""
-    idx = {i: {"kind": n.kind, "title": _title(n), "fields": n.fields} for i, n in keep.items()}
+    A group lobe id that a hub already uses gets a `-group` suffix. `facts`: each page's
+    `_facts`, when the caller kept them."""
+    facts = facts or {i: _facts(n) for i, n in keep.items()}
+    idx = {i: {"kind": n.kind, "title": facts[i][0], "fields": n.fields} for i, n in keep.items()}
     t = topics.tree(SimpleNamespace(_notes=idx))  # tree reads only `_notes`; no search index
 
     def top(h):
@@ -337,16 +392,6 @@ def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict
         return f"domain:{d}" if d in catalog.entries and not {d, i} & hidden else None
 
     gid = {g: g + "-group" if g in t.parent else g for g in GROUP_TITLES}
-
-    def no_hub(i, k, f):
-        if k != "resource":
-            return NO_HUB.get(k)
-        src = topics.page_source(keep[i].body).lower()
-        tags = f.get("tags")
-        tags = tags if isinstance(tags, list) else str(tags or "").replace(",", " ").split()
-        if src in MEDIA or MEDIA & {str(x).lstrip("#").lower() for x in tags}:
-            return "media"
-        return "chats" if src in CHATS else None
 
     lobe = {}
     for i, n in idx.items():
@@ -361,8 +406,9 @@ def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict
         elif k in GROUPS:
             lobe[i] = gid[GROUPS[k]]
         else:
-            lobe[i] = next((x for x in map(top, topics.page_hubs(n, t.parent))
-                            if x != topics.ROOT), None) or gid.get(no_hub(i, k, f))
+            hubs = (h for h in dict.fromkeys(facts[i][1]) if h in t.parent)  # page_hubs
+            lobe[i] = next((x for x in map(top, hubs) if x != topics.ROOT), None) \
+                or gid.get(facts[i][2])
         if lobe[i] in (None, topics.ROOT):
             lobe[i] = UNFILED
 
@@ -382,46 +428,85 @@ def _lobes(keep: dict, catalog: Catalog, hidden: set, pc: dict
     return lobe, [row(c, k) for c, k in sorted(count.items(), key=lambda x: (-x[1], x[0]))]
 
 
+def _facts(n) -> tuple[str, list[str], str | None]:
+    """What `_lobes` reads of one note: its title, its `related` targets and the group it
+    joins when it has no hub."""
+    f = n.fields
+    if n.kind != "resource":
+        group = NO_HUB.get(n.kind)
+    else:
+        src = topics.page_source(n.body).lower()
+        tags = f.get("tags")
+        tags = tags if isinstance(tags, list) else str(tags or "").replace(",", " ").split()
+        group = "media" if src in MEDIA or MEDIA & {str(x).lstrip("#").lower() for x in tags} \
+            else "chats" if src in CHATS else None
+    return _title(n), _edge_targets(f.get("related") or []), group
+
+
 def _prop(v):
     if isinstance(v, list):
         return [str(x)[:300] for x in v[:SHOWN_PROPS]]
     return str(v)[:300]
 
 
-def _pages(vault: Vault, notes: dict, hidden: set, catalog: Catalog, pc: dict
-           ) -> tuple[list[dict], list[dict]]:
+def _pages(vault: Vault, notes: dict, hidden: set, catalog: Catalog, pc: dict,
+           memo: dict | None = None) -> tuple[list[dict], list[dict]]:
     """Every non-private note for the reader view (`raw/` is not a kind), and
-    the brain lobes (`_lobes`)."""
+    the brain lobes (`_lobes`). With `memo`, the same note objects and catalog give the same
+    result, and a note object seen before keeps its row (the app's home reuses unchanged
+    notes; a changed file is a new object)."""
+    flat = [n for ns in notes.values() for n in ns]
+    hit = memo.get("pages") if memo is not None else None
+    if (hit and hit[1] == catalog.entries and hit[2] == hidden and len(hit[0]) == len(flat)
+            and all(map(operator.is_, hit[0], flat))):
+        return hit[3]
     keep = {}
-    for ns in notes.values():
-        for n in ns:
-            if n.id not in hidden and not is_private(n):
-                keep.setdefault(n.id, n)  # an id clash keeps the first kind, as wikilinks do
-    lobe, clusters = _lobes(keep, catalog, hidden, pc)
-    pages = []
-    for n in keep.values():
-        f = n.fields
-        tags = f.get("tags")
-        tags = tags if isinstance(tags, list) else str(tags or "").replace(",", " ").split()
-        body = n.body
-        if len(body.encode()) > BODY_MAX:
-            body = body.encode()[:BODY_MAX].decode(errors="ignore") + TRUNCATED
-        text = " ".join(str(v) for v in f.values()) + n.body
-        pages.append({
-            "id": n.id, "kind": n.kind, "title": _title(n),
-            "summary": plain(f.get("summary") or "", 300) or None,
-            "tags": [str(t).lstrip("#") for t in tags if str(t).strip("#")][:SHOWN_PROPS],
-            "props": {str(k): _prop(v) for k, v in f.items()
-                      if k not in TOOL_PROPS | {"id", "title", "summary", "private"}},
-            "body": body,
-            "links": [x for x in dict.fromkeys(link_targets(text))
-                      if x in keep and x != n.id],
-            "path": n.path.relative_to(vault.root).as_posix(),
-            "updated": date.fromtimestamp(n.path.stat().st_mtime).isoformat(),
-            "date": topics.page_date(n.id, f, n.body) or None,
-            "source": plain(topics.page_source(n.body)) or None,
-            "cluster": lobe[n.id]})
+    for n in flat:
+        if n.id not in hidden and not is_private(n):
+            keep.setdefault(n.id, n)  # an id clash keeps the first kind, as wikilinks do
+    old = memo.get("rows", {}) if memo is not None else {}
+    got = {}
+    for i, n in keep.items():
+        hit = old.get(n.path)
+        got[i] = hit if hit is not None and hit[0] is n else (n, *_row(vault, n), None)
+    lobe, clusters = _lobes(keep, catalog, hidden, pc, {i: g[3] for i, g in got.items()})
+    rows, pages = {}, []
+    for i, (n, base, raw, facts, last) in got.items():
+        links = [x for x in raw if x in keep and x != i]
+        row = last if last and last["links"] == links and last["cluster"] == lobe[i] else \
+            {**base, "links": links, "cluster": lobe[i]}
+        rows[n.path] = (n, base, raw, facts, row)
+        pages.append(row)
+    if memo is not None:
+        memo["rows"] = rows
+        memo["pages"] = (flat, catalog.entries, hidden, (pages, clusters))
     return pages, clusters
+
+
+def _row(vault: Vault, n) -> tuple[dict, list[str], tuple]:
+    """A page's row without `links` and `cluster`, every link target its text names, and its
+    `_facts`."""
+    f = n.fields
+    tags = f.get("tags")
+    tags = tags if isinstance(tags, list) else str(tags or "").replace(",", " ").split()
+    body = n.body
+    if len(body.encode()) > BODY_MAX:
+        body = body.encode()[:BODY_MAX].decode(errors="ignore") + TRUNCATED
+    text = " ".join(str(v) for v in f.values()) + n.body
+    facts = _facts(n)
+    return {
+        "id": n.id, "kind": n.kind, "title": facts[0],
+        "summary": plain(f.get("summary") or "", 300) or None,
+        "tags": [str(t).lstrip("#") for t in tags if str(t).strip("#")][:SHOWN_PROPS],
+        "props": {str(k): _prop(v) for k, v in f.items()
+                  if k not in TOOL_PROPS | {"id", "title", "summary", "private"}},
+        "body": body,
+        "links": None,
+        "path": n.path.relative_to(vault.root).as_posix(),
+        "updated": date.fromtimestamp(n.path.stat().st_mtime).isoformat(),
+        "date": topics.page_date(n.id, f, n.body) or None,
+        "source": plain(topics.page_source(n.body)) or None,
+        "cluster": None}, list(dict.fromkeys(link_targets(text))), facts
 
 
 def _ord(day) -> int:

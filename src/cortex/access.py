@@ -30,7 +30,7 @@ class Audience(StrEnum):
 
 KINDS = ("note", "chat", "browse", "study")
 VIEWERS = ("mcp", "dashboard", "page_public", "today_md", "start_card", "terminal",
-           "chat_local", "cloud_model")
+           "chat_local", "cloud_model", "app_home")
 # Chat's switch (ask.SOURCES) for each kind's CLOUD records; studying sits under "notes"
 KIND_SWITCH = {"note": "notes", "chat": "chats", "browse": "browsing", "study": "notes"}
 _CLOUD_ONLY = ("mcp", "dashboard", "page_public", "today_md", "start_card")
@@ -47,6 +47,8 @@ def may_see(viewer: str, audience: Audience | str, kind: str,
     - chat_local: LOCAL under `switches["private"]`; CLOUD under the kind's switch
       (KIND_SWITCH). `switches` None counts as every switch off.
     - cloud_model: CLOUD only, and only when `cloud_opt_in` (the user opted this data in).
+    - app_home: the app's home page; CLOUD, and LOCAL only with `private_flag` (the app's
+      Private switch is unlocked).
 
     An unknown viewer, audience or kind raises ValueError: a new one must be added here."""
     audience = Audience(audience)
@@ -60,6 +62,8 @@ def may_see(viewer: str, audience: Audience | str, kind: str,
         return audience is Audience.CLOUD
     if viewer == "terminal":
         return audience is Audience.CLOUD or (private_flag and tty)
+    if viewer == "app_home":
+        return audience is Audience.CLOUD or private_flag
     if viewer == "chat_local":
         switches = switches or {}
         key = "private" if audience is Audience.LOCAL else KIND_SWITCH[kind]

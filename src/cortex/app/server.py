@@ -43,6 +43,7 @@ ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta"}  # GETs that read the query
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -241,8 +242,12 @@ class App:
         self.last = time.monotonic()
         self.stop = threading.Event()
         self.desktop = None  # desktop.Desktop (window and tray) in the desktop app, else None
+        self.private_unlocked = False  # the Private switch: only then may ?private=1 apply
+        self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
+                    "/api/home": self.home, "/api/home/version": self.home_version,
+                    "/api/home/delta": self.home_delta,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
@@ -361,6 +366,31 @@ class App:
         if cid is None:
             return {"id": None, "messages": []}
         return {"id": cid, "messages": chat.load(self._vault(), cid)}  # load checks the id
+
+    def _home(self):
+        from cortex.home import HomeCache
+        from cortex.vault import Vault
+        root = self.need_root()
+        lock, homes = self.homes
+        with lock:
+            if root not in homes:
+                homes.clear()  # one vault at a time
+                homes[root] = HomeCache(Vault(root))
+            return homes[root]
+
+    def _private(self, query: dict) -> bool:
+        return self.private_unlocked and (query.get("private") or [""])[0] == "1"
+
+    def home(self, query: dict) -> dict:
+        """The live home (cortex.home): the dashboard's data plus feed, next_up and exams.
+        Builds and keeps the brain layout (`.cortex/brain-layout.json`, a view cache)."""
+        return self._home().get(self._private(query))
+
+    def home_version(self) -> dict:
+        return {"v": self._home().version()}
+
+    def home_delta(self, query: dict) -> dict:
+        return self._home().delta((query.get("since") or [None])[0], self._private(query))
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
@@ -1052,7 +1082,7 @@ def _handler(app: App):
                 self._send(200, data, ctype)
             elif url.path in app.get:
                 self._run(app.get[url.path],
-                          *([parse_qs(url.query)] if url.path == "/api/chat/get" else []))
+                          *([parse_qs(url.query)] if url.path in QUERY_GETS else []))
             elif url.path in app.post:
                 self._send(405, {"error": "use POST"})
             else:

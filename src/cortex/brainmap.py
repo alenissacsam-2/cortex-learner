@@ -111,6 +111,7 @@ PARAMS_HASH = hashlib.sha256(json.dumps(
 ).encode()).hexdigest()[:16]
 
 
+@lru_cache(maxsize=1 << 16)  # read-only arrays (frombuffer of bytes), so sharing them is safe
 def _u(key: str, k: int = 4) -> np.ndarray:
     """k uniforms in [0, 1) from a stable hash of `key`."""
     d = hashlib.blake2b(key.encode(), digest_size=4 * k).digest()
@@ -424,6 +425,7 @@ def _adjacent(lab: np.ndarray, nl: int) -> np.ndarray:
 
 # ---- colour --------------------------------------------------------------------------------
 
+@lru_cache(maxsize=1 << 12)  # a recolour after a lobe reorder asks again for the same shades
 def _hex(light: float, chroma: float, hue: float) -> str:
     """OKLCH to an sRGB hex colour; chroma is reduced until it fits the gamut."""
     a, b = chroma * math.cos(math.radians(hue)), chroma * math.sin(math.radians(hue))
@@ -444,6 +446,9 @@ def _hex(light: float, chroma: float, hue: float) -> str:
 def _hd(a, b) -> np.ndarray:
     d = np.abs(np.asarray(a, float) - b) % 360
     return np.minimum(d, 360 - d)
+
+
+_HD = _hd(np.arange(360)[:, None], np.arange(360))  # whole-degree hue distances, row by hue
 
 
 def _hues(want: np.ndarray, adj: np.ndarray, order: list[int]) -> dict[int, int]:
@@ -483,12 +488,10 @@ def _hues(want: np.ndarray, adj: np.ndarray, order: list[int]) -> dict[int, int]
         return False
 
     def pick(k, apart=False):
-        short, every = np.zeros(360), np.full(360, np.inf)
-        for j, h in hue.items():
-            if j != k:
-                d = _hd(cand, h)
-                every = np.minimum(every, d)
-                short += np.maximum(HUE_GAP - d, 0) * adj[k, j]
+        js = [j for j in hue if j != k]
+        d = _HD[[hue[j] for j in js]]  # whole degrees, so these sums are exact in any order
+        every = d.min(0, initial=np.inf)
+        short = (np.maximum(HUE_GAP - d, 0) * adj[k, js][:, None]).sum(0)
         off = _hd(cand, want[k])
         ok = short == 0
         if ok.any():
@@ -517,33 +520,51 @@ def _hues(want: np.ndarray, adj: np.ndarray, order: list[int]) -> dict[int, int]
 
 # ---- vectors, affinity, in-lobe layout -----------------------------------------------------
 
-def _vectors(root, ids: list[str]) -> tuple[np.ndarray, np.ndarray, bool]:
+def _stamp(path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def _vectors(root, ids: list[str], memo: dict | None = None
+             ) -> tuple[np.ndarray, np.ndarray, bool]:
     """Unit page vectors (each page's head chunk, else the mean of its chunks) from the
-    semantic cache, a has-vector mask, and whether the cache was readable."""
+    semantic cache, a has-vector mask, and whether the cache was readable. `memo` keeps the
+    loaded cache while its file is unchanged."""
     n = len(ids)
     try:
-        with np.load(root / CACHE, allow_pickle=False) as z:
-            vid, page, start, vecs = z["ids"], z["page"], z["start"], z["vecs"]
-        if not len(page) == len(start) == len(vecs) or (len(page) and page.max() >= len(vid)):
-            raise ValueError("inconsistent arrays")
-        row = {str(i): k for k, i in enumerate(vid)}
-        head = np.full(len(vid), -1)
-        z0 = np.flatnonzero(start == 0)[::-1]
-        head[page[z0]] = z0  # reversed, so the first head row of a page wins
+        key = _stamp(root / CACHE)
+        hit = memo.get("vectors") if memo is not None else None
+        if hit is None or hit[0] != key or key is None:
+            with np.load(root / CACHE, allow_pickle=False) as z:
+                vid, page, start, vecs = z["ids"], z["page"], z["start"], z["vecs"]
+            if not len(page) == len(start) == len(vecs) or (len(page) and page.max() >= len(vid)):
+                raise ValueError("inconsistent arrays")
+            head = np.full(len(vid), -1)
+            z0 = np.flatnonzero(start == 0)[::-1]
+            head[page[z0]] = z0  # reversed, so the first head row of a page wins
+            unit = np.zeros((len(vid), vecs.shape[1]), np.float32)  # one per cached page
+            unit[head >= 0] = vecs[head[head >= 0]]
+            for k in np.flatnonzero(head < 0):  # no head chunk: the mean of its chunks
+                unit[k] = vecs[page == k].astype(np.float32).mean(0)
+            norm = np.linalg.norm(unit, axis=1)
+            ok = np.isfinite(norm) & (norm > 0)
+            unit[ok] /= norm[ok, None]
+            unit[~ok] = 0
+            hit = (key, {str(i): k for k, i in enumerate(vid)}, unit, ok)
+            if memo is not None:
+                memo["vectors"] = hit
+        _, row, unit, ok = hit
         g = np.array([row.get(i, -1) for i in ids], dtype=np.int64)
-        out = np.zeros((n, vecs.shape[1]), np.float32)
-        h = np.where(g >= 0, head[g], -1)
-        out[h >= 0] = vecs[h[h >= 0]]
-        for k in np.flatnonzero((g >= 0) & (h < 0)):  # no head chunk: the mean of its chunks
-            out[k] = vecs[page == g[k]].astype(np.float32).mean(0)
+        has = (g >= 0) & ok[g]
+        out = np.zeros((n, unit.shape[1]), np.float32)
+        out[has] = unit[g[has]]
     except Exception as e:  # a disposable cache: lay the brain out by links instead
         if not isinstance(e, FileNotFoundError):
             log.warning("brain: vector cache unreadable, laying out by links: %s", e)
         return np.zeros((n, 0), np.float32), np.zeros(n, bool), False
-    norm = np.linalg.norm(out, axis=1)
-    has = np.isfinite(norm) & (norm > 0)
-    out[has] /= norm[has, None]
-    out[~has] = 0
     return out, has, True
 
 
@@ -564,6 +585,54 @@ def _knn(x: np.ndarray, k: int, block: int = 1024) -> tuple[np.ndarray, np.ndarr
         idx[s:s + block], sim[s:s + block] = (np.take_along_axis(part, o, 1),
                                               np.take_along_axis(val, o, 1))
     return idx, sim
+
+
+def _near(memo: dict | None, keys: list[str], x: np.ndarray, k: int) -> np.ndarray:
+    """_knn's indices for rows named `keys`. With `memo`, when only a few rows came, went or
+    changed vector since the last call, only those and the rows that lost a neighbour are
+    searched again; every other row merges its old neighbours with the new rows. Ties are by
+    index, as in _knn; a near-tie may order differently from a full search (the dot products
+    come from a different matrix product, equal only to the last bit or so)."""
+    old = memo.get("knn") if memo is not None else None
+    n = len(keys)
+    k = max(0, min(k, n - 1))
+    fresh = gone = None
+    if old is not None and old[0] == k and old[1] == keys and np.array_equal(old[2], x):
+        return old[3]  # nothing came, went or moved
+    if old is not None and old[0] == k and old[2].shape[1] == x.shape[1]:
+        okeys, oi = old[1], {key: i for i, key in enumerate(old[1])}
+        com = np.array([oi.get(key, -1) for key in keys], np.int64)
+        same = com >= 0
+        same[same] = (old[2][com[same]] == x[same]).all(1)
+        fresh = np.flatnonzero(~same)
+        kept = set(com[same].tolist())
+        gone = len(okeys) - len(kept)
+        if len(fresh) + gone > max(8, n // 50):  # many changes: a full search is as cheap
+            fresh = None
+    if fresh is None:
+        idx, sim = _knn(x, k)
+    else:
+        idx, sim = np.zeros((n, k), np.int64), np.zeros((n, k), np.float32)
+        to_new = np.full(len(old[1]), -1, np.int64)
+        to_new[com[same]] = np.flatnonzero(same)
+        oidx = to_new[old[3][com[same]]]  # the kept rows' old neighbours, renumbered
+        lost = (oidx < 0).any(1)
+        rows = np.flatnonzero(same)
+        redo = np.concatenate([fresh, rows[lost]]).astype(np.int64)
+        merge = rows[~lost]
+        if len(merge):
+            ci = np.concatenate([oidx[~lost], np.broadcast_to(fresh, (len(merge), len(fresh)))], 1)
+            cs = np.concatenate([old[4][com[merge]], x[merge] @ x[fresh].T], 1)
+            o = np.lexsort((ci, -cs), axis=1)[:, :k]
+            idx[merge], sim[merge] = np.take_along_axis(ci, o, 1), np.take_along_axis(cs, o, 1)
+        for r in redo:  # few: one row against all
+            s = x @ x[r]
+            s[r] = -np.inf
+            o = np.lexsort((np.arange(n), -s))[:k]
+            idx[r], sim[r] = o, s[o]
+    if memo is not None:
+        memo["knn"] = (k, list(keys), x.copy(), idx, sim)
+    return idx
 
 
 def _affinity(cent, hasc, links: np.ndarray, pl: np.ndarray, clusters: list[dict]) -> np.ndarray:
@@ -664,8 +733,21 @@ def _num(x) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
-def _read_layout(root) -> tuple[str, dict | None]:
-    """The stored layout's text, and the layout when it is valid for these parameters."""
+def _read_layout(root, memo: dict | None = None) -> tuple[str, dict | None]:
+    """The stored layout's text, and the layout when it is valid for these parameters.
+    `memo` keeps the parsed layout while its file is unchanged; callers get a copy whose
+    `pages` and `lobes` they may change."""
+    key = _stamp(root / LAYOUT)
+    hit = memo.get("layout") if memo is not None else None
+    if hit is None or hit[0] != key or key is None:
+        hit = (key, *_parse_layout(root))
+        if memo is not None:
+            memo["layout"] = hit
+    text, st = hit[1], hit[2]
+    return text, st and {**st, "pages": dict(st["pages"]), "lobes": dict(st["lobes"])}
+
+
+def _parse_layout(root) -> tuple[str, dict | None]:
     try:
         text = (root / LAYOUT).read_text(encoding="utf-8")
         st = json.loads(text)
@@ -702,45 +784,185 @@ def _r(v, nd=4) -> list[float]:
     return [round(float(x), nd) for x in v]
 
 
+@lru_cache(maxsize=1)
+def _mesh_b64() -> tuple[str, str, str]:
+    vp, vn, tri = _mesh()
+    return _b64(vp, "<f4"), _b64(vn, "<f4"), _b64(tri, "<u4")
+
+
+def _sited(lobes: dict, memo: dict | None = None):
+    """What the sites alone decide, whatever the lobes' order: `_regions` over every stored
+    lobe id (sorted), each pool's cell of every mesh vertex, which lobes touch, and a dict that
+    `_geometry` fills with each lobe's own region and centre. `memo` keeps it while the stored
+    lobes stay the same (a lobe's page count reorders the lobes)."""
+    key = json.dumps(lobes, sort_keys=True)
+    hit = memo.get("sited") if memo is not None else None
+    if hit is None or hit[0] != key:
+        ids = sorted(lobes)
+        geo, lab = _regions(lobes, ids)
+        vp = _mesh()[0]
+        split = any(e["body"] == "cerebellum" for e in lobes.values())
+        vcb = np.argmin(_parts(vp), 1) == 4
+        cells = {}
+        for part in PARTS:
+            _, own, s, wt, _, _ = geo[part]
+            m = _pool(vcb, part, split)
+            if own and m.any():
+                cells[part] = (m, _assign(vp[m], s, wt)[0])
+        touch = _adjacent(lab, len(ids)) if ids else np.zeros((0, 0), bool)
+        hit = (key, {i: k for k, i in enumerate(ids)}, geo, cells, touch, {})
+        if memo is not None:
+            memo["sited"] = hit
+    return hit[1:]
+
+
+def _geometry(lobes: dict, lid: list[str], kind: list[str], memo: dict | None = None):
+    """What the stored lobes alone decide: each sited lobe's region (pool, cell index, the
+    pool's sites and weights, interior samples), the lobes' centres, anchors, normals and areas,
+    the mesh (each vertex takes the lobe of its region in its pool) and the lobe colours."""
+    nl = len(lid)
+    li = {c: k for k, c in enumerate(lid)}
+    ring = np.array([lobes[i]["body"] == "ring" for i in lid], bool)
+    at, geo, cells, touch, own_part = _sited(lobes, memo)
+
+    def placed(i):  # a sited lobe's region, centre, anchor, normal and area, whatever the order
+        if i not in own_part:
+            e = lobes[i]
+            q, own, s, wt, cell, gap = geo[e["body"]]
+            j = own.index(e.get("host", i))
+            m = cell == j
+            inner = m & (gap >= GAP)
+            q = q[inner if inner.any() else m]
+            q = q if len(q) else s[j:j + 1]
+            c = np.asarray(q.mean(0), float)
+            a = np.asarray(q[np.argmin(((q - c) ** 2).sum(1))], float)
+            own_part[i] = ((e["body"], j, s, wt, q), c, a, _unit(a),
+                           0 if "host" in e else (cell == j).sum() / SAMPLES)
+        return own_part[i]
+
+    regions = {k: placed(lid[k])[0] for k in range(nl) if not ring[k]}
+    centre, anchor, normal, area = (np.zeros((nl, 3)), np.zeros((nl, 3)), np.zeros((nl, 3)),
+                                    np.zeros(nl))
+    for k in range(nl):
+        if ring[k]:
+            centre[k], anchor[k], normal[k] = (0, RING_Y, 0), (0, RING_Y, RING_R), (0, 0, 1)
+            continue
+        _, centre[k], anchor[k], normal[k], area[k] = placed(lid[k])
+
+    vl = np.full(len(_mesh()[0]), 65535)
+    for part, (m, cell) in cells.items():
+        vl[m] = np.array([li.get(i, 65535) for i in geo[part][1]])[cell]
+    pos, nrm, idx = _mesh_b64()
+    mesh = [{"name": "brain", "pos": pos, "nrm": nrm, "idx": idx, "lobe": _b64(vl, "<u2")}]
+
+    # colours: hue from the site's direction around the vertical axis, apart where regions touch
+    perm = [at[i] for i in lid]  # touching is pairwise: the stored lobes' matrix, in lid order
+    adj = touch[np.ix_(perm, perm)] if nl else np.zeros((0, 0), bool)
+    for k in range(nl):  # a guest touches its host and the host's neighbours
+        h = li.get(lobes[lid[k]].get("host"))
+        if h is not None:
+            adj[k] |= adj[h]
+            adj[:, k] |= adj[:, h]
+            adj[k, h] = adj[h, k] = True
+            adj[k, k] = False
+    tinted = [k for k in range(nl) if not ring[k] and kind[k] in ("topic", "domain", "group")]
+    angle, mid = {}, {}
+    for k in tinted:
+        e = lobes[lid[k]]
+        if e["body"] not in mid:
+            mid[e["body"]] = geo[e["body"]][0].mean(0)
+        site, c = np.array(lobes[e.get("host", lid[k])]["site"]), mid[e["body"]]
+        angle[k] = (math.degrees(math.atan2(site[2] - c[2], site[0] - c[0]))
+                    + (1e-3 if "host" in e else 0)) % 360
+    # spread over the whole wheel in the same circular order, the biggest lobe at its angle
+    order = sorted(tinted, key=lambda k: (angle[k], k))
+    want = np.zeros(nl)
+    for t, k in enumerate(order):
+        want[k] = (angle[tinted[0]] + 360 * (t - order.index(tinted[0])) / len(order)) % 360
+    hue = _hues(want, adj, tinted)
+    color: list[str] = []
+    for k in range(nl):
+        light, chroma = ((0.74, 0.07 if kind[k] == "group" else 0.19) if k in hue
+                         else (0.55 if ring[k] else 0.70, 0))
+        c = _hex(light, chroma, hue.get(k, 0))
+        while c in color:  # a hue shared by lobes that do not touch: a shade darker
+            light -= 0.03
+            c = _hex(light, chroma, hue.get(k, 0))
+        color.append(c)
+    return regions, centre, anchor, normal, area, mesh, color
+
+
 # ---- the blob ------------------------------------------------------------------------------
 
-def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False) -> dict:
+def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False,
+          auto_relayout: bool = True, memo: dict | None = None) -> dict:
     """The dashboard's `brain` key for build_data's pages and
-    lobes; reads and, when it changed, rewrites `.cortex/brain-layout.json`."""
+    lobes; reads and, when it changed, rewrites `.cortex/brain-layout.json`.
+    `auto_relayout=False` (the app's live home) never lays the brain out again by itself,
+    however much changed: placed pages keep their place and new ones join their neighbours;
+    `relayout` still does. `memo` is a dict the caller keeps between builds: the same inputs
+    then give the same blob object, and the vector cache, the parsed layout, the lobe geometry
+    and the nearest-page search are reused while their inputs stay the same."""
     root, n, nl = vault.root, len(pages), len(clusters)
+    inputs = None
+    if memo is not None and not relayout:
+        inputs = (auto_relayout, json.dumps(clusters, sort_keys=True),
+                  [(p["id"], p["cluster"], p["updated"], p["links"]) for p in pages],
+                  _stamp(root / CACHE), _stamp(root / LAYOUT))
+        if memo.get("inputs") == inputs:
+            return memo["out"]
     ids = [p["id"] for p in pages]
     at = {i: k for k, i in enumerate(ids)}
     lid = [c["id"] for c in clusters]
     li = {c: k for k, c in enumerate(lid)}
     pl = np.array([li[p["cluster"]] for p in pages], dtype=np.int64)
-    vec, has, vec_ok = _vectors(root, ids)
-    links = np.array(sorted({(min(a, b), max(a, b)) for a, p in enumerate(pages)
-                             for b in (at[x] for x in p["links"] if x in at) if a != b}),
-                     dtype=np.int64).reshape(-1, 2)
+    vec, has, vec_ok = _vectors(root, ids, memo)
+    ea = np.array([(a, at[x]) for a, p in enumerate(pages) for x in p["links"] if x in at],
+                  dtype=np.int64).reshape(-1, 2)
+    links = np.unique(np.sort(ea[ea[:, 0] != ea[:, 1]], axis=1), axis=0).reshape(-1, 2)
     deg = np.bincount(links.ravel(), minlength=n)
     nbrs: list[list[int]] = [[] for _ in range(n)]
-    for a, b in links:
-        nbrs[a].append(int(b))
-        nbrs[b].append(int(a))
+    for a, b in links.tolist():
+        nbrs[a].append(b)
+        nbrs[b].append(a)
     base = [c["id"].removesuffix("-group") if c["kind"] == "group" else None for c in clusters]
     ring = np.array([c["kind"] == "archive" or b in ARCHIVE for c, b in zip(clusters, base,
                                                                             strict=True)], bool)
+    hr = np.flatnonzero(has)
+    hr = hr[np.argsort(pl[hr], kind="stable")]
+    # a lobe's sum depends only on its pages' vectors in page order: `memo` keeps it by lobe id
+    stamp = vec_ok and memo["vectors"][0] if memo is not None else None
+    was, sums = (memo.get("cent", {}) if memo is not None else {}), {}
     cent = np.zeros((nl, vec.shape[1]), np.float32)
-    np.add.at(cent, pl[has], vec[has])
+    lk, cut = np.unique(pl[hr], return_index=True)
+    ends = [*cut.tolist(), len(hr)]
+    for j, k in enumerate(lk.tolist()):  # in page order, bit for bit as np.add.at summed
+        rows = hr[ends[j]:ends[j + 1]]
+        key = (stamp, [ids[r] for r in rows])
+        got = was.get(lid[k])
+        if got is None or got[0] != key:
+            got = (key, np.cumsum(vec[rows], axis=0)[-1])
+        sums[lid[k]] = got
+        cent[k] = got[1]
+    if memo is not None:
+        memo["cent"] = sums
     hasc = np.linalg.norm(cent, axis=1) > 0
     cent = _unit(cent) * hasc[:, None]
     aff = _affinity(cent, hasc, links, pl, clusters)
 
-    old_text, st = _read_layout(root)
+    old_text, st = _read_layout(root, memo)
+    plid = [lid[k] for k in pl.tolist()]  # each page's lobe id
+    hasl = has.tolist()
     changed = n if st is None else sum(
         1 for k, i in enumerate(ids) if (s := st["pages"].get(i)) is None
-        or s[3] != lid[pl[k]] or (has[k] and not s[4]))
-    full = relayout or st is None or changed > RELAYOUT_SHARE * n
+        or s[3] != plid[k] or (hasl[k] and not s[4]))
+    full = relayout or st is None or (auto_relayout and changed > RELAYOUT_SHARE * n)
     if full:
         st = {"version": VERSION, "params_hash": PARAMS_HASH, "pages": {},
               "lobes": _sites(clusters, base, ring, aff)}
     else:
-        st["pages"] = {i: s for i in ids if (s := st["pages"].get(i)) and s[3] == lid[pl[at[i]]]}
+        st["pages"] = {i: s for k, i in enumerate(ids)
+                       if (s := st["pages"].get(i)) and s[3] == plid[k]}
     lobes = st["lobes"]
     for k in range(nl):  # a lobe new since the last layout: a guest in its most affine region
         if lid[k] in lobes:
@@ -754,38 +976,20 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
             lobes[lid[k]] = {"body": lobes[host]["body"], "host": host}
     ring_k = ring  # the lobe's kind; where it sits is the stored body
     ring = np.array([lobes[i]["body"] == "ring" for i in lid], bool)
-
-    geo, lab = _regions(lobes, lid)
+    kind = [c["kind"] for c in clusters]
+    gkey = json.dumps([lobes, lid, kind], sort_keys=True)
+    hit = memo.get("geometry") if memo is not None else None
+    if hit is None or hit[0] != gkey:
+        hit = (gkey, _geometry(lobes, lid, kind, memo))
+        if memo is not None:
+            memo["geometry"] = hit
+    regions, centre, anchor, normal, area, mesh, color = hit[1]
     vol = _samples()[2]
-
-    def region(k):
-        """(pool, cell index, the pool's sites and weights, interior samples) of lobe k."""
-        e = lobes[lid[k]]
-        q, own, s, wt, cell, gap = geo[e["body"]]
-        j = own.index(e.get("host", lid[k]))
-        m = cell == j
-        inner = m & (gap >= GAP)
-        q = q[inner if inner.any() else m]
-        return e["body"], j, s, wt, q if len(q) else s[j:j + 1]
-
-    regions = {k: region(k) for k in range(nl) if not ring[k]}
-    centre, anchor, normal, area = (np.zeros((nl, 3)), np.zeros((nl, 3)), np.zeros((nl, 3)),
-                                    np.zeros(nl))
-    for k in range(nl):
-        if ring[k]:
-            centre[k], anchor[k], normal[k] = (0, RING_Y, 0), (0, RING_Y, RING_R), (0, 0, 1)
-            continue
-        part, j, _, _, q = regions[k]
-        centre[k] = q.mean(0)
-        anchor[k] = q[np.argmin(((q - centre[k]) ** 2).sum(1))]
-        normal[k] = _unit(anchor[k])
-        if "host" not in lobes[lid[k]]:
-            area[k] = (geo[part][4] == j).sum() / SAMPLES
 
     # place every page that has no stored position
     pos = np.full((n, 3), np.nan)
-    for i, s in st["pages"].items():
-        pos[at[i]] = s[:3]
+    if st["pages"]:
+        pos[[at[i] for i in st["pages"]]] = [s[:3] for s in st["pages"].values()]
 
     def jitter(rows, tag, size):
         return (np.array([_u(f"{tag}:{ids[r]}", 3) for r in rows]).reshape(-1, 3) - 0.5) * size
@@ -818,7 +1022,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     big = max(float(np.quantile(deg, 1 - VAULT_HUBS)), 1) if n else 1  # the vault's top hubs
     later = []
     for k in range(nl):
-        rows = [r for r in np.flatnonzero(pl == k) if np.isnan(pos[r, 0])]
+        rows = np.flatnonzero((pl == k) & np.isnan(pos[:, 0])).tolist()
         if not rows:
             continue
         if ring[k]:
@@ -839,7 +1043,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
             continue
         emb = [r for r in rows if has[r]]
         later += [r for r in rows if not has[r]]
-        own_placed = [r for r in np.flatnonzero((pl == k) & has) if not np.isnan(pos[r, 0])]
+        own_placed = ((pl == k) & has & ~np.isnan(pos[:, 0])).any()
         if emb and "host" not in lobes[lid[k]] and not own_placed:
             q = regions[k][4]  # a fresh region: the lobe's map, filling it
             y = _fill(_fit(_embed(vec[emb], lid[k]), q), q, lid[k])
@@ -853,9 +1057,10 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
             continue
         host = li.get(lobes[lid[k]].get("host"), k)
         for r in emb:  # next to its 3 nearest placed neighbours by vector, inside its lobe
-            pool = [x for x in np.flatnonzero((pl == k) & has) if not np.isnan(pos[x, 0])] or [
-                x for x in np.flatnonzero((pl == host) & has) if not np.isnan(pos[x, 0])]
-            if not pool:
+            pool = np.flatnonzero((pl == k) & has & ~np.isnan(pos[:, 0]))
+            if not len(pool):
+                pool = np.flatnonzero((pl == host) & has & ~np.isnan(pos[:, 0]))
+            if not len(pool):
                 later.append(r)
                 continue
             sims = vec[pool] @ vec[r]
@@ -880,6 +1085,8 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     if text != old_text:
         try:
             vault.write_text(root / LAYOUT, text)
+            if memo is not None:  # what was just written is what the next build reads
+                memo["layout"] = (_stamp(root / LAYOUT), text, st)
         except (VaultError, OSError) as e:  # a view cache: the next build lays it out again
             log.warning("brain layout not saved: %s", e)
 
@@ -889,69 +1096,22 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     if cortex.any():
         dep[cortex] = np.maximum(-_field(pos[cortex]), 0)
 
-    # one mesh; each vertex takes the lobe of its region in its pool
-    vp, vn, tri = _mesh()
-    split = any(e["body"] == "cerebellum" for e in lobes.values())
-    vcb = np.argmin(_parts(vp), 1) == 4
-    vl = np.full(len(vp), 65535)
-    for part in PARTS:
-        _, own, s, wt, _, _ = geo[part]
-        m = _pool(vcb, part, split)
-        if own and m.any():
-            vl[m] = np.array([li.get(i, 65535) for i in own])[_assign(vp[m], s, wt)[0]]
-    mesh = [{"name": "brain", "pos": _b64(vp, "<f4"), "nrm": _b64(vn, "<f4"),
-             "idx": _b64(tri, "<u4"), "lobe": _b64(vl, "<u2")}]
-
-    # colours: hue from the site's direction around the vertical axis, apart where regions touch
-    adj = _adjacent(lab, nl) if nl else np.zeros((0, 0), bool)
-    for k in range(nl):  # a guest touches its host and the host's neighbours
-        h = li.get(lobes[lid[k]].get("host"))
-        if h is not None:
-            adj[k] |= adj[h]
-            adj[:, k] |= adj[:, h]
-            adj[k, h] = adj[h, k] = True
-            adj[k, k] = False
-    kind = [c["kind"] for c in clusters]
-    tinted = [k for k in range(nl) if not ring[k] and kind[k] in ("topic", "domain", "group")]
-    angle = {}
-    for k in tinted:
-        e = lobes[lid[k]]
-        site, c = np.array(lobes[e.get("host", lid[k])]["site"]), geo[e["body"]][0].mean(0)
-        angle[k] = (math.degrees(math.atan2(site[2] - c[2], site[0] - c[0]))
-                    + (1e-3 if "host" in e else 0)) % 360
-    # spread over the whole wheel in the same circular order, the biggest lobe at its angle
-    order = sorted(tinted, key=lambda k: (angle[k], k))
-    want = np.zeros(nl)
-    for t, k in enumerate(order):
-        want[k] = (angle[tinted[0]] + 360 * (t - order.index(tinted[0])) / len(order)) % 360
-    hue = _hues(want, adj, tinted)
-    color: list[str] = []
-    for k in range(nl):
-        light, chroma = ((0.74, 0.07 if kind[k] == "group" else 0.19) if k in hue
-                         else (0.55 if ring[k] else 0.70, 0))
-        c = _hex(light, chroma, hue.get(k, 0))
-        while c in color:  # a hue shared by lobes that do not touch: a shade darker
-            light -= 0.03
-            c = _hex(light, chroma, hue.get(k, 0))
-        color.append(c)
-
     wide = n >= 65535
     none = 0xFFFFFFFF if wide else 65535
     near = np.full((n, N_NEAR), none, np.int64)
     emb = np.flatnonzero(has)
-    nb, _ = _knn(vec[emb], N_NEAR)
+    nb = _near(memo, [ids[r] for r in emb], vec[emb], N_NEAR)
     near[emb, :nb.shape[1]] = emb[nb]
 
     # fibres: every link, then each embedded page's nearest by meaning that is not a link
-    seen = {(int(a), int(b)) for a, b in links}
-    sa, sb = [], []
-    for r in emb:
-        for t in near[r, :N_SIMILAR]:
-            key = (min(int(r), int(t)), max(int(r), int(t)))
-            if t != none and key not in seen:
-                seen.add(key)
-                sa.append(int(r))
-                sb.append(int(t))
+    sb = near[emb, :N_SIMILAR]
+    sa, sb = np.repeat(emb, sb.shape[1]), sb.ravel()
+    sa, sb = sa[sb != none], sb[sb != none]
+    pair = np.minimum(sa, sb) * max(n, 1) + np.maximum(sa, sb)
+    pair[np.isin(pair, links[:, 0] * max(n, 1) + links[:, 1])] = -1
+    first = np.sort(np.unique(pair, return_index=True)[1])  # a pair's first sighting only
+    first = first[pair[first] >= 0]
+    sa, sb = sa[first], sb[first]
     fa = np.concatenate([links[:, 0], sa]).astype(np.int64)
     fb = np.concatenate([links[:, 1], sb]).astype(np.int64)
     home = np.where(ring[pl][:, None], pos, centre[pl]) if n else pos  # ring ends: no pull
@@ -963,7 +1123,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
               "k": _b64([0] * len(links) + [1] * len(sa), "u1")}
 
     # node weight for the renderer's size: links, similar-meaning fibres, recency of `updated`
-    sdeg = np.bincount(np.array(sa + sb, dtype=np.int64), minlength=n)
+    sdeg = np.bincount(np.concatenate([sa, sb]).astype(np.int64), minlength=n)
     day = np.array([_day(p.get("updated")) for p in pages], float)
     recent = np.exp((day - day.max()) / RECENT) if n else day
     weight = (0.6 * np.log1p(deg) / max(math.log1p(deg.max(initial=0)), 1e-9)
@@ -971,8 +1131,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
               + 0.15 * recent)
 
     cross: dict = {}
-    for a, b in links:
-        la, lb = sorted((int(pl[a]), int(pl[b])))
+    for la, lb in np.sort(pl[links], axis=1).tolist():
         if la != lb and not ring[la] and not ring[lb]:
             cross[la, lb] = cross.get((la, lb), 0) + 1
     tracts = []
@@ -983,7 +1142,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
         tracts.append({"a": a, "b": b, "n": cnt, "p": [
             _r(anchor[a]), _r(0.55 * p1), _r(0.55 * p2), _r(anchor[b])]})  # 45 % toward the centre
 
-    return {
+    out = {
         "version": VERSION,
         "legend": LEGEND,
         "nodes": {"ids": ids, "xyz": _b64(pos, "<f4"), "lobe": _b64(pl, "<u2"),
@@ -997,10 +1156,13 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
         "fibres": fibres,
         "tracts": tracts,
         "near": {"ids": _b64(near, "<u4" if wide else "<u2")},
-        "beacons": {str(r): bl for r in range(n) if ring[pl[r]] and (bl := beacons(r))},
+        "beacons": {str(r): bl for r in np.flatnonzero(ring[pl]).tolist() if (bl := beacons(r))},
         "stats": {"embedded": int(has.sum()), "unembedded": int(n - has.sum()),
                   "relayout": bool(full), "vectors": vec_ok},
     }
+    if inputs is not None:  # the layout as it is now on disk: this build may have written it
+        memo["inputs"], memo["out"] = (*inputs[:4], _stamp(root / LAYOUT)), out
+    return out
 
 
 def preservation(xyz: np.ndarray, vec: np.ndarray, has: np.ndarray, lobe: np.ndarray,
