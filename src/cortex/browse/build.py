@@ -756,7 +756,10 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     the same filter, but only its visits on days no browser or inbox visit holds: nothing
     counts twice, and a later run without it keeps those days as it keeps forgotten ones.
     `srcs` are read as given: callers that did not pick browsers explicitly pass
-    `sources.chosen(settings)` (S2). Runs under the browse-wide lock (`sites.busy`), so a
+    `sources.chosen(settings)` (S2). A rebuilt day whose stored counts hold a source this run
+    does not read whole (not given, failed, an unticked profile, or at its oldest held day,
+    which the browser has partly expired) keeps that source's counts, and its day pages stay
+    as they are (`_kept`). Runs under the browse-wide lock (`sites.busy`), so a
     forget never lands in the middle of it."""
     now = now or datetime.now(UTC)
     vis = settings.visible_to_claude
@@ -775,6 +778,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if not dry_run:
         forget.sync_private(vault)
     visits, cursors, first = [], {}, None
+    read: set[str] = set()  # the "w" ids this run reads
+    expiring: dict[str, set[str]] = defaultdict(set)  # day -> ids whose oldest held day it is
     for s in srcs:
         tell(f"{s.key}: reading its history")
         try:
@@ -803,6 +808,10 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             cursors[s.key] = {"cursor": top if top is not None else old, "ran": ran}
         for v in vs:  # which browser: Chat can list one browser's sites
             v.source = v.source or s.browser
+        ids = {s.key, *(v.source for v in vs)}
+        read |= ids
+        if vs:  # the browser has partly expired its oldest day: what is stored for it stays
+            expiring[local_day(min(v.start for v in vs), tz)] |= ids
         visits += vs
     pending = state.get("pending")  # days an earlier run rebuilt while a source was failing
     if isinstance(pending, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", pending):
@@ -831,6 +840,9 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     start = since or first
     if reset and oldest is not None and (start is None or oldest < start):
         start = oldest
+    if start is not None:
+        start = _monday(start)
+    days, bad = (sites._load(vault, sites.DAYS), None) if dry_run else sites.load_days(vault)
     if reset and not vis and not dry_run and (n := _void_signals(vault)):
         report["browse_voided"] += n
     if not dry_run and (gone := _drop_public(vault, None if not vis else held if reset
@@ -840,7 +852,6 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if start is None and not dry_run and (report["public_removed"] or reset):
         report["index_changed"] = int(write_index(vault, visible=vis))
     if start is not None:
-        start = _monday(start)
         tell(f"filtering {len(visits) + len(inbox)} visits from {start} on")
         items, c = _items(visits, inbox, settings, tz, start, tell)
         report.update(c)
@@ -849,6 +860,19 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         items, c = vet(vault, items, settings, runner, budget, ask=vis and not dry_run,
                        save=not dry_run)
         report.update(c)
+        # a rebuilt day whose stored counts hold a source this run does not read whole keeps
+        # them (`sites.record`), and its day pages, which cannot be split by source, stay as is
+        fresh: dict[str, Counter] = defaultdict(Counter)
+        for i in items:
+            fresh[i.day][i.browser] += 1
+        on_disk = {d for folder, pat in ((DIR, _DAY_FILE), (PRIVATE_DIR, _PDAY_FILE))
+                   for d, _ in _days(vault.root / folder, pat)}
+        prior = set(state.get("sources") or {})
+        keep = {d: _kept(days.get(d), read, prior, d in on_disk, expiring.get(d, set()), fresh[d])
+                for d in held if d >= start}
+        frozen = {d for d, k in keep.items() if k}
+        if reset and vis and not dry_run:  # their public pages were made under other rules
+            report["public_removed"] += _drop_public(vault, held - frozen)
         if embed is not None:
             tell("topics: reading the topic hubs")
         hub_ids, unit, titles = hubs(vault, embed) if embed is not None else ([], None, {})
@@ -861,11 +885,11 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             by_day[i.day].append(i)
         # a page on disk from `start` on is rebuilt too, so one whose items are all dropped now
         # (a new deny_domains entry) goes; a day no source holds keeps its page
-        on_disk = {d for folder, pat in ((DIR, _DAY_FILE), (PRIVATE_DIR, _PDAY_FILE))
-                   for d, _ in _days(vault.root / folder, pat)}
         for d in on_disk:
             if d >= start and d in held:
                 by_day.setdefault(d, [])
+        for d in frozen:
+            by_day.pop(d, None)
         if dry_run:
             for its in by_day.values():
                 report["private_would"] += bool(its)
@@ -885,12 +909,9 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         report["signals"] = signals(vault, items, where, titles, tz) if vis else 0
         report["days_from"] = start  # type: ignore[assignment]
         tell(f"sites: counting {len(items)} visits by site")
-        days, bad = sites.load_days(vault)
-        days = sites.record(vault, items, where, settings, tz, start, held, days)
+        days = sites.record(vault, items, where, settings, tz, start, held, days, keep)
     elif dry_run:
         return {**report, "visible_to_claude": vis, "dry_run": True}
-    else:
-        days, bad = sites.load_days(vault)
     inbox_stats = _archive_consumed(vault, inbox_stats, settings)
     if not report["sources_failed"]:  # a failed source would move the horizon up
         horizon = (local_day(min(v.start for v in history), tz) if history
@@ -937,6 +958,30 @@ def _void_signals(vault: Vault) -> int:
         if _JOURNAL_LINE.search(p.read_bytes().decode("utf-8", "replace")):
             vault._mutate(p, lambda text: _JOURNAL_LINE.sub("", text))
     return len(ids)
+
+
+def _kept(recs, read: set[str], prior: set[str], page: bool, expiring: set[str],
+          fresh: Counter) -> set[str]:
+    """The "w" ids whose stored counts of a rebuilt day stay (`sites.record`'s `keep`): the
+    sources in the day's counts this run did not read whole, and `sites.UNKNOWN` (counts
+    stored without per-source counts, or a day page with none) unless every source imported
+    before (`prior`) was. Read whole: in `read`, and on its oldest held day (`expiring`), which
+    the browser may have partly expired, only with at least as many items now (`fresh`, per
+    id) as are stored. The extension's inbox is read whole every run, and Takeout gives way to
+    the browsers on the days they hold."""
+    recs = recs if isinstance(recs, dict) else {}
+    have: Counter = Counter({sites.UNKNOWN: 0} if page and not recs else {})
+    for a in recs.values():
+        if isinstance(a, dict):
+            w = a.get("w")
+            for k, c in (w.items() if isinstance(w, dict) else [(sites.UNKNOWN, a.get("n"))]):
+                if type(c) is int:
+                    have[k] += c
+    read = read - {k for k in expiring if fresh[k] < have[k]
+                   or (sites.UNKNOWN in have and fresh.total() < have.total())}
+    out = {k for k, c in have.items() if (c > 0 or k == sites.UNKNOWN) and k not in read
+           and k != "extension" and not k.startswith("takeout/")}
+    return out - {sites.UNKNOWN} if prior <= read else out
 
 
 def _drop_public(vault: Vault, held: set[str] | str | None) -> int:

@@ -1634,3 +1634,93 @@ def test_idn_hosts_are_kept_as_punycode_and_still_filtered(url, host):
     for adult in ("https://xvideosü.com/x", "https://सेक्स.com/x"):
         assert privacy.judge(adult, "t", settings=S).category == "adult"
     assert privacy.drop_reason("https://" + "ü" * 70 + ".de/") == "scheme"  # not encodable
+
+
+def _site_days(r, site):
+    """{day: record} of one site's stored counts."""
+    from cortex.browse import sites
+
+    return {d: a for d, keys in sites.load_days(Vault(r))[0].items() for k, a in keys.items()
+            if k.startswith(site + "|")}
+
+
+def _unticked(browsers, skip=("chrome/Profile 1",)):
+    s = replace(ADULT_PRIVATE, visible_to_claude=True, skip_profiles=skip)
+    srcs = sources.chosen(s, sources.discover(*browsers))
+    assert not {x.key for x in srcs} & set(skip)
+    return s, srcs
+
+
+def test_a_rebuild_keeps_what_an_unticked_profile_stored(vault, browsers, monkeypatch):
+    """Review: rebuilding a day (here every held day, as a new FILTER_VERSION does) from the
+    profiles still ticked deleted an unticked profile's stored counts for good. They stay, and
+    that day's pages, which cannot be split by profile, stay as they are."""
+    run_import(vault, browsers)
+    day = "2026-11-10"  # Profile 1's only day; chrome/Default has visits on it too
+    page = vault / "browse" / "private" / f"browse-private-{day}.md"
+    before = page.read_bytes()
+    assert b"Chess puzzles" in before
+    assert _site_days(vault, "chess.com")[day]["w"] == {"chrome/Profile 1": 1}
+    monkeypatch.setattr(build, "FILTER_VERSION", build.FILTER_VERSION + 1)
+    s, srcs = _unticked(browsers)
+    rep = build.run(Vault(vault), srcs, s, embed=Embed(), tz=UTC, now=m(0, 2))
+    assert rep["days_from"] == "2026-11-09"
+    got = _site_days(vault, "chess.com")[day]
+    assert got["n"] == 1 and got["w"] == {"chrome/Profile 1": 1}
+    assert _site_days(vault, "example.com")[day]["w"] == {"chrome/Default": 2}  # rebuilt
+    assert page.read_bytes() == before
+    assert not (vault / "browse" / f"browse-{day}.md").exists()  # made under the old rules
+    assert (vault / "browse" / "browse-2026-11-09.md").exists()  # read whole: rebuilt
+    # ticked again: the day is rebuilt from every profile, nothing counted twice
+    run_import(vault, browsers, since="2026-11-09")
+    got = _site_days(vault, "chess.com")[day]
+    assert got["n"] == 1 and got["w"] == {"chrome/Profile 1": 1}
+    assert (vault / "browse" / f"browse-{day}.md").exists() and page.read_bytes() == before
+
+
+def test_counts_stored_without_sources_stay_while_a_profile_is_unticked(vault, browsers,
+                                                                        monkeypatch):
+    """Counts stored before per-source counts ("w") cannot say which profile made them: with
+    a profile imported before and not read now, they stay (as UNKNOWN), and go only once every
+    profile is read again."""
+    from cortex.browse import sites
+
+    run_import(vault, browsers)
+    days = sites.load_days(Vault(vault))[0]
+    for keys in days.values():
+        for a in keys.values():
+            del a["w"]
+    (vault / sites.DAYS).write_text(json.dumps(days), encoding="utf-8")
+    monkeypatch.setattr(build, "FILTER_VERSION", build.FILTER_VERSION + 1)
+    s, srcs = _unticked(browsers)
+    build.run(Vault(vault), srcs, s, embed=Embed(), tz=UTC, now=m(0, 2))
+    got = _site_days(vault, "chess.com")["2026-11-10"]
+    assert got["n"] == 1 and got["w"] == {sites.UNKNOWN: 1}
+    run_import(vault, browsers, since="2026-11-09")
+    assert _site_days(vault, "chess.com")["2026-11-10"]["w"] == {"chrome/Profile 1": 1}
+
+
+def test_a_rebuild_keeps_the_stored_part_of_a_sources_oldest_day(vault, tmp_path, monkeypatch):
+    """Review: the oldest day a browser holds is partly expired; rebuilding it lost the visits
+    stored from its earlier hours. With fewer visits now than stored, it stays as it is."""
+    local = tmp_path / "expiring"
+    hist = local / "Google" / "Chrome" / "User Data" / "Default" / "History"
+    rows = [(m(0), "https://lichess.org/study/abc", "Chess openings for beginners"),
+            (m(10), "https://lichess.org/study/def", "Chess middlegame plans"),
+            (m(300, 1), "https://music.example.com/g1", "Guitar chords")]
+    chromium(hist, rows)
+    brw = (local, tmp_path / "none")
+    run_import(vault, brw)
+    page = vault / "browse" / "private" / "browse-private-2026-11-09.md"
+    before = page.read_bytes()
+    monkeypatch.setattr(build, "FILTER_VERSION", build.FILTER_VERSION + 1)
+    run_import(vault, brw)  # nothing expired yet: every day is rebuilt, the same
+    assert page.read_bytes() == before
+    hist.unlink()
+    chromium(hist, rows[1:])  # the browser expired the first visit
+    monkeypatch.setattr(build, "FILTER_VERSION", build.FILTER_VERSION + 1)
+    rep = run_import(vault, brw)
+    assert rep["days_from"] == "2026-11-09"
+    assert _site_days(vault, "lichess.org")["2026-11-09"]["n"] == 2
+    assert page.read_bytes() == before
+    assert _site_days(vault, "example.com")["2026-11-10"]["n"] == 1
