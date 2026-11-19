@@ -240,7 +240,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 | `cortex today --minutes 30` | Today's plan, cut to 30 minutes |
 | `cortex import <file>` | Import a chat export, notes, a calendar or Google activity; `--dry-run` shows counts, `--private` keeps imported notes private |
 | `cortex digest` | Review chats imported since the last digest and confirm their topics |
-| `cortex ask "question"` | Answer from your notes, saved AI chats and browsing with your local model, with sources |
+| `cortex ask "question"` | Answer from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex recall "query"` | Search your vault by meaning and keywords |
 | `cortex dashboard` | Build and open the offline dashboard |
 | `cortex doctor` | Health check, with a fix for each problem |

@@ -211,7 +211,7 @@ def cites(answer: str) -> set[int]:
     return {int(n) for m in _CITE.findall(answer) for n in m.split(",")}
 
 
-def ask(vault: Vault, question: str, k: int = 8, runner=None) -> dict:
+def ask(vault: Vault, question: str, k: int = 8, runner=None, private: bool = False) -> dict:
     """{answer, sources: [{n, path, title}] (the passages the answer cites), model}, or
     {error, message} when there is no local model or no search model."""
     if semantic.load_embedder() is None:
@@ -222,7 +222,7 @@ def ask(vault: Vault, question: str, k: int = 8, runner=None) -> dict:
         return {"error": "no_local_model", "message": str(e)}
     if runner is None:
         return {"error": "no_local_model", "message": NO_MODEL}
-    found = _passages(vault, question, k)
+    found = _passages(vault, question, k, sources={"private": private})  # private: opt-in
     if not found:
         return {"answer": "I don't know from your archive.", "sources": [],
                 "model": runner.describe()}

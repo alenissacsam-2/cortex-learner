@@ -1836,14 +1836,17 @@ def recall_cmd(query: str,
 
 @app.command("ask")
 @_errors
-def ask_cmd(question: str, vault: VaultOpt = None) -> None:
-    """Answer a question from your notes, saved AI chats and browsing, private pages included,
-    with the local model only (Ollama or LM Studio); never a cloud model. Prints the cited
-    sources."""
+def ask_cmd(question: str, vault: VaultOpt = None,
+            private: bool = typer.Option(False, "--private", help=(
+                "Also read private notes and private browsing. The answer and its sources "
+                "print here, so never use it where an AI app reads this terminal."))) -> None:
+    """Answer a question from your notes, saved AI chats and browsing with the local model
+    only (Ollama or LM Studio); never a cloud model. Prints the cited sources. Private notes
+    and private browsing only with --private: a terminal an AI app runs must never print them."""
     from cortex import ask
 
     try:
-        out = ask.ask(_vault(vault), question)
+        out = ask.ask(_vault(vault), question, private=private)
     except ValueError as e:  # localllm refuses a cloud model or a non-loopback url in config
         typer.echo(f"{e}. Fix localllm in ~/.cortex/config.yaml: it must name a model on this "
                    "computer.", err=True)

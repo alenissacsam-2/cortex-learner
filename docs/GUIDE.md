@@ -91,7 +91,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex brief` | Your brief, teaching contract and Today |
 | `cortex dashboard` | Opens the offline dashboard |
 | `cortex recall "query"` | Searches your vault by meaning and keywords |
-| `cortex ask "question"` | Answers from your notes, saved AI chats and browsing with your local model, with sources |
+| `cortex ask "question"` | Answers from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex claims --summary` | How well Cortex knows you, per page (and which lines you clicked vs a chat relayed) |
 | `cortex claims --unasked` | What chats saved about you without asking, each with its undo |
 | `cortex export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
