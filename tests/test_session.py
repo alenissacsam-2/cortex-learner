@@ -338,6 +338,45 @@ def test_commit_runs_git_add_and_commit_outside_the_vault_lock(root, monkeypatch
     assert git(root, "status", "--porcelain").strip() == "M inbox.md"  # not in the snapshot
 
 
+def test_a_file_rewritten_after_the_snapshot_stays_out_of_the_commit(root, monkeypatch):
+    """B12 race: session B rewrites a file between A's snapshot and A's add. Its text must not
+    land in A's commit, or `undo A` would revert B's text."""
+    real, calls = sm_mod._withhold_secrets, []
+
+    def scan(top, paths, withheld):
+        if not calls:  # runs outside the lock, after the snapshot
+            Vault(root).write_text(root / "inbox.md", "session B's text\n")
+        calls.append(paths)
+        return real(top, paths, withheld)
+
+    monkeypatch.setattr(sm_mod, "_withhold_secrets", scan)
+    (root / "inbox.md").write_text("session A's text\n", encoding="utf-8")
+    (root / "clean.md").write_text("an unchanged hand edit\n", encoding="utf-8")
+    (root / "BRIEF.md").unlink()  # a tracked file's deletion
+    sha = sm_mod._commit(Vault(root), "cortex: test")
+    assert "inbox.md" in calls[0]  # it was in the snapshot
+    assert files_in(root, sha) == {"clean.md", "BRIEF.md"}
+    assert git(root, "ls-tree", "--name-only", sha, "BRIEF.md").strip() == ""  # deleted
+    assert git(root, "status", "--porcelain").strip() == "M inbox.md"
+    assert (root / "inbox.md").read_text(encoding="utf-8") == "session B's text\n"
+
+
+def test_a_same_size_replace_within_one_mtime_tick_is_still_caught(root, monkeypatch):
+    real = sm_mod._withhold_secrets
+    p = root / "inbox.md"
+
+    def scan(top, paths, withheld):
+        st = p.stat()
+        Vault(root).write_text(p, "BBBB\n")  # an atomic replace, same size as AAAA
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))  # and the same mtime
+        return real(top, paths, withheld)
+
+    monkeypatch.setattr(sm_mod, "_withhold_secrets", scan)
+    p.write_text("AAAA\n", encoding="utf-8")
+    assert sm_mod._commit(Vault(root), "cortex: test") is None  # nothing of ours left
+    assert git(root, "status", "--porcelain").strip() == "M inbox.md"
+
+
 def test_commit_fails_cleanly_when_another_git_holds_the_index(root, caplog):
     (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
     (root / ".git/index.lock").write_text("", encoding="utf-8")  # a commit running elsewhere

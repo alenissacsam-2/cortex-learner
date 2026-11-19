@@ -383,6 +383,30 @@ def _commit_paths(top: str, paths: list[str], message: str) -> bool:
     return True
 
 
+def _stat(top: str, rel: str) -> tuple[int, int, int] | None:
+    """(size, mtime_ns, file id) of a repo-relative path, None if missing. The file id catches
+    an atomic replace (vault writes) even within one mtime tick; an in-place rewrite of the same
+    size within one tick is not caught (accepted: hand editors replace or change the size)."""
+    try:
+        st = os.stat(Path(top) / rel)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns, st.st_ino
+
+
+def _unchanged(top: str, paths: list[str], stats: dict[str, tuple | None]) -> list[str]:
+    """`paths` whose stat still matches the locked snapshot; a file another writer changed
+    since is left uncommitted for the commit of whoever owns it next."""
+    keep = []
+    for rel in paths:
+        if _stat(top, rel) == stats[rel]:
+            keep.append(rel)
+        else:
+            log.debug("vault commit left %s for a later commit: it changed after the snapshot",
+                      rel)
+    return keep
+
+
 SCAN_MAX_BYTES = 1 << 20  # r1-trust T7: larger files (exports, media) are not scanned
 
 
@@ -444,17 +468,21 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
             skip = {pre + r for r in _rel(vault, exclude)}
             ours = [c for c in changed if c in keys]
             other = [c for c in changed if c not in keys and c not in skip] if before else []
+        stats = {c: _stat(top, c) for c in ours + other}
     # B12: the lock covered only the snapshot and the path lists; the scan, add and commit run
-    # on those exact paths outside it, so other writers never wait on git. A file written
-    # meanwhile goes in at its newer, whole state (writes are atomic replaces, and git reads
-    # an appended event file up to the size it stat'ed), the same as a write made just before
-    # the snapshot; ownership is by path, so `exclude` still holds. A revert or merge begun
-    # meanwhile makes git refuse the pathspec commit, and a second commit's index.lock fails
-    # the add or commit: either way a logged warning and None.
+    # on those exact paths outside it, so other writers never wait on git. A file another
+    # writer changed meanwhile (its stat differs from the snapshot's) is dropped right before
+    # the add and stays modified for its owner's next commit, so this commit never holds
+    # another session's text and `undo` stays per session. The window left is the few ms
+    # between that re-stat and git reading the file. A revert or merge begun meanwhile makes
+    # git refuse the pathspec commit, and a second commit's index.lock fails the add or
+    # commit: either way a logged warning and None.
     ours = _withhold_secrets(top, ours, withheld)
     other = _withhold_secrets(top, other, withheld)
-    if other and not _commit_paths(top, other, before):
-        return None
+    if other := _unchanged(top, other, stats):
+        if not _commit_paths(top, other, before):
+            return None
+    ours = _unchanged(top, ours, stats)
     if not ours or not _commit_paths(top, ours, message):
         return None
     # HEAD may already be another process's later commit: the newest with our message
