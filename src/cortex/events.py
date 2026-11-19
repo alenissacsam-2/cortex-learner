@@ -380,7 +380,8 @@ _RESTORE = {"problem_status": ("problem", "problem", "status", "todo"),
 
 def _restore_note(log: EventLog, target: dict) -> None:
     """After a void, reset the field the voided event set, from the latest live event of the same
-    kind, unless the note no longer holds the voided value (a later hand edit is kept)."""
+    kind, unless the note no longer holds the voided value (a later hand edit is kept). An
+    assessment's score goes the same way: the latest live score, or no score at all."""
     pl = target.get("payload")
     spec = _RESTORE.get(pl.get("kind")) if isinstance(pl, dict) else None
     if spec is None:
@@ -391,15 +392,17 @@ def _restore_note(log: EventLog, target: dict) -> None:
         note = log.vault.read(nkind, nid)
     except VaultError:
         return
-    if note.fields.get(field) != pl.get(field):
-        return
-    latest = None
-    for e in live(log.iter_events()):
-        p = e.get("payload")
-        if isinstance(p, dict) and p.get("kind") == pl["kind"] and p.get(idkey) == nid:
-            latest = e
-    value = latest["payload"][field] if latest else default
-    values = {field: value}
-    if nkind == "problem":
-        values["solved_on"] = latest["day"] if value == "solved" else None
-    log.vault._edit_fields(nkind, nid, values)
+    mine = [e for e in live(log.iter_events()) if isinstance(e.get("payload"), dict)
+            and e["payload"].get("kind") == pl["kind"] and e["payload"].get(idkey) == nid]
+    values = {}
+    if note.fields.get(field) == pl.get(field):
+        latest = mine[-1] if mine else None
+        values[field] = latest["payload"][field] if latest else default
+        if nkind == "problem":
+            values["solved_on"] = latest["day"] if values[field] == "solved" else None
+    if "score" in pl and note.fields.get("score") == pl["score"]:
+        # log_assessment writes a score only when given, so the note holds the last one given
+        values["score"] = next((e["payload"]["score"] for e in reversed(mine)
+                                if "score" in e["payload"]), None)
+    if values:
+        log.vault._edit_fields(nkind, nid, values)

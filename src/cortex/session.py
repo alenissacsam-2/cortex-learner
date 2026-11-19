@@ -57,7 +57,6 @@ COUNT_KINDS = ("asked", "graded", "logged", "patched", "added")
 LEDGER_LOG_KINDS = frozenset({"touch", "need", "need_skip", "resurfaced", "access",
                               "chat_learned"})
 SUMMARY_MAX = 600
-_MD_SPECIAL = re.compile(r"([\\`*_\[\]<>!#|~])")
 
 
 @dataclass
@@ -262,11 +261,6 @@ class SessionManager:
 
 # ---- end pipeline -------------------------------------------------------------------
 
-def _esc(text) -> str:
-    """One-line note-derived text with Markdown links, images and HTML neutralised."""
-    return _MD_SPECIAL.sub(r"\\\1", " ".join(str(text).split()))
-
-
 def _state_word(state: str | None) -> str:
     state = state or "not_started"
     return f"{levels.GLYPH[state]} {levels.LABEL[state]}"
@@ -285,13 +279,13 @@ def _session_md(sid, mode, started, ended, counts, rows, unchecked, summary,
              f"- Duration: {mins} min",
              "- Counts: " + ", ".join(f"{k} {counts.get(k, 0)}" for k in COUNT_KINDS),
              "", "## Concepts"]
-    lines += [f"- {_esc(r['title'])} ({r['id']}): {_state_word(r['before'])} → "
+    lines += [f"- {render.esc(r['title'])} ({r['id']}): {_state_word(r['before'])} → "
               f"{_state_word(r['after'])}" for r in rows] or ["- none"]
     lines += ["", "## Taught, not yet checked"]
-    lines += [f"- {_esc(u['title'])} ({u['id']})" for u in unchecked] or ["- none"]
+    lines += [f"- {render.esc(u['title'])} ({u['id']})" for u in unchecked] or ["- none"]
     if changes:
         lines += ["", "## Changed", *render.changed_lines(changes)]
-    lines += ["", "## Summary", _esc(summary) if summary else "(none)", ""]
+    lines += ["", "## Summary", render.esc(summary, SUMMARY_MAX) if summary else "(none)", ""]
     return "\n".join(lines)
 
 
