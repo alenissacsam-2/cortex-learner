@@ -335,7 +335,9 @@ def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
     settings = load_settings()
     side, scat = sites._sides(settings, llm, days)
     lo, hi = (got[0].isoformat(), got[1].isoformat()) if got else ("", "9999")
+    browser = m[1].lower() if (m := _BROWSER.search(text)) else None
     seen: dict[str, dict] = {}
+    unknown = 0  # visits of a named browser's range stored before Cortex kept the browser
     for day, keys in days.items():
         if not lo <= day <= hi or not isinstance(keys, dict):
             continue
@@ -343,17 +345,30 @@ def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
             h = side(day, key) if isinstance(a, dict) else None
             if h is None or not sources.get("private" if h else "browsing"):
                 continue
+            n = int(a.get("n", 0) or 0)
+            if browser:
+                w = a.get("w")
+                if not isinstance(w, dict):
+                    unknown += n
+                    continue
+                n = min(n, int(w.get(browser, 0) or 0))  # a forget lowers "n" only
+                if n <= 0:
+                    continue
             site, cat, _pd = sites._split(key)
             e = seen.setdefault(site, {"n": 0, "days": set(), "hidden": False,
                                        "cat": cat or scat(site)})
-            e["n"] += int(a.get("n", 0) or 0)
+            e["n"] += n
             e["days"].add(day)
             e["hidden"] |= bool(h)
     when = f"from {_span(got[0], got[1])}" if got else "in everything Cortex has stored"
+    if browser:
+        when = f"in {browser.title()} {when}"
     notes = []
-    if m := _BROWSER.search(text):
-        notes.append("Cortex adds up visits from every browser it imports and does not keep "
-                     f"which one a visit came from, so this is not {m[1].title()} alone.")
+    if unknown:
+        notes.append(f"{unknown} visit{'s' * (unknown != 1)} in this range were imported "
+                     "before Cortex kept which browser they came from, so they are left out. "
+                     "A full history import under Browsing records it for the days your "
+                     "browsers still hold.")
     stored = min((d for d in days if isinstance(days[d], dict)), default=None)
     if stored and lo < stored:
         notes.append(f"Cortex has browsing from {stored} on; browsers keep about 90 days of "

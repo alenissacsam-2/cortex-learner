@@ -593,18 +593,34 @@ def test_a_site_question_lists_every_site_once_with_its_counts(vault):
         "2026-10-01": {"old.example||0": {"n": 50}},
     }, llm={"miruro.tv": {"h": {"desc": "An **anime** streaming [site](x)"}}})
     got = (date(2026, 11, 16), date(2026, 11, 17), "")
-    out = chat.site_list(vault, "list all the unique sites I visited in Comet", got, ALL_ON)
+    out = chat.site_list(vault, "list all the unique sites I visited", got, ALL_ON)
     assert out.startswith("**2 sites** from 16 Nov to 17 Nov")
     lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
     assert lines == ["- **github.com** · programming · 9 visits on 1 day",
-                     "- **miruro.tv** · 6 visits on 2 days: An anime streaming site(x)"]
-    assert "not Comet alone" in out and "old.example" not in out
+                     "- **miruro.tv** · video · 6 visits on 2 days: An anime streaming site(x)"]
+    assert "old.example" not in out
     assert "Don't save (adult" in out          # the default skips adult: never stored, said so
     no_private = dict(ALL_ON, private=False)
     assert "miruro" not in chat.site_list(vault, "which sites did I visit", got, no_private)
     assert chat.site_list(vault, "what did I read about sites of battles?", got, ALL_ON) is None
     assert chat.site_list(vault, "what websites did I go to?", got, ALL_ON) is not None
     assert chat.site_list(vault, "what did I learn yesterday?", got, ALL_ON) is None
+
+
+def test_a_named_browser_counts_only_its_visits(vault):
+    _site_days(vault, {
+        "2026-11-17": {"miruro.tv||0": {"n": 5, "w": {"comet": 3, "chrome": 2}},
+                       "github.com||0": {"n": 4, "w": {"chrome": 4}},
+                       "x.example||0": {"n": 2, "w": {"comet": 9}}},  # a forget lowered n
+        "2026-11-16": {"old.example||0": {"n": 7}},  # imported before browsers were kept
+    })
+    got = (date(2026, 11, 16), date(2026, 11, 17), "")
+    out = chat.site_list(vault, "which sites did I visit in Comet?", got, ALL_ON)
+    assert out.startswith("**2 sites** in Comet from 16 Nov to 17 Nov")
+    lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
+    assert lines == ["- **miruro.tv** · video · 3 visits on 1 day",
+                     "- **x.example** · 2 visits on 1 day"]
+    assert "7 visits in this range were imported before" in out
 
 
 def test_a_site_question_before_the_stored_days_says_so(vault):

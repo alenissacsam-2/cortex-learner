@@ -79,6 +79,7 @@ class Item:
     k: Kept
     excerpt: str = ""
     channel: str = ""
+    browser: str = ""  # the Visit's source: a browser, "extension" or "takeout/…"
 
 
 def _dur(secs: float) -> str:
@@ -189,7 +190,7 @@ def _items(visits: list[sources.Visit], inbox: list[sources.Visit], settings: Se
             hit.excerpt = v.excerpt or hit.excerpt
             hit.channel = v.channel or hit.channel
             continue
-        it = Item(day, v.start, v.secs, k, v.excerpt, v.channel)
+        it = Item(day, v.start, v.secs, k, v.excerpt, v.channel, v.source)
         items.append(it)
         at.setdefault(key, it)
     items.sort(key=lambda i: (i.start, i.k.url))
@@ -800,6 +801,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
                               "size": st.st_size, "mtime_ns": st.st_mtime_ns}
         except OSError:
             cursors[s.key] = {"cursor": top if top is not None else old, "ran": ran}
+        for v in vs:  # which browser: Chat can list one browser's sites
+            v.source = v.source or s.browser
         visits += vs
     pending = state.get("pending")  # days an earlier run rebuilt while a source was failing
     if isinstance(pending, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", pending):

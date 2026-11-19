@@ -225,6 +225,9 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
         a = days.setdefault(it.day, {}).setdefault(key, {"n": 0, "s": 0, "a": ts, "b": ts})
         a["n"] += 1
         a["a"], a["b"] = min(a["a"], ts), max(a["b"], ts)
+        if it.browser:  # visits per source ("w"); a forget lowers "n" only, so "n" caps these
+            w = a.setdefault("w", {})
+            w[it.browser] = w.get(it.browser, 0) + 1
         hr = a.setdefault("hr", {})
         h = str(it.start.astimezone(tz).hour)
         hr[h] = hr.get(h, 0) + 1
