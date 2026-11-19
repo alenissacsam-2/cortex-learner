@@ -90,7 +90,7 @@ def test_sweep_header_counts_the_plan_and_misses_are_explained_not_retaught(root
 
     run(root, body)
     one = [{"kind": "sweep", "id": "c", "title": "C", "state": "learning"}]
-    assert start_card(mode="sweep", sprint_day=None, today=one, assessments=[],
+    assert start_card(mode="sweep", today=one, assessments=[],
                       open_mistakes=[], date="2026-11-16").startswith(
         "### Cortex · Sweep (1 cold question) ·")
 
@@ -130,5 +130,5 @@ def test_smaller_next_strings(root):
         assert len(home["next"]) < 800
 
     run(root, body)
-    assert "/cortex harvest" in start_card(mode="history", sprint_day=None, today=[],
+    assert "/cortex harvest" in start_card(mode="history", today=[],
                                            assessments=[], open_mistakes=[], date="2026-11-16")

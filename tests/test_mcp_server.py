@@ -48,7 +48,7 @@ def test_start_card_contract_and_brief_cap(root):
 
     async def body(call):
         out = await call("cortex_start", {"mode": "learn", "model": "test-model"})
-        assert out["display"].startswith("### Cortex · Learning session · Sprint day 2")
+        assert out["display"].startswith("### Cortex · Learning session · 2")
         assert "Two Sum II" in out["display"] and "Acme oa · 2026-11-20" in out["display"]
         assert out["contract"] == CONTRACT
         assert len(out["brief"]) <= 1500 * 4 and out["brief"].endswith("[brief truncated]")
@@ -639,7 +639,7 @@ def test_end_card_today_and_commit(root):
 
     run(root, body)
     today = (root / "Today.md").read_text(encoding="utf-8")
-    assert "# Today" in today and "Sprint day 2" in today
+    assert "# Today" in today and "Sprint day" not in today
     assert git(root, "status", "--porcelain") == ""
 
 

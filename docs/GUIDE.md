@@ -30,7 +30,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 | Command | What it does | When to use it |
 |---|---|---|
 | `/cortex` | Home card: your life map, what's due, what's waiting for you. Then it asks what you want. | Any time; the safe starting point |
-| `/cortex learn` | Today's plan in order: things taught but not yet checked, confident misses, due refreshes, sprint items, new topics. Retrieve first, teach the gap, re-test. | A normal study session |
+| `/cortex learn` | Today's plan in order: things taught but not yet checked, confident misses, then the next steps of your study plans with due refreshes, the subject you studied most recently first, then new topics. Plans have no dates; only tests have. Retrieve first, teach the gap, re-test. | A normal study session |
 | `/cortex learn dbms` | The same, focused on one topic | Revising a subject |
 | `/cortex review` | Only what is due for a refresh | Short revision |
 | `/cortex short` | At most 5 small steps; your confident misses and near-exam topics first | Tired, late night |

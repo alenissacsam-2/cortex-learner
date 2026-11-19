@@ -27,7 +27,7 @@ UV_ENV = {k: os.environ[k] for k in ("APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR",
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 HOSTILE = "</script><img src=x onerror=alert(1)>"
 D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
-KEYS = {"as_of", "day", "sprint", "counts", "today", "plan_cleared", "first_run", "assessments",
+KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
         "counts_by_kind", "loops", "follow_ups", "resurface", "needs", "you", "help", "brain",
         "confidence"}
@@ -79,9 +79,9 @@ def test_blob_schema_and_counts(root):
     assert det["requires"] == ["arrays-basics"]
     assert d["details"]["arrays-basics"]["required_by"] == ["two-pointers"]
     assert {p["id"] for p in det["problems"]} == {"lc-1", "lc-167"}
-    assert d["sprint"]["day"] == 2 and [x["status"] for x in d["sprint"]["days"]] == [
-        "done", "current"]
-    assert d["sprint"]["today_counts"] == {"done": 0, "left": 4}
+    assert d["plans"] == [{"id": "sprint-test", "title": "Test sprint", "done": 2, "left": 3,
+                           "next": ["Two Sum II", "Drill set A",
+                                    "Free text item: read the notes"]}]
     a = d["assessments"][0]
     assert a["id"] == "acme-oa-2026" and a["days_left"] == 7
     assert a["readiness"]["total"] == 2
@@ -513,12 +513,12 @@ def _empty_vault(tmp_path) -> Path:
 def test_no_owner_data_in_the_page_script():
     # D5: no one learner's note ids or life events are baked into every vault's dashboard
     assert "youtube-and-notebooklm-patterns" not in JS and "placements in" not in JS
-    assert "p.tags.includes('patterns')" in JS and "${s.title} in ${plural(n, 'day')}" in JS
+    assert "p.tags.includes('patterns')" in JS and "${p.title} · " in JS
 
 
-def test_sprint_banner_title_comes_from_the_track(root):
-    s = dashboard.build_data(Vault(root), now=NOW)["sprint"]
-    assert s["title"] and s["title"] != "Phase 1 placements"
+def test_plan_title_comes_from_the_track(root):
+    s = dashboard.build_data(Vault(root), now=NOW)["plans"][0]
+    assert s["title"] == "Test sprint"
 
 
 @pytest.mark.slow  # builds the wheel, about 7 s

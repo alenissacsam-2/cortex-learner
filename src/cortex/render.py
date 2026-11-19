@@ -116,6 +116,19 @@ def _pending(assessments: list[dict]) -> list[dict]:
             if (a.get("outcome") or "pending") == "pending" and not a.get("private")]
 
 
+def _deadline(d: Mapping) -> str:
+    n = d["days"]
+    left = "due today" if n == 0 else "1 day left" if n == 1 else f"{n} days left"
+    return f"{esc(d['title'])}: {left}"
+
+
+def _coming(assessments: list[dict], deadlines: list[dict]) -> list[str]:
+    """Coming up: pending assessments and plan deadlines by date, undated tests last."""
+    rows = [(a.get("date") or "~", _assessment(a)) for a in _pending(assessments)] + [
+        (d["date"], _deadline(d)) for d in deadlines]
+    return [text for _, text in sorted(rows, key=lambda r: r[0])]
+
+
 def _unchecked_titles(today: list[dict]) -> list[str]:
     return [esc(i["title"]) for i in today if i.get("kind") == "unchecked"]
 
@@ -198,17 +211,17 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
         *(["**Lately:** " + " · ".join(lately)] if lately else []),
         *(["**Waiting for you:** " + " · ".join(wait)] if wait else []),
         "**What would you like to do?** learn a topic · recall something · review "
-        "what's due · a 10-question sweep · today's sprint plan · save this chat · open the graph"])
+        "what's due · a 10-question sweep · today's plan · save this chat · open the graph"])
 
 
-def start_card(*, mode: str, sprint_day: int | None, today: list[dict],
-               assessments: list[dict], open_mistakes: list[tuple[str, int]],
-               date: str) -> str:
+def start_card(*, mode: str, today: list[dict], assessments: list[dict],
+               open_mistakes: list[tuple[str, int]], date: str,
+               deadlines: list[dict] = ()) -> str:
+    """Plan steps carry no day or date (v8: a plan is an ordered list per subject); only
+    assessments and plan deadlines (planner.deadlines) under Coming up have dates."""
     head = ["Cortex", MODE_LABEL.get(mode, esc(mode))]
     if mode == "sweep" and today:  # dogfood r4 #7: the plan's length, not a promised 10
         head[1] += f" ({len(today)} cold question{'s' if len(today) > 1 else ''})"
-    if sprint_day is not None:
-        head.append(f"Sprint day {sprint_day}")
     head.append(esc(date))
     lines = ["### " + " · ".join(head)]
     if mode in MODE_HINT:  # no quiz plan: the brief (returned beside the card) and one hint
@@ -225,9 +238,9 @@ def start_card(*, mode: str, sprint_day: int | None, today: list[dict],
     unchecked = _unchecked_titles(today)  # the plan's lane: privacy-filtered, 7-day rule
     if unchecked:
         lines.append("**Taught, not yet checked:** " + ", ".join(unchecked))
-    coming = _pending(assessments)[:COMING_UP]
+    coming = _coming(assessments, deadlines)[:COMING_UP]
     if coming:
-        lines.append("**Coming up:** " + "; ".join(_assessment(a) for a in coming))
+        lines.append("**Coming up:** " + "; ".join(coming))
     if open_mistakes:
         lines.append("**Open mistakes:** " + ", ".join(
             f"⚑ {esc(t)} ({n}×)" for t, n in open_mistakes[:MISTAKES_SHOWN]))
@@ -311,20 +324,18 @@ def end_card(*, counts: dict, moved: list[dict], unchecked: list[str], new_mista
     return "\n".join(lines)
 
 
-def today_md(*, today: list[dict], sprint_day: int | None, assessments: list[dict],
-             as_of: str, cues: Mapping[str, str] | None = None) -> str:
-    """`cues` maps concept -> last question asked on it (raw); re-check items show it."""
+def today_md(*, today: list[dict], assessments: list[dict], as_of: str,
+             cues: Mapping[str, str] | None = None, deadlines: list[dict] = ()) -> str:
+    """`cues` maps concept -> last question asked on it (raw); re-check items show it.
+    `deadlines` (planner.deadlines) join the assessments under Coming up."""
     cues = cues or {}
-    lines = [TODAY_HEADER, f"# Today · {esc(as_of)}"]
-    if sprint_day is not None:
-        lines.append(f"Sprint day {sprint_day}")
-    lines += ["", "## Plan"]
+    lines = [TODAY_HEADER, f"# Today · {esc(as_of)}", "", "## Plan"]
     for i in today:
         state = i.get("state")
         mark = f"{GLYPH[state]} {LABEL[state]}" if state in GLYPH else NO_CONCEPT
         why = esc(i.get("why") or "")
-        # the planner's folded-Owed pointer links its track page (a vault id, ID_RE-safe)
-        title = f"More owed items are in [[{esc(i['more'])}]]" if i.get("more") \
+        # the planner's "more steps" pointer links its track page (a vault id, ID_RE-safe)
+        title = f"More steps are in [[{esc(i['more'])}]]" if i.get("more") \
             else esc(i["title"])
         lines.append(f"- {mark} · {title}" + (f" · {why}" if why else ""))
         if i.get("model"):  # a vault id, ID_RE-safe like `more`
@@ -338,9 +349,9 @@ def today_md(*, today: list[dict], sprint_day: int | None, assessments: list[dic
     unchecked = _unchecked_titles(today)
     if unchecked:
         lines += ["", "## Taught but not checked"] + [f"- {t}" for t in unchecked]
-    coming = _pending(assessments)
+    coming = _coming(assessments, deadlines)
     if coming:
-        lines += ["", "## Coming up"] + [f"- {_assessment(a)}" for a in coming]
+        lines += ["", "## Coming up"] + [f"- {c}" for c in coming]
     lines += ["", "Refresh with /cortex or `cortex brief`", ""]
     return "\n".join(lines)
 

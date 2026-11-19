@@ -1151,7 +1151,7 @@ FIRST_STEPS = ("To start: 1. add a test date (tell any Claude chat, or add one i
 
 def _today_line(it: dict) -> str:
     state = it["state"]
-    head = f"{levels.GLYPH[state]} {levels.LABEL[state]}" if state else "- Track item"
+    head = f"{levels.GLYPH[state]} {levels.LABEL[state]}" if state else "- Plan step"
     # the id only when it says something the title doesn't ("Sorting", not "Sorting (sorting)")
     name = it["title"] if not it["id"] or slugify(it["title"]) == it["id"] else \
         f"{it['title']} ({it['id']})"
@@ -1202,8 +1202,9 @@ def today(minutes: Annotated[int | None, typer.Option(
     v, now = _vault(vault), datetime.now(UTC)
     items = _print_today(v, now, planner.check_minutes(minutes))
     v.write_text(v.root / "Today.md", render.today_md(
-        today=items, sprint_day=planner.sprint_day(v), assessments=planner.assessments(v),
-        as_of=local_day(now), cues=planner.last_questions(v)))
+        today=items, assessments=planner.assessments(v),
+        as_of=local_day(now), cues=planner.last_questions(v),
+        deadlines=planner.deadlines(v, local_day(now))))
 
 
 @app.command()

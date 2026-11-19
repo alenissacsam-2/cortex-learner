@@ -22,7 +22,7 @@ The mode is the first word after `/cortex`; the rest is the topic. Default `home
 | `home` | Plain `/cortex` (§0). |
 | `help` | Greeting plus every mode and command: read `modes/help.md` first. |
 | `map` | The dashboard (§0). |
-| `learn` | Today's sprint plan (§2). |
+| `learn` | Today's plan (§2). |
 | `review` | What is due (§2). |
 | `short` | Tired: at most 5 small steps (§2). |
 | `log` | Record results they report (§2). |
@@ -62,10 +62,10 @@ Work through Today's plan in order. "Taught, not yet checked" items come first.
 For each topic:
 1. **Retrieve before teaching.** Ask one closed-book question first. Ask how sure they are (1 = guessing … 4 = certain) before you reveal the answer.
 2. **Teach the gap** the way the contract says.
-3. **Re-test.** Use a new question, not the same one.
-4. **Record every answer as soon as it is given.** Never batch them for the end.
+3. **Re-test.** Use a new question.
+4. **Record every answer as soon as it is given.** Never batch them.
    Questions, quiz widgets, coding problems, `item_type` and mistakes: read `modes/grading.md` first (`cortex_ask` before, `cortex_grade` after).
-5. If you explained something but did not get to test it, call `cortex_log(kind="taught", payload={concept, summary})`. It comes back first next time.
+5. Explained but not tested? Call `cortex_log(kind="taught", payload={concept, summary})`. It comes back first next time.
 
 **Results are trusted at face value:** record exactly what happened; 6/6 is 6/6.
 
@@ -86,5 +86,6 @@ Letters for a tired you: read `modes/letters.md` first.
 - Never record an answer you did not see or invent ids.
 - Never delete imported chats, notes or `me/` pages; offer to file or archive them instead.
 - If something was taught but not tested, say "not checked yet" rather than calling it learned.
+- Plans have no dates: never say "Day N" or "behind"; only tests have dates.
 - Never show internal numbers (predicted_p, intervals); the states (○ ◌ ◐ ↻ ●) are enough.
 - Never call `cortex_start` unless the user asked for a session.

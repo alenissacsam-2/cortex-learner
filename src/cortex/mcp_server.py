@@ -162,6 +162,8 @@ ERROR_NEXT = {
 }
 # SEC-1: me/ pages that steer study sessions, and the modes where editing them is expected
 WATCHED_PAGES = {"teaching-contract": "contract", "profile": "profile"}
+NO_DATES = ("Plan steps have no dates: never say 'Day N', give a step a date or call a plan "
+            "behind; switching subjects just pauses one. Only tests have dates.")
 START_NEXT = {
     "home": "If this chat already had a real conversation before /cortex, first offer to save "
             "it (modes/save-history.md, 'Save this chat'); the user usually wants that. "
@@ -169,10 +171,10 @@ START_NEXT = {
             "it, and read a bare 'ok' as yes to the last thing you offered. When they name a "
             "topic, call "
             "cortex_context(topic=…) or cortex_find to see what they know, then teach by the "
-            "contract. Pull anything else (profile, goals, sprint plan) only if needed. "
+            "contract. Pull anything else (profile, goals, study plans) only if needed. "
             "If you show resurfaced ideas, record them with cortex_log(kind='resurfaced').",
-    "learn":"Ask one closed-book question first (cortex_ask), then teach the gap.",
-    "short": "Ask one closed-book question first (cortex_ask), then teach the gap.",
+    "learn":"Ask one closed-book question first (cortex_ask), then teach the gap. " + NO_DATES,
+    "short": "Ask one closed-book question first (cortex_ask), then teach the gap. " + NO_DATES,
     "review": "Re-test the first refresh item: cortex_ask, then cortex_grade.",
     "log": "Record results with cortex_log; call cortex_end when done.",
     "about": "Answer with cortex_find and cortex_read; call cortex_end when done.",
@@ -735,9 +737,10 @@ class Cortex:
         open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                         key=lambda m: (-m.count, m.id))
         display = render.start_card(
-            mode=mode, sprint_day=planner.sprint_day(self.vault), today=today,
+            mode=mode, today=today,
             assessments=planner.assessments(self.vault),
-            open_mistakes=[(titles.get(m.id, m.id), m.count) for m in open_m], date=today_s)
+            open_mistakes=[(titles.get(m.id, m.id), m.count) for m in open_m], date=today_s,
+            deadlines=planner.deadlines(self.vault, today_s))
         extra = {}
         if mode == "week":
             w = extra["week"] = planner.week_summary(self.vault, self.catalog, now=s.started)

@@ -652,9 +652,8 @@ def _record(vault: Vault, *, sid, mode, started, ended, counts, rows, unchecked,
     vault.write_text(vault.path_for("session", name),
                      relink.with_up(text, day) if day else text)  # Obsidian: session -> day
     vault.write_text(vault.root / "Today.md", render.today_md(
-        today=today, sprint_day=planner.sprint_day(vault),
-        assessments=planner.assessments(vault), as_of=as_of,
-        cues=planner.last_questions(vault)))
+        today=today, assessments=planner.assessments(vault), as_of=as_of,
+        cues=planner.last_questions(vault), deadlines=planner.deadlines(vault, as_of)))
     try:  # log.md is a view too; it must never break close
         vault.append_log(local_day(ended), "session", f"{mode}, {len(changes)} changes")
     except Exception:

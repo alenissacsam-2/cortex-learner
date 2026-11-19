@@ -897,7 +897,7 @@ def test_study_answers_come_from_the_learner_model(vault):
 
     plan = ask_("What should I study today?")
     assert plan.startswith("**Today's plan**")
-    assert "Drill set A" in plan and "Test sprint" not in plan  # the track's Day 2 lines
+    assert "Drill set A" in plan and "Day 2" not in plan  # the plan's next steps, no days
     weak = ask_("Where am I weak?")
     assert "**Two pointers** · a confident miss on 2026-11-15, 1 open mistake" in weak
     assert "⚑ DSA: off-by-one at the loop end · seen 1×, last on 2026-11-15" in weak
