@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -312,3 +313,137 @@ def test_void_assessment_result_keeps_a_hand_edited_score(ev):
     ev.vault.set_field("assessment", "acme-oa", "score", 90)
     void(ev, e)
     assert ev.vault.read("assessment", "acme-oa").fields["score"] == 90
+
+
+# ---- the incremental parse cache and key map ----------------------------------------------
+
+def fresh(ev):
+    """The log as a cold process parses it."""
+    events._PARSED.clear()
+    return list(EventLog(ev.vault).iter_events())
+
+
+def raw(i, key=None):
+    """One event line as another process would write it."""
+    eid = f"01JD{i:022d}"
+    return (json.dumps({"id": eid, "key": key or eid, "ts": "2026-11-13T13:00:00Z",
+                        "day": "2026-11-13", "session": "cli", "kind": "log",
+                        "source": "external", "schema": 1}) + "\n").encode()
+
+
+def test_incremental_parse_matches_a_full_parse(ev):
+    for i in range(60):
+        out = grade(ev, now=NOON + timedelta(seconds=i), key=f"k{i}")
+        out["verdict"] = "edited by a caller"  # the returned event is not the cached one
+        if i % 7 == 0:
+            list(ev.iter_events())
+        if i % 13 == 0:
+            [path] = files(ev)
+            with open(path, "ab") as f:  # another process
+                f.write(raw(i) + b"not json\n")
+    cached = list(ev.iter_events())
+    assert len(cached) == 60 + 5 and all(e.get("verdict") != "edited by a caller" for e in cached)
+    assert cached == fresh(ev)
+
+
+def test_another_process_append_and_key_are_seen(ev):
+    grade(ev)
+    assert not ev.has_key("theirs")
+    [path] = files(ev)
+    with open(path, "ab") as f:
+        f.write(raw(1, key="theirs"))
+    assert ev.has_key("theirs") and len(list(ev.iter_events())) == 2
+    other = EventLog(Vault(ev.vault.root))  # another instance with its own Vault
+    theirs = grade(other, key="k2", now=NOON + timedelta(minutes=1))
+    assert ev.has_key("k2")
+    assert grade(ev, key="k2", now=NOON + timedelta(hours=1)) == theirs  # a retry: the old event
+    assert grade(ev, key="k2", now=NOON + timedelta(hours=2)) == theirs
+    assert len(list(ev.iter_events())) == 3
+
+
+@pytest.mark.parametrize("how,keys", [
+    ("replace", ["ka", "kc"]),  # cortex undo: temp file + os.replace, here also longer
+    ("in_place_same_size", ["ka", "kc"]),
+    ("shorter", ["ka"]),
+    ("grew_tail_changed", ["ka", "kb"]),
+])
+def test_a_rewrite_parses_the_file_again(ev, how, keys):
+    a = grade(ev, key="ka")
+    b = grade(ev, key="kb", now=NOON + timedelta(minutes=1))
+    assert ev.has_key("kb")
+    [path] = files(ev)
+    data, stat = path.read_bytes(), path.stat()
+    rekeyed = data.replace(b'"kb"', b'"kc"')  # same size; outside the last 64 bytes
+    if how == "replace":
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(rekeyed + raw(1))
+        tmp.replace(path)
+    elif how == "in_place_same_size":
+        path.write_bytes(rekeyed)
+    elif how == "shorter":
+        path.write_bytes(data[:data.index(b"\n") + 1])
+    else:
+        i = data.rindex(b'"correct"')  # in the last line's last 64 bytes
+        path.write_bytes(data[:i] + b'"partial"' + data[i + 9:] + raw(1))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))  # a coarse clock differs too
+    got = list(ev.iter_events())
+    assert [e["key"] for e in got if e["key"] in ("ka", "kb", "kc")] == keys
+    assert got == fresh(ev) and got[0]["id"] == a["id"]
+    if how == "grew_tail_changed":
+        assert [e.get("verdict") for e in got[:2]] == ["correct", "partial"]
+    assert ev.has_key("kb") == (how == "grew_tail_changed")
+    again = grade(ev, key="kb", now=NOON + timedelta(hours=1))
+    assert (again["id"] == b["id"]) == (how == "grew_tail_changed")
+
+
+def test_a_torn_line_is_parsed_once_when_completed(ev, caplog):
+    grade(ev)
+    [path] = files(ev)
+    line = raw(1, key="late")
+    with open(path, "ab") as f:
+        f.write(line[:30])
+    assert len(list(ev.iter_events())) == 1 and not ev.has_key("late")
+    with open(path, "ab") as f:
+        f.write(line[30:])
+    assert len(list(ev.iter_events())) == 2 and ev.has_key("late")
+    with open(path, "ab") as f:
+        f.write(raw(2)[:-1])  # a whole event, not yet terminated, is seen
+    assert len(list(ev.iter_events())) == 3
+    with open(path, "ab") as f:
+        f.write(b'\n{"torn')
+    assert len(list(ev.iter_events())) == 3
+    assert "skipping" not in caplog.text  # a torn line may be mid-write: not logged yet
+    with open(path, "ab") as f:
+        f.write(b'"]\n')
+    for _ in range(3):
+        list(ev.iter_events())
+    grade(ev, now=NOON + timedelta(hours=1))
+    got = list(ev.iter_events())
+    assert caplog.text.count("skipping") == 1  # logged once, when the line was completed
+    assert len(got) == 4 and got == fresh(ev)
+
+
+def test_own_append_reads_nothing_back(ev, monkeypatch):
+    grade(ev)
+    ev.has_key("x")
+    calls = []
+    monkeypatch.setattr(events, "_parse_file", lambda *a: calls.append(a))
+    for i in range(5):
+        grade(ev, key=f"k{i}", now=NOON + timedelta(minutes=i))
+    assert calls == [] and ev.has_key("k4") and len(list(ev.iter_events())) == 6
+
+
+@pytest.mark.slow
+def test_append_time_is_flat_in_a_big_month_file(ev):
+    import time
+
+    path = ev.vault.root / "events" / "2026" / "11" / "cli.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"".join(raw(i) for i in range(75_000)))
+    ev.has_key("warm")
+    t = time.perf_counter()
+    for i in range(200):
+        grade(ev, key=f"k{i}", now=NOON + timedelta(seconds=i))
+    per = (time.perf_counter() - t) / 200
+    print(f"{per * 1000:.1f} ms per append at 75k events")
+    assert per < 0.1  # was ~0.5 s here when each append re-parsed the month file

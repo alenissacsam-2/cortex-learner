@@ -150,15 +150,33 @@ def _check_fields(fields: dict) -> None:
                 _check_text("A payload value", s, TEXT_LIMIT)
 
 
-# path -> ((mtime_ns, size), events): in-process only. The log is append-only, so a re-read
-# parses just the file being written. Bad lines are logged once per file version.
-# shortcut: a same-size rewrite within one mtime tick is missed; add st_ino if that bites.
-_PARSED: dict[Path, tuple[tuple[int, int], list[dict]]] = {}
+_TAIL = 64  # bytes before the parsed end that must still match for an incremental read
 
 
-def _parse_lines(path: Path, data: bytes) -> list[dict]:
+class _Parsed:
+    """One event file's parse, in-process only. `events` come from the newline-terminated
+    bytes [0, length) (`lines` lines), whose last _TAIL bytes are `tail`; `view` adds a valid
+    unterminated last line, if any. `key` is the (st_ino, mtime_ns, size) it was read at."""
+    __slots__ = ("key", "events", "length", "lines", "tail", "view")
+
+    def __init__(self):
+        self.key, self.events, self.length, self.lines, self.tail = None, [], 0, 0, b""
+        self.view = self.events
+
+
+# The log is append-only, so a file that only grew (same inode, its old tail unchanged) is
+# read from where the last parse ended; anything else (undo's os.replace, a truncation, a
+# same-size rewrite) is parsed again whole. Bad lines are logged once, when first parsed.
+_PARSED: dict[Path, _Parsed] = {}
+
+
+def _stat_key(st: os.stat_result) -> tuple[int, int, int]:
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
+def _parse_lines(path: Path, data: bytes, first: int = 0, quiet: bool = False) -> list[dict]:
     out = []
-    for n, line in enumerate(data.split(b"\n"), 1):
+    for n, line in enumerate(data.split(b"\n"), first + 1):
         if not line.strip():
             continue
         try:
@@ -167,16 +185,49 @@ def _parse_lines(path: Path, data: bytes) -> list[dict]:
                     and isinstance(ev.get("id"), str)):
                 raise ValueError("not an event object")
         except ValueError as e:  # JSON and Unicode errors subclass ValueError
-            log.warning("skipping %s line %d: %s", path, n, e)
+            if not quiet:
+                log.warning("skipping %s line %d: %s", path, n, e)
             continue
         out.append(ev)
     return out
+
+
+def _parse_file(path: Path, key: tuple[int, int, int], hit: _Parsed | None) -> _Parsed:
+    """`path` parsed at `key`: only the bytes past `hit` when the file just grew."""
+    with open(path, "rb") as f:
+        if hit is not None and hit.key[0] == key[0] and key[2] > hit.key[2]:
+            f.seek(hit.length - len(hit.tail))
+            data = f.read()
+            if data.startswith(hit.tail):
+                return _extend(path, key, hit, data, len(hit.tail))
+        f.seek(0)
+        return _extend(path, key, _Parsed(), f.read(), 0)
+
+
+def _extend(path: Path, key, p: _Parsed, data: bytes, skip: int) -> _Parsed:
+    """Add to `p` the lines of `data[skip:]`, which starts at file offset p.length; `data[:skip]`
+    is p.tail. An unterminated last line goes only to `view`, silently: it may be mid-write, and
+    it is parsed (and logged if bad) once a newline completes it."""
+    end = max(data.rfind(b"\n") + 1, skip)
+    if end > skip:
+        done = data[skip:end]
+        p.events.extend(_parse_lines(path, done, p.lines))
+        p.lines += done.count(b"\n")
+        p.length += end - skip
+        p.tail = data[max(0, end - _TAIL):end]
+    rest = data[end:]
+    pending = _parse_lines(path, rest, p.lines, quiet=True) if rest.strip() else []
+    p.view = p.events + pending if pending else p.events
+    p.key = key
+    return p
 
 
 class EventLog:
     def __init__(self, vault: Vault):
         self.vault = vault
         self._last_id: ULID | None = None
+        self._keys: dict[str, dict] = {}
+        self._sig: dict[Path, tuple] | None = None  # the file keys self._keys was built from
 
     # ---- reading ------------------------------------------------------------
 
@@ -194,33 +245,45 @@ class EventLog:
         out.sort(key=lambda e: (e["ts"], e["id"]))
         return iter(out)
 
-    def _cached(self, pattern: str) -> list[dict]:
-        """The parse-cached events of the files matching `pattern`, unsorted and shared with
-        the cache: callers must not mutate them."""
+    def _files(self, pattern: str) -> list[tuple[Path, _Parsed]]:
+        """The up-to-date parses of the files matching `pattern`."""
         out = []
         for path in sorted(self._dir().glob(pattern)):
             try:
-                st = path.stat()  # before the read: a change after it misses the cache next time
-                key = (st.st_mtime_ns, st.st_size)
+                key = _stat_key(path.stat())  # before the read: a later change shows next time
                 hit = _PARSED.get(path)
-                if hit is None or hit[0] != key:
-                    hit = _PARSED[path] = (key, _parse_lines(path, path.read_bytes()))
+                if hit is None or hit.key != key:
+                    hit = _PARSED[path] = _parse_file(path, key, hit)
             except OSError as e:
                 log.warning("skipping %s: %s", path, e)
                 continue
-            out.extend(hit[1])
+            out.append((path, hit))
         return out
 
+    def _cached(self, pattern: str) -> list[dict]:
+        """The parse-cached events of the files matching `pattern`, unsorted and shared with
+        the cache: callers must not mutate them."""
+        return [ev for _, p in self._files(pattern) for ev in p.view]
+
     def _key_map(self) -> dict[str, dict]:
-        """key -> its first event (by ts, id), shared with the cache. Rebuilt on each call from the
-        cache: another process's keys and a file reverted by cortex undo must both be seen."""
-        keys: dict[str, dict] = {}
-        for ev in self._cached("*/*/*.jsonl"):
-            k = ev.get("key")
-            if isinstance(k, str) and (k not in keys or (ev["ts"], ev["id"]) < (
-                    keys[k]["ts"], keys[k]["id"])):
-                keys[k] = ev
-        return keys
+        """key -> its first event (by ts, id), shared with the cache. Rebuilt whenever any file
+        changed other than by this instance's own append (which updates it in place): another
+        process's keys and a file reverted by cortex undo must both be seen."""
+        files = self._files("*/*/*.jsonl")
+        sig = {path: p.key for path, p in files}
+        if sig != self._sig:
+            self._keys = {}
+            for _, p in files:
+                for ev in p.view:
+                    self._add_key(ev)
+            self._sig = sig
+        return self._keys
+
+    def _add_key(self, ev: dict) -> None:
+        k, keys = ev.get("key"), self._keys
+        if isinstance(k, str) and (k not in keys or (ev["ts"], ev["id"]) < (
+                keys[k]["ts"], keys[k]["id"])):
+            keys[k] = ev
 
     def has_key(self, key) -> bool:
         return key in self._key_map()
@@ -293,7 +356,11 @@ class EventLog:
         year, month = event["day"][:4], event["day"][5:7]
         path = self._dir() / year / month / f"{event['session']}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+        line = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+        try:
+            before = _stat_key(path.stat())
+        except FileNotFoundError:
+            before = None
         with open(path, "ab+") as f:
             size = f.seek(0, os.SEEK_END)
             if size:
@@ -302,10 +369,36 @@ class EventLog:
                     # never truncate: the line may be a whole event; a torn one is skipped on read
                     log.warning("closing an unterminated last line in %s", path)
                     f.write(b"\n")
-            f.write(line.encode("utf-8"))
+            f.write(line)
             f.flush()
             os.fsync(f.fileno())
         self.vault._track(path)
+        self._remember(path, before, size, line)
+
+    def _remember(self, path: Path, before, size: int, line: bytes) -> None:
+        """Fold our own append into the parse cache, and the key map, so the next call reads
+        nothing back. Only when the cache held the whole file just before the write; otherwise
+        the next read catches up from the file."""
+        hit = _PARSED.get(path)
+        if before is None and size == 0:
+            hit = _Parsed()
+        elif hit is None or hit.key != before or hit.length != size:
+            return
+        try:
+            after = _stat_key(path.stat())
+        except OSError:
+            _PARSED.pop(path, None)
+            return
+        ev = json.loads(line)  # a copy of the returned event, exactly as a re-read gives it
+        hit.events.append(ev)
+        hit.lines += 1
+        hit.length += len(line)
+        hit.tail = (hit.tail + line)[-_TAIL:]
+        hit.key = after
+        _PARSED[path] = hit
+        if self._sig is not None and self._sig.get(path) == before:
+            self._sig[path] = after
+            self._add_key(ev)
 
 
 def check_assessment_result(score, day) -> None:
