@@ -2071,6 +2071,12 @@ void main() {
     const home = { yaw: 0.9, pitch: 0.55, dist: 3, tx: ctr[0], ty: ctr[1], tz: ctr[2] };
     const cam = Object.assign({}, home);
     let W = 0, H = 0, dpr = 1, focal = 1, camSet = false, maxDist = DIST_MAX, goal = null;
+    const CAM = ['yaw', 'pitch', 'dist', 'tx', 'ty', 'tz'];
+    // opts.camera (a remount): start where the old brain's camera was, not at the overview
+    if (opts.camera && CAM.every((k) => Number.isFinite(opts.camera[k]))) {
+      for (const k of CAM) cam[k] = opts.camera[k];
+      camSet = true;
+    }
     const V = { cy: 1, sy: 0, cp: 1, sp: 0, dist: 3, tx: 0, ty: 0, tz: 0, focal: 1 };
     const VP = new Float32Array(16), eye = new Float32Array(3);
     function basis() {
@@ -3115,7 +3121,7 @@ void main() {
       const w = box.clientWidth, h = box.clientHeight, r = Math.min(1.5, window.devicePixelRatio || 1);
       if (w === W && h === H && r === dpr) return;
       // at the overview the camera re-frames for the new size; elsewhere it stays put
-      const atHome = camSet && !anim && ['yaw', 'pitch', 'dist', 'tx', 'ty', 'tz'].every((k) => Math.abs(cam[k] - home[k]) < 1e-3);
+      const atHome = camSet && !anim && CAM.every((k) => Math.abs(cam[k] - home[k]) < 1e-3);
       W = w; H = h; dpr = r;
       focal = H / 2 / Math.tan(FOV / 2);
       R.resize(w, h, r);
@@ -3173,6 +3179,18 @@ void main() {
 
     return {
       get renderer() { return R.kind; },
+      // for a remount: the view, the selected page, spin and the Growth month, and whether a
+      // pointer is down or the camera still moving (a flight, a zoom, a flick: a remount waits)
+      get camera() { const o = {}; for (const k of CAM) o[k] = cam[k]; return o; },
+      get selected() { return selected >= 0 ? PG[selected].id : null; },
+      get spin() { return spin; },
+      get growth() { return growthMonth; },
+      get busy() { return !!anim || !!goal || ptrs.size > 0 || Math.abs(vel[0]) + Math.abs(vel[1]) > 1e-4; },
+      // select a page without flying to it (a remount restores the selection)
+      reselect(id) {
+        const i = idIndex.get(String(id));
+        if (i !== undefined && userVis[i] && !(ARCH[i] && !archiveOn)) select(i, false);
+      },
       // Frame a page and ring it; false when it is unknown or filtered out.
       flyTo(id) {
         const i = idIndex.get(String(id));

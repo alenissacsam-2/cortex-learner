@@ -556,8 +556,9 @@ def test_readiness_carries_the_weighted_share_and_plain_counts(root, monkeypatch
 
 
 def test_readiness_label_names_the_weighted_share():
-    # D3: Home and Study show one metric, called what it is, beside the plain count
-    assert JS.count("= readiness(r") == 2
+    # D3: Study shows one metric, called what it is, beside the plain count (Home's Exams and
+    # deadlines board shows the days left)
+    assert JS.count("= readiness(r") == 1
     assert "% of the test's weight solid · ${topics}" in JS
     assert "% ready (" not in JS and "tested topics solid" not in JS
 
@@ -585,7 +586,7 @@ def test_day_is_the_cortex_day_not_the_calendar_date(root):
     late = datetime(2026, 11, 14, 1, 30).astimezone()
     d = dashboard.build_data(Vault(root), now=late)
     assert d["as_of"].startswith("2026-11-14") and d["day"] == "2026-11-13"
-    assert "const TODAY = D.day ||" in JS
+    assert "let TODAY = D.day ||" in JS and "TODAY = D.day ||" in JS[JS.index("function reindex"):]
 
 
 def test_me_pages_get_friendly_titles(root):

@@ -530,9 +530,25 @@ def render_html(data: dict) -> str:
     # `:\/\/` is the same JSON string; note URLs then never read as fetchable URLs in the page
     blob = (json.dumps(data, ensure_ascii=False, separators=(",", ":"))
             .replace("<", "\\u003c").replace("://", ":\\/\\/"))
-    slots = {"CSP": csp, "CSS": read("dashboard.css"), "DATA": blob, "D3": d3, "BRAIN": brain,
-             "APP": app}
+    slots = {"CSPMETA": f'<meta http-equiv="Content-Security-Policy" content="{csp}">',
+             "STYLE": f"<style>{read('dashboard.css')}</style>",
+             "SCRIPTS": f'<script type="application/json" id="data">{blob}</script>\n'
+                        f"<script>{d3}</script>\n<script>{brain}</script>\n<script>{app}</script>"}
     return _SLOT.sub(lambda m: slots[m.group(1)], read("dashboard.html.tmpl"))
+
+
+LIVE_FILES = ("d3.v7.min.js", "brain3d.js", "dashboard.js")
+
+
+def render_live(key: str) -> str:
+    """The app's live home: the same template with the CSS and scripts served by the app (its
+    CSP header holds); no data blob, dashboard.js fetches /api/home. `key` busts the cache as
+    on the app's other pages ('' when the page was opened without it)."""
+    q = f"?t={key}"
+    slots = {"CSPMETA": "", "STYLE": f'<link rel="stylesheet" href="/dashboard.css{q}">',
+             "SCRIPTS": "\n".join(f'<script src="/{n}{q}" defer></script>' for n in LIVE_FILES)}
+    return _SLOT.sub(lambda m: slots[m.group(1)],
+                     (ASSETS / "dashboard.html.tmpl").read_text(encoding="utf-8"))
 
 
 @contextmanager

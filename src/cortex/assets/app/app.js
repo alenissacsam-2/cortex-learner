@@ -8,7 +8,7 @@
   try {
     if (T) sessionStorage.setItem('cortex.key', T); else T = sessionStorage.getItem('cortex.key') || '';
   } catch (e) { /* storage blocked: reopen the printed link after a reload */ }
-  history.replaceState(null, '', '/' + location.hash);
+  history.replaceState(null, '', '/manage' + location.hash);
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
   const SECTIONS = ['setup', 'chat', 'status', 'connect', 'llm', 'browse', 'vault'];
@@ -1455,7 +1455,7 @@
   $('toast-x').addEventListener('click', toastHide);
   for (const [t, fn] of [['mouseenter', toastHold], ['mouseleave', toastRelease], ['focusin', toastHold], ['focusout', toastRelease]]) $('toast').addEventListener(t, fn);
   document.querySelectorAll('.side button').forEach((b) => b.addEventListener('click', () => show(b.dataset.s, true)));
-  $('section-select').addEventListener('change', (e) => show(e.target.value, true));
+  $('section-select').addEventListener('change', (e) => (e.target.value === 'home' ? location.assign('/') : show(e.target.value, true)));
   window.addEventListener('popstate', () => { const s = location.hash.slice(1); if (s !== current) show(s, true); });  // Back switches sections
 
   const want = location.hash.slice(1);

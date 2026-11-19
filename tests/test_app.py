@@ -54,6 +54,7 @@ def fakes(monkeypatch):
     monkeypatch.setattr(localllm, "_request", no_runner)
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())  # never the owner's receiver
+    monkeypatch.setattr(server, "PORT", 0)  # never the owner's app port
     return calls
 
 
@@ -129,10 +130,10 @@ def test_no_token_401_and_the_page_takes_it_from_the_url(app):
     assert call(app, "GET", "/api/status", token="wrong")[0] == 401
     # the page shell holds no data, so a reload without the key still loads it (the tab keeps
     # the key in sessionStorage); every API call still needs the key
-    status_, _, raw, _ = call(app, "GET", "/", token=False)
+    status_, _, raw, _ = call(app, "GET", "/manage", token=False)
     assert status_ == 200 and app.token.encode() not in raw
     assert call(app, "GET", "/app.js", token=False)[0] == 200
-    status_, _, raw, r = call(app, "GET", f"/?t={app.token}", token=False)
+    status_, _, raw, r = call(app, "GET", f"/manage?t={app.token}", token=False)
     assert status_ == 200 and f"/app.js?t={app.token}".encode() in raw
     assert b"<script>" not in raw and b"{{T}}" not in raw  # no inline script
     csp = r.getheader("Content-Security-Policy")
@@ -142,6 +143,61 @@ def test_no_token_401_and_the_page_takes_it_from_the_url(app):
     assert call(app, "GET", f"/app.css?t={app.token}", token=False)[0] == 200
     js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "insertAdjacentHTML" not in js
+
+
+def test_home_is_the_live_dashboard_and_manage_the_old_page(app):
+    """`/` is the dashboard filled live from /api/home: no inline script or style and no data
+    in the page; its files load without the key; every API call still needs it."""
+    status_, _, raw, r = call(app, "GET", f"/?t={app.token}", token=False)
+    assert status_ == 200 and b'id="data"' not in raw and b"{{" not in raw
+    assert b"<script>" not in raw and b"<style>" not in raw and b"http-equiv" not in raw
+    for name in ("dashboard.css", "d3.v7.min.js", "brain3d.js", "dashboard.js"):
+        assert f"/{name}?t={app.token}".encode() in raw
+        st, _, body, rr = call(app, "GET", f"/{name}", token=False)
+        assert st == 200 and body == (server.ASSETS.parent / name).read_bytes()
+        assert rr.getheader("Content-Security-Policy") == server.CSP
+    csp = r.getheader("Content-Security-Policy")
+    assert "default-src 'self'" in csp and "unsafe" not in csp
+    assert r.getheader("Referrer-Policy") == "no-referrer"
+    raw = call(app, "GET", "/?t=wrong", token=False)[2]
+    assert app.token.encode() not in raw and b"/dashboard.js?t=\"" in raw
+    assert call(app, "GET", "/api/home", token=False)[0] == 401
+    assert call(app, "GET", "/api/home/version", token="wrong")[0] == 401
+    assert call(app, "GET", "/api/home/version")[0] == 200
+    assert b'<a href="/">Home</a>' in call(app, "GET", "/manage", token=False)[2]
+    assert call(app, "POST", "/", {})[0] == 405
+
+
+def test_first_run_home_goes_to_setup(home):
+    srv, a = _serve(None)
+    try:
+        st, _, _, r = call(a, "GET", f"/?t={a.token}", token=False)
+        assert st == 302 and r.getheader("Location") == f"/manage?t={a.token}#setup"
+        st, _, _, r = call(a, "GET", "/", token=False)
+        assert st == 302 and r.getheader("Location") == "/manage#setup"
+        assert call(a, "GET", "/manage", token=False)[0] == 200
+    finally:
+        a.receiver.stop()
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_tries_the_fixed_port_first(vault, monkeypatch):
+    """One origin across launches keeps the page's theme and brain style; a taken port falls
+    back to any free one."""
+    other = socket.socket()
+    other.bind(("127.0.0.1", 0))
+    other.listen()
+    try:
+        for port, busy in ((_free_port(), False), (other.getsockname()[1], True)):
+            monkeypatch.setattr(server, "PORT", port)
+            srv, a, url = server.start(vault, echo=lambda *x: None)
+            try:
+                assert (a.port == port) is not busy and url.startswith(f"http://127.0.0.1:{a.port}/")
+            finally:
+                server.finish(srv, a)
+    finally:
+        other.close()
 
 
 def test_wrong_host_or_origin_403(app):
@@ -2391,12 +2447,12 @@ def test_installer_wording(app, monkeypatch):
     import shutil
 
     from cortex import doctor, update
-    _, _, raw, _ = call(app, "GET", f"/?t={app.token}", token=False)
+    _, _, raw, _ = call(app, "GET", f"/manage?t={app.token}", token=False)
     assert b"Run cortex app again to reopen it." in raw and b"{{REOPEN}}" not in raw
     monkeypatch.setattr(update, "mode", lambda: "installer")
-    _, _, raw, _ = call(app, "GET", f"/?t={app.token}", token=False)
+    _, _, raw, _ = call(app, "GET", f"/manage?t={app.token}", token=False)
     assert raw.count(b"Open Cortex from the Start menu to reopen it.") == 2
-    assert b"Start menu" in call(app, "GET", "/?t=wrong", token=False)[2]
+    assert b"Start menu" in call(app, "GET", "/manage?t=wrong", token=False)[2]
     for check in (doctor.check_search_model, doctor.check_ai_apps):
         assert "Start menu" in check()[3] and "cortex app" not in check()[3]
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
