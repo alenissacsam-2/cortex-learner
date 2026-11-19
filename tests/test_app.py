@@ -2059,6 +2059,17 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
     assert server.running_url() is None
 
 
+def test_the_launcher_log_never_holds_the_key(monkeypatch, capsys):
+    from cortex.app import launch
+    seen = {}
+    monkeypatch.setattr(server, "running_url", lambda: None)
+    monkeypatch.setattr(server, "run", lambda root, echo: (
+        echo("Cortex app: http://127.0.0.1:8790/?t=Abc-_123"), seen.setdefault("ok", 1)))
+    launch.main()
+    out = capsys.readouterr().out
+    assert seen and "http://127.0.0.1:8790/" in out and "Abc" not in out and "?t=" not in out
+
+
 def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
     import sys
 

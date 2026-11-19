@@ -9,12 +9,15 @@ app start says so in a message box with the log's path."""
 from __future__ import annotations
 
 import os
+import re
 import sys
 import traceback
 import webbrowser
 from pathlib import Path
 
 LOG_MAX = 1_000_000  # bytes; a bigger log starts over
+
+_KEY = re.compile(r"\?t=[\w-]+")
 
 
 def _log_to(name: str) -> Path:
@@ -48,7 +51,8 @@ def main() -> None:
         here = str(Path(sys.argv[0]).resolve().parent)
         os.environ["PATH"] = here + os.pathsep + os.environ.get("PATH", "")
         from cortex import taint
-        server.run(taint._vault_root(), echo=print)
+        # the log keeps the address, never the key (?t=): the page holds it, the log may be shared
+        server.run(taint._vault_root(), echo=lambda s: print(_KEY.sub("", s)))
     except Exception:  # noqa: BLE001  (a double-click must never fail silently)
         traceback.print_exc()
         _alert("Cortex could not start.\n\nWhat went wrong is written in "
