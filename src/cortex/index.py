@@ -9,11 +9,13 @@ tool can return them.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import html
 import json
 import logging
 import re
 import sqlite3
+import unicodedata
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -104,9 +106,59 @@ def fts_query(text: str, any_word: bool = False) -> str:
     return " ".join(f'"{t}"*' for t in words)
 
 
+# Look-alikes of an `untrusted_note` tag: each char's comparison key (NFKD, casefolded, marks,
+# format/zero-width chars, controls, spaces, dashes and underscores dropped, homoglyphs folded)
+# is matched after every `<`-like char, so `</ untrusted-n<U+200B><Cyrillic o>te` is a tag too.
+# Code points, not literals, so no look-alike hides in this source.
+_LT = "".join(map(chr, (0x3C, 0xAB, 0x2C2, 0x1438, 0x2039, 0x2329, 0x226E, 0x276E, 0x27E8,
+                        0x3008, 0xFE3F, 0xFE64, 0xFF1C)))  # every char keyed "<" (tested)
+_LT_RE = re.compile(f"[{re.escape(_LT)}]")
+_FOLD = str.maketrans({c: k for k, cs in {  # Cyrillic, Greek, Armenian, small caps, digits
+    "<": tuple(map(ord, _LT)), "/": (0x5C, 0x2044, 0x2215, 0x2571, 0x29F8),
+    "a": (0x430,), "c": (0x441,), "d": (0x501, 0x1D05), "e": (0x435, 0x3B5, 0x1D07),
+    "i": (0x456, 0x3B9), "k": (0x43A, 0x3BA), "m": (0x43C,),
+    "n": (0x43F, 0x3B7, 0x3BD, 0x578, 0x274), "o": (0x43E, 0x3BF, 0x585, 0x1D0F, 0x30),
+    "p": (0x440, 0x3C1), "r": (0x433, 0x280), "s": (0x455, 0xA731, 0x35),
+    "t": (0x442, 0x3C4, 0x1D1B, 0x37), "u": (0x3C5, 0x3BC, 0x57D, 0x1D1C),
+    "x": (0x445, 0x3C7), "y": (0x443,)}.items() for c in cs})
+_SKIP_CATS = {"Cc", "Cf", "Mn", "Me", "Pc", "Pd", "Zl", "Zp", "Zs"}
+_BLANKS = set(map(chr, (0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0)))  # letters that render blank
+_TAGS = ("untrustednote", "/untrustednote")
+
+
+@functools.lru_cache(maxsize=4096)
+def _key(ch: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", ch).casefold().translate(_FOLD)
+                   if c not in _BLANKS and unicodedata.category(c) not in _SKIP_CATS)
+
+
+def _tag_follows(text: str, j: int) -> bool:
+    """Do the chars from `j` on spell `/?untrustednote` once compared by `_key`? Stops at the
+    first char that cannot continue it, so the scans from each `<` never overlap: linear."""
+    s = ""
+    while j < len(text):
+        s += _key(text[j])
+        j += 1
+        if s.startswith(_TAGS):
+            return True
+        if not any(t.startswith(s) for t in _TAGS):
+            return False
+    return False
+
+
+def _neutralise(text: str) -> str:
+    """Break every look-alike of an opening or closing `untrusted_note` tag: its `<` becomes
+    `&lt;`, the rest of the text is left as it is."""
+    out, last = [], 0
+    for m in _LT_RE.finditer(text):
+        if _tag_follows(text, m.end()):
+            out += [text[last:m.start()], "&lt;"]
+            last = m.end()
+    return "".join(out) + text[last:]
+
+
 def _wrap(id: str, text: str) -> str:
-    text = re.sub(r"</?untrusted_note", lambda m: m.group(0).replace("<", "&lt;"), text,
-                  flags=re.I)
+    text = _neutralise(text)
     return f'<untrusted_note id="{html.escape(id, quote=True)}">\n{text}\n</untrusted_note>'
 
 
