@@ -814,7 +814,7 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     bare = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False, browsing=False,
                                          private=False), TODAY)
     assert "sites" not in bare and "Rust" not in bare and "Journal" not in bare
-    assert "Heaps" not in bare and "**2 concepts** studied" in bare
+    assert "Heaps" not in bare and "studied" not in bare  # concepts are notes: switched off
     empty = chat.digest(vault, date(2026, 11, 3), date(2026, 11, 3), ALL_ON, TODAY)
     assert empty.startswith("Cortex has nothing recorded on 3 Nov. Not included:")
 
@@ -831,3 +831,46 @@ def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch)
     _, events = _turn(vault, None, "summarize my week", None)
     assert [e["s"] for e in events if e["t"] == "step"] == [
         "Putting together your week from 16 Nov to 18 Nov"]
+
+
+@pytest.mark.parametrize("q,caught", [
+    ("which sites did I visit yesterday?", True), ("list all the unique sites I visited", True),
+    ("what websites did I go to?", True), ("sites I've been on this week", True),
+    ("my most visited sites", True), ("What is the domain of every rational function?", False),
+    ("List the binding sites used by hemoglobin", False), ("what is a website?", False)])
+def test_only_a_first_person_browsing_question_gets_the_site_list(vault, q, caught):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
+    assert (chat.site_list(vault, q, None, ALL_ON) is not None) is caught
+
+
+def test_a_visible_site_never_shows_the_private_side_description(vault):
+    from pathlib import Path
+    cfg = Path.home() / ".cortex" / "config.yaml"  # the test's own home
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("browse:\n  visible_to_claude: true\n", encoding="utf-8")
+    _site_days(vault, {"2026-11-17": {"x.example||0": {"n": 2}}},
+               llm={"x.example": {"h": {"desc": "Made from private titles"}}})
+    out = chat.site_list(vault, "which sites did I visit?", None, ALL_ON)
+    assert "x.example" in out and "private titles" not in out
+
+
+def test_study_answers_follow_the_notes_switch(vault):
+    off = dict(chat.get_settings(), sources=dict(ALL_ON, notes=False))
+    _, events = _turn(vault, None, "where am I weak?", None, settings=off)
+    text = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert text == chat.NOTES_OFF
+
+
+def test_the_runner_is_only_looked_up_when_the_model_is_needed(vault):
+    asked = []
+
+    def find():
+        asked.append(1)
+        raise ValueError("only a loopback runner")
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
+    _, events = _turn(vault, None, "which sites did I visit yesterday?", find)
+    assert not asked and [e["model"] for e in events if e["t"] == "start"] == ["Cortex"]
+    _, events = _turn(vault, None, "what is Dijkstra's algorithm?", find)
+    assert asked == [1]
+    assert [(e["code"], e["message"]) for e in events if e["t"] == "err"] == [
+        ("no_local_model", "only a loopback runner")]

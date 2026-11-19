@@ -313,9 +313,13 @@ def delete_all(vault: Vault) -> int:
 # "which sites did I visit in the past 4 months?": answered from the stored day counts, every
 # site in the range, never from a few passages (a small model lists some and repeats them)
 _SITES_Q = re.compile(r"\b(?:sites?|websites?|domains?)\b", re.I)
-_LIST_Q = re.compile(r"\b(?:all|list|unique|every|distinct|visit\w*|went|go|gone|open\w*"
-                     r"|brows\w*|used?)\b", re.I)
+# "which sites did I visit", "sites I've been on", "my most visited sites": the person's own
+# browsing, never "the domain of every function" or "the binding sites used by hemoglobin"
+_LIST_Q = re.compile(r"\b(?:i|i've|ive|me|my)\b[\w\s',-]{0,40}?\b(?:visit\w*|went|go|gone|been"
+                     r"|open\w*|brows\w*|use[ds]?|surf\w*)\b", re.I)
 _BROWSER = re.compile(r"\b(chrome|edge|brave|comet|firefox|opera|vivaldi|arc)\b", re.I)
+NOTES_OFF = ("Notes and mistakes are switched off in Chat settings, so I can't read your study "
+             "plan.")
 SITES_SHOWN = 2000  # "all the sites": every one, short of a runaway answer
 _MD = re.compile(r"[*_`\[\]<>#|]")  # a model-written description stays plain text
 
@@ -393,7 +397,8 @@ def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
     lines = [f"**{len(order)} site{'s' * (len(order) != 1)}** {when}, most visits first:", ""]
     for site, e in order[:SITES_SHOWN]:
         entry = llm.get(site) if isinstance(llm.get(site), dict) else {}
-        said = entry.get("h" if e["hidden"] else "v") or entry.get("v") or entry.get("h")
+        # a visible site never shows what the model wrote from private titles ("h")
+        said = (entry.get("h") or entry.get("v")) if e["hidden"] else entry.get("v")
         desc = _MD.sub("", str((said or {}).get("desc") or "")).strip()
         cat = "" if e["cat"] in ("", "other") else f" · {e['cat']}"
         nd = len(e["days"])
@@ -447,7 +452,8 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date) -> str:
     has something, then one line on what is left out."""
     when = f"on {_span(lo, hi)}" if lo == hi else f"from {_span(lo, hi)}"
     sections = []
-    studied = chat_study.answer(vault, "range", (lo, hi, None), today)
+    studied = chat_study.answer(vault, "range", (lo, hi, None), today) \
+        if sources.get("notes") else chat_study.NO_STUDY
     if not studied.startswith(chat_study.NO_STUDY):
         sections.append(studied.splitlines())
     skipped: list = []
@@ -586,14 +592,21 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         listed = digest(vault, lo, hi, s["sources"], today)
     elif asked is not None:
         step = chat_study.STEP[asked] + (span if asked == "range" else "")
-        listed = chat_study.answer(vault, asked, own, today)
+        listed = chat_study.answer(vault, asked, own, today) if s["sources"].get("notes") \
+            else NOTES_OFF
     if listed is None and semantic.load_embedder() is None:
         emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
         return convo_id
+    if listed is None and callable(runner) and not isinstance(runner, localllm.Runner):
+        try:  # the app passes localllm.find: it may start LM Studio, so only when needed
+            runner = runner()
+        except ValueError as e:  # a refused localllm setting (cloud model, non-loopback url)
+            emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
+            return convo_id
     if listed is None and not _local(runner):
         emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
         return convo_id
-    model = runner.model if _local(runner) else "Cortex"
+    model = "Cortex" if listed is not None else runner.model
     msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})

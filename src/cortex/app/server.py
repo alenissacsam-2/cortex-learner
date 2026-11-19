@@ -1018,12 +1018,8 @@ def _handler(app: App):
                 self.close_connection = True  # no length: the end of the answer ends the body
                 self._head(200, "application/x-ndjson", None)
                 threading.Thread(target=keepalive, daemon=True, name="chat-keepalive").start()
-                try:
-                    runner = localllm.find()  # local only: never cloudllm
-                except ValueError as e:
-                    emit({"t": "err", "code": "no_local_model", "message": str(e)})
-                    return
-                chat.reply(vault, cid, text, runner, emit, cancel)
+                # local only, never cloudllm; looked up only when the turn needs the model
+                chat.reply(vault, cid, text, localllm.find, emit, cancel)
             except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)
                 emit({"t": "err", "code": "internal",
                       "message": f"internal error ({type(e).__name__})"})
