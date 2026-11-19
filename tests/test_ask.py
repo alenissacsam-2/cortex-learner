@@ -94,7 +94,7 @@ def test_browse_pages_reach_the_prompt_as_a_chunk_not_a_snippet(vault, monkeypat
 
 
 def test_no_local_runner_is_an_error(vault, monkeypatch):
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     out = ask.ask(vault, "car motor")
     assert out == {"error": "no_local_model",
                    "message": "Start Ollama (recommended) or LM Studio: cortex app → Setup."}
@@ -119,5 +119,5 @@ def test_the_cloud_runner_is_never_used(vault, monkeypatch, home):
     monkeypatch.setattr(cloudllm, "find", no_cloud)
     monkeypatch.setattr(cloudllm.CloudRunner, "_post", no_cloud)
     r = Fake()
-    monkeypatch.setattr(localllm, "find", lambda config=None: r)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: r)
     assert ask.ask(vault, "car motor")["answer"] == r.reply and r.asked

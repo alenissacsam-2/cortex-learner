@@ -560,7 +560,7 @@ def test_cli_llm_test_sends_only_the_synthetic_prompt(serve, monkeypatch):
     assert out.exit_code == 0, out.output
     assert "answer: programming (confidence 0.90)" in out.output and "time: " in out.output
     assert "Dijkstra shortest path tutorial" in f.calls[0][2]["messages"][1]["content"]
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     assert CliRunner().invoke(app, ["llm", "test"]).exit_code == 1
 
 

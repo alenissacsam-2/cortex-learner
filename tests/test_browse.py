@@ -1298,10 +1298,10 @@ def test_cli_import_status_and_llm_status(vault, machine, monkeypatch):
     st = cli("browse", "status", "--vault", str(vault)).output
     assert "chrome/Default: up to 2026-11-1" in st and "local LLM: none" in st
     assert cli("browse", "import", "--since", "11/10", "--vault", str(vault)).exit_code == 1
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     out = cli("llm", "status")
     assert "ollama pull qwen3.5:4b" in out.output
-    monkeypatch.setattr(localllm, "find", lambda config=None: FakeRunner())
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: FakeRunner())
     monkeypatch.setattr(FakeRunner, "ping", lambda *a, **k: 0.25, raising=False)
     out = cli("llm", "status").output
     assert "found: fake qwen3:4b at 127.0.0.1:11434" in out
@@ -1316,7 +1316,7 @@ def test_h3_cli_import_uses_the_runner_only_when_enabled(vault, machine, monkeyp
     (home / ".cortex" / "config.yaml").write_text("localllm:\n  enabled: true\n",
                                                    encoding="utf-8")
     used = []
-    monkeypatch.setattr(localllm, "find", lambda config=None: used.append(1) or FakeRunner())
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: used.append(1) or FakeRunner())
     assert cli("browse", "import", "--vault", str(vault)).exit_code == 0
     assert used == [1]
     out = cli("llm", "status").output

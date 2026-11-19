@@ -812,7 +812,7 @@ def test_setup_test_turns_the_model_on(app, monkeypatch):
             return "programming", 0.9
 
     seen = []
-    monkeypatch.setattr(localllm, "find", lambda config=None: (seen.append(config), Fake())[1])
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: (seen.append(config), Fake())[1])
     call(app, "POST", "/api/setup/test", {"model": "4b", "runner": "ollama"})
     job = wait_job(app)
     assert job["error"] is None and job["result"]["answer"] == "programming"
@@ -832,7 +832,7 @@ def test_runner_states_and_a_stopped_test_says_start(app, monkeypatch):
     _, s, _, _ = call(app, "GET", "/api/setup")
     assert s["runner"]["ollama"]["state"] == "stopped" and not s["runner"]["done"]
     assert s["runner"]["recommend"] == "ollama"
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     call(app, "POST", "/api/setup/test", {"model": "2b", "runner": "ollama"})
     assert wizard.STOPPED.format("Ollama") in wait_job(app)["error"]
     monkeypatch.setattr(status, "ollama_models", lambda: [])
@@ -1193,7 +1193,7 @@ def test_setup_start_and_one_click_model(app, monkeypatch):
     pulled = []
     monkeypatch.setattr(actions, "_popen", lambda args, **k: (pulled.append(args),
                                                               FakeProc(b"success\n"))[1])
-    monkeypatch.setattr(localllm, "find", lambda config=None: Fake())
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: Fake())
     call(app, "POST", "/api/setup/model", {"model": "2b", "runner": "ollama"})
     job = wait_job(app)
     assert job["error"] is None and pulled == [["C:\\o\\ollama.exe", "pull", "qwen3.5:2b"]]
@@ -1250,7 +1250,7 @@ def llm(monkeypatch):
 
     from cortex import cloudllm, localllm
     s = Stream("ollama", ["Move the pointer", " on the smaller side [1]."], delay=0.01)
-    monkeypatch.setattr(localllm, "find", lambda config=None: s.runner())
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: s.runner())
     monkeypatch.setattr(cloudllm, "find", lambda *a, **k: pytest.fail("cloud runner used"))
     yield s
     s.close()
@@ -1287,7 +1287,7 @@ def test_chat_needs_the_key_and_the_origin(app):
 
 def test_chat_state_names_every_missing_piece(app, monkeypatch):
     from cortex import localllm
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     code, js, _, _ = call(app, "GET", "/api/chat")
     assert code == 200 and js["missing"] == ["embed", "llm"] and js["chats"] == []
     assert js["settings"]["length"] == "normal"

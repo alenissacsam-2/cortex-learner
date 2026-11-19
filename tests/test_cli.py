@@ -218,7 +218,7 @@ def test_doctor_warns_when_the_local_model_is_on_but_silent(home, monkeypatch):
     assert doctor.check_local_model()[1:3] == ("Local model", "off")
     (home / ".cortex").mkdir()
     (home / ".cortex/config.yaml").write_text("localllm:\n  enabled: true\n", encoding="utf-8")
-    monkeypatch.setattr(localllm, "find", lambda config=None: None)
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     status, _, _, fix = doctor.check_local_model()
     assert status == "WARN" and "cortex llm start" in fix
 
@@ -228,7 +228,7 @@ def test_doctor_warns_when_the_local_model_is_on_but_silent(home, monkeypatch):
         def describe(self):
             return "ollama qwen3.5:4b at 127.0.0.1:11434"
 
-    monkeypatch.setattr(localllm, "find", lambda config=None: Fake())
+    monkeypatch.setattr(localllm, "find", lambda config=None, **_: Fake())
     assert doctor.check_local_model()[0] == "PASS"
 
 
