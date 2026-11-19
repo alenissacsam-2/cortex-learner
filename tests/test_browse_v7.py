@@ -153,6 +153,18 @@ def test_c1_the_cloud_runner_is_never_the_classifier(vault, hist, monkeypatch):
     assert build.local_only(off) is None  # not loopback
 
 
+def test_c1_a_new_skip_verdict_reaches_a_day_the_run_does_not_rebuild(vault, hist):
+    skip = replace(OWNER, skip_categories=("adult",))
+    text = "Living quietly with my condition"
+    imp(vault, hist, skip, runner=fake_local({text: None}))  # no verdict: kept local
+    forgotten_day(vault)  # a day no browser holds keeps its private page
+    assert b"living quietly" in (vault / PRIV / "browse-private-2026-01-05.md").read_bytes(
+        ).lower()
+    rep = imp(vault, hist, skip, runner=fake_local({text: "adult"}), since="2026-11-09")
+    assert rep["refiltered_day_pages"] >= 1
+    assert b"living quietly" not in every_byte(vault)
+
+
 def test_c1_a_sensitive_verdict_on_a_search_follows_its_category(vault, hist):
     r = fake_local({"chess tactics": "betting"})
     imp(vault, hist, replace(OWNER, skip_categories=("adult", "betting")), runner=r)
