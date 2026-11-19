@@ -611,12 +611,16 @@ def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkey
         sorted(s.key for s in srcs)) or {"sources": len(srcs)})
     cfg = home / ".cortex" / "config.yaml"
     cfg.parent.mkdir(exist_ok=True)
-    cfg.write_text("browse:\n  browsers: [comet]\n", encoding="utf-8")
+    cfg.write_text("browse: {}\n", encoding="utf-8")  # no browsers filter: every one found
     assert app.auto_import() is None  # never imported: the first import is the user's
     state = vault / build.STATE
     state.parent.mkdir(parents=True, exist_ok=True)
     old = (datetime.now(UTC) - timedelta(hours=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     state.write_text(json.dumps({"last_run": old}), encoding="utf-8")
+    assert app.auto_import() is None  # no browser imported before: none is read unasked
+    # the user ticked only comet in the import dialog: chrome stays unread though found
+    state.write_text(json.dumps({"last_run": old, "sources": {"comet/Default": {"cursor": 1}}}),
+                     encoding="utf-8")
     gate = threading.Event()
     app.jobs.start("Something else", "vault", lambda job: gate.wait(5))
     assert app.auto_import() is None  # another job runs
@@ -629,9 +633,9 @@ def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkey
         assert app.auto_import() is None  # the in-app receiver's Processor does it
     finally:
         app.receiver.srv = None
-    cfg.write_text("browse:\n  browsers: [comet]\n  auto_import_hours: 0\n", encoding="utf-8")
+    cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
     assert app.auto_import() is None
-    cfg.write_text("browse:\n  browsers: [comet]\n", encoding="utf-8")
+    cfg.write_text("browse: {}\n", encoding="utf-8")
     from cortex.app import status
     real = status.embedding
     monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": False})

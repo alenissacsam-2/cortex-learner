@@ -216,18 +216,28 @@ def runner_for(audience: str, local, cloud, settings: Settings | None = None):
     return local
 
 
-def run_import(v: Vault, progress=None, say=None) -> dict:
-    """What the import command runs, with every browser found and no `since`: the import
-    itself picks the days with new History visits or changed inbox files (a `since` would skip
-    the History days before it while still moving their cursor). The local LLM only when
-    config enables it; never a download. Then the private browse vectors."""
+def auto_sources(v: Vault) -> list:
+    """The automatic import's browsers and profiles: those `sources.chosen` finds now that the
+    user imported before (keys in the browse state), never one they never ticked."""
+    from cortex.browse import build, sources
+
+    done = build.load_state(v).get("sources") or {}
+    return [s for s in sources.chosen(load_settings()) if s.key in done]
+
+
+def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> dict:
+    """What the import command runs, with every browser found (or `srcs`) and no `since`: the
+    import itself picks the days with new History visits or changed inbox files (a `since`
+    would skip the History days before it while still moving their cursor). The local LLM only
+    when config enables it; never a download. Then the private browse vectors."""
     from cortex import semantic
     from cortex.browse import build, sites, sources
 
     say = say or _say
     runner, budget = local_runner()
     settings = load_settings()
-    r = build.run(v, sources.chosen(settings), settings, embed=semantic.load_embedder(),
+    srcs = sources.chosen(settings) if srcs is None else srcs
+    r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
                   runner=runner, budget=budget, progress=progress, say=say)
     r["model"] = runner is not None
     sites.update_vectors(v, say)
@@ -342,10 +352,12 @@ class Processor:
             now = self.clock()
             idle = self._stored_at is not None and now - self._stored_at >= IDLE_PROCESS_S
             due = idle or (self._due is not None and now >= self._due)
-            aged = False
+            aged, picked = False, None
             if not due and not self.processing and now >= self._auto_at:
                 self._auto_at = now + AUTO_EVERY_S
-                aged = due = auto_import_due(self.v, self.now())
+                if auto_import_due(self.v, self.now()):
+                    picked = auto_sources(self.v)
+                    aged = due = bool(picked)
             deep = not due and not self._deepened and now - self._last_batch >= DEEPEN_IDLE_S
             if self.processing or not (due or deep):
                 return False
@@ -367,7 +379,7 @@ class Processor:
                      else f"  {key}: {n} visits read, {new} new")
 
         try:
-            self.last = summary(run_import(self.v, progress=progress),
+            self.last = summary(run_import(self.v, progress=progress, srcs=picked),
                                 time.perf_counter() - t0)
         except Exception as e:  # logged by type only: a message may hold a URL or title
             self.last = f"failed: {type(e).__name__}"

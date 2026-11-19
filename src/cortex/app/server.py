@@ -513,11 +513,11 @@ class App:
         return {"ok": True}
 
     def auto_import(self) -> dict | None:
-        """Start the ordinary history import (the chosen browsers, incremental) when
+        """Start the ordinary history import (only the browsers and profiles imported before,
+        incremental) when
         `browse_serve.auto_import_due` says so and no job runs; None when it did not. The
         in-app receiver's Processor does the same check, so the app leaves it to that."""
         from cortex import browse_serve
-        from cortex.browse import load_settings, sources
         from cortex.vault import Vault
         if not self.entry() or self.receiver.srv is not None or self.jobs.running():
             return None
@@ -526,7 +526,7 @@ class App:
         root = self.root
         if not browse_serve.auto_import_due(Vault(root)):
             return None
-        keys = {s.key for s in sources.chosen(load_settings())}
+        keys = {s.key for s in browse_serve.auto_sources(Vault(root))}  # never an unticked one
         if not keys:
             return None
         try:

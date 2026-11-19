@@ -685,16 +685,21 @@ def _last_run(vault, when: datetime) -> None:
     from cortex.browse import build
     p = vault / build.STATE  # what a finished import leaves
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"last_run": when.strftime("%Y-%m-%dT%H:%M:%SZ")}), encoding="utf-8")
+    p.write_text(json.dumps({"last_run": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "sources": {
+        "comet/Default": {"cursor": 1}}}), encoding="utf-8")
 
 
 def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, monkeypatch):
     """browse.auto_import_hours: due by the last import's age, first checked a minute after
     start then every 10 minutes; never before a first import, never with 0, never while the
-    browse-wide lock is held (a forget or deepen)."""
-    from cortex.browse import build, sites
+    browse-wide lock is held (a forget or deepen). Only the profiles imported before."""
+    from cortex.browse import build, sites, sources
     runs, lines = [], []
-    monkeypatch.setattr(bs, "run_import", lambda v, progress=None: runs.append(1) or {})
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source("chrome", "Default", vault / "a"),
+        sources.Source("comet", "Default", vault / "b")])
+    monkeypatch.setattr(bs, "run_import", lambda v, progress=None, srcs=None: runs.append(
+        [s.key for s in srcs]) or {})
     monkeypatch.setattr(bs, "run_deepen", lambda v, say=None: None)  # no local model
     now = datetime(2026, 11, 19, 12, tzinfo=UTC)
     t = [0.0]
@@ -712,19 +717,25 @@ def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, mon
     with sites.busy(bs.Vault(vault)):  # a forget or deepen holds the lock: not now
         assert not p.tick() and not runs
     t[0] += bs.AUTO_EVERY_S
-    assert p.tick() and runs == [1]
+    last = json.loads((vault / build.STATE).read_text(encoding="utf-8"))
+    (vault / build.STATE).write_text(json.dumps({**last, "sources": {}}), encoding="utf-8")
+    assert not p.tick() and not runs  # no profile imported before: none is read unasked
+    _last_run(vault, now - timedelta(hours=7))
+    t[0] += bs.AUTO_EVERY_S
+    C = ["comet/Default"]  # chrome is found but was never ticked: it stays unread
+    assert p.tick() and runs == [C]
     assert any("last import over 6 hours ago" in x for x in lines)
     _last_run(vault, now - timedelta(hours=5))  # fresh enough
     t[0] += bs.AUTO_EVERY_S
-    assert not p.tick() and runs == [1]
+    assert not p.tick() and runs == [C]
     (home / ".cortex").mkdir(exist_ok=True)
     cfg = home / ".cortex" / "config.yaml"
     cfg.write_text("browse:\n  auto_import_hours: 4\n", encoding="utf-8")
     t[0] += bs.AUTO_EVERY_S
-    assert p.tick() and runs == [1, 1]
+    assert p.tick() and runs == [C, C]
     cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
     t[0] += bs.AUTO_EVERY_S
-    assert not p.tick() and runs == [1, 1]
+    assert not p.tick() and runs == [C, C]
 
 
 def test_auto_import_hours_falls_back_on_bad_values():
