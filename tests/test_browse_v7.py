@@ -50,9 +50,10 @@ def hist(tmp_path):
     return local, tmp_path / "roaming"
 
 
-def imp(r, hist, settings=OWNER, **kw):
+def imp(r, hist, settings=OWNER, srcs=None, **kw):
     kw.setdefault("embed", Embed())
-    return build.run(Vault(r), sources.discover(*hist), settings, tz=UTC, now=m(0, 2), **kw)
+    srcs = sources.discover(*hist) if srcs is None else srcs
+    return build.run(Vault(r), srcs, settings, tz=UTC, now=m(0, 2), **kw)
 
 
 def fake_local(labels: dict[str, str | None]):
@@ -356,6 +357,68 @@ def test_c16_every_read_file_is_archived_and_old_ones_pruned(vault, hist):
     assert not list(d.glob("inbox-*.jsonl"))  # read whole: archived whatever its date
     assert rep["archive_pruned"] >= 1  # older than the browsers' history
     assert not (vault / build.ARCHIVE / "inbox-2026-01-13.jsonl").exists()
+
+
+OLD = "2026-10-20"  # 20 days before T0: not yet a browser's partly expired oldest day
+RESET = replace(OWNER, hidden_from_claude=("adult", "money"))
+
+
+def old_day(tmp_path, vault, profile_1=True):
+    """Chrome Default holds T0's day only; Profile 1 also OLD, when the extension saw a visit."""
+    ud = tmp_path / "local" / "Google" / "Chrome" / "User Data"
+    chromium(ud / "Default" / "History", ROWS)
+    if profile_1:
+        chromium(ud / "Profile 1" / "History",
+                 [(m(100, -20), "https://lichess.org/old", "Chess old game", 60),
+                  (m(100), "https://lichess.org/now", "Chess now", 60)])
+    d = vault / ".cortex" / "browse"
+    d.mkdir(parents=True)
+    (d / f"inbox-{OLD}.jsonl").write_text(
+        json.dumps({**EXT, "start": m(200, -20).isoformat()}) + "\n", encoding="utf-8")
+    hist = tmp_path / "local", tmp_path / "roaming"
+    return hist, [s for s in sources.discover(*hist) if s.profile == "Default"]
+
+
+def on_old_day(vault, url, title) -> bool:
+    """The visit is in OLD's counts and on its private page."""
+    days = json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
+    return (url in json.dumps(days[OLD])
+            and title in (vault / PRIV / f"browse-private-{OLD}.md").read_text(encoding="utf-8"))
+
+
+EXT_OLD = ("lichess.org/extonly", "Chess from the extension")
+B_OLD = ("lichess.org/old", "Chess old game")
+
+
+@pytest.mark.parametrize("read_before, settings", [(True, RESET), (False, OWNER)])
+def test_c5_a_profile_a_run_did_not_read_still_finds_the_extensions_visits(
+        tmp_path, vault, read_before, settings):
+    """A run that reads only Default (Profile 1 unticked, or not imported yet) keeps the
+    archive of the older days; ticked and imported, Profile 1's day comes back whole."""
+    hist, default = old_day(tmp_path, vault)
+    if read_before:
+        imp(vault, hist)
+    imp(vault, hist, srcs=default)
+    imp(vault, hist, settings)  # a reset, or Profile 1's first import, rebuilds OLD
+    assert on_old_day(vault, *EXT_OLD) and on_old_day(vault, *B_OLD)
+
+
+def test_c5_takeout_never_replaces_a_day_the_archive_holds(tmp_path, vault):
+    hist, _ = old_day(tmp_path, vault, profile_1=False)
+    imp(vault, hist)
+    g = [sources.Visit(m(300, -20), "https://lichess.org/google", "Chess from takeout", 0)]
+    assert imp(vault, hist, takeout=g)["takeout"] == 0
+    assert on_old_day(vault, *EXT_OLD)
+
+
+def test_c5_a_day_the_browsers_forgot_is_not_rebuilt_from_the_archive_alone(tmp_path, vault):
+    hist, _ = old_day(tmp_path, vault)
+    imp(vault, hist)
+    p1 = tmp_path / "local" / "Google" / "Chrome" / "User Data" / "Profile 1" / "History"
+    p1.unlink()
+    chromium(p1, [(m(100), "https://lichess.org/now", "Chess now", 60)])  # OLD expired
+    imp(vault, hist, RESET)
+    assert on_old_day(vault, *EXT_OLD) and on_old_day(vault, *B_OLD)
 
 
 # ---- C12 ---------------------------------------------------------------------------------

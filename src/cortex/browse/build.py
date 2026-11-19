@@ -124,7 +124,9 @@ def _inbox_time(v) -> datetime | None:
 
 
 ARCHIVE = ".cortex/browse/inbox-archive"  # consumed inbox files, filtered (review C5)
-ARCHIVE_DAYS = 90  # with no browser History to set the horizon: Chrome keeps about this long
+# kept at least this long (Chrome keeps about this long): a browser not read this run (unticked,
+# not chosen, not imported yet) or Takeout may bring back an older day, whose rebuild needs it
+ARCHIVE_DAYS = 90
 
 
 def read_inbox(vault: Vault, folder: str = ".cortex/browse"
@@ -813,8 +815,12 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if isinstance(pending, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", pending):
         first = pending if first is None or pending < first else first
     inbox, inbox_stats = read_inbox(vault)
-    history = list(visits)  # the browsers' own visits set the archive's horizon
-    inbox = read_inbox(vault, ARCHIVE)[0] + inbox  # C5: consumed records still count
+    # the oldest day the browsers' History holds ("" with none read)
+    horizon = local_day(min(v.start for v in visits), tz) if visits else ""
+    archived = read_inbox(vault, ARCHIVE)[0]
+    alone = {local_day(v.start, tz) for v in archived} - {local_day(v.start, tz)
+                                                          for v in visits + inbox}
+    inbox = archived + inbox  # C5: consumed records still count
     if takeout:
         # R2-8: only the days a browser or the inbox holds are cut, never a day no source has
         have = {local_day(v.start, tz) for v in visits + inbox}
@@ -834,9 +840,12 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     held = {local_day(v.start, tz) for v in visits + inbox}
     # a browser's oldest day (when old enough to be expiring: a new profile's is not) is partly
     # expired: once counted, it keeps what was stored and is read no more, like a day the
-    # browsers forgot (a rebuild would lose its earlier hours)
+    # browsers forgot (a rebuild would lose its earlier hours); so is a day only the archive
+    # holds, older than every History read (rebuilt from the archive alone, it would lose the
+    # browsers' visits)
     month_ago = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
-    if edge := {d for d in edges if d <= month_ago} & set(sites._load(vault, sites.DAYS)):
+    edge = {d for d in edges if d <= month_ago} | {d for d in alone if d < horizon}
+    if edge := edge & set(sites._load(vault, sites.DAYS)):
         visits = [v for v in visits if local_day(v.start, tz) not in edge]
         inbox = [v for v in inbox if local_day(v.start, tz) not in edge]
         held -= edge
@@ -907,9 +916,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         days, bad = sites.load_days(vault)
     inbox_stats = _archive_consumed(vault, inbox_stats, settings)
     if not report["sources_failed"]:  # a failed source would move the horizon up
-        horizon = (local_day(min(v.start for v in history), tz) if history
-                   else (now - timedelta(days=ARCHIVE_DAYS)).date().isoformat())
-        report["archive_pruned"] = _prune_archive(vault, horizon)
+        floor = (now - timedelta(days=ARCHIVE_DAYS)).date().isoformat()
+        report["archive_pruned"] = _prune_archive(vault, min(horizon or floor, floor))
     # every run, so a settings change (a category hidden since) reaches the site pages
     report.update(sites.write(vault, settings, tz, say=say, days=days, bad=bad))
     if reset:
@@ -1007,7 +1015,8 @@ def _archive_consumed(vault: Vault, stats: dict[str, list[int]], settings: Setti
 
 def _prune_archive(vault: Vault, horizon: str) -> int:
     """Delete the archived inbox files of days before `horizon` (the oldest day the browsers'
-    History holds, a day of zone slack): those days are never rebuilt again. How many went."""
+    History holds, or ARCHIVE_DAYS ago when that is older; a day of zone slack). How many
+    went."""
     cut = (date.fromisoformat(horizon) - timedelta(days=1)).isoformat()
     gone = 0
     for p in sorted((vault.root / ARCHIVE).glob("inbox-*.jsonl")):
