@@ -36,13 +36,12 @@ from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.index import _edge_targets, link_targets
 from cortex.render import index_md, plain
-from cortex.vault import CHECKED_RE, HEADING_RE, TOOL_PROPS, UNCHECKED_RE, Vault, is_private
+from cortex.vault import TOOL_PROPS, Vault, is_private
 
 ASSETS = Path(__file__).parent / "assets"
 YOU = "@you"  # not a valid note id, so it never collides with one
 EVIDENCE_SHOWN, WEEKS, MISTAKE_DAYS = 10, 8, 30
 ITEM_TYPE = {"problem_status": "problem", "self_report": "self report"}
-_DAY_RE = re.compile(r"^Day (\d+)$")
 _SLOT = re.compile(r"\{\{(\w+)\}\}")
 BODY_MAX = 20 * 1024
 TRUNCATED = "\n\n*… truncated here; open the note in Obsidian for the rest.*\n"
@@ -69,34 +68,12 @@ def _title(note) -> str:
     return plain(note.fields.get("title") or note.id) or note.id
 
 
-def _sprint(track) -> dict | None:
-    if track is None:
-        return None
-    cur = track.fields.get("current_day")
-    cur = cur if isinstance(cur, int) and not isinstance(cur, bool) else None
-    nums, done, left, inside, level = [], 0, 0, False, 0
-    for line in track.body.splitlines():
-        m = HEADING_RE.match(line)
-        if m:
-            d = _DAY_RE.match(m.group(2))
-            if d:
-                nums.append(int(d.group(1)))
-            if inside and len(m.group(1)) <= level:
-                inside = False
-            if cur is not None and m.group(2) == f"Day {cur}":
-                inside, level = True, len(m.group(1))
-            continue
-        if inside:
-            done += bool(CHECKED_RE.match(line))
-            left += bool(UNCHECKED_RE.match(line))
-    last = max(nums + [cur or 0], default=0)
-    days = [{"n": n, "label": f"Day {n}",
-             "status": "upcoming" if cur is None or n > cur else "current" if n == cur
-             else "done"} for n in range(1, last + 1)]
-    pd = planner._day(track.fields.get("placement_date"))
-    return {"day": cur, "days": days, "title": _title(track),
-            "placement_date": pd.isoformat() if pd else None,
-            "today_counts": {"done": done, "left": left}}
+def _plans(vault, catalog, hidden, pc) -> list[dict]:
+    """Each non-private plan without dates (v8): its title, next undone steps and counts."""
+    return [{"id": p["id"], "title": plain(p["title"]) or p["id"],
+             "next": [plain(s["title"], 200) for s in p["steps"][:planner.STEPS_SHOWN]],
+             "done": p["done"], "left": len(p["steps"])}
+            for p in planner.plans(vault, catalog, hidden, pc)]
 
 
 def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
@@ -263,7 +240,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
     return {
         "as_of": now.astimezone().isoformat(timespec="seconds"),
         "day": day,  # the 04:00 Cortex day, which the calendar date in `as_of` is not
-        "sprint": _sprint(next((t for t in notes["track"] if t.id not in private), None)),
+        "plans": _plans(vault, catalog, hidden, pc),
         "counts": counts,
         "today": today,
         # an empty plan is "done" only after work today; never graded at all is a first run

@@ -1,3 +1,4 @@
+import json
 import shutil
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -14,7 +15,8 @@ from cortex.render import today_md
 from cortex.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
-ORDER = ["unchecked", "asked", "confident_miss", "track", "warmup", "refresh", "new"]
+ORDER = ["unchecked", "asked", "confident_miss", "warmup", "track", "refresh", "new"]
+RANK = {**{k: n for n, k in enumerate(ORDER)}, "refresh": ORDER.index("track")}  # one block
 _local_day = events.local_day
 
 
@@ -85,13 +87,13 @@ def test_kind_order(v):
     items = plan(v, states, catalog, events=evs)
     ks = kinds(items)
     assert set(ks) == set(ORDER)
-    assert ks == sorted(ks, key=ORDER.index)
+    assert ks == sorted(ks, key=RANK.get)
     assert [i["id"] for i in items if i["kind"] == "warmup"] == ["seen", "old"]
     assert [i["id"] for i in items if i["kind"] == "refresh"] == ["risky"]
     assert [(i["id"], i["why"]) for i in items if i["kind"] == "new"] == [
         ("hash-maps", "Ready to learn")]
     track = [i["why"] for i in items if i["kind"] == "track"]
-    assert track == ["Sprint plan · Day 2"] * 4 + ["Owed"]
+    assert track == ["Test sprint"] * 3  # the plan's title: no day, no date
 
 
 def test_cap_holds_with_40_due(v):
@@ -103,52 +105,60 @@ def test_cap_holds_with_40_due(v):
     refresh = [i["id"] for i in items if i["kind"] == "refresh"]
     assert refresh[:3] == ["c00", "c01", "c02"]  # lowest R = highest risk first
     assert [i["id"] for i in items if i["kind"] == "new"] == ["arrays-basics"]
-    assert kinds(items).count("track") == 5
+    assert kinds(items).count("track") == 3
 
 
-def test_track_items_uncapped(v):
+def test_a_plan_shows_its_next_three_steps_then_a_pointer(v):
+    """v8: a plan is an ordered list without dates; its first 3 undone steps show, outside
+    the cap, then one pointer to the track (no count, no id); the page is untouched."""
     no_exam(v)
     path = v.root / "tracks/sprint-test.md"
     text = path.read_text(encoding="utf-8")
     extra = "".join(f"- [ ] Drill {n}\n" for n in range(20))
-    path.write_text(text.replace("## Owed", extra + "\n## Owed"), encoding="utf-8")
-    items = plan(v, {f"c{n}": due(f"c{n}", 0.5) for n in range(10)}, cap=3)
-    assert kinds(items).count("track") == 25
-    assert len([i for i in items if i["kind"] != "track"]) == 3
-
-
-def test_owed_folds_to_first_three_and_a_pointer(v):
-    """ideas-r2 #6: Day items stay uncapped; Owed shows its first 3 unchecked items in the
-    track's order, then one pointer to the track (no count, no id); the page is untouched."""
-    no_exam(v)
-    path = v.root / "tracks/sprint-test.md"
-    owed = "".join(f"- [ ] Owed {n}\n" for n in range(6))
-    text = path.read_text(encoding="utf-8").replace("## Buffer", owed + "\n## Buffer")
+    text = text.replace("## Owed", extra + "\n## Owed")
     path.write_text(text, encoding="utf-8")
-    items = plan(v, {})
-    owed_items = [i for i in items if i["why"] == "Owed"]
-    assert [i["title"] for i in owed_items] == [
-        "Two Sum II (owed copy)", "Owed 0", "Owed 1", "More owed items are in Test sprint"]
-    more = owed_items[-1]
-    assert more == {"kind": "track", "id": None, "title": "More owed items are in Test sprint",
-                    "state": None, "why": "Owed", "more": "sprint-test"}
-    assert len([i for i in items if i["why"].startswith("Sprint plan")]) == 4
+    items = plan(v, {f"c{n}": due(f"c{n}", 0.5) for n in range(10)}, cap=3)
+    track = [i for i in items if i["kind"] == "track"]
+    assert [i["title"] for i in track] == [
+        "Two Sum II", "Drill set A", "Free text item: read the notes",
+        "More steps are in Test sprint"]
+    assert track[-1] == {"kind": "track", "id": None, "title": "More steps are in Test sprint",
+                         "state": None, "why": "Test sprint", "subject": "dsa",
+                         "more": "sprint-test"}
+    assert len([i for i in items if i["kind"] != "track"]) == 3
     assert path.read_text(encoding="utf-8") == text
     assert not any(i.get("more") for i in plan(v, {}, mode="short"))
-    md = today_md(today=items, sprint_day=2, assessments=[], as_of="2026-11-15")
-    assert "- ▫ · More owed items are in [[sprint-test]] · Owed" in md.splitlines()
-    three = text.replace("".join(f"- [ ] Owed {n}\n" for n in range(2, 6)), "")
-    path.write_text(three, encoding="utf-8")  # exactly 3 unchecked Owed items: no pointer
-    assert [i["title"] for i in plan(v, {}) if i["why"] == "Owed"] == [
-        "Two Sum II (owed copy)", "Owed 0", "Owed 1"]
+    md = today_md(today=items, assessments=[], as_of="2026-11-15")
+    assert "- ▫ · More steps are in [[sprint-test]] · Test sprint" in md.splitlines()
+
+
+def test_an_old_dated_track_still_reads_without_its_days(v):
+    """An old note with `current_day`, `## Day N` headings, a placement date and an Owed copy
+    reads as one ordered plan: Day 1's ticked steps count as done, the Owed repeat of lc-167
+    is dropped, a later Day's step simply follows, and no day or date reaches the plan. The
+    note is never rewritten."""
+    no_exam(v)
+    path = v.root / "tracks/sprint-test.md"
+    text = path.read_text(encoding="utf-8").replace(
+        "current_day: 2", 'current_day: 9\nplacement_date: "2026-11-26"').replace(
+        "## Owed", "## Day 3\n- [ ] [[arrays-basics]] Day 3 recap\n\n## Owed")
+    path.write_bytes(text.encode("utf-8"))
+    p = planner.plans(v, Catalog.load(v))
+    assert [(s["id"], s["title"]) for s in p[0]["steps"]] == [
+        ("lc-167", "Two Sum II"), ("two-pointers", "Drill set A"),
+        (None, "Free text item: read the notes"), ("arrays-basics", "Day 3 recap")]
+    assert p[0]["done"] == 2 and p[0]["subject"] == "dsa"
+    blob = json.dumps(plan(v, {}))
+    for word in ("Day 2", "Day 9", "2026-11-26", "behind", "overdue", "Sprint plan"):
+        assert word not in blob
+    assert path.read_bytes() == text.encode("utf-8")
 
 
 def test_solved_problem_skipped(v):
     v.set_field("problem", "lc-167", "status", "solved")
     track = [i for i in plan(v, {}) if i["kind"] == "track"]
     assert "lc-167" not in {i["id"] for i in track}
-    assert [i["title"] for i in track] == ["Drill set A", "Drill set B",
-                                           "Free text item: read the notes"]
+    assert [i["title"] for i in track] == ["Drill set A", "Free text item: read the notes"]
 
 
 # ---- warm-up ----------------------------------------------------------------------------
@@ -217,9 +227,9 @@ def test_private_exam_is_hidden_from_claude_but_still_planned(v):
     assert [(i["id"], i["why"]) for i in items if i["kind"] == "refresh"] == [
         ("heaps", "a private test in 5 days"), ("other", "Needs refresh")]
     rows = planner.assessments(v)
-    card = start_card(mode="learn", sprint_day=None, today=items, assessments=rows,
+    card = start_card(mode="learn", today=items, assessments=rows,
                       open_mistakes=[], date="2026-11-15")
-    md = today_md(today=items, sprint_day=None, assessments=rows, as_of="2026-11-15")
+    md = today_md(today=items, assessments=rows, as_of="2026-11-15")
     for text in (card, md):
         assert "Acme" not in text and "acme" not in text and "2026-11-20" not in text
 
@@ -567,7 +577,7 @@ def test_private_concept_never_on_the_start_card(v):
 
     no_exam(v)
     states = {c: taught(c, 14) for c in ("two-pointers", "secret-diary")}
-    card = start_card(mode="learn", sprint_day=None, today=plan(v, states), assessments=[],
+    card = start_card(mode="learn", today=plan(v, states), assessments=[],
                       open_mistakes=[], date="2026-11-15")
     assert "**Taught, not yet checked:** Two pointers" in card
     assert "secret-diary" not in card and "Private concept" not in card
@@ -628,7 +638,7 @@ def test_refresh_names_oldest_solved_problem(v):
     items = plan(v, states, mode="review")
     refresh = {i["id"]: i.get("model") for i in items if i["kind"] == "refresh"}
     assert refresh == {"two-pointers": "lc-167", "arrays-basics": "lc-1"}
-    md = today_md(today=items, sprint_day=None, assessments=[], as_of="2026-11-15").splitlines()
+    md = today_md(today=items, assessments=[], as_of="2026-11-15").splitlines()
     assert "  - Re-derive [[lc-167]]: approach and complexity in 2 minutes, no code" in md
 
 
@@ -660,7 +670,7 @@ def test_past_question_cue_is_escaped(v):
     cues = planner.last_questions(v)
     assert cues["two-pointers"] == hostile
     items = plan(v, {"two-pointers": due("two-pointers", 0.2)}, mode="review")
-    md = today_md(today=items, sprint_day=None, assessments=[], as_of="2026-11-15", cues=cues)
+    md = today_md(today=items, assessments=[], as_of="2026-11-15", cues=cues)
     line = next(x for x in md.splitlines() if "Past question" in x)
     assert line.startswith("  - Past question (answer in your own words first): ")
     for bad in ("](", "<", ">", "http", "evil", "javascript", "[[", "**", " `"):
@@ -668,16 +678,14 @@ def test_past_question_cue_is_escaped(v):
     assert "secret-diary" in line and "\\*\\*Why\\*\\*" in line and "\\`two pointers\\`" in line
     assert line.endswith("…")
     assert len(line) < 260
-    assert "Past question" not in today_md(today=items, sprint_day=None, assessments=[],
+    assert "Past question" not in today_md(today=items, assessments=[],
                                            as_of="2026-11-15")
 
 
 def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
-    """D1: a `private: true` track (title, unlinked items, the owed pointer, its sprint day)
-    and a private open mistake never reach the plan, `cortex today`, Today.md, the start card
-    or the dashboard blob."""
-    import json
-
+    """D1: a `private: true` track (title, unlinked items, its pointer) and a private open
+    mistake never reach the plan, next_up, `cortex today`, Today.md, the start card or the
+    dashboard blob."""
     from conftest import run
     from typer.testing import CliRunner
 
@@ -698,7 +706,8 @@ def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
                                "mistakes": ["dsa.hush", "dsa.off-by-one"]})
     catalog = Catalog.load(v)
     states, _ = planner.current_states(v, events.local_day(now), catalog)
-    seen = [json.dumps(today(v, catalog, states, now=now)), str(planner.sprint_day(v))]
+    seen = [json.dumps(today(v, catalog, states, now=now)),
+            json.dumps(planner.next_up(v, catalog, states, now=now))]
     r = CliRunner().invoke(app, ["today", "--vault", str(root)])
     assert r.exit_code == 0, r.output
     seen += [r.output, (root / "Today.md").read_text(encoding="utf-8")]
@@ -712,4 +721,4 @@ def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
     assert "DSA: off-by-one" in seen[4]  # and the public mistake
     for text in seen:
         assert "SECRET-" not in text
-    assert planner.sprint_day(v) == 2
+    assert [p["id"] for p in planner.plans(v, catalog)] == ["sprint-test"]

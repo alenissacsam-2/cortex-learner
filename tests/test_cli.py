@@ -290,11 +290,12 @@ def test_brief_prints_contract_verbatim_and_today(vault):
     today = out.split("## Today", 1)[1]
     lines = today.strip().splitlines()
     assert lines[0] == "◌ Unverified: Array basics (arrays-basics) [Taught today, not yet checked]"
-    assert "○ Not started: Drill set A (two-pointers) [Sprint plan · Day 2]" in lines
-    assert "- Track item: Two Sum II (lc-167) [Sprint plan · Day 2]" in lines
-    assert "- Track item: Free text item: read the notes [Sprint plan · Day 2]" in lines
-    assert "- Track item: Two Sum II (owed copy) (lc-167) [Owed]" in lines
-    assert "Recap" not in today  # Day 1 is not today
+    # v8: a plan's next steps in its order, no day or date; the Owed copy of lc-167 is a repeat
+    assert "○ Not started: Drill set A (two-pointers) [Test sprint]" in lines
+    assert "- Plan step: Two Sum II (lc-167) [Test sprint]" in lines
+    assert "- Plan step: Free text item: read the notes [Test sprint]" in lines
+    assert "owed copy" not in today and "Day 2" not in today
+    assert "Recap" not in today  # a done step
     assert "Done for today ✓" not in today  # items are open
 
 
@@ -302,7 +303,7 @@ def test_today_prints_and_writes_today_md(vault):
     out = run("today", "--vault", vault).output
     assert out.startswith("## Today") and "Drill set A" in out
     md = (vault / "Today.md").read_text(encoding="utf-8")
-    assert "# Today" in md and "Drill set A" in md and "Sprint day 2" in md
+    assert "# Today" in md and "Drill set A" in md and "Day 2" not in md
     assert "Done for today" not in out  # open items: not done
 
 
@@ -338,7 +339,7 @@ def test_cli_prints_note_text_without_control_characters(vault, monkeypatch):
         "title": "evil\x1b]8;;http://x\x07link\x1b[2J ‮esrever"}])
     out = run("today", "--vault", vault).output
     assert "\x1b" not in out and "\x07" not in out and "‮" not in out
-    assert "- Track item: evil]8;;http://xlink[2J esrever [Sprint plan]" in out
+    assert "- Plan step: evil]8;;http://xlink[2J esrever [Sprint plan]" in out
 
 
 def test_every_visible_option_has_help():

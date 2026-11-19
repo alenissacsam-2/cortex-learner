@@ -1,10 +1,14 @@
 """Today planning (SPEC §5 "Today", §15a.5, §15a.9, §15a.14).
 
-Order: unchecked (newest taught first, 7 days at most), asked, confident miss, track, warm-up,
-refresh, new. Warm-up + refresh + new share the cap; the others are uncapped, except a track's
-Owed list, folded to OWED_SHOWN items and a pointer to the track. `short` mode
-takes 5: confident misses, then concepts an exam within 2 days tests, then the normal order.
-`sweep` mode is its own short list (`sweep`).
+Order: unchecked (newest taught first, 7 days at most), asked, confident miss, warm-up, then
+refreshes and plan steps grouped by subject (a named topic's subject, then the most recently
+studied subject first), new.
+Warm-up + refresh + new share the cap; the others are uncapped. A plan (a track note) is an
+ordered list of steps with no dates: its next STEPS_SHOWN undone steps show, then a pointer to
+the track. Switching subjects only pauses a plan: nothing is "behind". Real dates belong only
+to assessments (exams, interviews, deadlines). `short` mode takes 5: confident misses, then
+concepts an exam within 2 days tests, then the normal order. `sweep` mode is its own short
+list (`sweep`).
 """
 
 from __future__ import annotations
@@ -16,14 +20,14 @@ from cortex import levels
 from cortex.catalog import Catalog
 from cortex.events import EventLog, live, local_day
 from cortex.levels import ConceptState
-from cortex.vault import HEADING_RE, UNCHECKED_RE, VaultError, invalid, is_private
+from cortex.vault import CHECKED_RE, UNCHECKED_RE, VaultError, invalid, is_private
 
 CAP, SHORT_CAP = 15, 5
 UNCHECKED_DAYS = 7  # a concept leaves the "Taught, not yet checked" lane after this many days
 SHORT_EXAM_DAYS = 2  # short mode pulls concepts an exam this close tests to the front
 WINDOW = 14  # days: the exam clock and the fail / felt-weak boost
 WARMUP_GAP, WARMUP_MAX, NEW_MAX = 2, 5, 2
-OWED_SHOWN = 3  # first unchecked Owed items per track, in the learner's order; then a "more" item
+STEPS_SHOWN = 3  # next undone steps per plan, in the learner's order; then a "more" item
 NO_PLAN_MODES = ("home", "log", "about", "week", "capture", "reflect", "project", "save", "history",
                  "probe", "mock")
 SWEEP_CAP = 10
@@ -49,20 +53,95 @@ def _studied(ev: dict) -> bool:
 _LINK_RE = re.compile(r"^\[\[([^\]|#^]+)(?:[|#^][^\]]*)?\]\]\s*")  # cut as index._target
 
 
-def _unchecked(body: str, heading: str) -> list[str]:
-    """Unchecked item texts under `## <heading>` (exact heading text)."""
-    out, inside, level = [], False, 0
-    for line in body.splitlines():
-        m = HEADING_RE.match(line)
-        if m:
-            if inside and len(m.group(1)) <= level:
-                break
-            if m.group(2) == heading:
-                inside, level = True, len(m.group(1))
+def _subject(catalog, id: str | None, pcs: dict | None = None) -> str | None:
+    """The subject an id belongs to: a catalog entry's domain, a problem's first concept's
+    domain (`pcs`: levels.problem_concepts), else the id itself."""
+    if id in (pcs or {}) and pcs[id]:
+        cs = pcs[id]
+        id = cs if isinstance(cs, str) else cs[0]
+    e = catalog.entries.get(id) if id else None
+    return (e.domain or e.id) if e else id
+
+
+def plans(vault, catalog, private: set[str] | None = None, pcs: dict | None = None,
+          ) -> list[dict]:
+    """The non-private plans (track notes): {id, title, subject, steps[{id, title}], done,
+    links}, in vault order.
+
+    A plan is its checklist in the note's order, with no dates: `steps` are the unchecked
+    items, one per linked id or text (a repeat, such as an old `## Owed` copy, is dropped),
+    solved problems and private ids left out; `done` counts the checked items. Headings (old
+    `## Day N` ones too) and `current_day` or date fields are ignored, so old notes still read
+    and nothing is rewritten. `subject` is the track's `subject` field (a domain, area or
+    concept name or id) as its domain, else the domain most of its links fall in, else the
+    track id. One plan per subject is the usual shape; several may share one."""
+    from cortex.index import link_targets  # index imports planner
+
+    private = hidden(vault, catalog) if private is None else private
+    pcs = levels.problem_concepts(vault) if pcs is None else pcs
+    solved = {n.id for n in vault.iter_notes("problem") if n.fields.get("status") == "solved"}
+    out = []
+    for track in vault.iter_notes("track"):
+        if is_private(track) or track.id in private:  # D1: its title and lines too
             continue
-        if inside and UNCHECKED_RE.match(line):
-            out.append(UNCHECKED_RE.sub("", line, count=1).strip())
+        steps, seen, done = [], set(), 0
+        for line in track.body.splitlines():
+            done += bool(CHECKED_RE.match(line))
+            if not UNCHECKED_RE.match(line):
+                continue
+            text = UNCHECKED_RE.sub("", line, count=1).strip()
+            m = _LINK_RE.match(text)
+            id = m.group(1).strip() if m else None
+            if (id or text) in seen or id in solved or id in private:
+                continue  # SPEC §5: never propose a solved problem
+            seen.add(id or text)
+            steps.append({"id": id, "title": (text[m.end():].strip() if m else text) or id})
+        links = link_targets(track.body)
+        subject, name = None, track.fields.get("subject")
+        if isinstance(name, str) and name.strip():
+            try:
+                subject = _subject(catalog, catalog.resolve(
+                    name.strip().rpartition(":")[2], ("domain", "area", "concept")))
+            except VaultError:
+                pass
+        if subject is None:
+            subs = [s for t in links if (s := _subject(catalog, t, pcs)) in catalog.entries]
+            subject = max(dict.fromkeys(subs), key=subs.count) if subs else track.id
+        out.append({"id": track.id, "title": str(track.fields.get("title") or track.id),
+                    "subject": subject, "steps": steps, "done": done, "links": links})
     return out
+
+
+def last_active(vault, catalog, events: list[dict], pcs: dict | None = None,
+                tracks: list[dict] | None = None) -> dict[str, dict]:
+    """subject -> {ts, day} of the latest study on it: a grade, ask, taught or evidence log on
+    one of its concepts or problems, or a touch naming it, one of its pages or its plan. A
+    pure fold over events and notes; `tracks` is plans() when the caller already has it."""
+    pcs = levels.problem_concepts(vault) if pcs is None else pcs
+    tracks = plans(vault, catalog, pcs=pcs) if tracks is None else tracks
+    of_track = {t["id"]: t["subject"] for t in tracks}
+    out: dict[str, dict] = {}
+
+    def see(subject, ev):
+        subject = of_track.get(subject, subject)
+        ts = str(ev.get("ts") or "")
+        if subject and ts > out.get(subject, {}).get("ts", ""):
+            out[subject] = {"ts": ts, "day": ev.get("day")}
+
+    for it in levels._items([e for e in events if "ts" in e and "id" in e], pcs):
+        p = it.ev.get("payload")
+        if it.ev.get("kind") == "log" and isinstance(p, dict) and p.get("kind") == "touch":
+            for id in p.get("ids") or []:
+                if isinstance(id, str):
+                    see(_subject(catalog, id, pcs), it.ev)
+        elif it.concept and _studied(it.ev):
+            see(_subject(catalog, it.concept), it.ev)
+    return out
+
+
+def _by_recency(subjects: list, last: dict[str, dict]) -> list:
+    """`subjects` most recently studied first; never studied last; ties keep the given order."""
+    return sorted(subjects, key=lambda s: last.get(s, {}).get("ts", ""), reverse=True)
 
 
 def _day(value) -> date | None:
@@ -201,7 +280,8 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
         if title is None:
             e = catalog.entries.get(id)
             title = e.title if e else id
-        return {"kind": kind, "id": id, "title": title, "state": state_of(id), "why": why}
+        return {"kind": kind, "id": id, "title": title, "state": state_of(id), "why": why,
+                "subject": _subject(catalog, id)}
 
     private = hidden(vault, catalog)  # no lane may show a private subject
     visible = sorted((c, st) for c, st in states.items() if c not in private)
@@ -221,33 +301,22 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
     seen = {i["id"] for i in out}
     out += [item("confident_miss", c, f"confident miss on {st.confident_miss}")  # uncapped
             for c, st in visible if getattr(st, "confident_miss", None) and c not in seen]
+    pcs = levels.problem_concepts(vault)
+    tracks = plans(vault, catalog, private, pcs)
+    active = last_active(vault, catalog, events, pcs, tracks)
     on_track: set[str] = set()
+    steps = []  # each plan's next steps, then its pointer; plans in vault order
     if mode != "review":
-        from cortex.index import link_targets  # index imports planner
+        for p in tracks:
+            on_track.update(p["links"])
+            lane = [{**item("track", s["id"], p["title"], s["title"]), "subject": p["subject"]}
+                    for s in p["steps"][:STEPS_SHOWN]]
+            if len(p["steps"]) > STEPS_SHOWN:  # ideas-r2 #6: no count
+                lane.append({**item("track", None, p["title"], f"More steps are in {p['title']}"),
+                             "subject": p["subject"], "more": p["id"]})
+            steps += lane
 
-        solved = {n.id for n in vault.iter_notes("problem") if n.fields.get("status") == "solved"}
-        for track in vault.iter_notes("track"):
-            if is_private(track) or track.id in private:  # D1: its title and lines too
-                continue
-            on_track.update(link_targets(track.body))
-            n = track.fields.get("current_day")
-            for heading, why in ([(f"Day {n}", f"Sprint plan · Day {n}")] if n is not None
-                                 else []) + [("Owed", "Owed")]:
-                lane = []
-                for text in _unchecked(track.body, heading):
-                    m = _LINK_RE.match(text)
-                    id = m.group(1).strip() if m else None
-                    if id in solved or id in private:
-                        continue  # SPEC §5: never propose a solved problem
-                    title = text[m.end():].strip() if m else text
-                    lane.append(item("track", id, why, title or id))
-                if heading == "Owed" and len(lane) > OWED_SHOWN:  # ideas-r2 #6: no count
-                    name = track.fields.get("title") or track.id
-                    lane = lane[:OWED_SHOWN] + [{**item(
-                        "track", None, why, f"More owed items are in {name}"), "more": track.id}]
-                out += lane
-
-    taken = {i["id"] for i in out} | private
+    taken = {i["id"] for i in out + steps} | private
 
     warm = []
     if mode != "review":
@@ -311,9 +380,8 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
 
     # ideas-r2 #5: a refresh names one problem already solved under the concept, the oldest
     # `solved_on` first (undated last), ties by id
-    pcs = levels.problem_concepts(vault) if ranked[:room - k] else {}
     models: dict[str, tuple[str, str]] = {}
-    for n in vault.iter_notes("problem") if pcs else ():
+    for n in vault.iter_notes("problem") if ranked[:room - k] else ():
         if n.fields.get("status") == "solved" and n.id not in private and not is_private(n):
             key = (str(n.fields.get("solved_on") or "~"), n.id)
             for c in pcs.get(n.id, []):
@@ -324,7 +392,15 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
                for c in ranked[:room - k]]
     shown = {i["id"] for i in refresh}
     new = [item("new", c, "Ready to learn") for c in ready if c not in shown][:k]
-    out += warm + refresh + new
+    # refreshes and plan steps by subject: a named topic's subject first, then the most
+    # recently studied (a paused subject just sinks); ties, and each subject's refreshes, keep
+    # the risk order; a refresh in a subject with no plan is a group of its own
+    groups: dict = {}
+    for i in refresh + steps:
+        groups.setdefault(i["subject"], []).append(i)
+    named = {_subject(catalog, c) for c in topic_ids}
+    order = sorted(_by_recency(list(groups), active), key=lambda s: s not in named)
+    out += warm + [i for s in order for i in groups[s]] + new
     if mode != "short":
         return out
     # tired evening: confident misses, then concepts an exam within SHORT_EXAM_DAYS tests, then
@@ -334,7 +410,7 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
     picked, ids = [], set()
     for n in ([n for n, i in enumerate(out) if i["kind"] == "confident_miss"]
               + [n for n, i in enumerate(out) if i["id"] in soon] + list(range(len(out)))):
-        key = out[n]["id"] if out[n]["id"] is not None else n  # free-text track items: by slot
+        key = out[n]["id"] if out[n]["id"] is not None else n  # free-text plan steps: by slot
         if key not in ids and not out[n].get("more"):  # 5 items to do, not a pointer
             ids.add(key)
             picked.append(out[n])
@@ -618,15 +694,34 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
     }
 
 
-def sprint_day(vault) -> int | None:
-    """The first non-private track's `current_day` (sprint days, not dates), or None."""
-    for track in vault.iter_notes("track"):
-        if is_private(track):
-            continue
-        day = track.fields.get("current_day")
-        if isinstance(day, int) and not isinstance(day, bool):
-            return day
-    return None
+def next_up(vault, catalog, states, *, now: datetime, events: list[dict] | None = None,
+            ) -> list[dict]:
+    """What to do next, by subject: the home page's "Next up".
+
+    today()'s learn plan (private subjects already left out) grouped by subject, the most
+    recently studied subject first (last_active: grades, asks, taught, touches), never studied
+    last. Each group is {subject, title, last_day, items}, items in plan order: anything in
+    the subject taught but unchecked, asked, missed or a warm-up, its due reviews, its plan's
+    next undone steps (no dates), then new concepts. A subject left alone for a while
+    just drops down: nothing is "behind" or overdue. Items with no subject (ids outside the
+    catalog) form a last group with subject None. Deterministic for the same notes and events.
+    `states` is current_states()[0] for the same day.
+    """
+    events = list(EventLog(vault).iter_events()) if events is None else list(events)
+    items = today(vault, catalog, states, now=now, events=events)
+    pcs = levels.problem_concepts(vault)
+    tracks = plans(vault, catalog, pcs=pcs)
+    last = last_active(vault, catalog, events, pcs, tracks)
+    names = {t["id"]: t["title"] for t in tracks}
+    groups: dict = {}
+    for i in items:
+        groups.setdefault(i["subject"], []).append(i)
+    order = _by_recency([s for s in groups if s is not None], last) + (
+        [None] if None in groups else [])
+    return [{"subject": s,
+             "title": (catalog.entries[s].title if s in catalog.entries
+                       else names.get(s, s) if s else "Other"),
+             "last_day": last.get(s, {}).get("day"), "items": groups[s]} for s in order]
 
 
 def assessments(vault) -> list[dict]:

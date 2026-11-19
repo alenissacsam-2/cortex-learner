@@ -11,7 +11,7 @@
   const VERDICT = { correct: '✓', partial: '½', wrong: '✗' };
   const OUTCOME = { pass: '✓ pass', fail: '✗ fail', pending: '… pending', unknown: '? unknown' };
   const GROUPS = [['unchecked', 'Taught, not yet checked'], ['asked', 'Asked, not graded'],
-    ['confident_miss', 'Confident miss'], ['track', 'Sprint plan'], ['warmup', 'Warm-up'],
+    ['confident_miss', 'Confident miss'], ['track', 'Plan steps'], ['warmup', 'Warm-up'],
     ['refresh', 'Refresh'], ['new', 'Ready to learn']];
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const $ = (id) => document.getElementById(id);
@@ -1929,25 +1929,12 @@
 
   /* ---- Study (the old Today and History) ---- */
   function renderStudy() {
-    const s = D.sprint, box = $('sprint');
-    if (!s || !s.days.length) box.hidden = true;
-    else {
-      const strip = el('ol', 'strip');
-      strip.setAttribute('aria-label', 'Sprint days');
-      for (const d of s.days) {
-        const li = el('li', 'pill ' + d.status, d.label + (d.status === 'done' ? ' ✓' : ''));
-        if (d.status === 'current') li.setAttribute('aria-current', 'step');
-        strip.append(li);
-      }
-      box.append(strip);
-      if (s.day != null) {
-        const c = s.today_counts;
-        box.append(el('p', null, `Day ${s.day} · ${c.done} done · ${c.left} left`));
-      }
-      if (isDay(s.placement_date)) {
-        const n = between(TODAY, s.placement_date);
-        if (n >= 0) box.append(el('p', 'muted', `${s.title} in ${plural(n, 'day')}`));
-      }
+    // v8: plans have no dates; each shows its next step and how many are done and left
+    const box = $('sprint'), ps = D.plans || [];
+    if (!ps.length) box.hidden = true;
+    for (const p of ps) {
+      box.append(el('p', null, `${p.title} · ${p.next.length ? 'next: ' + p.next[0] : 'all steps done'}`
+        + ` · ${p.done} done · ${p.left} left`));
     }
     const tiles = $('tiles');
     for (const st of STATES) {
@@ -2140,7 +2127,7 @@
       you: 'what Cortex knows about you, lines waiting for your yes, and your me/ pages',
       timeline: 'pages by the day they were written, month by month',
       ideas: 'open loops, decisions to revisit, ideas coming back and recent notes',
-      study: 'the sprint, learning states, the plan, readiness for tests, mistakes and weekly answers',
+      study: 'your study plans, learning states, the plan, readiness for tests, mistakes and weekly answers',
       help: 'this page' };
     const tbl = el('table'), tb = el('tbody');
     SECTIONS.forEach((s, i) => {
