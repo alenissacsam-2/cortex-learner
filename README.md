@@ -29,7 +29,7 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 - **It plans what to revise.** A daily plan (Today) orders lessons taught but not yet checked, confident misses, refreshes that are due, topics for the next test and new topics. You can cut it to the time you have.
 - **It works with the AI apps you already use.** An MCP server gives Claude Code, the Claude desktop app, Gemini CLI, Cursor, VS Code, Windsurf, Codex, LM Studio and other MCP clients the same tools. A `/cortex` skill adds study modes to Claude.
 - **It brings in your history.** Import chat exports (claude.ai, ChatGPT, Gemini, Perplexity), notes (Obsidian, Notion, any folder), calendars (.ics), Google activity and your browser history.
-- **It stays on your computer.** No account, no telemetry. The vault is a normal Obsidian vault with its own git history, so every change can be reviewed and undone.
+- **It stays on your computer.** No account, no telemetry. The vault is a normal Obsidian vault with its own git history, so every change can be reviewed and undone. Git is your choice: turn it off for a very large vault, or include your private browsing pages in it.
 
 ## A tour
 
@@ -49,11 +49,11 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ![Add your history with the ChatGPT guide open](docs/images/app-import.png)
 
-**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only.
+**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only. After your first import, new history comes in by itself every few hours while the app or the receiver runs, since browsers keep only about 90 days.
 
 ![Browsing privacy: the cloud switch is off and each sensitive category has its own three-way choice](docs/images/app-privacy.png)
 
-**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, and lists the pages each answer used. It never uses a cloud model.
+**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. Questions about your own record are answered straight from Cortex's data, even with no model running: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week".
 
 ![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips](docs/images/app-chat.png)
 
