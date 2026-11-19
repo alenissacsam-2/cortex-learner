@@ -193,6 +193,39 @@ def local_runner(budget_s: float | None = None):
     return runner, _budget(budget_s)
 
 
+def idle_runner(budget_s: float | None = None):
+    """(runner, budget) for the imports' title checks: the configured local model only when
+    it is already loaded and the PC is idle (`titles.may_run`: it never starts a runner or
+    loads a model), else (None, None)."""
+    from cortex.browse import titles
+
+    runner, _ = titles.may_run()
+    return (runner, _budget(budget_s)) if runner is not None else (None, None)
+
+
+def check_titles(v: Vault, runner, settings: Settings, budget) -> dict:
+    """C1's background pass: up to titles.CAP titles and search terms with no verdict yet,
+    newest visit first (`store.pending`), to the loaded local model in batches with a pause
+    between them, while the PC stays idle. Each batch's labels are saved as it comes (their
+    days are made again by the import that follows); a Don't-save verdict takes what it
+    matches out of every store. Counts only."""
+    from contextlib import closing
+
+    from cortex.browse import build, forget, privacy, sites, store, titles
+
+    if not store.exists(v):
+        return {}
+    with closing(store.connect(v)) as con:
+        texts = store.pending(con, settings, sites.load_verdicts(v), titles.CAP)
+        got, c = titles.check(texts, runner, list(build.VET_LABELS), budget,
+                              save=lambda lab: store.put_verdicts(con, lab), gate=titles.idle,
+                              pause=titles.PAUSE_S)
+    skip = frozenset(x for x in got.values() if privacy.audience(x, settings) == "skip")
+    if skip:
+        forget.purge(v, forget.Rule(cats=skip), write=False)
+    return {"titles_checked": c["answered"], "titles_calls": c["calls"]}
+
+
 def _budget(budget_s: float | None):
     from cortex import localllm, taint
 
@@ -230,19 +263,24 @@ def auto_sources(v: Vault) -> list:
 
 
 def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> dict:
-    """What the import command runs, with every browser found (or `srcs`) and no `since`: the
-    import itself picks the days with new History visits or changed inbox files (a `since`
-    would skip the History days before it while still moving their cursor). The local LLM only
-    when config enables it; never a download. Then the private browse vectors."""
+    """The background import (the receiver's runs, the app's live import every
+    AUTO_EVERY_S), with every browser found (or `srcs`) and no `since`: the import itself
+    reads only what is new and makes the days it changed. The local model only when it is
+    already loaded and the PC idle (`idle_runner`): then first the titles waiting for its
+    verdict (`check_titles`); never a download or a model load. Then the private browse
+    vectors."""
     from cortex import semantic
     from cortex.browse import build, sites, sources
 
     say = say or _say
-    runner, budget = local_runner()
+    runner, budget = idle_runner()
     settings = load_settings()
     srcs = sources.chosen(settings) if srcs is None else srcs
+    checked = (check_titles(v, runner, settings, budget)
+               if runner is not None and settings.visible_to_claude else {})
     r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
                   runner=runner, budget=budget, progress=progress, say=say)
+    r.update(checked)
     r["model"] = runner is not None
     sites.update_vectors(v, say)
     return r
@@ -283,10 +321,11 @@ def auto_import_hours(config: dict | None = None) -> float:
     return h if ok else AUTO_IMPORT_HOURS
 
 
-def auto_import_due(v: Vault, now: datetime | None = None) -> bool:
+def auto_import_due(v: Vault, now: datetime | None = None, *, live: bool = False) -> bool:
     """True when the last import is older than `auto_import_hours` and the browse-wide lock is
     free (no import, deepen or forget runs). Never before the user's first import: a fresh
-    install reads no history until they ask once."""
+    install reads no history until they ask once. `live` (the app's live import, every
+    AUTO_EVERY_S): any age; auto_import_hours 0 still turns it off."""
     from cortex.browse import build, sites
 
     hours = auto_import_hours()
@@ -297,7 +336,7 @@ def auto_import_due(v: Vault, now: datetime | None = None) -> bool:
         t = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except ValueError:
         return False
-    if (now or datetime.now(UTC)) - t < timedelta(hours=hours):
+    if not live and (now or datetime.now(UTC)) - t < timedelta(hours=hours):
         return False
     try:
         with sites.busy(v, 0):  # a peek: the import takes it again for its whole run

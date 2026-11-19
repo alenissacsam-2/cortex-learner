@@ -1,5 +1,6 @@
-"""A fake Ollama on a loopback port the OS picks: GET /api/tags lists `models`; POST /api/chat
-answers in Ollama's shape (with `format: json`, the first allowed label of a classify prompt;
+"""A fake Ollama on a loopback port the OS picks: GET /api/tags lists `models`, GET /api/ps the
+ones in memory (`loaded`, none by default); POST /api/chat answers in Ollama's shape (with
+`format: json`, the first allowed label of a classify prompt, for each line of a numbered one;
 otherwise `answer`). Every request is recorded in `requests` as {"path", "body"}."""
 
 import json
@@ -12,8 +13,9 @@ _LABELS = re.compile(r"Allowed labels: (\[.*?\])")
 
 
 class FakeOllama:
-    def __init__(self, models=("qwen3.5:2b",), answer=ANSWER):
+    def __init__(self, models=("qwen3.5:2b",), answer=ANSWER, loaded=()):
         self.models, self.answer, self.requests = list(models), answer, []
+        self.loaded = list(loaded)
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -32,6 +34,8 @@ class FakeOllama:
                 fake.requests.append({"path": self.path, "body": None})
                 if self.path == "/api/tags":
                     self._send(200, {"models": [{"name": m} for m in fake.models]})
+                elif self.path == "/api/ps":
+                    self._send(200, {"models": [{"name": m} for m in fake.loaded]})
                 else:
                     self._send(404, {"error": "not found"})
 
@@ -58,6 +62,9 @@ class FakeOllama:
                        if m.get("role") == "system"), "")
         m = _LABELS.search(system)
         label = json.loads(m.group(1))[0] if m else "other"
+        if "numbered" in system:
+            n = len(re.findall(r"^\d+\. ", body["messages"][-1]["content"], re.M))
+            return json.dumps({str(k + 1): label for k in range(n)})
         return json.dumps({"label": label, "confidence": 0.9})
 
     def chats(self) -> list[dict]:

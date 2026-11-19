@@ -252,10 +252,16 @@
     const r = j.result || {};
     const word = j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done';
     // running: the moving bar under the line; done: a brief success tint; failed: the error tint
-    $('jobline').classList.remove('idle', 'running', 'ok', 'bad', 'ended');
+    $('jobline').classList.remove('idle', 'running', 'ok', 'bad', 'ended', 'determinate');
     $('jobline').classList.add(j.running ? 'running' : word === 'done' ? 'ok' : word === 'failed' ? 'bad' : 'ended');
     $('job-name').textContent = j.running ? j.name : `${j.name}: ${word}`;
-    $('job-line').textContent = j.running ? j.line : (j.error || '');
+    // a stepped job: "Step 3 of 5 · checking titles · 42% · about 2 min left", a filling bar
+    const p = j.running ? j.progress : null;
+    if (p) {
+      $('jobline').classList.add('determinate');
+      $('jobline').style.setProperty('--pct', `${p.overall}%`);
+    }
+    $('job-line').textContent = p ? stepText(p) : j.running ? j.line : (j.error || '');
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
   }
@@ -280,8 +286,14 @@
       if (pollAgain && !dead) { pollAgain = false; poll(); }
     }
   }
+  function stepText(p) {
+    const s = p.eta_s;
+    const left = s == null ? '' : s < 60 ? ' · less than a minute left'
+      : s < 3600 ? ` · about ${Math.round(s / 60)} min left` : ` · about ${Math.round(s / 3600)} h left`;
+    return `Step ${p.step} of ${p.steps} · ${p.label} · ${p.pct}%${left}`;
+  }
   function idle() {
-    $('jobline').classList.remove('running', 'ok', 'bad', 'ended');
+    $('jobline').classList.remove('running', 'ok', 'bad', 'ended', 'determinate');
     $('jobline').classList.add('idle');
     $('job-name').textContent = 'Nothing running';
     $('job-line').textContent = 'Long actions show their progress here, one at a time.';

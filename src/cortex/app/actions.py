@@ -207,8 +207,24 @@ def browse_scan(job) -> dict:
 
 
 class Cancelled(KeyboardInterrupt):
-    """Raised inside `build.run` on Cancel. Like Ctrl+C there, it leaves whole pages only and
-    the old state, so the next import redoes the same days."""
+    """Raised inside `build.run` on Cancel. Like Ctrl+C there, it leaves whole pages only;
+    what was read and checked is saved in the store, so the next import goes on from there."""
+
+
+def browse_migrate(job, root: Path) -> dict:
+    """The site Markdown pages into the browsing store (`store.migrate`): zipped into
+    .cortex/backups first, removed from the vault only once the store holds every one. Counts
+    only."""
+    from cortex.browse import load_settings, store
+    steps = store.MIGRATE_STEPS
+    job.say("moving the site pages into Cortex's own store")
+    r = store.migrate(_vault(root), settings=load_settings(), step=lambda n, d, t: job.progress(
+        n, len(steps), d, t, steps[n - 1]))
+    if r.get("missing") or r.get("error"):
+        return {"ok": False, "counts": status.safe(r), "lines": [
+            "The site pages were not moved: the store does not hold every one yet. Nothing "
+            "was removed."]}
+    return {"ok": True, "counts": status.safe(r)}
 
 
 class _Watched:
@@ -230,12 +246,14 @@ class _Watched:
 
 def history_import(job, root: Path, keys: set[str], takeout: list | None = None) -> dict:
     """The full import of the chosen browsers' past history (`build.run`, no `since`: every
-    day with visits not imported yet), plus Google activity rows (`takeout`) when given.
-    Without the search model it stops first: every page would land under Other. Progress and
-    summary are counts only."""
-    from cortex import localllm, semantic
+    visit not read yet), plus Google activity rows (`takeout`) when given, in named steps
+    (`job.progress`; the site pages' move into the store first, once). Without the search
+    model it stops first: every page would land under Other. The local model checks titles
+    only when it is already loaded and the PC idle (`titles.may_run`); its summaries wait for
+    the background runs. Cancel keeps what was saved. Progress and summary are counts only."""
+    from cortex import browse_serve, semantic
     from cortex.app import wizard
-    from cortex.browse import build, load_settings, sources
+    from cortex.browse import build, load_settings, sources, store
 
     srcs = [s for s in sources.discover() if s.key in keys]
     if not srcs and not takeout:
@@ -250,17 +268,14 @@ def history_import(job, root: Path, keys: set[str], takeout: list | None = None)
         if job.cancelled.is_set():
             raise Cancelled
 
-    runner = budget = None
-    if localllm.enabled():
-        try:
-            runner = localllm.find(background=True)
-        except ValueError:  # a non-loopback localllm.url is refused
-            runner = None
-        if runner is not None:
-            cfg = status.config().get("localllm")
-            secs = cfg.get("budget_s", 300) if isinstance(cfg, dict) else 300
-            budget = localllm.Budget(secs if isinstance(secs, (int, float)) else 300)
-    job.say(f"reading {len(srcs)} browser profile(s); the first time can take a while")
+    runner, budget = browse_serve.idle_runner()
+    v = _vault(root)
+    moving = () if store.migrated(v) else store.MIGRATE_STEPS
+    names = (*moving, *build.PHASES)
+
+    def step(n, done, total):  # n counts from 1 over `names`
+        job.progress(n, len(names), done, total, names[n - 1])
+        check()
 
     def progress(key, n, new, err):
         job.say(f"{key}: not read ({type(err).__name__}); the others go on" if err
@@ -272,13 +287,19 @@ def history_import(job, root: Path, keys: set[str], takeout: list | None = None)
         return embed(texts)
 
     try:
-        r = build.run(_vault(root), srcs, load_settings(), embed=watched_embed,
+        if moving:
+            store.migrate(v, settings=load_settings(), step=step)
+            if not store.migrated(v):
+                return {"ok": False, "lines": ["The site pages could not be moved into the "
+                                               "store; nothing was imported."]}
+        job.say(f"reading {len(srcs)} browser profile(s); the first time can take a while")
+        r = build.run(v, srcs, load_settings(), embed=watched_embed,
                       runner=_Watched(runner, check) if runner is not None else None,
-                      budget=budget, progress=progress, takeout=takeout)
+                      budget=budget, progress=progress, takeout=takeout,
+                      step=lambda n, d, t: step(n + len(moving), d, t), summaries=False)
     except Cancelled:
         return {"ok": False, "cancelled": True, "lines": [
-            "Stopped. Every page on disk is whole and nothing was marked as imported, so the "
-            "next import redoes these days."]}
+            "Stopped. What was read is saved; the next import goes on from there."]}
     summary = {"days_written": r.get("private_written", 0) + r.get("public_written", 0),
                "private_pages": r.get("private_written", 0), "kept": r.get("kept", 0),
                "private": r.get("private", 0), "dropped": r.get("dropped", 0),

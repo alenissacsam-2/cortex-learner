@@ -16,7 +16,7 @@ from test_browse_sites import OWNER, hidden, visible
 from typer.testing import CliRunner
 
 from cortex import cli, cloudllm, doctor, localllm, semantic, session
-from cortex.browse import build, forget, privacy, sites, sources, vectors
+from cortex.browse import build, forget, privacy, sites, sources, store, vectors
 from cortex.catalog import Catalog
 from cortex.index import Index
 from cortex.vault import Vault
@@ -66,6 +66,10 @@ def fake_local(labels: dict[str, str | None]):
         got = labels.get(text, "ordinary")
         return None if got is None else (got, 0.9)
     r.classify = classify
+
+    def classify_many(texts, labels_, *, timeout=60, budget=None):  # a batch: line by line
+        return {i: got[0] for i, t in enumerate(texts) if (got := classify(t, labels_))}
+    r.classify_many = classify_many
     r.summarise = lambda *a, **k: None
     return r
 
@@ -131,7 +135,7 @@ def test_c1_no_verdict_keeps_a_title_local_and_verdicts_are_cached(vault, hist):
     imp(vault, hist, runner=r)
     text = visible_text(vault)
     assert "living quietly" not in text and "chess tactics ·" not in text
-    cache = (vault / sites.VERDICTS).read_text(encoding="utf-8")
+    cache = json.dumps(store.verdicts(Vault(vault)))  # saved in the store, batch by batch
     assert "chess" not in cache.lower() and len(cache) > 2  # hashes, never the text
     again = fake_local({})
     imp(vault, hist, runner=again, since="2026-11-09")

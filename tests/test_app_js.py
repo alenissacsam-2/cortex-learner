@@ -579,6 +579,37 @@ def test_a_command_that_failed_shows_as_failed(tmp_path):
                                     "Job: stopped: needs the search model"]
 
 
+def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):
+    """A job with `progress` (server.Job.progress) reads "Step 3 of 5 · checking titles ·
+    42% · about 2 min left" and fills its bar to the overall share; without, the moving bar."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    js = APP_JS.read_text(encoding="utf-8")
+    fns = "".join(re.search(rf"\n  function {f}\(\w+\) \{{.*?\n  \}}\n", js, re.S)[0]
+                  for f in ("showJob", "stepText"))
+    script = tmp_path / "step.cjs"
+    script.write_text(
+        "const el = () => { const cls = new Set(); return { cls, classList: { "
+        "remove: (...c) => c.forEach((x) => cls.delete(x)), "
+        "add: (...c) => c.forEach((x) => cls.add(x)) }, "
+        "style: { setProperty(k, v) { this[k] = v; } }, textContent: '', hidden: false }; };\n"
+        "const els = {};\nconst $ = (id) => els[id] || (els[id] = el());\n"
+        "let hideTimer;\n" + fns
+        + "const p = { step: 3, steps: 5, label: 'checking titles', done: 42, total: 100, "
+          "pct: 42, overall: 48, eta_s: 130 };\n"
+          "showJob({ name: 'Import', running: true, cancellable: true, seconds: 9, "
+          "progress: p });\nconst a = [$('job-line').textContent, "
+          "$('jobline').cls.has('determinate'), $('jobline').style['--pct']];\n"
+          "showJob({ name: 'Import', running: true, seconds: 9, line: 'reading' });\n"
+          "console.log(JSON.stringify([...a, $('job-line').textContent, "
+          "$('jobline').cls.has('determinate')]));\n", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [
+        "Step 3 of 5 · checking titles · 42% · about 2 min left", True, "48%", "reading", False]
+
+
 BUSY = HARNESS[:HARNESS.index("const out = {};")] + r"""
 const out = { errors };
 (async () => {

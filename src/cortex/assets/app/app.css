@@ -105,6 +105,9 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
   animation: job-slide 1.2s ease-in-out infinite;
 }
 @keyframes job-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+/* a stepped job: the bar fills to its overall share (--pct, set by app.js) */
+.jobline.running.determinate::after { width: var(--pct, 0%); animation: none; transform: none;
+  transition: width .3s ease-out; }
 .jobline.ok { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); animation: job-ok 2.4s ease-out forwards; }
 @keyframes job-ok { 0%, 50% { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); } to { background: var(--panel); } }
 .jobline.bad { background: color-mix(in srgb, var(--refresh) 16%, var(--panel)); border-bottom-color: var(--refresh); }

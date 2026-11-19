@@ -6,6 +6,7 @@ while the browser runs), opened read-only and deleted again; a browser file is n
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -39,11 +40,15 @@ GAP_CAP = 600.0  # seconds: a visit lasts until the next one, at most this long
 TEMP_PREFIX, STALE_SECS = "cortex-browse-", 3600
 CHROMIUM_SQL = """
 SELECT v.visit_time, v.visit_duration, v.transition, u.url, u.title,
-       (SELECT k.term FROM keyword_search_terms k WHERE k.url_id = u.id LIMIT 1)
-FROM visits v JOIN urls u ON u.id = v.url ORDER BY v.visit_time"""
+       (SELECT k.term FROM keyword_search_terms k WHERE k.url_id = u.id LIMIT 1), v.rowid
+FROM visits v JOIN urls u ON u.id = v.url {where} ORDER BY v.visit_time"""
 FIREFOX_SQL = """
-SELECT v.visit_date, v.visit_type, p.url, p.title
-FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id ORDER BY v.visit_date"""
+SELECT v.visit_date, v.visit_type, p.url, p.title, v.rowid
+FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id {where} ORDER BY v.visit_date"""
+# rows past the cursor: a new visit id, or a time in the last GAP_CAP before the newest time
+# read (re-read, so the last visit's time on the page is measured to the visit after it)
+_SINCE = {"chromium": "WHERE v.rowid > ? OR v.visit_time >= ?",
+          "firefox": "WHERE v.rowid > ? OR v.visit_date >= ?"}
 
 
 class CopyFailed(OSError):
@@ -81,6 +86,9 @@ class Visit:
     source: str = ""
     excerpt: str = ""  # from the extension's inbox only
     channel: str = ""  # a video's channel, from the extension's inbox only
+    # "<raw time>:<URL hash>": the visit's key in cortex.browse.store, the same however the
+    # browser numbers its rows (a rebuilt History file, a reused id)
+    native: str = ""
 
 
 def _profiles(browser: str, folder: Path, name: str) -> list[Source]:
@@ -203,26 +211,45 @@ def read(src: Source) -> tuple[list[Visit], int | None]:
     A visit lasts until the next one (at most GAP_CAP), or its recorded duration if shorter.
     A row whose time is not an integer, negative or out of range is skipped (second review
     L1), so one bad row never aborts the source or moves the cursor into the future."""
+    visits, top, _ = read_since(src)
+    return visits, top
+
+
+def read_since(src: Source, after_id: int | None = None, after_time: int | None = None
+               ) -> tuple[list[Visit], int | None, int | None]:
+    """The visits of `src` past a cursor (`after_id`, `after_time`: the newest visit id and raw
+    time read before; None reads all), oldest first, with their `native` key, then the newest
+    raw time and visit id read (the next cursor; None when nothing was). Visits of the last
+    GAP_CAP before `after_time` are read again, so their time on the page is measured to
+    the next visit. Only the History file's rows past the cursor are fetched (its indexes on
+    the visit id and time), so a run with nothing new reads next to nothing."""
     sweep()
+    ff = src.browser == "firefox"
+    since = after_id is not None and after_time is not None
+    where = _SINCE["firefox" if ff else "chromium"] if since else ""
+    args = (after_id, after_time - int(GAP_CAP * 1e6)) if since else ()
     with _copy(src.path) as con:
-        if src.browser == "firefox":
-            rows = [(t, 0, u, ti, None) for t, ty, u, ti in con.execute(FIREFOX_SQL)
-                    if ty not in FF_SKIP]
+        if ff:
+            raw_rows = [(t, 0, u, ti, None, i, ty not in FF_SKIP) for t, ty, u, ti, i
+                        in con.execute(FIREFOX_SQL.format(where=where), args)]
         else:
-            rows = [(t, d, u, ti, k) for t, d, tr, u, ti, k in con.execute(CHROMIUM_SQL)
-                    if not isinstance(tr, int) or tr & 0xFF not in SUBFRAME]
+            raw_rows = [(t, d, u, ti, k, i, not isinstance(tr, int) or tr & 0xFF not in SUBFRAME)
+                        for t, d, tr, u, ti, k, i
+                        in con.execute(CHROMIUM_SQL.format(where=where), args)]
+    ids = [r[5] for r in raw_rows if isinstance(r[5], int)]  # a frame moves the cursor too
     late = datetime.now(UTC) + timedelta(days=1)
-    rows = [r for r in rows if _sane(src.browser, r[0], late)]
+    rows = [r[:6] for r in raw_rows if r[6] and _sane(src.browser, r[0], late)]
     rows = [(t, d if isinstance(d, int) else 0, *rest) for t, d, *rest in rows]
     out = []
-    for n, (raw, dur, url, title, term) in enumerate(rows):
+    for n, (raw, dur, url, title, term, _) in enumerate(rows):
         gap = (rows[n + 1][0] - raw) / 1e6 if n + 1 < len(rows) else GAP_CAP
         secs = min(max(gap, 0.0), GAP_CAP)
         if dur and dur > 0:
             secs = min(secs, dur / 1e6)
         out.append(Visit(to_time(src.browser, raw), url or "", title or "", secs,
-                         term or None, src.key))
-    return out, (rows[-1][0] if rows else None)
+                         term or None, src.key,
+                         native=f"{raw}:{hashlib.sha1((url or '').encode()).hexdigest()[:16]}"))
+    return out, max((r[0] for r in rows), default=None), max(ids, default=None)
 
 
 def scan(sources: list[Source], settings: privacy.Settings,

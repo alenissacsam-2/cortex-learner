@@ -565,7 +565,8 @@ def test_past_history_scan_then_import_mocked(app, home, monkeypatch):
     assert not s["history"]["done"]
     call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default"]})
     job = wait_job(app, seen)
-    assert runs == [(["chrome/Default"], {"takeout": None})]  # no `since`: all past history
+    assert [(k, {x: kw[x] for x in kw if x != "step"}) for k, kw in runs] == [
+        (["chrome/Default"], {"takeout": None, "summaries": False})]  # no `since`: all of it
     c = job["result"]["counts"]
     assert (c["days_written"], c["private_pages"], c["dropped"], c["local_model_used"]) == \
         (5, 5, 1, False)
@@ -596,10 +597,10 @@ def test_safe_keeps_numbers_and_dates_only():
     assert got == {"n": 3, "ok": True, "day": "2026-11-17", "t": "2026-11-17T10:00:00Z"}
 
 
-def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkeypatch):
-    """browse.auto_import_hours in the app: the ordinary import job over the chosen browsers,
-    only after a first import, not with 0, not while a job runs, the browse lock is held or
-    the in-app receiver (whose Processor does the same check) runs."""
+def test_the_live_import_reads_new_history_quietly(app, vault, home, monkeypatch):
+    """The app's live import (every 10 minutes): no job, only the browsers imported before,
+    only after a first import, not with browse.auto_import_hours 0, not while a job runs or
+    the browse lock is held, not without the search model. Whatever the last import's age."""
     from cortex import semantic
     from cortex.browse import build, sites, sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
@@ -628,11 +629,6 @@ def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkey
     wait_job(app)
     with sites.busy(_vault(vault)):
         assert app.auto_import() is None  # a forget or deepen holds the browse lock
-    app.receiver.srv = object()
-    try:
-        assert app.auto_import() is None  # the in-app receiver's Processor does it
-    finally:
-        app.receiver.srv = None
     cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
     assert app.auto_import() is None
     cfg.write_text("browse: {}\n", encoding="utf-8")
@@ -641,9 +637,11 @@ def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkey
     monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": False})
     assert app.auto_import() is None  # no search model: the job would only stop at once
     monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": True})
-    assert app.auto_import()["job"] == "Importing new history"
-    job = wait_job(app)
-    assert job["section"] == "browse" and job["result"]["ok"] and runs == [["comet/Default"]]
+    state.write_text(json.dumps({"last_run": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                 "sources": {"comet/Default": {"cursor": 1}}}), encoding="utf-8")
+    got = app.auto_import()  # a minute-old import: live all the same, and no job of its own
+    assert got["live"]["sources"] == 1 and runs == [["comet/Default"]]
+    assert app.jobs.cur.name == "Something else"
 
 
 def test_an_untick_at_import_keeps_the_profile_out_of_automatic_imports(app, vault, home,

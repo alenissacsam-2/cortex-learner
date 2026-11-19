@@ -1033,7 +1033,7 @@ def test_local_llm_writes_the_summary_once(vault, browsers):
     # second review: for a public page the runner hears the owner's hub names only, never a
     # title or a site; page titles go to it only for the private pages (see the test below)
     hub_calls = [s for s in r.seen if set(s) <= {"Chess hub", "Cooking hub"}]
-    assert hub_calls == [["Chess hub", "Cooking hub"], ["Chess hub"]]
+    assert sorted(hub_calls) == [["Chess hub"], ["Chess hub", "Cooking hub"]]
     day = (vault / "browse" / "browse-2026-11-09.md").read_text(encoding="utf-8")
     assert "What I was into: Mostly chess study." in day
     assert "HEALTHMARKER" not in day
@@ -1402,7 +1402,7 @@ def test_cli_import_without_a_vault():
 def test_cli_import_progress_summary_and_model_hint(vault, machine):
     out = cli("browse", "import", "--vault", str(vault))
     assert out.exit_code == 0, out.output
-    assert "chrome/Default: 16 visits read, 16 new" in out.output
+    assert "chrome/Default: 16 visits read, 13 new" in out.output  # 3 dropped, never saved
     assert "firefox/ab12.default-release: 1 visits read, 1 new" in out.output
     assert "embedding model not downloaded" in out.output
     assert "To fix: cortex model download" in out.output
@@ -1448,25 +1448,24 @@ def test_a_locked_source_is_reported_skipped_and_redone_next_time(vault, machine
     assert "chrome/Default: 16 visits read" in out.output and "1 source(s) not read" in out.output
     state = build.load_state(Vault(vault))
     assert "edge/Default" not in state["sources"] and "chrome/Default" in state["sources"]
-    assert state["pending"] == "2026-11-09"
     assert list((tmp_path / "tmp").iterdir()) == []
-    assert "rebuilds from 2026-11-09" in cli("browse", "status", "--vault", str(vault)).output
     monkeypatch.setattr(sources.shutil, "copyfile", real)  # the browser closed
     rep = build.run(Vault(vault), sources.discover(*machine), S, tz=UTC)
-    assert rep["days_from"] == "2026-11-09" and build.load_state(Vault(vault))["pending"] is None
+    # the source kept no cursor, so it is read whole and its days are made again
+    assert rep["days_from"] == "2026-11-09" and rep["visits_new"] == 1
     assert "edge/Default" in build.load_state(Vault(vault))["sources"]
 
 
 def test_any_error_in_one_source_never_stops_the_others(vault, browsers):
-    real = sources.read
+    real = sources.read_since
 
-    def odd(src):
+    def odd(src, *a):
         if src.browser == "edge":
             raise ValueError("odd file")
-        return real(src)
+        return real(src, *a)
     seen = []
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(sources, "read", odd)
+        mp.setattr(sources, "read_since", odd)
         rep = run_import(vault, browsers, progress=lambda *a: seen.append(a))
     assert rep["sources"] == 3 and rep["sources_failed"] == 1
     assert [a[0] for a in seen if a[3]] == ["edge/Default"]
@@ -1489,8 +1488,12 @@ def test_ctrl_c_leaves_whole_pages_no_state_and_no_temp_copy(vault, machine, mon
     assert not (vault / build.STATE).exists()
     assert list((tmp_path / "tmp").iterdir()) == []
     assert not [p for p in vault.rglob("*.tmp")]
-    page = vault / "browse" / "private" / "browse-private-2026-11-09.md"
+    page = vault / "browse" / "private" / "browse-private-2026-11-10.md"  # the newest first
     assert page.read_text(encoding="utf-8").startswith("---")
+    # what was read is saved: the next run reads nothing again and makes the day left
+    rep = build.run(Vault(vault), sources.discover(*machine), S, tz=UTC)
+    assert rep["visits_new"] == 0 and rep["days_from"] == "2026-11-09"
+    assert (vault / "browse" / "private" / "browse-private-2026-11-09.md").is_file()
 
 
 def test_cli_status_shows_mode_and_last_read(vault, machine):
