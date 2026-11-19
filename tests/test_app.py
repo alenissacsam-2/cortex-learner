@@ -170,7 +170,10 @@ def test_get_never_changes_anything(app, vault, home, fakes):
     for path in [*app.get, *app.post]:
         code = call(app, "GET", path)[0]
         assert code in (200, 405), path
-    assert snapshot(home, vault) == before
+    after = snapshot(home, vault)
+    # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
+    after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
+    assert after == before
     assert app.jobs.cur is None and not app.stop.is_set()
     assert fakes == []  # A1/A10: no page load runs a program (no schtasks query any more)
 

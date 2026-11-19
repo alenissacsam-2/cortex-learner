@@ -21,7 +21,8 @@ from cortex.vault import Note
 
 S, L, C = Audience.SKIP, Audience.LOCAL, Audience.CLOUD
 # The spec's §2 table, written out. A cell is True/False, a condition, or {kind: condition}.
-# Conditions: "private_flag+tty" (both), "cloud_opt_in", "sw:<switch>" (Chat's switch on).
+# Conditions: "private_flag", "private_flag+tty" (both), "cloud_opt_in", "sw:<switch>"
+# (Chat's switch on).
 MATRIX = {
     "mcp":         {S: False, L: False,              C: True},
     "dashboard":   {S: False, L: False,              C: True},
@@ -33,6 +34,7 @@ MATRIX = {
                     C: {"note": "sw:notes", "chat": "sw:chats", "browse": "sw:browsing",
                         "study": "sw:notes"}},
     "cloud_model": {S: False, L: False,              C: "cloud_opt_in"},
+    "app_home":    {S: False, L: "private_flag",     C: True},
 }
 SWITCHES = ("notes", "chats", "browsing", "private")
 SWITCH_SETS = [None, *(dict(zip(SWITCHES, bits, strict=True))
@@ -43,6 +45,8 @@ def _expected(cell, kind, switches, private_flag, tty, cloud_opt_in) -> bool:
     cell = cell[kind] if isinstance(cell, dict) else cell
     if isinstance(cell, bool):
         return cell
+    if cell == "private_flag":
+        return private_flag
     if cell == "private_flag+tty":
         return private_flag and tty
     if cell == "cloud_opt_in":
