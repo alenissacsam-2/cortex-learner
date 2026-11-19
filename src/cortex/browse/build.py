@@ -267,9 +267,10 @@ def vet(vault: Vault, items: list[Item], settings: Settings, runner, budget, *,
 
 # ---- topics -------------------------------------------------------------------------------
 
-def hubs(vault: Vault, embed) -> tuple[list[str], np.ndarray, dict[str, str]]:
+def hubs(vault: Vault, embed, save: bool = True) -> tuple[list[str], np.ndarray, dict[str, str]]:
     """(hub ids, unit member centroids, hub titles) for hubs with enough members; the root
-    topic map is left out (it is not a topic)."""
+    topic map is left out (it is not a topic). `save=False` (a dry run) keeps the embedded
+    heads out of the vault's vector cache."""
     from cortex import semantic
     from cortex.catalog import Catalog
     from cortex.index import Index
@@ -280,7 +281,7 @@ def hubs(vault: Vault, embed) -> tuple[list[str], np.ndarray, dict[str, str]]:
     # only the hub members' heads: the import never pays for embedding every page it wrote
     need = set().union(*topics.members(idx, t).values())
     ids, sums, _ = topics.centroids(idx, t, semantic.vectors(idx, embed, dim, budget=0.0,
-                                                             only=need))
+                                                             only=need, save=save))
     keep = [n for n, h in enumerate(ids) if h != topics.ROOT]
     sums = sums[keep]
     unit = sums / np.maximum(np.linalg.norm(sums, axis=1, keepdims=True), 1e-9)
@@ -863,7 +864,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         report.update(c)
         if embed is not None:
             tell("topics: reading the topic hubs")
-        hub_ids, unit, titles = hubs(vault, embed) if embed is not None else ([], None, {})
+        hub_ids, unit, titles = (hubs(vault, embed, save=not dry_run) if embed is not None
+                                 else ([], None, {}))
         tell(f"topics: placing {len(items)} visits under {len(hub_ids)} topic hubs")
         where = place(items, embed, hub_ids, unit, tell)
         for i in items:

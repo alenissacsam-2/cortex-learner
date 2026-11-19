@@ -393,7 +393,6 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
                 if not isinstance(w, dict):
                     unknown += n
                     continue
-                unknown += _count(w.get(sites.UNKNOWN)) or 0  # kept by a rebuild, no source
                 # ids are source keys ("comet/Default"); a bare browser name is accepted too
                 got = [_count(c) for k, c in w.items()
                        if isinstance(k, str) and k.split("/")[0] == browser]

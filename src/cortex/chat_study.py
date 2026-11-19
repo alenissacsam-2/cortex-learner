@@ -7,6 +7,7 @@ the passages and the local model answer it."""
 
 from __future__ import annotations
 
+import calendar
 import re
 from collections import Counter
 from datetime import date, datetime, time, timedelta
@@ -139,9 +140,20 @@ def _ahead(text: str, got, today: date):
         return got
     if _DAYNAME.search(phrase):
         return lo + timedelta(7), hi + timedelta(7), got[2]
-    try:  # a day or month with no year: this year's, which _day/_month put a year back
-        return lo.replace(year=lo.year + 1), hi.replace(year=hi.year + 1), got[2]
-    except ValueError:  # 29 Feb into a common year
+    # a day or month with no year: this year's, which _day/_month put a year back
+    if lo == hi:  # a day: next year's; 29 Feb the next 29 Feb
+        for y in range(lo.year + 1, lo.year + 5):
+            if (lo.month, lo.day) != (2, 29) or calendar.isleap(y):
+                return lo.replace(year=y), lo.replace(year=y), got[2]
+        return got
+    y = lo.year + 1
+    if lo.day == 1 and (lo.year, lo.month) == (hi.year, hi.month) \
+            and hi.day == calendar.monthrange(hi.year, hi.month)[1]:  # a whole month
+        return lo.replace(year=y), hi.replace(year=y, day=calendar.monthrange(y, hi.month)[1]), \
+            got[2]
+    try:
+        return lo.replace(year=y), hi.replace(year=hi.year + 1), got[2]
+    except ValueError:  # a range ending 29 Feb into a common year
         return got
 
 

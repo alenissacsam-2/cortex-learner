@@ -1420,6 +1420,16 @@ def test_cli_import_dry_run_writes_nothing(vault, machine):
     assert not (vault / build.STATE).exists()
 
 
+def test_a_dry_run_with_a_search_model_writes_nothing(vault, browsers):
+    """The topic hubs embed their members' heads; a dry run must not save those vectors."""
+    stamp = lambda: {p: (b, (vault / p).stat().st_mtime_ns)  # noqa: E731
+                     for p, b in files(vault).items()}
+    before = stamp()
+    r = run_import(vault, browsers, dry_run=True)
+    assert r["dry_run"] and r["kept"]  # hubs were embedded and visits placed
+    assert stamp() == before
+
+
 def test_a_locked_source_is_reported_skipped_and_redone_next_time(vault, machine, monkeypatch,
                                                                   tmp_path):
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path / "tmp"))
