@@ -17,7 +17,8 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
-from cortex import ask, localllm, semantic, taint
+from cortex import ask, chat_study, localllm, semantic, taint
+from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
 from cortex.index import STOPWORDS
 from cortex.vault import Vault
 
@@ -485,9 +486,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     found: list = []
     parts: list = []
     # a site list keeps to its own dates: a follow-up's borrowed ones are for passages only
-    if (listed := site_list(vault, text, got if said is text else None,
-                            s["sources"])) is not None:
+    own = got if said is text else None
+    if (listed := site_list(vault, text, own, s["sources"])) is not None:
         emit({"t": "step", "s": "Counting the sites you visited" + span})
+        parts.append(listed)
+        emit({"t": "tok", "s": listed})
+    elif (asked := chat_study.kind(text, own)) is not None:  # from the learner model, no model
+        emit({"t": "step", "s": chat_study.STEP[asked] + (span if asked == "range" else "")})
+        listed = chat_study.answer(vault, asked, own, today)
         parts.append(listed)
         emit({"t": "tok", "s": listed})
     else:
