@@ -694,18 +694,21 @@ def test_old_names_are_hidden_aliases():
 
 def test_ask_prints_the_answer_sources_and_model(vault, monkeypatch):
     from cortex import ask, localllm
-    monkeypatch.setattr(ask, "ask", lambda v, q: {
+    seen = []
+    monkeypatch.setattr(ask, "ask", lambda v, q, private: seen.append(private) or {
         "answer": "Use two pointers [1].", "model": "ollama gemma3:2b at 127.0.0.1:11434",
         "sources": [{"n": 1, "path": "concepts/two-pointers.md", "title": "Two pointers"}]})
     out = run("ask", "how do I pair numbers?", "--vault", vault).output
     assert out.index("Use two pointers [1].") < out.index("[1] concepts/two-pointers.md")
     assert "ollama gemma3:2b" in out
-    monkeypatch.setattr(ask, "ask", lambda v, q: {"error": "no_local_model",
+    run("ask", "x", "--private", "--vault", vault)
+    assert seen == [False, True]  # private notes and browsing only with --private
+    monkeypatch.setattr(ask, "ask", lambda v, q, private: {"error": "no_local_model",
                                                   "message": "Start Ollama (recommended)."})
     r = run("ask", "x", "--vault", vault, ok=False)
     assert r.exit_code == 1 and "Start Ollama" in r.output
 
-    def cloud(v, q):
+    def cloud(v, q, private):
         raise ValueError(localllm._CLOUD)
     monkeypatch.setattr(ask, "ask", cloud)
     r = run("ask", "x", "--vault", vault, ok=False)
