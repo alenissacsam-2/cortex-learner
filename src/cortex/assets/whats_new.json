@@ -5,7 +5,7 @@
       "Status warns when your browsing history has not been imported for a while, with Import new history now.",
       "Chat lists the sites you visited and sums up a day or week in about a second, even on a big history.",
       "Browser profiles you untick in the history list stay unticked in every automatic import.",
-      "Chat understands more dates (\"on Monday\", \"last night\", \"the last 3 days\") and a day starts at 04:00, as in Today.",
+      "Chat understands more dates (\"on Monday\", \"last night\", \"the last 3 days\", \"what's due on Friday?\") and a day starts at 04:00, as in Today.",
       "Sites filed under a category you set to Don't save never show in Chat's site lists or summaries."
     ],
     "do": [
