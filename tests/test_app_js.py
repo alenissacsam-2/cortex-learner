@@ -496,7 +496,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["updBefore"] == {"rows": ["Cortex 0.1.0"], "asked": False}
     assert out["avail"] == {"rows": ["Cortex 0.1.0", "Cortex 0.2.0 is available"],
                             "link": ["https://github.com/o/r/releases/tag/v0.2.0",
-                                     "noopener noreferrer", "_blank", "What’s new"],
+                                     "noopener noreferrer", "_blank", "Release notes"],
                             "buttons": ["Update now"]}
     assert out["updConfirm"] == {
         "title": "Update Cortex?", "ok": "Update now", "applied": False,

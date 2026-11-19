@@ -446,8 +446,7 @@ def site_list(vault: Vault, text: str, got, sources: dict,
     if unknown:
         notes.append(f"{unknown} visit{'s' * (unknown != 1)} in this range were imported "
                      "before Cortex kept which browser they came from, so they are left out. "
-                     "The next history import (Browsing, or the automatic one) records it for "
-                     "the days your browsers still hold.")
+                     "Days your browsers no longer fully hold cannot get it back.")
     stored = min((d for d in days if isinstance(days[d], dict)), default=None)
     if stored and lo < stored:
         notes.append(f"Cortex has browsing from {stored} on; browsers keep about 90 days of "

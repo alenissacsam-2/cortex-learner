@@ -446,7 +446,7 @@
         [h('p', { class: 'ink-2', text: `Cortex will download the update${mb}, close, and reopen when it's done. AI apps connected to Cortex may need a restart.` })],
         () => job('/api/update/apply', {}));
       out.push(row(`Cortex ${r.latest} is available`, null, r.command ? 'Run this in a terminal to update:' : null,
-        [ext(r.notes_url, 'What’s new'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
+        [ext(r.notes_url, 'Release notes'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
       if (r.command) {
         out.push(h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: r.command }),
           copyBtn(() => r.command, 'Copy failed; select the command and copy it.'))));
