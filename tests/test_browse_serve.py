@@ -487,6 +487,49 @@ def test_session_end_writes_the_private_page_and_empties_the_inbox(srv, vault, h
     assert st["queued_records"] == 0 and st["last_processed"] and st["processing"] is False
 
 
+def _two_found(vault, monkeypatch, read):
+    from cortex.browse import sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source("chrome", "Default", vault / "a"),
+        sources.Source("comet", "Default", vault / "b")])
+    monkeypatch.setattr(sources, "read", lambda s: (read.append(s.key), ([], None))[1])
+
+
+def test_session_end_import_reads_only_the_sources_imported_before(srv, vault, home,
+                                                                    monkeypatch):
+    """No import the user did not click reads a browser or profile they never imported."""
+    from cortex import semantic
+    from cortex.browse import build
+    read = []
+    _two_found(vault, monkeypatch, read)
+    monkeypatch.setattr(semantic, "load_embedder", lambda download=False: None)
+    (vault / build.STATE).parent.mkdir(parents=True, exist_ok=True)
+    (vault / build.STATE).write_text(json.dumps({"sources": {"comet/Default": {"cursor": 1}}}),
+                                     encoding="utf-8")
+    p = srv.processor
+    p.clock = Clock()
+    call(srv, "POST", "/v1/batch", {"records": [], "session_end": True})
+    p.clock.t += bs.DEBOUNCE_S
+    assert p.tick() and read == ["comet/Default"]
+
+
+def test_session_end_with_none_imported_before_reads_no_history_but_the_inbox(
+        srv, vault, home, monkeypatch):
+    from cortex import semantic
+    read = []
+    _two_found(vault, monkeypatch, read)
+    monkeypatch.setattr(semantic, "load_embedder", lambda download=False: None)
+    p = srv.processor
+    p.clock = Clock()
+    call(srv, "POST", "/v1/batch", {"records": [rec(title="Fourier series notes")],
+                                    "session_end": True})
+    p.clock.t += bs.DEBOUNCE_S
+    assert p.tick() and read == []
+    page = vault / "browse" / "private" / f"browse-private-{DAY}.md"
+    assert "Fourier series notes" in page.read_text(encoding="utf-8")
+    assert inbox(vault) == []
+
+
 def test_extension_js_parses_and_session_logic(tmp_path):
     node = shutil.which("node")
     if node is None:
@@ -522,7 +565,7 @@ def test_processing_prints_counts_only_progress(tmp_path, monkeypatch):
     lines = []
     p = bs.Processor(bs.Vault(tmp_path), clock=lambda: 100.0, say=lines.append)
 
-    def fake(v, progress=None):
+    def fake(v, progress=None, srcs=None):
         progress("comet/Default", 12, 5, None)
         return {"days_from": "2026-11-01", "private_written": 3, "kept": 9, "private": 2,
                 "dropped": 1, "model": True}
