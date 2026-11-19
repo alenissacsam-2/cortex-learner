@@ -32,9 +32,9 @@ def _seen() -> tuple[int, ...] | None:
 def record(version: str | None = None) -> None:
     """Remember `version` (the running one by default) as shown."""
     from cortex import taint
-    app = status.config().get("app")
-    app = app if isinstance(app, dict) else {}
-    taint.write_config({"app": {**app, "whats_new_seen": version or update.current()}})
+    seen = version or update.current()
+    taint.write_config(lambda cfg: {"app": {
+        **(cfg["app"] if isinstance(cfg.get("app"), dict) else {}), "whats_new_seen": seen}})
 
 
 # the last version without this card: an existing user with no record updated from it or earlier

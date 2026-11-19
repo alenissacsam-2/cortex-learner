@@ -1,6 +1,6 @@
 """Check for updates and fetch the new installer, only when the user clicks (docs/INSTALL.md).
 
-Stdlib only. `latest` asks GitHub for the latest release of `cli.REPO` and sends nothing about
+Stdlib only. `latest` asks GitHub for the latest release of `REPO` and sends nothing about
 the user (a generic User-Agent). `download` takes only that repo's release assets, follows
 redirects only to GitHub's download hosts, caps the size and checks the SHA-256 that the release
 publishes. `launch` starts the new CortexSetup.exe with `--update`; it waits for the app to exit.
@@ -20,7 +20,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlsplit
 
-from cortex.cli import CHECKOUT, REPO
+REPO = "alenissacsam-2/cortex-learner"  # the GitHub repo that holds the plugin marketplace
+CHECKOUT = Path(__file__).resolve().parents[2]  # the source checkout of an editable install
 
 API = "https://api.github.com"
 EXE = "CortexSetup.exe"

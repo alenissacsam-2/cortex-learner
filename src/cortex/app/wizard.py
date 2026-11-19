@@ -342,7 +342,7 @@ def pull(job, id: str, runner: str) -> dict:
 
 def test_and_save(job, id: str, runner: str) -> dict:
     """Test the model with a synthetic prompt; on success turn it on in config."""
-    from cortex import cli
+    from cortex import taint
     m = model(id)
     if runner not in ("ollama", "lmstudio"):
         raise ValueError("runner must be ollama or lmstudio")
@@ -356,6 +356,8 @@ def test_and_save(job, id: str, runner: str) -> dict:
         if runner_state(runner) == "stopped":
             raise ValueError(STOPPED.format(RUNNERS[runner])) from None
         raise
-    cli._write_config(localllm=local)
+    taint.write_config(lambda cfg: {"localllm": {  # merged under the lock
+        **(cfg["localllm"] if isinstance(cfg.get("localllm"), dict) else {}),
+        "enabled": True, "model": name, "runner": runner}})
     job.say(f"saved: localllm on, {name} ({runner})")
     return {**out, "lines": [*out["lines"], f"saved: local model on, {name}"]}
