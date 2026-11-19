@@ -12,6 +12,7 @@ dependencies = [
     "typer",
     "fastembed>=0.9.1",
     "numpy",
+    "truststore>=0.10.5",
 ]
 
 [project.scripts]

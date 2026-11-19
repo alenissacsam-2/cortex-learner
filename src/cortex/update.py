@@ -20,6 +20,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlsplit
 
+from cortex._proc import proxy_env
+
 REPO = "alenissacsam-2/cortex-learner"  # the GitHub repo that holds the plugin marketplace
 CHECKOUT = Path(__file__).resolve().parents[2]  # the source checkout of an editable install
 
@@ -227,6 +229,7 @@ def launch(exe: Path, app_pid: int, install: Path | None = None) -> None:
         args += ["--dir", str(install)]
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    # PyInstaller's temp-folder variables must not reach the new installer (as child_env does)
+    # PyInstaller's temp-folder variables must not reach the new installer (as child_env does);
+    # the system proxy does, for its uv (which reads only HTTPS_PROXY)
     subprocess.Popen(args, creationflags=flags, close_fds=True,
-                     env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+                     env={**proxy_env(), "PYINSTALLER_RESET_ENVIRONMENT": "1"})

@@ -301,6 +301,7 @@ dependencies = [
     { name = "numpy" },
     { name = "python-ulid" },
     { name = "ruamel-yaml" },
+    { name = "truststore" },
     { name = "typer" },
 ]
 
@@ -318,6 +319,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "python-ulid" },
     { name = "ruamel-yaml" },
+    { name = "truststore", specifier = ">=0.10.5" },
     { name = "typer" },
 ]
 

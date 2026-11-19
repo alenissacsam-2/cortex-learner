@@ -831,8 +831,9 @@
       });
     };
     const skill = board('Claude Desktop skill', {},
-      row('cortex-skill.zip', d.skill_zip_found ? d.skill_zip : null, 'Skills cannot be installed by file. In Claude Desktop, open Settings → Capabilities → Skills and upload this zip; then /cortex works in Chat.',
-        [d.skill_zip_found ? btn('Open folder', () => post('/api/open', { what: 'skill_zip' }), null, { 'aria-label': 'Open folder: Claude Desktop skill' }) : ext(d.skill_url, 'Download cortex-skill.zip')]));
+      row('cortex-skill.zip', d.skill_zip_found ? d.skill_zip : null, 'Skills cannot be installed by file. In Claude Desktop, open Settings → Capabilities. First turn on Code execution and file creation on that page, then upload this zip under Skills; /cortex then works in Chat.',
+        d.skill_zip_found ? [btn('Open folder', () => post('/api/open', { what: 'skill_zip' }), null, { 'aria-label': 'Open folder: Claude Desktop skill' }),
+          copyBtn(() => d.skill_zip, 'Copy failed; select the path and copy it.')] : [ext(d.skill_url, 'Download cortex-skill.zip')]));
     put('connect', board('AI apps', { note: `${found} found · ${on} connected`, btn: ['Apply…', apply] }, ...rows,
       h('div', { class: 'foot', text: d.vault ? 'Apply shows the exact files first. Backups are named <file>.cortex-<date>.bak, next to each file.' : 'Set up a vault first (Setup); each entry points at it.' })), skill);
   }
@@ -1005,7 +1006,8 @@
       h('div', { class: 'pad' }, h('strong', { text: `Then, in ${EXT_BROWSERS}` }),
         h('ol', { class: 'how' }, extPage(),
           h('li', { text: 'Turn on Developer mode.' }),
-          h('li', {}, 'Click Load unpacked and choose the folder that opened: ', h('code', { text: x.folder })),
+          h('li', {}, 'Click Load unpacked and choose the folder that opened: ', h('code', { text: x.folder }),
+            x.folder ? copyBtn(() => x.folder, 'Copy failed; select the folder path and copy it.') : null),
           h('li', { text: 'Open the Cortex capture popup, paste the key and press Save and test.' })))];
   }
 
@@ -1390,7 +1392,8 @@
     const sConnect = step('connect', 'Connect AI apps', done.connect, names(on), [
       row(todo.length ? `Found: ${names(todo)}` : 'No other AI app found', null,
         'This is what lets Claude and your other AI apps know you. Cortex adds itself to each app’s settings; you see the exact files first, and each one is backed up.',
-        todo.length ? [btn(`Connect ${names(todo)}`, connectFound, 'btn lit', { disabled: !d.vault.done })] : null),
+        todo.length ? [btn(`Connect ${names(todo)}`, connectFound, 'btn lit', { disabled: !d.vault.done })]
+          : on.length ? null : [ext('https://claude.ai/download', 'Get Claude Desktop')]),
       row('Choose apps one by one', null, 'Add or remove single apps, and see what each change does.', [btn('Open Connect AI apps', () => show('connect', true))])], first);
 
     const sHistory = step('history', 'Add your history (optional)', done.history, 'added',

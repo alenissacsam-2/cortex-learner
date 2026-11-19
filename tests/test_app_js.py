@@ -1219,3 +1219,13 @@ def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_p
     assert out["hours"] == [{"hours": 12}, {"hours": 0}]
     assert out["double"] == ["Stop", False, 1]
     assert out["later"] == ["Send", True]
+
+
+def test_setup_texts_copy_paths_skill_switch_and_get_claude_desktop():
+    """DEPS-UX-AUDIT A8, A9, A11: Copy beside the extension folder and the skill zip path, the
+    Code execution switch named before the skill upload, and a Get Claude Desktop link (an
+    ordinary external link) when no AI app is found."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "copyBtn(() => x.folder," in js and "copyBtn(() => d.skill_zip," in js
+    assert "First turn on Code execution and file creation on that page, then upload" in js
+    assert "ext('https://claude.ai/download', 'Get Claude Desktop')" in js
