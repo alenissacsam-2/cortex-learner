@@ -593,6 +593,57 @@ def test_a_job_the_page_did_not_start_shows_with_cancel(root_committed, tmp_path
     assert out["cancelled"]
 
 
+UNTICK = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'browse').fire('click');
+    await tick();
+    const boxes = () => $('browse').querySelectorAll('input').filter((e) => e.id.startsWith('h-browse-'));
+    out.checked = boxes().map((b) => [b.id, b.checked]);
+    out.hint = $('browse').querySelectorAll('.help').some((p) => p.textContent === 'Unticked profiles are also left out of the automatic imports.');
+    const imp = () => $('browse').querySelectorAll('button').find((b) => b.textContent === 'Import my past history').fire('click');
+    imp();
+    await tick();
+    const chrome = boxes().find((b) => b.id === 'h-browse-chrome_Default');
+    chrome.checked = true;
+    chrome.fire('change');
+    imp();
+    await tick();
+    out.posts = fetched.filter((f) => f.path === '/api/browse/import').map((f) => f.body);
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_saved_unticks_start_unticked_and_the_import_sends_them(root_committed, tmp_path,
+                                                                 monkeypatch):
+    """browse.skip_profiles (sent as `skip` per history source) starts unticked; Import sends
+    the ticked keys as sources and the unticked as skip; ticking again moves it back."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/browse"]["history"] = {"available": True, "imported": None, "scanned": False,
+        "sources": [{"key": "chrome/Default", "browser": "chrome", "profile": "Default",
+                     "skip": True},
+                    {"key": "comet/Default", "browser": "comet", "profile": "Default",
+                     "skip": False}]}
+    out = _run(node, tmp_path, "untick", UNTICK, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["checked"] == [["h-browse-chrome_Default", False],
+                              ["h-browse-comet_Default", True]]
+    assert out["hint"]
+    assert out["posts"] == [
+        {"sources": ["comet/Default"], "skip": ["chrome/Default"], "from": "browse"},
+        {"sources": ["chrome/Default", "comet/Default"], "skip": [], "from": "browse"}]
+
+
 # ---- every control, clicked: the QA sweep (A3, B5, B6) ----------------------------------------
 
 SWEEP = HARNESS[:HARNESS.index("const out = {};")] + r"""

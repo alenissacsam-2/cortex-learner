@@ -49,6 +49,7 @@ class Settings:
     skip_categories: tuple[str, ...] | None = None
     private_mcp: bool = False  # allow `cortex mcp --private` (local models only)
     cloud_processing: bool = False  # a cloud model may process cloud-audience browsing
+    skip_profiles: tuple[str, ...] = ()  # source keys unticked in the app: no automatic import
 
     def __post_init__(self):
         if self.skip_categories is None:
@@ -95,6 +96,9 @@ def load_settings(config: dict | None = None) -> Settings:
                     deny=domains("deny_domains"), allow=domains("allow_domains"),
                     private=domains("private_domains"),
                     visible_to_claude=b.get("visible_to_claude") is True,
+                    skip_profiles=tuple(sorted({x for x in b["skip_profiles"]
+                                                if isinstance(x, str)}))
+                    if isinstance(b.get("skip_profiles"), list) else (),
                     browsers=tuple(sorted({str(x).strip().lower() for x in (
                         [b["browsers"]] if isinstance(b.get("browsers"), str)
                         else b.get("browsers") if isinstance(b.get("browsers"), list) else [])

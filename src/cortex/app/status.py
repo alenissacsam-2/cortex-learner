@@ -280,8 +280,9 @@ def history(root: Path | None, scanned: dict) -> dict:
     """The browser profiles on this computer (found by file, never read here), with the counts
     of the last scan: the "Import my past history" step."""
     try:
-        from cortex.browse import build, sources
+        from cortex.browse import build, load_settings, sources
         found = sources.discover()
+        skip = load_settings().skip_profiles
     except (ImportError, OSError):
         return {"available": False, "sources": [], "imported": None}
     except Exception:  # noqa: BLE001
@@ -298,7 +299,8 @@ def history(root: Path | None, scanned: dict) -> dict:
             log.exception("browse state read failed")
     return {"available": True, "imported": imported, "scanned": bool(scanned),
             "sources": [{"key": s.key, "browser": s.browser, "profile": s.profile,
-                         **safe(scanned.get(s.key, {}))} for s in found]}
+                         "skip": s.key in skip, **safe(scanned.get(s.key, {}))}
+                        for s in found]}
 
 
 def imports(root: Path | None = None) -> dict:

@@ -126,10 +126,12 @@ def discover(local: Path | None = None, roaming: Path | None = None, *,
 
 
 def chosen(settings, found: list[Source] | None = None) -> list[Source]:
-    """The sources `browse.browsers` allows (every one found when it is empty)."""
+    """The sources `browse.browsers` allows (every one found when it is empty), minus the
+    profiles unticked in the app (`browse.skip_profiles`)."""
     found = discover() if found is None else found
     want = getattr(settings, "browsers", ())
-    return [s for s in found if not want or s.browser in want]
+    skip = getattr(settings, "skip_profiles", ())
+    return [s for s in found if (not want or s.browser in want) and not (skip and s.key in skip)]
 
 
 def pick(sources: list[Source], browser: str | None = None,
