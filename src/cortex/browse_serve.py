@@ -179,7 +179,7 @@ def local_runner(budget_s: float | None = None):
     if not localllm.enabled():
         return None, None
     try:
-        runner = localllm.find()
+        runner = localllm.find(background=True)
     except ValueError:  # a non-loopback localllm.url is refused
         return None, None
     if runner is None:

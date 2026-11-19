@@ -117,6 +117,18 @@ def test_model_choice_rules(serve, monkeypatch):
     assert localllm.find({"localllm": {"model": "mistral:7b"}}).model == "mistral:7b"
 
 
+def test_background_work_asks_for_its_own_model_first(serve, monkeypatch):
+    o = serve({("GET", "/api/tags"): tags("qwen3.5:2b", "qwen3.5:9b")})
+    monkeypatch.setattr(localllm, "_PROBES", [("ollama", o.base, "/api/tags")])
+    both = {"localllm": {"model": "qwen3.5:2b", "background_model": "qwen3.5:9b"}}
+    assert localllm.find(both).model == "qwen3.5:2b"  # Chat and ask: the main model
+    assert localllm.find(both, background=True).model == "qwen3.5:9b"
+    gone = {"localllm": {"model": "qwen3.5:2b", "background_model": "llama3:70b"}}
+    assert localllm.find(gone, background=True).model == "qwen3.5:2b"  # not held: falls back
+    assert localllm.find({"localllm": {"model": "qwen3.5:2b"}}, background=True).model \
+        == "qwen3.5:2b"
+
+
 def test_find_uses_loaded_config_when_none(serve, monkeypatch):
     o = serve({("GET", "/api/tags"): tags("a:3b")})
     monkeypatch.setattr(localllm, "_PROBES", [])

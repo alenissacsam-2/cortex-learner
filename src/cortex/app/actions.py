@@ -247,7 +247,7 @@ def history_import(job, root: Path, keys: set[str], takeout: list | None = None)
     runner = budget = None
     if localllm.enabled():
         try:
-            runner = localllm.find()
+            runner = localllm.find(background=True)
         except ValueError:  # a non-loopback localllm.url is refused
             runner = None
         if runner is not None:

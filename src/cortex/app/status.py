@@ -126,7 +126,8 @@ def lms_path() -> str | None:
 def llm() -> dict:
     c = _llm_cfg()
     out = {"enabled": c.get("enabled") is True, "runner": c.get("runner") or "auto",
-           "model": c.get("model") or None, "lms": lms_path(), "server_port": None,
+           "model": c.get("model") or None, "background_model": c.get("background_model") or None,
+           "lms": lms_path(), "server_port": None,
            "loaded": [], "ollama": ollama_models(), "available": True, "error": None}
     try:
         from cortex import localllm

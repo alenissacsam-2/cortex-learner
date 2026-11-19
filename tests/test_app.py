@@ -672,6 +672,12 @@ def test_llm_settings_store_the_runner(app):
                 {"model": "bad name", "runner": "ollama"}):
         assert call(app, "POST", "/api/llm/settings", bad)[0] == 400, bad
     assert saved() == ("gemma3:2b", "lmstudio")
+    assert call(app, "POST", "/api/llm/settings", {"background_model": "qwen3.5:9b"})[0] == 200
+    assert taint.config()["localllm"]["background_model"] == "qwen3.5:9b"
+    assert saved() == ("gemma3:2b", "lmstudio")  # the main choice is left alone
+    assert call(app, "POST", "/api/llm/settings", {"background_model": "bad name"})[0] == 400
+    assert call(app, "POST", "/api/llm/settings", {"background_model": ""})[0] == 200
+    assert "background_model" not in taint.config()["localllm"]
 
 
 @pytest.mark.parametrize("name", ["qwen3.5:4b", "gemma3:2b", "library/qwen3:8b",

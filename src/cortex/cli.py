@@ -2237,11 +2237,11 @@ def _browse_sources(browser: str | None, profile: str | None) -> list:
     return sources.pick(found, browser, profile)
 
 
-def _local_llm(config: dict | None = None):
+def _local_llm(config: dict | None = None, background: bool = False):
     """The loopback runner, or None (no runner, or a bad localllm.url, said on stderr)."""
     try:
         from cortex import localllm
-        return localllm.find(config)
+        return localllm.find(config, background=background)
     except ImportError:
         return None
     except ValueError as e:  # a non-loopback localllm.url is refused
@@ -2344,7 +2344,7 @@ def browse_import(since: Annotated[str | None, typer.Option(
         typer.echo(NO_MODEL)
     from cortex import localllm
 
-    runner, budget = (_local_llm() if localllm.enabled() else None), None
+    runner, budget = (_local_llm(background=True) if localllm.enabled() else None), None
     if runner is not None:
         cfg = taint.config().get("localllm")
         secs = cfg.get("budget_s", 300) if isinstance(cfg, dict) else 300

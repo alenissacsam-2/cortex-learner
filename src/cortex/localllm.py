@@ -441,15 +441,23 @@ def _probe(kind: str, base: str, path: str, wanted: str | None) -> Runner | None
     return Runner(kind, base, model) if model else None
 
 
-def find(config: dict | None = None) -> Runner | None:
+def find(config: dict | None = None, *, background: bool = False) -> Runner | None:
     """First local runner that answers and holds the configured model, or None. A configured
-    localllm.url is tried first, as Ollama and then as an OpenAI-compatible server."""
+    localllm.url is tried first, as Ollama and then as an OpenAI-compatible server.
+    `background` (imports and site descriptions, which run while the owner is away) asks for
+    `localllm.background_model` first, a slower but better model, and falls back to `model`."""
     if config is None:
         from cortex.taint import config as load_config
         config = load_config()
     cfg = config.get("localllm") if isinstance(config, dict) else None
     cfg = cfg if isinstance(cfg, dict) else {}
-    wanted = _wanted(cfg.get("model"))
+    bg = _wanted(cfg.get("background_model")) if background else None
+    if bg and bg != _wanted(cfg.get("model")) and (r := _find(config, cfg, bg)):
+        return r
+    return _find(config, cfg, _wanted(cfg.get("model")))
+
+
+def _find(config: dict, cfg: dict, wanted: str | None) -> Runner | None:
     if wanted and _cloud(wanted):
         raise ValueError(_CLOUD)
     probes = list(_PROBES)

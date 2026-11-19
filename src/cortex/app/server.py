@@ -384,6 +384,15 @@ class App:
             if r not in wizard.RUNNERS:
                 raise ValueError("runner must be ollama or lmstudio")
             new["model"], new["runner"] = m, r
+        if "background_model" in body:  # "" or null: the main model does background work too
+            b = body["background_model"] or ""
+            if not isinstance(b, str) or len(b) > 200 or not all(
+                    c.isalnum() or c in "._:@/-" for c in b):
+                raise ValueError("not a model name")
+            if b:
+                new["background_model"] = b
+            else:
+                new.pop("background_model", None)
         cli._write_config(localllm=new)
         return {"ok": True}
 
