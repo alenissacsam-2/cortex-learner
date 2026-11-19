@@ -6,13 +6,14 @@ import http.client
 import json
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import ask, chat, cloudllm, localllm, semantic
+from cortex import ask, chat, chat_study, cloudllm, localllm, semantic
+from cortex.events import EventLog
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -646,3 +647,86 @@ def test_a_looping_answer_is_cut_to_its_lines_once():
     text = "\n".join(["Intro", line, "- Miruro.tv: anime", line, line])
     assert chat._looping(text) and not chat._looping("\n".join(["Intro", line, line]))
     assert chat._once(text) == "\n".join(["Intro", line, "- Miruro.tv: anime"])
+
+
+# ---- study questions from the learner model --------------------------------------------------
+
+@pytest.mark.parametrize("text, want", [
+    ("What should I study today?", "plan"), ("what's my plan", "plan"),
+    ("What's next?", "plan"), ("what should i work on next", "plan"),
+    ("Today's plan", "plan"), ("show me my study plan for today", "plan"),
+    ("What's due?", "due"), ("what should I review today?", "due"),
+    ("Is anything due for review?", "due"), ("what do I need to revise", "due"),
+    ("What are my weak topics?", "weak"), ("Where am I weak?", "weak"),
+    ("What mistakes do I keep making?", "weak"), ("what are my recurring mistakes", "weak"),
+    ("What did I study yesterday?", "range"), ("what have I studied this week?", "range"),
+    ("What did I study on 12 Nov?", "range"), ("which concepts did I practise last week", "range"),
+    ("How am I doing?", "progress"), ("how's my progress so far", "progress"),
+    ("what is my progress", "progress"),
+    ("What is Dijkstra's algorithm?", None), ("What did I read about car motors yesterday?", None),
+    ("What did I study about graphs yesterday?", None), ("What did I learn yesterday?", None),
+    ("what should I study for heaps", None), ("what's the plan for the Rust rewrite?", None),
+    ("What is due process?", None), ("what are weak references in Java?", None),
+    ("How am I doing on two pointers?", None), ("what did I study", None),
+    ("which sites did I visit yesterday?", None), ("what mistakes do students make in DP?", None),
+    ("plan a trip to Goa", None), ("how is progress measured in agile?", None),
+])
+def test_study_questions_caught_and_not(text, want):
+    assert chat_study.kind(text, chat._when(text, TODAY)) == want
+
+
+def _study_events(vault):
+    log = EventLog(vault)
+
+    def at(day):
+        return datetime(2026, 11, day, 12).astimezone()  # local noon: that local day anywhere
+
+    log.append(session="cli", kind="grade", source="tutor", now=at(15),
+               fields={"object": "concept:two-pointers", "verdict": "wrong", "confidence": 4,
+                       "mistakes": ["dsa.off-by-one"]})
+    log.append(session="cli", kind="taught", source="tutor", now=at(17),
+               fields={"object": "concept:arrays-basics"})
+    log.append(session="cli", kind="grade", source="tutor", now=at(17),
+               fields={"object": "concept:arrays-basics", "verdict": "correct"})
+    log.append(session="cli", kind="ask", source="tutor", now=at(17),
+               fields={"object": "concept:two-pointers", "question": "Why sort first?"})
+    log.append(session="cli", kind="grade", source="tutor", now=at(17),  # a private concept
+               fields={"object": "concept:secret-diary", "verdict": "wrong", "confidence": 4})
+
+
+def test_study_answers_come_from_the_learner_model(vault):
+    _study_events(vault)
+
+    def ask_(q):
+        return chat.study_answer(vault, q, chat._when(q, TODAY), TODAY)
+
+    plan = ask_("What should I study today?")
+    assert plan.startswith("**Today's plan**")
+    assert "Drill set A" in plan and "Test sprint" not in plan  # the track's Day 2 lines
+    weak = ask_("Where am I weak?")
+    assert "**Two pointers** · a confident miss on 2026-11-15, 1 open mistake" in weak
+    assert "⚑ DSA: off-by-one at the loop end · seen 1×, last on 2026-11-15" in weak
+    day = ask_("What did I study yesterday?")
+    assert day.startswith("**2 concepts** studied on 17 Nov")
+    assert "**Array basics** · taught; 1 answer graded (1 correct)" in day
+    assert "**Two pointers** · asked 1 question" in day
+    progress = ask_("How am I doing?")
+    due = ask_("what's due?")
+    assert "**2 concepts** in Cortex" in progress
+    for out in (plan, weak, day, progress, due):
+        assert "Private concept" not in out and "secret" not in out  # D1: hidden as planned
+        assert "predicted" not in out and "interval" not in out
+    assert ask_("What is Dijkstra's algorithm?") is None
+    assert ask_("What did I study on 3 Nov?") == "Cortex has no study recorded on 3 Nov."
+
+
+def test_reply_answers_a_study_question_without_the_model(vault, stream):
+    _study_events(vault)
+    s = stream("ollama", ["never used"])
+    cid, events = _turn(vault, None, "What did I study yesterday?", s.runner())
+    assert [e["s"] for e in events if e["t"] == "step"] == ["Reading what you studied from 17 Nov"]
+    text = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert text.startswith("**2 concepts** studied on 17 Nov") and s.bodies == []
+    saved = chat.load(vault, cid)
+    assert saved[-1]["role"] == "assistant" and saved[-1]["text"] == text
+    assert saved[-1]["sources"] == [] and "searched" not in saved[-1]
