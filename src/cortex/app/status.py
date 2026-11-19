@@ -223,6 +223,7 @@ def receiver_probe(root: Path | None) -> tuple[str, dict]:
 def browse_settings() -> dict:
     try:
         from cortex.browse import lists, load_settings
+        from cortex.browse_serve import auto_import_hours
         s = load_settings()
     except (ImportError, OSError, ValueError):  # no browse code, an unreadable config
         return {"available": False}
@@ -235,6 +236,7 @@ def browse_settings() -> dict:
             "private": list(s.private), "categories": list(lists.CATEGORIES),
             "hidden_from_claude": list(s.hidden_from_claude),
             "skip_categories": list(s.skip_categories), "private_mcp": s.private_mcp,
+            "auto_import_hours": auto_import_hours(),
             # per category as stored; with visible_to_claude off every kept one is local anyway
             "audience": {c: audience(c, replace(s, visible_to_claude=True))
                          for c in lists.CATEGORIES}}

@@ -223,6 +223,8 @@ Cortex can turn your browser history into pages, so it knows what you have been 
 6. `cortex browse deepen` gives your local AI time with your sites (see below).
 7. `cortex browse forget --site <domain>` (or `--category <name>`, for example `--category health`) removes that site or category from everything Cortex stored: day and site pages (private ones too), visit counts, search vectors, site summaries and the extension's archive. It prints what it removed. Add the site to `deny_domains` as well, or the next import reads it again from your browser.
 
+**Keep importing.** Browsers keep about 90 days of history; days not imported by then are gone. After your first import, Cortex imports new visits by itself while `cortex app` or the receiver (`cortex browse serve`) runs, whenever the last import is older than `browse.auto_import_hours` (default 6; 0 turns it off). It checks a minute after starting, then every 10 minutes, and waits while a forget or `deepen` runs. In the app, **Browsing** → **Past history** shows the last import, an **Import new history now** button and this setting. To keep it going without the app open, turn on **Start at login** under **Browsing**.
+
 **One page per website.** Each import also writes a page per site you visited, in a folder per category: `browse/sites/<category>/` for what Claude may see, and the private folder for hidden categories. A site with some hidden visits (a video site, say) gets both: the visible page never counts or names the hidden ones. Each page has the visits, first and last seen, top pages, the searches that led there, related sites and links to your topics. `browse/browse-profile.md` sums it up: when you browse (by hour and weekday), top categories and sites, interests and months. The private profile adds the hidden categories, with their top sites and searches. `browse/sites.csv` lists the sites for a spreadsheet.
 
 **The first big run** (for example one browser's history since a start date, with a small local model):
@@ -263,6 +265,7 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 - `skip_categories`: the categories never saved at all. The default is `[adult]` (from the older `adult: skip`).
 - `adult: skip` or `private`, and `sensitive: private` or `skip`: the older settings; they only set the default of `skip_categories`.
 - `browsers`: which browsers to read, for example `[comet]`. Leave it out to read every browser found.
+- `auto_import_hours`: import new history by itself when the last import is this many hours old (0 to 168; default 6; 0 is off). Only after your first import.
 - `deny_domains`: sites that are never read.
 - `allow_domains`: if set, only these sites are kept.
 - `private_domains`: sites treated like sensitive ones: they never add time to a public topic, and no text the extension reads there is kept.

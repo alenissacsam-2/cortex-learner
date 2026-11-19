@@ -745,6 +745,26 @@
   /* Past history: one list for the Setup step and the Browsing section */
   const BROWSERS = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', comet: 'Comet', firefox: 'Firefox' };
   const untick = new Set();
+  function importTicked(hist, from) {  // only new visits: the import skips the days it has
+    const keys = hist.sources.map((s) => s.key).filter((k) => !untick.has(k));
+    if (!keys.length) { toast('Tick at least one browser.'); return; }
+    job('/api/browse/import', { sources: keys, from });
+  }
+  /* The Browsing section's last import and browse.auto_import_hours (0 = off) */
+  function autoImportRows(hist, s) {
+    if (!hist || !hist.available || !hist.sources.length) return [];
+    const at = hist.imported ? new Date(hist.imported) : null, ok = at && !isNaN(at);
+    const hours = h('input', { type: 'number', id: 'b-auto', min: 0, max: 168, step: 1, value: String(s.auto_import_hours ?? 6) });
+    hours.addEventListener('change', () => post('/api/browse/auto', { hours: Number(hours.value) },
+      () => toast(Number(hours.value) ? 'Saved.' : 'Saved: automatic import is off.')));
+    return [
+      h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Last import' }),
+        h('span', { class: 'val', text: ok ? daysAgo(at) : 'never', title: ok ? at.toLocaleString() : null }))),
+        h('div', { class: 'acts' }, btn('Import new history now', () => importTicked(hist, 'browse')))),
+      h('div', { class: 'field' }, h('label', { for: 'b-auto', text: 'Import new history automatically' }),
+        h('div', { class: 'inline' }, h('span', { text: 'every' }), hours, h('span', { text: 'hours while Cortex runs (0 = off)' })),
+        h('p', { class: 'help', text: 'Browsers keep about 90 days of history; days not imported by then are gone. Cortex imports new visits while the app or the receiver runs; turn on Start at login under Browsing to keep it going without the app.' }))];
+  }
   function historyRows(hist, from) {
     if (!hist || !hist.available) return [note('Not available in this version yet.')];
     const intro = h('p', { class: 'pad ink-2', text: 'Cortex can read the history your browsers already keep, on this computer only, and turn it into private day pages. The first time can take a while. If the local model is on, it writes the day summaries; when its time budget runs out, later days get simple rule-made lines.' });
@@ -762,14 +782,9 @@
           counted ? h('span', { class: 'val', text: `${s.visits.toLocaleString()} visits` }) : null),
         h('span', { class: 'sub', text: sub })));
     });
-    const go = () => {
-      const keys = hist.sources.map((s) => s.key).filter((k) => !untick.has(k));
-      if (!keys.length) { toast('Tick at least one browser.'); return; }
-      job('/api/browse/import', { sources: keys, from });
-    };
     return [intro, ...rows, h('div', { class: 'foot' }, h('div', { class: 'inline' },
       btn('Scan (counts only)', () => job('/api/browse/scan', { from })),
-      btn('Import my past history', go, 'btn lit'),
+      btn('Import my past history', () => importTicked(hist, from), 'btn lit'),
       h('span', { class: 'sub', text: hist.imported ? `Last import ${hist.imported}.` : 'Never imported.' })))];
   }
 
@@ -1042,7 +1057,7 @@
             btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn')),
           h('li', { text: 'Open the Cortex capture popup, enter port 8799, paste the key and press Save and test. Its top line then says Receiver connected, and its Process now button does the same as the one below.' }))));
     const past = board('Past history', { note: d.history && d.history.imported ? `last import ${d.history.imported}` : 'never imported' },
-      ...historyRows(d.history, 'browse'));
+      ...autoImportRows(d.history, s), ...historyRows(d.history, 'browse'));
     const acts = board('Actions', { note: `${d.queued} waiting · processed ${d.last_processed || 'never'}` },
       row('Process now', null, 'Turns waiting visits and new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
       row('Self-test', null, 'Runs the whole import on made-up history in a temp folder; your vault and browsers are not touched.', [btn('Run self-test', () => job('/api/browse/selftest', {}))]),

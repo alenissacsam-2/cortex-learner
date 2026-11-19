@@ -236,6 +236,7 @@ class App:
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
             "/api/browse/settings": self.browse_settings, "/api/browse/cloud": self.cloud,
+            "/api/browse/auto": self.auto_settings,
             "/api/browse/receiver": self.receive, "/api/chat": None,  # do_POST streams it
             "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
             "/api/browse/login": self.login, "/api/browse/pair": self.pair,
@@ -499,6 +500,41 @@ class App:
         cli._write_config(cloudllm={**c, **{k: v for k, v in got.items() if v is not None}},
                           browse={**b, "cloud_processing": on})
         return {"ok": True}
+
+    def auto_settings(self, body: dict) -> dict:
+        """Save `browse.auto_import_hours` (0-168; 0 = off), the other browse keys kept."""
+        from cortex import cli
+        h = body.get("hours")
+        if not (isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 168):
+            raise ValueError("hours must be a number from 0 (off) to 168")
+        old = status.config().get("browse")
+        cli._write_config(browse={**(old if isinstance(old, dict) else {}),
+                                  "auto_import_hours": int(h) if h == int(h) else h})
+        return {"ok": True}
+
+    def auto_import(self) -> dict | None:
+        """Start the ordinary history import (the chosen browsers, incremental) when
+        `browse_serve.auto_import_due` says so and no job runs; None when it did not. The
+        in-app receiver's Processor does the same check, so the app leaves it to that."""
+        from cortex import browse_serve
+        from cortex.browse import load_settings, sources
+        from cortex.vault import Vault
+        if not self.entry() or self.receiver.srv is not None or self.jobs.running():
+            return None
+        if not status.embedding()["downloaded"]:  # the import job would stop at once, every
+            return None                            # 10 minutes: wait for the search model
+        root = self.root
+        if not browse_serve.auto_import_due(Vault(root)):
+            return None
+        keys = {s.key for s in sources.chosen(load_settings())}
+        if not keys:
+            return None
+        try:
+            return self.jobs.start("Importing new history", "browse",
+                                   lambda job: actions.history_import(job, root, keys),
+                                   cancellable=True, quiet_errors=True)
+        except Busy:  # a job started meanwhile: the next check tries again
+            return None
 
     def chat_begin(self, body: dict) -> tuple:
         """Check a chat turn and take the one chat slot: (vault, id or None, text). Busy while
@@ -1142,7 +1178,18 @@ def run(root: Path | None, *, open_browser: bool = True, port: int = 0, echo=pri
         app.stop.set()
         srv.shutdown()
 
+    def auto():  # browse.auto_import_hours: first check after a minute, then every 10
+        from cortex import browse_serve
+        wait = browse_serve.AUTO_FIRST_S
+        while not app.stop.wait(wait):
+            wait = browse_serve.AUTO_EVERY_S
+            try:
+                app.auto_import()
+            except Exception as e:  # noqa: BLE001  (the next check tries again)
+                echo(f"cortex app: automatic import check failed ({type(e).__name__})")
+
     threading.Thread(target=watch, daemon=True).start()
+    threading.Thread(target=auto, daemon=True, name="cortex-app-auto-import").start()
     echo(f"Cortex app: {url}")
     echo("It runs on this computer only. Close it with Quit on the page or Ctrl+C here.")
     if open_browser:

@@ -596,6 +596,70 @@ def test_safe_keeps_numbers_and_dates_only():
     assert got == {"n": 3, "ok": True, "day": "2026-11-17", "t": "2026-11-17T10:00:00Z"}
 
 
+def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkeypatch):
+    """browse.auto_import_hours in the app: the ordinary import job over the chosen browsers,
+    only after a first import, not with 0, not while a job runs, the browse lock is held or
+    the in-app receiver (whose Processor does the same check) runs."""
+    from cortex import semantic
+    from cortex.browse import build, sites, sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source("chrome", "Default", home / "a"),
+        sources.Source("comet", "Default", home / "b")])
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: lambda texts: None)
+    runs = []
+    monkeypatch.setattr(build, "run", lambda v, srcs, settings, **kw: runs.append(
+        sorted(s.key for s in srcs)) or {"sources": len(srcs)})
+    cfg = home / ".cortex" / "config.yaml"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("browse:\n  browsers: [comet]\n", encoding="utf-8")
+    assert app.auto_import() is None  # never imported: the first import is the user's
+    state = vault / build.STATE
+    state.parent.mkdir(parents=True, exist_ok=True)
+    old = (datetime.now(UTC) - timedelta(hours=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state.write_text(json.dumps({"last_run": old}), encoding="utf-8")
+    gate = threading.Event()
+    app.jobs.start("Something else", "vault", lambda job: gate.wait(5))
+    assert app.auto_import() is None  # another job runs
+    gate.set()
+    wait_job(app)
+    with sites.busy(_vault(vault)):
+        assert app.auto_import() is None  # a forget or deepen holds the browse lock
+    app.receiver.srv = object()
+    try:
+        assert app.auto_import() is None  # the in-app receiver's Processor does it
+    finally:
+        app.receiver.srv = None
+    cfg.write_text("browse:\n  browsers: [comet]\n  auto_import_hours: 0\n", encoding="utf-8")
+    assert app.auto_import() is None
+    cfg.write_text("browse:\n  browsers: [comet]\n", encoding="utf-8")
+    from cortex.app import status
+    real = status.embedding
+    monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": False})
+    assert app.auto_import() is None  # no search model: the job would only stop at once
+    monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": True})
+    assert app.auto_import()["job"] == "Importing new history"
+    job = wait_job(app)
+    assert job["section"] == "browse" and job["result"]["ok"] and runs == [["comet/Default"]]
+
+
+def _vault(root):
+    from cortex.vault import Vault
+    return Vault(root)
+
+
+def test_auto_import_setting_saved_and_checked(app, home):
+    assert call(app, "GET", "/api/browse")[1]["settings"]["auto_import_hours"] == 6
+    assert call(app, "POST", "/api/browse/auto", {"hours": 12})[0] == 200
+    from cortex import taint
+    assert taint.config()["browse"]["auto_import_hours"] == 12
+    assert call(app, "GET", "/api/browse")[1]["settings"]["auto_import_hours"] == 12
+    assert call(app, "POST", "/api/browse/auto", {"hours": 0})[0] == 200
+    for bad in (-1, 169, "6", True, None):
+        assert call(app, "POST", "/api/browse/auto", {"hours": bad})[0] == 400
+    assert taint.config()["browse"]["auto_import_hours"] == 0
+    assert call(app, "POST", "/api/browse/auto", {"hours": 6}, token="wrong")[0] == 401
+
+
 def test_pair_and_in_app_receiver(app, vault, monkeypatch):
     from cortex import browse_serve
     monkeypatch.setattr(browse_serve, "PORT", 0)  # never 8799: the owner's may be running
