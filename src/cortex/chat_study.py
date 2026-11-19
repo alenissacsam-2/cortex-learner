@@ -120,6 +120,31 @@ def _due_by(text: str, got) -> date:
     return got[0] + timedelta(6) if re.fullmatch(r"this\s+week", phrase, re.I) else got[1]
 
 
+_BACK = re.compile(r"\b(?:last|past|previous|ago|yesterday|night|since)\b|\d{4}", re.I)
+_DAYNAME = re.compile(r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b", re.I)
+
+
+def _ahead(text: str, got, today: date):
+    """A due question looks forward: a weekday, weekend, month or day with no year that chat's
+    dates resolved to the past ("on Friday", "this weekend", "on 25 Nov", "in December") is the
+    next one. "last Friday", "3 days ago" and a stated year stay as said."""
+    phrase = text[got[2][0]:got[2][1]]
+    if _BACK.search(phrase):
+        return got
+    lo, hi = got[:2]
+    if re.search(r"weekend", phrase, re.I):
+        lo = today + timedelta((5 - today.weekday()) % 7 if today.weekday() != 6 else -1)
+        return lo, lo + timedelta(1), got[2]  # this Saturday to Sunday, the due-by day
+    if hi >= today:
+        return got
+    if _DAYNAME.search(phrase):
+        return lo + timedelta(7), hi + timedelta(7), got[2]
+    try:  # a day or month with no year: this year's, which _day/_month put a year back
+        return lo.replace(year=lo.year + 1), hi.replace(year=hi.year + 1), got[2]
+    except ValueError:  # 29 Feb into a common year
+        return got
+
+
 def kind(text: str, got=None, today: date | None = None, first: bool = True) -> str | None:
     """Which study question `text` is (plan, due, weak, range, progress), "digest" for a
     question about everything done on some days within the last year (chat.digest answers
@@ -162,6 +187,7 @@ def study_answer(vault: Vault, text: str, got, today: date, first: bool = True) 
     a date range's study, or progress; None for any other question."""
     k = kind(text, got, today, first)
     if k == "due" and got:
+        got = _ahead(text, got, today)
         got = (got[0], _due_by(text, got), got[2])
     return None if k in (None, "digest") else answer(vault, k, got, today)  # digest: chat.digest
 

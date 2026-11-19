@@ -664,11 +664,11 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
     query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
-    span = f" from {_span(got[0], got[1], today)}" if got else ""
     # a site list or a study answer is read from Cortex's own data with no model, so it needs
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
-    # borrowed ones are for passages only)
+    # borrowed ones are for passages only), and so does its step line
     own = got if said is text else None
+    span = f" from {_span(own[0], own[1], today)}" if own else ""
     # which data answer, if any, is decided first and cheaply; it is read after `start` and its
     # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
     step = data = None
@@ -720,7 +720,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         # pages are dated by when they were written: a future range ("tomorrow's exam") keeps
         # no page, so it does not narrow the search; a range running past today stops at today
         past = got and got[0] <= today
-        emit({"t": "step", "s": "Searching your notes and browsing" + (span if past else "")})
+        emit({"t": "step", "s": "Searching your notes and browsing" + (
+            f" from {_span(got[0], min(got[1], today), today)}" if past else "")})
         found = ask._passages(vault, query, s["passages"],
                               between=(got[0].isoformat(), min(got[1], today).isoformat())
                               if past else None,

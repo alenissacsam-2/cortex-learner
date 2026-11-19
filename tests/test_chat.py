@@ -1007,6 +1007,32 @@ def test_due_for_a_range_counts_reviews_due_by_its_last_day(vault):
     assert ask_("what is due this week?").startswith("**2 concepts due for review** by 22 Nov:")
 
 
+def test_due_on_a_day_looks_forward(vault):
+    _study_events(vault)  # TODAY is Wednesday 18 Nov 2026
+
+    def by(q, today=TODAY):
+        got = chat._when(q, today)
+        assert chat_study.kind(q, got, today) == "due", q
+        return chat_study._due_by(q, chat_study._ahead(q, got, today))
+    assert by("what is due on Friday?") == date(2026, 11, 20)  # not last Friday
+    assert by("what is due this weekend?") == date(2026, 11, 22)
+    assert by("what is due this weekend?", date(2026, 11, 22)) == date(2026, 11, 22)  # Sunday
+    assert by("what is due on 25 Nov?") == date(2026, 11, 25)  # not 2025
+    assert by("what is due in December?") == date(2026, 12, 31)
+    assert by("what is due on 17 Nov 2026?") == date(2026, 11, 17)  # a stated year stays
+    got = chat._when("last Friday", TODAY)
+    assert chat_study._ahead("last Friday", got, TODAY) == got
+    assert chat.study_answer(vault, "what is due on Friday?",
+                             chat._when("what is due on Friday?", TODAY), TODAY).startswith(
+        "**2 concepts due for review** by 20 Nov:")
+
+
+def test_a_site_question_after_a_dated_one_shows_its_own_dates(vault):
+    cid, _ = _turn(vault, None, "what did I study yesterday?", None)
+    _, events = _turn(vault, cid, "which sites did I visit?", None)
+    assert [e["s"] for e in events if e["t"] == "step"] == ["Counting the sites you visited"]
+
+
 def test_a_week_digest_on_a_monday_is_your_week_so_far(vault, monkeypatch):
     monday = date(2026, 11, 16)
     _site_days(vault, {"2026-11-16": {"github.com||0": {"n": 1}},
