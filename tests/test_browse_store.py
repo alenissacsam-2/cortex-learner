@@ -8,6 +8,7 @@ Claude; a forget reaches the store; a backup holds a snapshot of it."""
 
 import json
 import math
+import shutil
 import sqlite3
 import zipfile
 from contextlib import closing
@@ -104,6 +105,71 @@ def test_an_unchanged_history_file_is_not_even_copied(vault, hist, monkeypatch):
     assert copied == [] and rep["sources"] == 1 and not rep.get("sources_failed")
     add_visit(hist, m(80), "https://lichess.org/practice", "Chess practice")
     assert imp(vault, hist)["visits_new"] == 1 and len(copied) == 1
+
+
+# ---- bounded memory: chunks of visits, runs of days ---------------------------------------
+
+def test_a_history_is_read_a_chunk_at_a_time_and_the_chunks_change_nothing(hist):
+    """However long the history, a source is held a chunk at a time; a visit's time on the
+    page is still measured to the next visit across a chunk's edge."""
+    src = sources.discover(*hist)[0]
+    whole, top_t, top_id = sources.read_since(src)
+    with sources.Since(src) as rd:
+        chunks = list(rd.chunks(3))
+    assert rd.total == len(ROWS) and {len(c) for c in chunks[:-1]} == {3}
+    assert [v for c in chunks for v in c] == whole and len(whole) == len(ROWS)
+    assert (rd.top_time, rd.top_id) == (top_t, top_id) and top_id == len(ROWS)
+
+
+def test_small_chunks_and_runs_of_days_make_the_same_store_and_pages(vault, hist, tmp_path,
+                                                                      monkeypatch):
+    for day in (1, 2, 3):
+        add_visit(hist, m(10, day), "https://lichess.org/practice", "Chess practice")
+        add_visit(hist, m(20, day), "https://www.chess.com/lessons/2", "Chess lesson two")
+    other = tmp_path / "other"
+    shutil.copytree(vault, other)
+    imp(vault, hist)
+    asked: list[int] = []
+    real = store.items
+    monkeypatch.setattr(store, "CHUNK", 2)
+    monkeypatch.setattr(build, "RENDER_VISITS", 2)
+    monkeypatch.setattr(store, "items", lambda con, days, s: (asked.append(len(days)),
+                                                             real(con, days, s))[1])
+    imp(other, hist)
+    assert set(asked) == {1}  # one day's visits at a time
+    assert browse_files(other) == browse_files(vault)
+    q = "SELECT source, native, ts, day, url, title, secs FROM visits ORDER BY native"
+    with closing(store.connect(Vault(vault))) as a, closing(store.connect(Vault(other))) as b:
+        assert a.execute(q).fetchall() == b.execute(q).fetchall()
+        # a first import into an empty store makes the indexes after its rows
+        assert {n for (n,) in b.execute("SELECT name FROM sqlite_master WHERE type = 'index' "
+                                        "AND tbl_name = 'visits' AND sql IS NOT NULL")} \
+            == {"visits_day", "visits_tkey"}
+
+
+def test_a_stop_mid_read_keeps_each_saved_chunk_and_the_next_run_goes_on_from_it(
+        vault, hist, tmp_path, monkeypatch):
+    whole = tmp_path / "whole"
+    shutil.copytree(vault, whole)
+    imp(whole, hist)
+    monkeypatch.setattr(store, "CHUNK", 2)
+    saved: list[int] = []
+
+    def stop(n, done, total):
+        if n == 2 and done < total:
+            saved.append(done)
+            if len(saved) == 2:
+                raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        imp(vault, hist, step=stop)
+    assert 0 < rows(vault) < rows(whole)
+    opened: list = []
+    real = sources.Since.__enter__
+    monkeypatch.setattr(sources.Since, "__enter__",
+                        lambda self: (opened.append(self), real(self))[1])
+    imp(vault, hist)
+    assert opened[0].total < len(ROWS)  # from the saved chunks' cursor on, not the whole file
+    assert rows(vault) == rows(whole) and browse_files(vault) == browse_files(whole)
 
 
 # ---- titles in batches --------------------------------------------------------------------

@@ -32,6 +32,7 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
@@ -222,27 +223,53 @@ def vet(vault: Vault, items: list[Item], settings: Settings, runner, budget, *,
     local (`Kept.local`); without one, a title is judged by the word lists only. A search
     term is never shown on a visible page without an "ordinary" verdict (`sites._shown`).
     `step(done, total)` per batch. Counts only."""
-    from cortex.browse import store, titles
-
     local = local_only(runner)
     keep = local is not None if keep_local is None else keep_local
     verdicts = sites.load_verdicts(vault)
     c: Counter = Counter()
-    need: dict[str, str] = {}
-    for it in reversed(items) if local is not None and ask else ():
+    need = _unvetted(items, verdicts, {}) if local is not None and ask else {}
+    c.update(_ask(vault, need, local, budget, verdicts, save=save, con=con, step=step))
+    return _apply(items, verdicts, settings, keep, c), c
+
+
+def _unvetted(items: list[Item], verdicts: dict, need: dict[str, str]) -> dict[str, str]:
+    """Add to `need` the texts of `items` (newest first) the local model has no verdict on:
+    {text hash: text}. Only uncategorised, not private records."""
+    from cortex.browse import store
+
+    for it in reversed(items):
         k = it.k
         text = store.text_of(k)
         if k.category is None and not k.private and text \
                 and (h := privacy.text_key(text)) not in verdicts:
             need.setdefault(h, text)
-    if need:
-        got, n = titles.check(need, local, list(VET_LABELS), budget, step=step, save=(
-            (lambda lab: store.put_verdicts(con, lab)) if save and con is not None else None))
-        c["vet_asked"] += n["asked"]
-        c["vet_calls"] += n["calls"]
-        verdicts.update(got)
-        if save and con is None and got:
-            sites._save(vault, sites.VERDICTS, {**sites._load(vault, sites.VERDICTS), **got})
+    return need
+
+
+def _ask(vault: Vault, need: dict[str, str], local, budget, verdicts: dict, *, save: bool,
+         con, step) -> Counter:
+    """The local model's verdicts on `need` (`titles.check`), each batch's saved in the store
+    (`con`) as it comes, and added to `verdicts`. Counts."""
+    from cortex.browse import store, titles
+
+    c: Counter = Counter()
+    if not need:
+        return c
+    got, n = titles.check(need, local, list(VET_LABELS), budget, step=step, save=(
+        (lambda lab: store.put_verdicts(con, lab)) if save and con is not None else None))
+    c["vet_asked"] += n["asked"]
+    c["vet_calls"] += n["calls"]
+    verdicts.update(got)
+    if save and con is None and got:
+        sites._save(vault, sites.VERDICTS, {**sites._load(vault, sites.VERDICTS), **got})
+    return c
+
+
+def _apply(items: list[Item], verdicts: dict, settings: Settings, keep: bool, c: Counter
+           ) -> list[Item]:
+    """`items` with the local model's `verdicts` applied (see `vet`); counts into `c`."""
+    from cortex.browse import store
+
     out = []
     for it in items:
         k = it.k
@@ -262,7 +289,7 @@ def vet(vault: Vault, items: list[Item], settings: Settings, runner, budget, *,
             c["vet_unsure"] += 1
         it.k = k
         out.append(it)
-    return out, c
+    return out
 
 
 # ---- topics -------------------------------------------------------------------------------
@@ -757,6 +784,11 @@ def signals(vault: Vault, items: list[Item], where: dict, titles: dict[str, str]
 PHASES = ("reading browsers", "saving new visits", "checking titles", "writing day pages",
           "updating search index")
 RESUMMARISE = 7  # days made while the local model was away, redone per run once it is here
+RENDER_VISITS = 20000  # visits whose days' pages are made together (bounds the memory)
+SAVE_S = 30.0  # the site counts are saved (and the days written marked clean) this often
+# the background import rests this long after each chunk: it runs on a thread of the app's own
+# process, so it yields rather than lowering a process priority
+PAUSE_S = 0.05
 
 
 def _local_set_up() -> bool:
@@ -775,21 +807,22 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         runner=None, budget=None, since: str | None = None, now: datetime | None = None,
         tz: tzinfo | None = None, dry_run: bool = False, progress=None, say=None,
         takeout: list[sources.Visit] | None = None, step=None, ask: bool | None = None,
-        summaries: bool = True, keep_local: bool | None = None) -> dict:
+        summaries: bool = True, keep_local: bool | None = None, pause: float = 0.0) -> dict:
     """One import into the store (`cortex.browse.store`), then the pages of the days it
     changed. Counts only.
-    1 reading browsers: each source from its cursor on (`sources.read_since`); a History file
+    1 reading browsers: each source from its cursor on (`sources.Since`); a History file
     unchanged since the last run is not even copied. 2 saving new visits: through the §2
-    filter into the store, a chunk per transaction, with the source's cursor in the last one;
-    the extension's inbox files (and the archive of consumed ones) not read since they
-    changed; `takeout` (Google activity, cortex.browse.takeout) too, which counts only on days
-    no browser or inbox visit holds. 3 checking titles: the local model's verdicts (C1, `vet`)
-    on the changed days' texts, in batches, when `ask` (default: visible to Claude and not a
-    dry run). 4 writing day pages: every dirty day (new or changed rows, a forget, a verdict;
-    all days on a settings change, from `since` on with it), newest first; each day is clean
-    once its pages are written, so a stop goes on there next time. 5 updating search index:
-    the browse index, the site pages (`cortex.browse.sites`, only when the counts or settings
-    changed), the state.
+    filter into the store, store.CHUNK visits read and saved at a time, the source's cursor
+    moved after its last; the extension's inbox files (and the archive of consumed ones) not
+    read since they changed; `takeout` (Google activity, cortex.browse.takeout) too, which
+    counts only on days no browser or inbox visit holds. 3 checking titles: the local model's
+    verdicts (C1, `vet`) on the changed days' texts, in batches, when `ask` (default: visible
+    to Claude and not a dry run). 4 writing day pages: every dirty day (new or changed rows, a
+    forget, a verdict; all days on a settings change, from `since` on with it), newest first,
+    RENDER_VISITS visits' days at a time; each day is clean once its pages and site counts are
+    saved (every SAVE_S), so a stop goes on there next time. Memory stays bounded by those
+    chunks, however long the history. 5 updating search index: the browse index, the site
+    pages (`cortex.browse.sites`, only when the counts or settings changed), the state.
     `runner` (the local LLM, laptop only) writes the public pages' one-line summary from hub
     names and the private pages' day and session summaries from their kept titles; with
     `summaries` False (the app's import job: the model's time goes to the titles) or no
@@ -799,7 +832,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     settings.visible_to_claude only the private pages are written: no public page or index,
     journal line or touch.
     A source that fails is skipped and keeps its cursor. `dry_run` writes nothing (an
-    in-memory copy of the store) and counts the day pages it would write.
+    in-memory copy of the store) and counts the day pages it would write. `pause`: seconds
+    of rest after each chunk (the background import, so the owner's machine stays quick).
     `progress(key, visits, new, error)` per source; `step(phase, done, total)` (phase 1-5,
     PHASES) as each part goes. `srcs` are read as given: callers that did not pick browsers
     explicitly pass `sources.chosen(settings)` (S2). Runs under the browse-wide lock
@@ -813,25 +847,32 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     state = load_state(vault)
     report: Counter = Counter()
     fp = fingerprint(settings)
-    # who may see what changed (visibility, hidden or skipped categories, the domain lists,
-    # the filter's own rules): everything stored is filtered again (C2) and every day redone
-    reset = state.get("settings") != fp
     fresh = not store.exists(vault)
-    if reset and not dry_run:
-        tell("settings changed: filtering what is stored again")
-        report.update({f"refiltered_{k}": n for k, n in forget.purge(
-            vault, forget.Rule.of(settings), write=False).items()})
-    if not dry_run:
-        forget.sync_private(vault)
     keep_local = local_only(runner) is not None or _local_set_up() if keep_local is None \
         else keep_local
     ask = vis and not dry_run if ask is None else ask and not dry_run
     con = store.connect(vault, memory=dry_run)
     try:
+        # who may see what changed (visibility, hidden or skipped categories, the domain
+        # lists, the filter's own rules) since the stored rows were filtered (the store's
+        # mark, else the state's: a vault imported before the store): everything stored is
+        # filtered again (C2) and every day redone. A first import has nothing to redo, so a
+        # stopped one goes on from its saved chunks.
+        was = store.get_meta(con, "settings") or state.get("settings")
+        reset = was is not None and was != fp
+        if reset and not dry_run:
+            tell("settings changed: filtering what is stored again")
+            report.update({f"refiltered_{k}": n for k, n in forget.purge(
+                vault, forget.Rule.of(settings), write=False).items()})
+        elif was is None and not dry_run:
+            with con:
+                store.set_meta(con, "settings", fp)
+        if not dry_run:
+            forget.sync_private(vault)
         cursors = _read_and_save(vault, con, srcs, settings, tz, now, reset, fresh, state,
-                                 takeout, report, tell, phase, progress)
+                                 takeout, report, tell, phase, progress, pause)
         part = store.partial(con)
-        held = store.days(con) - part
+        held = store.days(con) - part if reset or since else set()  # no scan on a live run
         if reset and not vis and not dry_run and (n := _void_signals(vault)):
             report["browse_voided"] += n
         if not dry_run and (gone := _drop_public(vault, None if not vis else held if reset
@@ -850,7 +891,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         if todo:
             got = _render(vault, con, todo, settings, embed=embed, runner=runner, budget=budget,
                           tz=tz, dry_run=dry_run, ask=ask, keep_local=keep_local,
-                          summaries=summaries, report=report, tell=tell, phase=phase)
+                          summaries=summaries, report=report, tell=tell, phase=phase,
+                          pause=pause)
             if dry_run:
                 return {**report, "days_from": _monday(min(todo)), "days": got,
                         "visible_to_claude": vis, "dry_run": True}
@@ -880,6 +922,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             "sources": {**(state.get("sources") or {}), **cursors},
             "settings": fp, "inbox": stats, "sites_stamp": _sites_stamp(vault)},
             indent=1, sort_keys=True))
+        with con:
+            store.set_meta(con, "settings", fp)
         phase(5, 1, 1)
         return {**report, "visible_to_claude": vis}
     finally:
@@ -910,57 +954,76 @@ def _state_row(cursor: int | None, ran: str, stat: str | None) -> dict:
 
 def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetime,
                    reset: bool, fresh: bool, state: dict, takeout, report: Counter, tell,
-                   phase, progress) -> dict:
+                   phase, progress, pause: float = 0.0) -> dict:
     """Phases 1 and 2 of `run`: the new visits of every source, the inbox files and `takeout`
-    into the store. The state's cursor rows of the sources read (for `status`)."""
+    into the store. A source is read and saved store.CHUNK visits at a time (memory stays
+    bounded however long the history), its cursor moved with each chunk (a stop or crash
+    loses at most one) and its History file's stat once the last is saved; a first import
+    into an empty store makes the indexes after its rows (`store.bulk`). `pause` s between
+    chunks (the background import leaves the machine to its owner). The
+    state's cursor rows of the sources read (for `status`)."""
     from cortex.browse import store
 
-    got, cursors = [], {}
+    cursors: dict = {}
     ran = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    for n, s in enumerate(srcs):
-        phase(1, n, len(srcs))
-        id_cur, t_cur, stat_old = store.cursor(con, s.key)
-        stat = store.file_stat(s.path)
-        if not reset and id_cur is not None and stat is not None and stat == stat_old:
-            report["sources"] += 1  # the browser wrote nothing since: not even copied
-            cursors[s.key] = _state_row(t_cur, ran, stat)
+    with ExitStack() as copies, store.bulk(con):
+        got = []
+        for n, s in enumerate(srcs):
+            phase(1, n, len(srcs))
+            id_cur, t_cur, stat_old = store.cursor(con, s.key)
+            stat = store.file_stat(s.path)
+            if not reset and id_cur is not None and stat is not None and stat == stat_old:
+                report["sources"] += 1  # the browser wrote nothing since: not even copied
+                cursors[s.key] = _state_row(t_cur, ran, stat)
+                if progress:
+                    progress(s.key, 0, 0, None)
+                continue
+            tell(f"{s.key}: reading its history")
+            try:
+                # a settings change reads everything again: a visit dropped before may pass now
+                got.append((s, copies.enter_context(sources.Since(
+                    s, None if reset else id_cur, None if reset else t_cur)), stat))
+            except Exception as e:  # one bad source never stops the others
+                _failed(s, e, report, progress)
+        phase(1, len(srcs), len(srcs))
+        legacy = state.get("sources") or {}
+        total, done, fills, seen = sum(g[1].total for g in got), 0, {}, {}
+        for s, rd, stat in got:
+            old = (legacy.get(s.key) or {}).get("cursor")
+            # a vault imported before the store existed: the days up to the old cursor have
+            # pages
+            quiet = (sources.to_time(s.browser, old).timestamp()
+                     if fresh and isinstance(old, int) else None)
+            tell(f"{s.key}: saving {rd.total} visits")
+            read = new = 0
+            try:
+                for chunk in rd.chunks(store.CHUNK):
+                    c = store.ingest(con, chunk, settings, tz, quiet_until=quiet, seen=seen)
+                    # the cursor follows each chunk (rows come oldest first, so every row
+                    # before it is saved), without the file's stat: a stop goes on from here
+                    with con:
+                        store.set_cursor(con, s.key, rd.top_id, rd.top_time, None, now)
+                    read += len(chunk)
+                    new += c["new"]
+                    report["dropped"] += c["dropped"]
+                    if quiet is not None:
+                        fills.setdefault(s.key, set()).update(
+                            local_day(v.start, tz) for v in chunk)
+                    phase(2, min(done + read, total), total)
+                    if pause:
+                        time.sleep(pause)
+                with con:
+                    store.set_cursor(con, s.key, rd.top_id, rd.top_time, stat, now)
+            except Exception as e:  # what was saved stays, and the cursor with it
+                _failed(s, e, report, progress)
+                continue
+            finally:
+                done += rd.total
+            report["sources"] += 1
+            report["visits_new"] += new
             if progress:
-                progress(s.key, 0, 0, None)
-            continue
-        tell(f"{s.key}: reading its history")
-        try:
-            # a settings change reads everything again: a visit dropped before may pass now
-            vs, top_t, top_id = sources.read_since(s, None if reset else id_cur,
-                                                   None if reset else t_cur)
-        except Exception as e:  # one bad source never stops the others
-            log.warning("browse: %s not read: %s", s.key, type(e).__name__)
-            report["sources_failed"] += 1
-            if progress:
-                progress(s.key, 0, 0, e)
-            continue
-        report["sources"] += 1
-        got.append((s, vs, top_t, top_id, stat))
-    phase(1, len(srcs), len(srcs))
-    legacy = state.get("sources") or {}
-    total, done, fills = sum(len(g[1]) for g in got), 0, {}
-    for s, vs, top_t, top_id, stat in got:
-        old = (legacy.get(s.key) or {}).get("cursor")
-        # a vault imported before the store existed: the days up to the old cursor have pages
-        quiet = (sources.to_time(s.browser, old).timestamp()
-                 if fresh and isinstance(old, int) else None)
-        tell(f"{s.key}: saving {len(vs)} visits")
-        c = store.ingest(con, vs, settings, tz, quiet_until=quiet,
-                         step=lambda d, t, base=done: phase(2, base + d, total),
-                         before_commit=lambda s=s, a=top_id, b=top_t, st=stat: store.set_cursor(
-                             con, s.key, a, b, st, now))
-        done += len(vs)
-        report["dropped"] += c["dropped"]
-        report["visits_new"] += c["new"]
-        if progress:
-            progress(s.key, len(vs), c["new"], None)
-        cursors[s.key] = _state_row(store.cursor(con, s.key)[1], ran, stat)
-        if quiet is not None and vs:
-            fills[s.key] = {local_day(v.start, tz) for v in vs}
+                progress(s.key, read, new, None)
+            cursors[s.key] = _state_row(store.cursor(con, s.key)[1], ran, stat)
     if fresh and state.get("last_run"):  # the archive's days were imported before
         store.ingest_files(con, vault, settings, tz, [ARCHIVE], quiet_until=float("inf"))
     c = store.ingest_files(con, vault, settings, tz, [".cortex/browse", ARCHIVE])
@@ -982,27 +1045,56 @@ def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetim
     return cursors
 
 
+def _failed(s: sources.Source, e: Exception, report: Counter, progress) -> None:
+    log.warning("browse: %s not read: %s", s.key, type(e).__name__)
+    report["sources_failed"] += 1
+    if progress:
+        progress(s.key, 0, 0, e)
+
+
+def _batches(con, todo: set[str]) -> list[list[str]]:
+    """`todo`, newest first, in runs of days holding about RENDER_VISITS visits."""
+    from cortex.browse import store
+
+    size = store.by_day(con, todo)
+    out: list[list[str]] = [[]]
+    n = 0
+    for d in sorted(todo, reverse=True):
+        if out[-1] and n + size.get(d, 0) > RENDER_VISITS:
+            out.append([])
+            n = 0
+        out[-1].append(d)
+        n += size.get(d, 0)
+    return out
+
+
 def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, runner, budget,
             tz, dry_run: bool, ask: bool, keep_local: bool, summaries: bool, report: Counter,
-            tell, phase):
-    """Phases 3 and 4 of `run` for the days `todo`: (site counts, the name a torn counts file
-    went to, whether a new skip verdict purged anything); in a dry run, the number of days."""
+            tell, phase, pause: float = 0.0):
+    """Phases 3 and 4 of `run` for the days `todo`, in runs of days of about RENDER_VISITS
+    visits (`_batches`, newest first: memory stays bounded however long the history): 3 the
+    texts of every run with no verdict yet, then the local model's verdicts on them; 4 each
+    run's pages. Returns (site counts, the name a torn counts file went to, whether a new skip
+    verdict purged anything); in a dry run, the number of days."""
     from cortex.browse import store
 
     vis = settings.visible_to_claude
+    local = local_only(runner)
+    batches = _batches(con, todo)
     tell(f"filtering: the visits of {len(todo)} days")
-    items, c = store.items(con, todo, settings)
-    report.update(c)
     phase(3, 0, 1)
-    if local_only(runner) is not None and ask:
-        tell(f"local model: checking the titles and searches of {len(items)} visits")
     had = sites.load_verdicts(vault)
-    items, c = vet(vault, items, settings, runner, budget, ask=ask, save=not dry_run, con=con,
-                   keep_local=keep_local, step=lambda d, t: phase(3, d, t))
-    report.update(c)
+    verdicts = dict(had)
+    need: dict[str, str] = {}
+    if local is not None and ask:
+        for b in batches:
+            _unvetted(store.items(con, set(b), settings)[0], verdicts, need)
+        tell(f"local model: checking {len(need)} titles and searches")
+    report.update(_ask(vault, need, local, budget, verdicts, save=not dry_run, con=con,
+                       step=lambda d, t: phase(3, d, t)))
     # a text the model now files under a Don't-save category may sit on a day this run does
     # not make (kept unvetted before): every store loses it now
-    skip = frozenset(v for h, v in sites.load_verdicts(vault).items()
+    skip = frozenset(v for h, v in verdicts.items()
                      if had.get(h) != v and privacy.audience(v, settings) == "skip")
     if skip and not dry_run:
         report.update({f"refiltered_{k}": n for k, n in forget.purge(
@@ -1013,38 +1105,58 @@ def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, run
         tell("topics: reading the topic hubs")
     hub_ids, unit, titles = (hubs(vault, embed, save=not dry_run) if embed is not None
                              else ([], None, {}))
-    tell(f"topics: placing {len(items)} visits under {len(hub_ids)} topic hubs")
-    where = place(items, embed, hub_ids, unit, tell)
-    for i in items:
-        report["kept" if public(i, where) else "private"] += 1
-    by_day: dict[str, list[Item]] = {d: [] for d in todo}
-    for i in items:
-        by_day.setdefault(i.day, []).append(i)
-    if dry_run:
-        for its in by_day.values():
-            report["private_would"] += bool(its)
-            report["public_would"] += bool(vis and _hub_rows(its, where))
-            report["empty_would"] += not its
-        return len(by_day)
-    tell(f"sites: counting {len(items)} visits by site")
-    days, bad = sites.load_days(vault)
-    days = sites.record(vault, items, where, settings, tz, "", set(by_day), days)
-    report["signals"] = signals(vault, items, where, titles, tz, con, set(by_day)) if vis else 0
+    days, bad = sites.load_days(vault) if not dry_run else ({}, None)
     report["days_from"] = _monday(min(todo))  # type: ignore[assignment]
     asks = runner if summaries else None
-    last = time.monotonic()
-    for n, day in enumerate(sorted(by_day, reverse=True)):  # the newest first
-        for side, what in write_day(vault, day, by_day[day], where, titles, asks, budget,
-                                    tz, visible=vis).items():
-            report[f"{side}_{what}"] += 1
-        store.clean(con, [day])
-        if keep_local and by_day[day]:  # its local-model lines are made once the model is here
-            store.mark_unsummarised(con, [day], local_only(asks) is None
-                                    or (budget is not None and not budget.ok()))
-        phase(4, n + 1, len(by_day))
-        if time.monotonic() - last >= PROGRESS_S:
-            tell(f"day pages: {n + 1} of {len(by_day)} days")
-            last = time.monotonic()
+    tell(f"topics: placing the visits of {len(todo)} days under {len(hub_ids)} topic hubs")
+    if not dry_run:
+        tell(f"sites: counting the visits of {len(todo)} days by site")
+    last, saved, done, written = 0.0, time.monotonic(), 0, []
+    for b in batches:
+        items, c = store.items(con, set(b), settings)
+        report.update(c)
+        items = _apply(items, verdicts, settings, local is not None if keep_local is None
+                       else keep_local, report)
+        # its progress lines at most every PROGRESS_S, however many runs
+        where = place(items, embed, hub_ids, unit,
+                      tell if time.monotonic() - last >= PROGRESS_S else None)
+        by_day: dict[str, list[Item]] = {d: [] for d in b}
+        for i in items:
+            report["kept" if public(i, where) else "private"] += 1
+            by_day.setdefault(i.day, []).append(i)
+        if dry_run:
+            for its in by_day.values():
+                report["private_would"] += bool(its)
+                report["public_would"] += bool(vis and _hub_rows(its, where))
+                report["empty_would"] += not its
+            continue
+        days = sites.record(vault, items, where, settings, tz, "", set(by_day), days,
+                            save=False)
+        if vis:
+            report["signals"] += signals(vault, items, where, titles, tz, con, set(by_day))
+        for day in b:  # the newest first
+            for side, what in write_day(vault, day, by_day[day], where, titles, asks, budget,
+                                        tz, visible=vis).items():
+                report[f"{side}_{what}"] += 1
+            written.append(day)
+            if keep_local and by_day[day]:  # its local-model lines are made once it is here
+                store.mark_unsummarised(con, [day], local_only(asks) is None
+                                        or (budget is not None and not budget.ok()))
+            done += 1
+            phase(4, done, len(todo))
+            if time.monotonic() - last >= PROGRESS_S:
+                tell(f"day pages: {done} of {len(todo)} days")
+                last = time.monotonic()
+        # a day is clean once its pages and its site counts are saved: a stop goes on there
+        if b is batches[-1] or time.monotonic() - saved >= SAVE_S:
+            sites.save_days(vault, days, settings)
+            store.clean(con, written)
+            saved, written = time.monotonic(), []
+        if pause:
+            time.sleep(pause)
+    if dry_run:
+        return len(todo)
+    report.setdefault("signals", 0)
     return days, bad, bool(skip)
 
 

@@ -1369,9 +1369,9 @@ def test_selftest_passes_on_synthetic_data_only(machine, tmp_path, monkeypatch):
 
 
 def test_selftest_fails_loudly(monkeypatch):
-    def broken(src):
+    def broken(self):
         raise sqlite3.DatabaseError("x")
-    monkeypatch.setattr(sources, "read", broken)
+    monkeypatch.setattr(sources.Since, "__enter__", broken)
     out = cli("browse", "selftest")
     assert out.exit_code == 1
     assert "FAIL  scan reads every source" in out.output and "checks failed" in out.output
@@ -1457,15 +1457,15 @@ def test_a_locked_source_is_reported_skipped_and_redone_next_time(vault, machine
 
 
 def test_any_error_in_one_source_never_stops_the_others(vault, browsers):
-    real = sources.read_since
+    real = sources.Since.__enter__
 
-    def odd(src, *a):
-        if src.browser == "edge":
+    def odd(self):
+        if self.src.browser == "edge":
             raise ValueError("odd file")
-        return real(src, *a)
+        return real(self)
     seen = []
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(sources, "read_since", odd)
+        mp.setattr(sources.Since, "__enter__", odd)
         rep = run_import(vault, browsers, progress=lambda *a: seen.append(a))
     assert rep["sources"] == 3 and rep["sources_failed"] == 1
     assert [a[0] for a in seen if a[3]] == ["edge/Default"]
@@ -1492,7 +1492,7 @@ def test_ctrl_c_leaves_whole_pages_no_state_and_no_temp_copy(vault, machine, mon
     assert page.read_text(encoding="utf-8").startswith("---")
     # what was read is saved: the next run reads nothing again and makes the day left
     rep = build.run(Vault(vault), sources.discover(*machine), S, tz=UTC)
-    assert rep["visits_new"] == 0 and rep["days_from"] == "2026-11-09"
+    assert rep.get("visits_new", 0) == 0 and rep["days_from"] == "2026-11-09"
     assert (vault / "browse" / "private" / "browse-private-2026-11-09.md").is_file()
 
 

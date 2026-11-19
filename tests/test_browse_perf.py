@@ -116,7 +116,7 @@ class Embed:
         return out
 
 
-STEPS = [(sources, "read_since"), (store, "ingest"), (store, "items"), (build, "vet"),
+STEPS = [(sources.Since, "__enter__"), (store, "ingest"), (store, "items"), (build, "_ask"),
          (titles, "check"), (build, "hubs"),
          (build, "place"), (build, "write_day"), (build, "write_index"), (build, "signals"),
          (sites, "record"), (sites, "write"), (forget, "purge")]

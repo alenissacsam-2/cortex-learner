@@ -492,8 +492,17 @@ def _two_found(vault, monkeypatch, read):
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source("chrome", "Default", vault / "a"),
         sources.Source("comet", "Default", vault / "b")])
-    monkeypatch.setattr(sources, "read_since",
-                        lambda s, *a: (read.append(s.key), ([], None, None))[1])
+    class Empty(sources.Since):  # records which source was opened; reads nothing
+        def __enter__(self):
+            read.append(self.src.key)
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def chunks(self, n=1000):
+            return iter(())
+    monkeypatch.setattr(sources, "Since", Empty)
 
 
 def test_session_end_import_reads_only_the_sources_imported_before(srv, vault, home,

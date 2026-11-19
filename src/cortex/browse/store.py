@@ -11,14 +11,17 @@ never stored, and `forget.purge` deletes the rows a rule matches (secure_delete 
 them on disk). SQLite in WAL mode with a busy timeout; it is Cortex's own state under
 `.cortex/`, so it is written by SQLite's transactions, not `cortex.vault`'s temp files.
 
-Tables: meta; sources (a browser profile's cursor: newest visit id and raw time read, and its
-History file's size and mtime); visits; files (inbox and archive files already read); dirty
-(days whose pages must be made again; a run clears each day once its pages are written, so a
-stopped run goes on where it was); unsummarised (days made while the local model was away);
-verdicts (the local model's label per text hash, C1); hub_days (public time per topic hub and
-day, for the weekly interest lines); site_pages (one row per site and side: what the site
-Markdown pages held, once `migrate` moved them out of the vault). A `sites` view sums the
-visits per site. Indexes: visits by day, by site, by site with a search, by text hash.
+Tables: meta (among others "settings": the fingerprint of the settings the rows were filtered
+under); sources (a browser profile's cursor: newest visit id and raw time read, moved with
+each saved chunk, and its History file's size and mtime once read whole); visits; files
+(inbox and archive files already read); dirty (days whose pages must be made again; a run
+clears each day once its pages and site counts are saved, so a stopped run goes on where it
+was); unsummarised (days made while the local model was away); verdicts (the local model's
+label per text hash, C1); hub_days (public time per topic hub and day, for the weekly
+interest lines); site_pages (one row per site and side: what the site Markdown pages held,
+once `migrate` moved them out of the vault: the per-site numbers the brain and Chat read, so
+no reader ever scans the visits). Indexes: visits by day and by text hash; a first import
+into an empty store makes them after its rows (`bulk`).
 
 Not built yet (SPEC-browse-events): the tombstone ledger (a forget deletes rows, it is not a
 remembered rule), the source manager (sources are the browsers found, "extension" and
@@ -36,7 +39,7 @@ import sqlite3
 import time
 import zipfile
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -49,7 +52,8 @@ log = logging.getLogger(__name__)
 
 PATH = ".cortex/browse/store.db"
 EXT = "extension"
-CHUNK = 5000  # rows saved per transaction: a stop keeps every chunk before it
+CHUNK = 1000  # rows read and saved per transaction: a stop keeps every chunk before it
+SEEN_CAP = 50_000  # filter verdicts kept across chunks (`ingest`)
 BACKUPS = ".cortex/backups"
 
 _DDL = """
@@ -62,10 +66,6 @@ CREATE TABLE IF NOT EXISTS visits(
     category TEXT, maybe INTEGER NOT NULL DEFAULT 0, search TEXT, engine TEXT, video TEXT,
     channel TEXT NOT NULL DEFAULT '', excerpt TEXT NOT NULL DEFAULT '',
     secs REAL NOT NULL DEFAULT 0, tkey TEXT, PRIMARY KEY(source, native));
-CREATE INDEX IF NOT EXISTS visits_day ON visits(day, ts);
-CREATE INDEX IF NOT EXISTS visits_site ON visits(site, ts);
-CREATE INDEX IF NOT EXISTS visits_search ON visits(site, search) WHERE search IS NOT NULL;
-CREATE INDEX IF NOT EXISTS visits_tkey ON visits(tkey);
 CREATE TABLE IF NOT EXISTS files(name TEXT PRIMARY KEY, stat TEXT);
 CREATE TABLE IF NOT EXISTS dirty(day TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS unsummarised(day TEXT PRIMARY KEY);
@@ -77,10 +77,8 @@ CREATE TABLE IF NOT EXISTS site_pages(site TEXT NOT NULL, hidden INTEGER NOT NUL
     titles TEXT, searches TEXT, led TEXT, hubs TEXT, related TEXT, description TEXT,
     PRIMARY KEY(site, hidden));
 CREATE INDEX IF NOT EXISTS site_pages_last ON site_pages(last);
-CREATE VIEW IF NOT EXISTS sites AS SELECT site, MIN(ts) AS first, MAX(ts) AS last,
-    COUNT(*) AS visits, SUM(secs) AS secs, COUNT(DISTINCT day) AS days FROM visits
-    GROUP BY site;
 """
+_INDEXES = (("visits_day", "visits(day, ts)"), ("visits_tkey", "visits(tkey)"))
 _COLS = ("source", "native", "ts", "day", "url", "title", "host", "site", "category", "maybe",
          "search", "engine", "video", "channel", "excerpt", "secs", "tkey")
 # a row saved again counts as new only when its time on the page or its title changed (the
@@ -113,7 +111,30 @@ def connect(vault: Vault, *, memory: bool = False) -> sqlite3.Connection:
     con.execute("PRAGMA busy_timeout=5000")
     con.execute("PRAGMA secure_delete=ON")  # a forgotten row is overwritten, not left in a page
     con.executescript(_DDL)
+    indexes(con)
     return con
+
+
+def indexes(con: sqlite3.Connection, make: bool = True) -> None:
+    """Make the visits' indexes (when missing), or with `make` False drop them: a first
+    import into an empty store saves its rows first and makes them once after (`bulk`)."""
+    for name, on in _INDEXES:
+        con.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {on}" if make
+                    else f"DROP INDEX IF EXISTS {name}")
+
+
+@contextmanager
+def bulk(con: sqlite3.Connection):
+    """Around a first import into an empty store: the visits' indexes go while the rows are
+    saved and are made once after (a stop or crash in between: `connect` makes them)."""
+    empty = con.execute("SELECT 1 FROM visits LIMIT 1").fetchone() is None
+    if empty:
+        indexes(con, make=False)
+    try:
+        yield
+    finally:
+        if empty:
+            indexes(con)
 
 
 def version(vault: Vault) -> tuple:
@@ -179,15 +200,17 @@ def text_of(k: Kept) -> str:
 
 
 def ingest(con: sqlite3.Connection, visits: list, settings: Settings, tz, *,
-           quiet_until: float | None = None, step=None, before_commit=None) -> Counter:
+           quiet_until: float | None = None, seen: dict | None = None) -> Counter:
     """Filter `visits` (sources.Visit with `.source` and `.native`) and save the ones kept,
     CHUNK per transaction. A new or changed row marks its day dirty, except a row no newer
     than `quiet_until` (epoch seconds: a vault imported before the store existed already has
-    those days' pages). `step(done, total)` after each chunk; `before_commit()` runs inside
-    the last chunk's transaction (the source's cursor moves with its last rows). Counts:
-    "dropped" (never stored), "new" (rows new or changed)."""
+    those days' pages). `seen`: the filter's verdicts by record, kept across calls (the filter
+    is pure, so a record is judged once). Counts: "dropped" (never stored), "new" (rows new or
+    changed)."""
     c: Counter = Counter()
-    seen: dict[tuple[str, str, str], tuple] = {}  # the filter is pure: once per record
+    seen = {} if seen is None else seen
+    if len(seen) > SEEN_CAP:  # bounded however long the history: judged again after
+        seen.clear()
     rows = []
     for v in visits:
         rec = (v.url, v.title, v.channel)
@@ -204,22 +227,15 @@ def ingest(con: sqlite3.Connection, visits: list, settings: Settings, tz, *,
                      int(k.maybe), k.search, k.engine, k.video, v.channel or "",
                      "" if a.private else v.excerpt or "", float(v.secs),
                      privacy.text_key(text) if text else None))
-    if not rows and before_commit:
-        with con:
-            before_commit()
     for i in range(0, len(rows), CHUNK):
         with con:
             days = set()
-            for r in rows[i:i + CHUNK]:
+            for r in rows[i:i + CHUNK]:  # one by one: executemany returns no RETURNING rows
                 for day, ts in con.execute(_UPSERT, r).fetchall():
                     c["new"] += 1
                     if quiet_until is None or ts > quiet_until:
                         days.add(day)
             mark(con, days)
-            if before_commit and i + CHUNK >= len(rows):
-                before_commit()
-        if step:
-            step(min(i + CHUNK, len(rows)), len(rows))
     return c
 
 
@@ -747,9 +763,15 @@ def forget_rows(vault: Vault, rule, gone: dict, text_sig) -> Counter:
     return +c
 
 
-def by_day(con: sqlite3.Connection) -> dict[str, int]:
-    """{day: visits} the store holds (status and tests)."""
-    return dict(con.execute("SELECT day, COUNT(*) FROM visits GROUP BY day"))
+def by_day(con: sqlite3.Connection, days_: set[str] | None = None) -> dict[str, int]:
+    """{day: visits} the store holds (of `days_` only, when given)."""
+    if days_ is None:
+        return dict(con.execute("SELECT day, COUNT(*) FROM visits GROUP BY day"))
+    out: dict[str, int] = {}
+    for chunk in _chunks(sorted(days_), 500):
+        out.update(con.execute("SELECT day, COUNT(*) FROM visits WHERE day IN "
+                               f"({', '.join('?' * len(chunk))}) GROUP BY day", chunk))
+    return out
 
 
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")

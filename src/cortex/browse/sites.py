@@ -261,12 +261,12 @@ def load_cache(vault: Vault) -> dict:
 # ---- recording ----------------------------------------------------------------------------
 
 def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start: str,
-           held: set[str] | None, days: dict | None = None) -> dict:
+           held: set[str] | None, days: dict | None = None, save: bool = True) -> dict:
     """Replace the counts of every day from `start` on that a source still holds (`held`;
     None: every day) with those of `items`; a day no source holds (forgotten by the browser,
-    or from Takeout only) keeps its counts. Drop any key of a category now in
-    skip_categories, and save. `days`: the counts already loaded (`load_days`). Returns the
-    per-day counts."""
+    or from Takeout only) keeps its counts, and save (`save_days`; with `save` False the
+    caller does). `days`: the counts already loaded (`load_days`). Returns the per-day
+    counts."""
     days = load_days(vault)[0] if days is None else days
     for d in list(days):
         if not isinstance(days[d], dict) or (d >= start and (held is None or d in held)):
@@ -320,12 +320,18 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
                 for b in keys:
                     if _split(b)[0] != _split(a)[0]:
                         co[b] = co.get(b, 0) + 1
+    if save:
+        save_days(vault, days, settings)
+    return days
+
+
+def save_days(vault: Vault, days: dict, settings: Settings) -> None:
+    """Save the per-day counts, without any key of a category now in skip_categories."""
     skip = set(settings.skip_categories)
     for d in days.values():
         for key in [k for k in d if _split(k)[1] in skip]:
             del d[key]
     _save(vault, DAYS, days)
-    return days
 
 
 # ---- the pages ----------------------------------------------------------------------------

@@ -267,8 +267,8 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     AUTO_EVERY_S), with every browser found (or `srcs`) and no `since`: the import itself
     reads only what is new and makes the days it changed. The local model only when it is
     already loaded and the PC idle (`idle_runner`): then first the titles waiting for its
-    verdict (`check_titles`); never a download or a model load. Then the private browse
-    vectors."""
+    verdict (`check_titles`); never a download or a model load. It rests build.PAUSE_S after
+    each chunk, so the machine stays quick. Then the private browse vectors."""
     from cortex import semantic
     from cortex.browse import build, sites, sources
 
@@ -279,7 +279,8 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     checked = (check_titles(v, runner, settings, budget)
                if runner is not None and settings.visible_to_claude else {})
     r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
-                  runner=runner, budget=budget, progress=progress, say=say)
+                  runner=runner, budget=budget, progress=progress, say=say,
+                  pause=build.PAUSE_S)
     r.update(checked)
     r["model"] = runner is not None
     sites.update_vectors(v, say)
