@@ -94,14 +94,15 @@ def added_days(events) -> dict[str, dt.date]:
     return out
 
 
-def resurface(vault: Vault, today: str, limit: int = 3, events=None) -> list[dict]:
+def resurface(vault: Vault, today: str, limit: int = 3, events=None,
+              created_of=None) -> list[dict]:
     """Ideas due to be shown again, most overdue first. Permanent notes, decisions, and
     resources with a summary; each shown n times waits INTERVALS[n] days after the last time,
     the first time counted from the day the page was added (a harvested page keeps its old
-    `date`), else `created`."""
+    `date`), else `created` (or `created_of`, a caller's memo of it)."""
     events = list(EventLog(vault).iter_events() if events is None else events)
     seen, added = shown_days(events), added_days(events)
-    day, out = dt.date.fromisoformat(today), []
+    day, out, created_of = dt.date.fromisoformat(today), [], created_of or created
     for kind in ("note", "decision", "resource"):
         for n in vault.iter_notes(kind):
             f = n.fields
@@ -109,7 +110,7 @@ def resurface(vault: Vault, today: str, limit: int = 3, events=None) -> list[dic
                     kind == "resource" and not f.get("summary")):
                 continue
             days = sorted(d for d in map(parse_day, seen.get(n.id, [])) if d)
-            due = (days[-1] if days else added.get(n.id) or created(n)) + dt.timedelta(
+            due = (days[-1] if days else added.get(n.id) or created_of(n)) + dt.timedelta(
                 days=INTERVALS[min(len(seen.get(n.id, [])), len(INTERVALS) - 1)])
             if due <= day:
                 out.append({"id": n.id, "kind": kind, "title": str(f.get("title") or n.id),

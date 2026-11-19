@@ -40,9 +40,16 @@ UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics")
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
 IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar")
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
-STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
-          "/app.css": ("app.css", "text/css; charset=utf-8"),
-          "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+_JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
+# path -> (its file, type); "/" is the live home, filled by dashboard.render_live
+STATIC = {"/": (None, "text/html; charset=utf-8"),
+          "/manage": (ASSETS / "index.html", "text/html; charset=utf-8"),
+          "/app.css": (ASSETS / "app.css", _CSS), "/app.js": (ASSETS / "app.js", _JS),
+          "/dashboard.css": (ASSETS.parent / "dashboard.css", _CSS),
+          **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
+                                                        "dashboard.js")}}
+PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
+QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta"}  # GETs that read the query
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -262,8 +269,12 @@ class App:
         self.last = time.monotonic()
         self.stop = threading.Event()
         self.desktop = None  # desktop.Desktop (window and tray) in the desktop app, else None
+        self.private_unlocked = False  # the Private switch: only then may ?private=1 apply
+        self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
+                    "/api/home": self.home, "/api/home/version": self.home_version,
+                    "/api/home/delta": self.home_delta,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
@@ -382,6 +393,31 @@ class App:
         if cid is None:
             return {"id": None, "messages": []}
         return {"id": cid, "messages": chat.load(self._vault(), cid)}  # load checks the id
+
+    def _home(self):
+        from cortex.home import HomeCache
+        from cortex.vault import Vault
+        root = self.need_root()
+        lock, homes = self.homes
+        with lock:
+            if root not in homes:
+                homes.clear()  # one vault at a time
+                homes[root] = HomeCache(Vault(root))
+            return homes[root]
+
+    def _private(self, query: dict) -> bool:
+        return self.private_unlocked and (query.get("private") or [""])[0] == "1"
+
+    def home(self, query: dict) -> dict:
+        """The live home (cortex.home): the dashboard's data plus feed, next_up and exams.
+        Builds and keeps the brain layout (`.cortex/brain-layout.json`, a view cache)."""
+        return self._home().get(self._private(query))
+
+    def home_version(self) -> dict:
+        return {"v": self._home().version()}
+
+    def home_delta(self, query: dict) -> dict:
+        return self._home().delta((query.get("since") or [None])[0], self._private(query))
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
@@ -1044,6 +1080,14 @@ def _handler(app: App):
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.end_headers()
 
+        def _redirect(self, where: str):
+            self.send_response(302)
+            self.send_header("Location", where)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+
         def _gate(self, query_token: str | None = None, need_token: bool = True) -> bool:
             hosts = {f"{HOST}:{app.port}", f"localhost:{app.port}"}
             if self.headers.get("Host") not in hosts:  # DNS rebinding
@@ -1073,16 +1117,27 @@ def _handler(app: App):
             if not self._gate(qt, need_token=not static):
                 return
             if static:
-                name, ctype = static
-                data = (ASSETS / name).read_bytes()
-                if name == "index.html":  # the key goes only into a page opened with it
-                    ok = bool(qt) and hmac.compare_digest(qt.encode(), app.token.encode())
-                    data = data.replace(b"{{T}}", app.token.encode() if ok else b"") \
+                path, ctype = static
+                # the key goes only into a page opened with it
+                ok = bool(qt) and hmac.compare_digest(qt.encode(), app.token.encode())
+                key = app.token if ok else ""
+                if path is None:
+                    try:
+                        app.need_root()
+                    except ValueError:  # first run: no vault yet, so Setup
+                        self._redirect("/manage" + (f"?t={key}" if key else "") + "#setup")
+                        return
+                    from cortex import dashboard
+                    data = dashboard.render_live(key).encode()
+                else:
+                    data = path.read_bytes()
+                if url.path == "/manage":
+                    data = data.replace(b"{{T}}", key.encode()) \
                         .replace(b"{{REOPEN}}", reopen().encode())
                 self._send(200, data, ctype)
             elif url.path in app.get:
                 self._run(app.get[url.path],
-                          *([parse_qs(url.query)] if url.path == "/api/chat/get" else []))
+                          *([parse_qs(url.query)] if url.path in QUERY_GETS else []))
             elif url.path in app.post:
                 self._send(405, {"error": "use POST"})
             else:
@@ -1314,14 +1369,15 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
           ) -> tuple[ThreadingHTTPServer, App, str]:
     """The app's server, app.json and its watch and auto-import threads, not yet serving: the
     caller runs `srv.serve_forever` and then `finish`. `idle`: stop after 30 minutes with no
-    request and no job (the browser app; the desktop app runs until Quit)."""
+    request and no job (the browser app; the desktop app runs until Quit). No `port`: PORT if
+    it is free, else any free one."""
     try:
-        srv, app = make_server(root, port)
+        srv, app = make_server(root, port or PORT)
     except OSError as e:
-        if not port:
-            raise
-        raise SystemExit(f"Port {port} is in use or not allowed ({e.strerror or e}). Pick "
-                         "another, or leave --port out for a free one.") from None
+        if port:
+            raise SystemExit(f"Port {port} is in use or not allowed ({e.strerror or e}). Pick "
+                             "another, or leave --port out for a free one.") from None
+        srv, app = make_server(root, 0)  # PORT is taken (a second Cortex, another program)
     url = f"http://{HOST}:{app.port}/?t={app.token}"
     try:
         _save_state(app)

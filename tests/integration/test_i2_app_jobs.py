@@ -43,6 +43,7 @@ def fakes(monkeypatch):
     monkeypatch.setattr(actions, "_popen", no_proc)
     monkeypatch.setattr(server, "_open", lambda url: None)
     monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
+    monkeypatch.setattr(server, "PORT", 0)  # never the owner's app port
 
 
 @pytest.fixture
@@ -121,7 +122,10 @@ def test_auth_and_get_changes_nothing(app, vault, home):
         assert c.call("GET", path)[0] == 200, path
     for path in set(app.post) - set(app.get):  # a GET on a change route is refused, not run
         assert c.call("GET", path)[0] == 405, path
-    assert _tree(vault, home) == before
+    after = _tree(vault, home)
+    # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
+    after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
+    assert after == before
 
 
 def test_upload_preview_run_lifecycle(app, home, tmp_path):

@@ -442,7 +442,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert out["errors"] == [] and out["sinks"] == [], out
     # boots: the key leaves the URL and goes in the header; Setup shows, the rest hide
-    assert out["replaced"][0] == "/" and out["tokens"] == ["KEY123"]
+    assert out["replaced"][0] == "/manage" and out["tokens"] == ["KEY123"]
     assert out["hidden"] == {s: s != "setup" for s in out["hidden"]}
     assert out["wordmark"] == 1
     assert setup["order"] == ["vault", "connect", "embed", "history", "llm"]

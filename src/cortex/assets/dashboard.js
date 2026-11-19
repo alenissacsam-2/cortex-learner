@@ -1,9 +1,34 @@
 /* Cortex dashboard, Night Platform. Every note-derived string goes
    in with textContent (or d3 .text); nothing here parses HTML. */
-(() => {
+(async () => {
   'use strict';
   const T0 = performance.now();
-  const D = JSON.parse(document.getElementById('data').textContent);
+  // The snapshot (cortex dashboard) carries its data; the app's live home fetches it and keeps
+  // it current from /api/home/delta.
+  const BLOB = document.getElementById('data'), LIVE = !BLOB;
+  let KEY = '';
+  if (LIVE) {  // the app's key, as app.js: from the link once, then this tab's sessionStorage
+    KEY = new URLSearchParams(location.search).get('t') || '';
+    try { if (KEY) sessionStorage.setItem('cortex.key', KEY); else KEY = sessionStorage.getItem('cortex.key') || ''; } catch (e) { /* storage off */ }
+    history.replaceState(null, '', '/' + location.hash);
+  }
+  async function api(path) {
+    const r = await fetch(path, { headers: { 'X-Cortex-Token': KEY }, cache: 'no-store' });
+    if (!r.ok) throw new Error(`The app answered ${r.status}.`);
+    return r.json();
+  }
+  function offline(on) {  // the header chip: the app is not answering
+    const s = document.getElementById('stale');
+    s.textContent = '· not connected to Cortex';
+    s.hidden = !on;
+  }
+  async function fetchHome() {
+    for (;;) {
+      try { const d = await api('/api/home'); offline(false); return d; } catch (e) { offline(true); }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  let D = BLOB ? JSON.parse(BLOB.textContent) : await fetchHome();
   const STATES = ['solid', 'learning', 'needs_refresh', 'unverified', 'not_started'];
   const GLYPH = { solid: '●', learning: '◐', needs_refresh: '↻', unverified: '◌', not_started: '○' };
   const LABEL = { solid: 'Solid', learning: 'Learning', needs_refresh: 'Needs refresh',
@@ -15,8 +40,8 @@
     ['refresh', 'Refresh'], ['new', 'Ready to learn']];
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const $ = (id) => document.getElementById(id);
-  const TODAY = D.day || D.as_of.slice(0, 10);  // the 04:00 Cortex day, as `cortex today`
-  const NAME = D.owner && D.owner.name ? D.owner.name : '';
+  let TODAY = D.day || D.as_of.slice(0, 10);  // the 04:00 Cortex day, as `cortex today`
+  let NAME = D.owner && D.owner.name ? D.owner.name : '';
   const SVGNS = d3.namespaces.svg;
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
   const motion = (ms) => (REDUCED.matches ? 0 : ms);  // a d3 transition's length: instant under reduced motion
@@ -129,6 +154,8 @@
     chevron: ['M9 6l6 6-6 6'],
     check: ['M5 12.5l4.5 4.5L19 7.5'],
     help: ['M12 3a9 9 0 1 0 0.01 0', 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7', 'M12 17h.01'],
+    gear: ['M12 5.5a6.5 6.5 0 1 0 0.01 0', 'M12 9.5a2.5 2.5 0 1 0 0.01 0', 'M12 3v2.5', 'M12 18.5V21', 'M3 12h2.5',
+      'M18.5 12H21', 'M5.6 5.6l1.8 1.8', 'M16.6 16.6l1.8 1.8', 'M5.6 18.4l1.8-1.8', 'M16.6 7.4l1.8-1.8'],
   };
   function icon(name) {
     const s = svgEl('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
@@ -528,8 +555,8 @@
     reader.append(iconBtn('close', `Close the ${inspector ? 'inspector' : 'reader'} (Esc)`, closeReader, 'icon-btn close'),
       el('h2', null, title));
   }
-  function openReader(id) {
-    const p = PAGES.get(id), n = GN.get(id);
+  function openReader(id, keep) {  // keep: a live refresh (no focus moved, the scroll kept)
+    const p = PAGES.get(id), n = GN.get(id), top = reader.scrollTop;
     if (!p && !n) return;
     panel(id, p ? p.title : n.title, false);
     const meta = el('div', 'rmeta');
@@ -552,7 +579,8 @@
     if (n && (n.kind === 'concept' || n.kind === 'domain' || n.kind === 'area')) reader.append(...conceptDetails(n));
     if (p) reader.append(...pageView(p));
     G.setCurrent(id);
-    reader.querySelector('.close').focus({ preventScroll: true });
+    if (keep) reader.scrollTop = top;
+    else reader.querySelector('.close').focus({ preventScroll: true });
   }
   function obsidianBtn(p) {
     const a = el('a', 'btn', null);
@@ -570,7 +598,9 @@
 
   /* ---- the brain inspector: a page's neighbourhood, or a lobe ---- */
   const DEG = new Map();  // undirected link degree, for "top pages" lists
-  {
+  countDegrees();
+  function countDegrees() {
+    DEG.clear();
     const seen = new Set();
     for (const p of D.pages) {
       for (const t of p.links) {
@@ -684,7 +714,7 @@
   const SECTIONS = ['home', 'brain', 'library', 'you', 'timeline', 'ideas', 'study', 'help'];
   const TITLES = { home: 'Home', brain: 'Brain', library: 'Library', you: 'You', timeline: 'Timeline',
     ideas: 'Ideas', study: 'Study', help: 'Help' };
-  const rendered = new Set();
+  const rendered = new Set(), stale = new Set();  // stale: rendered from older data (live home)
   let current = null;
   const sel = $('section-select');
   for (const s of SECTIONS) { const o = el('option', null, TITLES[s]); o.value = s; sel.append(o); }
@@ -704,6 +734,7 @@
       current = name;
       try { history.replaceState(null, '', '#' + name); } catch (e) { /* a file URL may refuse */ }
       if (!rendered.has(name)) { rendered.add(name); RENDER[name](); }
+      else if (stale.delete(name)) rerender(name);
       if (name === 'home') placeBrain('home-brain-slot');
       if (name === 'brain') setView(view);
       window.scrollTo(0, 0);
@@ -750,10 +781,18 @@
     const hm = D.as_of.slice(11, 16);
     $('clock').replaceChildren(dm(roomy() ? 'AS OF ' + hm : hm, phone() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
     $('clock').title = `Built ${fmtDay(TODAY)} ${TODAY.slice(0, 4)}, ${hm}`;
-    $('stale').hidden = !(Date.now() - Date.parse(D.as_of) > 12 * 36e5);
+    if (!LIVE) $('stale').hidden = !(Date.now() - Date.parse(D.as_of) > 12 * 36e5);
     $('open-search').replaceChildren(icon('search'));
   }
   $('open-search').addEventListener('click', () => openPalette());
+  if (LIVE) {  // the app's other pages: setup, chat, status, connect, local model, browsing, vault
+    const a = el('a', 'icon-btn');
+    a.href = '/manage';
+    a.setAttribute('aria-label', 'Settings');
+    a.title = 'Settings';
+    a.append(icon('gear'));
+    $('theme').before(a);
+  }
   const fit = () => `${phone()} ${roomy()}`;
   let wasFit = fit();
   window.addEventListener('resize', () => {
@@ -791,16 +830,20 @@
   const modeBtns = [], spinBtns = [], aliveBtns = [];
   const brainFilter = { kinds: new Set(['concept', 'note', 'project', 'decision', 'chat', 'youtube', 'person', 'other']),
     states: new Set(STATES) };
-  function ensureBrain() {
+  // keep: a remount's view (camera, mode, style) from the brain it replaces
+  function ensureBrain(keep) {
     if (brain || brainFailed) return brain;
     const t = performance.now();
     const pages = D.pages.map((p) => ({ id: p.id, title: p.title, kind: p.kind, cluster: p.cluster, links: p.links,
       date: p.date, updated: p.updated, group: kindGroup(p), state: GN.has(p.id) ? GN.get(p.id).state : null }));
-    brainHost = el('div', 'brain-host');
-    $('home-brain-slot').append(brainHost);
+    const first = !brainHost;
+    if (first) {
+      brainHost = el('div', 'brain-host');
+      $('home-brain-slot').append(brainHost);
+    }
     try {
       brain = window.CortexBrain.mount(brainHost, {
-        brain: D.brain, pages, today: TODAY,
+        brain: D.brain, pages, today: TODAY, camera: keep && keep.camera, mode: keep && keep.mode,
         onHover(n, pos) {
           if (!n || !pos) { hideTip(); return; }
           const r = brainHost.getBoundingClientRect(), c = LOBES.get(n.cluster);
@@ -813,7 +856,7 @@
         onMode: syncMode,
         onSpin: syncSpin,
         onAlive: syncAlive,
-        style: HAS_STYLE ? savedStyle() : undefined,
+        style: HAS_STYLE ? (keep && keep.style) || savedStyle() : undefined,
         keyHelp: HAS_STYLE ? 'L opens Look.' : '',
         onStyle(s) { saveStyle(s); syncLook(); },
         onCrumbs(c) {
@@ -830,12 +873,14 @@
       return null;
     }
     // brain3d.js owns the other keys on the stage; L is the page's
-    brainHost.addEventListener('keydown', (e) => {
-      if (HAS_STYLE && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
-        e.preventDefault();
-        openLook();
-      }
-    });
+    if (first) {
+      brainHost.addEventListener('keydown', (e) => {
+        if (HAS_STYLE && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
+          e.preventDefault();
+          openLook();
+        }
+      });
+    }
     document.body.dataset.brainMs = String(Math.round(performance.now() - t));
     document.body.dataset.brainRenderer = brain.renderer;
     requestAnimationFrame(() => { document.body.dataset.brainFrameMs = String(Math.round(performance.now() - T0)); });
@@ -857,6 +902,37 @@
     if (brainHost.parentNode !== slot) slot.append(brainHost);
     b.setArchive(slotId === 'brain-slot' && archiveOn);  // the unsorted-chat ring stays off on Home
     b.resize();
+  }
+  // Live home: a new brain blob. brain3d.js has no incremental add, so the brain is mounted
+  // again where it was (camera, selection, mode, Growth month, spin, style, filters) and the new
+  // pages pop for 3 s. Never under a pointer or a flight, at most once every 2 s.
+  let remountIds = null, remountAt = 0, remountTimer = 0, popTimer = 0;
+  function remountBrain(added) {
+    remountIds = (remountIds || []).concat(added || []);
+    clearTimeout(remountTimer);
+    if (!brain) { remountIds = null; return; }  // not mounted yet: it mounts the new blob
+    const wait = brain.busy ? 250 : remountAt + 2000 - Date.now();
+    if (wait > 0) { remountTimer = setTimeout(remountBrain, wait); return; }
+    remountAt = Date.now();
+    const ids = remountIds, old = brain;
+    remountIds = null;
+    const keep = { camera: old.camera, mode: old.mode, style: old.style, selected: old.selected,
+      spin: old.spin, growth: old.growth };
+    hideTip();
+    old.destroy();
+    brain = null;
+    if (!ensureBrain(keep)) return;
+    brain.setArchive(brainHost.parentNode === $('brain-slot') && archiveOn);
+    if (brainUi) applyBrainFilter();
+    if (keep.growth) brain.setGrowth(keep.growth);
+    if (keep.selected) brain.reselect(keep.selected);
+    if (keep.spin) brain.setSpin(true);
+    syncLook();
+    if (ids.length) {
+      brain.highlight(ids);
+      clearTimeout(popTimer);
+      popTimer = setTimeout(() => { if (brain) findInBrain(); }, 3000);
+    } else findInBrain();
   }
   function showInBrain(id) {
     show('brain');
@@ -893,7 +969,7 @@
     const d = (p) => dateOf(p) || '';
     const ids = D.pages.filter((p) => p.updated === TODAY && BRAIN_IDS.has(p.id))
       .sort((a, b) => (d(b) > d(a) ? 1 : d(b) < d(a) ? -1 : 0)).slice(0, 30).map((p) => p.id);
-    const first = departures()[0], focusId = first && BRAIN_IDS.has(first.id) ? first.id : null;
+    const first = nextUp()[0], focusId = first && BRAIN_IDS.has(first.id) ? first.id : null;
     brain.today(ids, focusId);
     live(ids.length ? `Replaying ${plural(ids.length, 'page')} saved today.` : 'Nothing saved today.');
   }
@@ -909,6 +985,7 @@
   }
   if (!brainFailed) $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'));
   else noBrain();
+  $('explore').addEventListener('click', () => { show('brain'); setView('3d'); });
 
   /* ---- Look: the brain's style, generated from the renderer's schema ---- */
   const CB = window.CortexBrain || {};
@@ -1131,39 +1208,13 @@
     if (more && rows.length > cap) b.root.append(moreFoot(rows.length - cap, more[0], more[1]));
     return b.root;
   }
-  // One readiness metric on Home and Study: the weighted Solid share, named as such, beside
+  // One readiness metric on Study: the weighted Solid share, named as such, beside
   // the plain topic count (the two differ when topics carry different weights).
   function readiness(r) {
     const topics = `${r.solid} of ${plural(r.total, 'topic')}`;
     if (r.share == null) return { pct: Math.round(100 * r.solid / r.total), label: `${topics} solid` };
     const pct = Math.round(100 * r.share);
     return { pct, label: `${pct}% of the test's weight solid · ${topics}` };
-  }
-  function assessRow(a) {
-    const r = el('div', 'brow');
-    const t = el('div', 't'), l1 = el('div', 'line1');
-    const who = [a.company || a.id, a.kind].filter(Boolean).join(' · ');
-    l1.append(PAGES.has(a.id) ? button('ttl linkbtn', who, () => openReader(a.id)) : el('span', 'ttl', who));
-    t.append(l1);
-    const ready = el('div', 'ready');
-    const rd = a.readiness;
-    if (rd.total) {
-      const bar = el('div', 'bar'), fill = el('span');
-      const { pct, label } = readiness(rd);
-      bar.setAttribute('role', 'img');
-      bar.setAttribute('aria-label', label);
-      fill.style.width = pct + '%';
-      bar.append(fill);
-      ready.append(bar, el('span', 'sub', label));
-    } else ready.append(el('span', 'sub', 'No tested topics recorded'));
-    t.append(ready);
-    const acts = el('div', 'acts');
-    const n = a.days_left;
-    acts.append(n == null ? el('span', 'sub', 'date not set') : dm(n === 0 ? 'TODAY' : `IN ${n}D`, 2,
-      n === 0 ? 'today' : `in ${plural(n, 'day')}`));
-    acts.append(copyBtn(`/cortex mock ${a.id}`));
-    r.append(t, acts);
-    return r;
   }
 
   // Nothing planned and nothing ever checked: three first steps instead of "Done for today".
@@ -1179,19 +1230,27 @@
   }
 
   /* ---- Home ---- */
-  function departures() {
+  // Next up: tests and deadlines in the next 2 days, then each subject's next steps (the most
+  // recently studied subject first; the snapshot has today's plan), then due loops and decisions.
+  function nextUp() {
     const items = [];
-    for (const a of D.assessments) {
+    for (const a of D.exams || D.assessments) {
       if (a.days_left == null || a.days_left < 0 || a.days_left > 2) continue;
       items.push({ time: a.days_left === 0 ? 'TODAY' : `IN ${a.days_left}D`, id: a.id,
-        title: [a.company || a.id, a.kind].filter(Boolean).join(' · '), why: 'Assessment',
+        title: [a.company || a.id, a.kind].filter(Boolean).join(' · '),
+        why: a.kind === 'deadline' ? 'Deadline' : 'Assessment',
         lobe: pageLobe(a.id), word: 'DUE', prompt: `/cortex mock ${a.id}` });
     }
     const groupOf = Object.fromEntries(GROUPS);
-    for (const i of D.today) {
-      items.push({ time: i.kind === 'unchecked' || i.kind === 'asked' ? 'NOW' : 'NEXT', id: i.id, title: i.title,
-        why: i.why || groupOf[i.kind] || '', lobe: pageLobe(i.id), state: i.state,
-        prompt: i.kind === 'refresh' ? '/cortex review' : i.id ? `/cortex learn ${i.id}` : '/cortex learn' });
+    let first = true;
+    for (const g of D.next_up || [{ subject: null, items: D.today }]) {
+      for (const i of g.items) {
+        const now = D.next_up ? first : i.kind === 'unchecked' || i.kind === 'asked';
+        first = false;
+        items.push({ time: now ? 'NOW' : 'NEXT', id: i.id, title: i.title, why: i.why || groupOf[i.kind] || '',
+          lobe: g.subject ? g.subject.id : pageLobe(i.id), subject: g.subject, state: i.state,
+          prompt: i.kind === 'refresh' || i.kind === 'review' ? '/cortex review' : i.id ? `/cortex learn ${i.id}` : '/cortex learn' });
+      }
     }
     const dated = (d) => (d === TODAY ? 'TODAY' : fmtDay(d).toUpperCase());
     for (const l of D.loops) {
@@ -1206,10 +1265,163 @@
     }
     return items;
   }
+  // PLATFORM: the subject's lobe chip, else a chip of the subject's own title
+  function platChip(it) {
+    if (!it.subject || LOBES.has(it.lobe)) return lobeChip(it.lobe);
+    const s = el('span', 'code', code(it.subject.title));
+    s.title = it.subject.title;
+    s.setAttribute('aria-label', 'Subject: ' + it.subject.title);
+    return s;
+  }
+  function examRow(a) {
+    const n = a.days_left;
+    return brow({ id: a.id, title: [a.company || a.id, a.kind].filter(Boolean).join(' · '), sub: fmtDay(a.date),
+      right: el('span', 'kind', n === 0 ? 'today' : `${plural(n, 'day')} left`),
+      prompt: a.kind === 'deadline' ? null : `/cortex mock ${a.id}`, brainId: a.id });
+  }
+
+  /* the live feed: Today or This week, grouped by subject, newest first */
+  const FEED = [['today', 'Today'], ['week', 'This week']];
+  const feedKey = (i) => [i.ts, i.kind, i.id, i.title].join('\n');
+  let feedRange = 'today', feedSeen = null;
+  const hhmm = (ts) => {
+    const t = new Date(ts);
+    return isNaN(t) ? '' : `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  };
+  function feedRows() {
+    const items = (D.feed && D.feed[feedRange]) || [];
+    if (!items.length) {
+      return [el('p', 'empty', `${feedRange === 'today' ? 'Nothing yet today' : 'Nothing earlier this week'}. `
+        + 'What you save, study and ask shows up here.')];
+    }
+    const out = [];
+    let subj = null;
+    for (const i of items) {
+      const s = i.subject ? i.subject.id : '';
+      if (s !== subj) { subj = s; out.push(el('h3', 'feed-subj', i.subject ? i.subject.title : 'Other')); }
+      const r = brow({ id: i.id, title: i.title, sub: i.detail,
+        left: el('span', 'ftime', [feedRange === 'today' ? '' : fmtDay(i.day), i.timed === false ? '' : hhmm(i.ts)].filter(Boolean).join(' ')) });
+      if (feedSeen && !feedSeen.has(feedKey(i))) r.classList.add('fresh');  // new since the last render
+      out.push(r);
+    }
+    return out;
+  }
+  function feedBoard() {
+    const tools = el('div', 'band-tools'), seg = el('div', 'seg');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'Feed range');
+    tools.append(seg);
+    const b = board('Live feed', { cls: 'feed', action: tools });
+    const fill = () => {
+      for (const t of seg.children) t.setAttribute('aria-pressed', String(t.dataset.k === feedRange));
+      b.body.replaceChildren(...feedRows());
+    };
+    for (const [k, word] of FEED) {
+      const t = button(null, word, () => { feedRange = k; fill(); });
+      t.dataset.k = k;
+      seg.append(t);
+    }
+    fill();
+    feedSeen = new Set(D.feed ? [...D.feed.today, ...D.feed.week].map(feedKey) : []);
+    return b.root;
+  }
+
+  /* quick chat: one question to the app's chat, the answer and its numbered sources */
+  let chatBoard = null, chatId = null;
+  function quickChat() {
+    const full = el('a', 'band-btn', 'Open full chat');
+    full.href = '/manage#chat';
+    const b = board('Quick chat', { cls: 'quick-chat', action: full });
+    const lab = el('label', 'qc-label', 'Ask about your notes'), q = el('input'), row = el('div', 'qc-row');
+    q.type = 'text';
+    q.id = 'qc-q';
+    q.autocomplete = 'off';
+    lab.htmlFor = 'qc-q';
+    const go = button('btn', 'Ask', () => ask());
+    row.append(q, go);
+    const need = el('div'), out = el('div', 'qc-out');
+    out.setAttribute('aria-live', 'polite');
+    b.body.append(lab, row, need, out);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ask(); } });
+    const setUp = (what, why) => {  // what is missing, with the page that sets it up
+      const p = el('p', 'qc-need', why + ' '), a = el('a', null, what === 'llm' ? 'Set up a local model' : 'Finish setup');
+      a.href = what === 'llm' ? '/manage#llm' : '/manage#setup';
+      p.append(a);
+      return p;
+    };
+    api('/api/chat').then((s) => {
+      if ((s.missing || []).includes('llm')) {
+        need.replaceChildren(setUp('llm', 'No local model is set up, so chat answers only about your sites and studying.'));
+      }
+    }, () => {});
+    function sources(src) {
+      if (!src || !src.length) return [];
+      const box = el('div', 'chip-list');
+      for (const s of src) {
+        const p = D.pages.find((x) => x.path === s.path), label = `${s.n} ${s.title || s.path}`;
+        box.append(p ? button('chip', label, () => openReader(p.id), `Open source ${s.n}: ${p.title}`) : el('span', 'chip', label));
+      }
+      return [el('h4', null, 'Sources'), box];
+    }
+    let busy = false;
+    async function ask() {
+      const text = q.value.trim();
+      if (!text || busy) return;
+      busy = true;
+      go.disabled = true;
+      out.setAttribute('aria-busy', 'true');
+      out.replaceChildren(el('p', 'muted', 'Thinking…'));
+      let answer = '', src = [], failed = null;
+      try {
+        const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ id: chatId, text }),
+          headers: { 'X-Cortex-Token': KEY, 'Content-Type': 'application/json' } });
+        if (!r.ok) {
+          let d = {};
+          try { d = await r.json(); } catch (e) { /* no body */ }
+          throw new Error(d.error || `The app answered ${r.status}.`);
+        }
+        const rd = r.body.getReader(), dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await rd.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line) continue;
+            const ev = JSON.parse(line);
+            if (ev.id) chatId = ev.id;
+            if (ev.t === 'tok') answer += ev.s;
+            else if (ev.t === 'text') answer = ev.s;
+            else if (ev.t === 'src') src = ev.sources || [];
+            else if (ev.t === 'err') failed = ev;
+            if ((ev.t === 'tok' || ev.t === 'text') && answer) out.replaceChildren(md(answer));
+          }
+        }
+      } catch (e) {
+        failed = { code: 'app', message: e.name === 'TypeError' ? 'The app is not answering.' : e.message };
+      }
+      busy = false;
+      go.disabled = false;
+      out.setAttribute('aria-busy', 'false');
+      if (failed) {
+        const what = failed.code === 'no_local_model' ? 'llm' : failed.code === 'not_set_up' ? 'setup' : null;
+        const why = failed.message || 'No answer.';
+        out.replaceChildren(what ? setUp(what, why) : el('p', 'qc-need', why));
+        return;
+      }
+      q.value = '';
+      out.replaceChildren(md(answer || 'No answer.'), ...sources(src));
+    }
+    return b.root;
+  }
+
   let flicked = false;
   function renderHome() {
-    const items = departures(), host = $('departures');
-    const b = board('Departures: today', { cls: 'departures' });
+    const items = nextUp(), host = $('departures');
+    const b = board('Next up', { cls: 'departures' });
     const head = el('div', 'dep-head');
     for (const h of ['TIME', 'ITEM', 'PLATFORM', 'STATUS', '']) head.append(el('span', null, h));
     b.body.append(head);
@@ -1229,7 +1441,7 @@
       item.append(PAGES.has(it.id) || GN.has(it.id) ? button('ttl linkbtn', it.title, () => openReader(it.id))
         : el('span', 'ttl', it.title), el('span', 'sub', it.why));
       const plat = el('div', 'plat');
-      plat.append(lobeChip(it.lobe));
+      plat.append(platChip(it));
       const st = el('div', 'status' + (it.word ? ' word' : ''));
       if (it.word) st.textContent = it.word; else st.append(stateWord(it.state));
       const acts = el('div', 'acts');
@@ -1243,7 +1455,7 @@
     else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
     else b.root.append(el('div', 'foot', 'That is everything due today.'));
     host.replaceChildren(D.first_run && !items.length ? firstRunBoard() : b.root);
-    if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, once
+    if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;
       times.forEach((d, k) => {
         if (!d) return;
@@ -1256,31 +1468,33 @@
 
     const lobes = D.clusters.filter((c) => c.count > 0).length;
     $('lobe-line').textContent = `${D.pages.length.toLocaleString('en')} pages in ${plural(lobes, 'lobe')}`;
-    $('explore').addEventListener('click', () => { show('brain'); setView('3d'); });
 
-    const rowA = $('home-row-a');
-    const pending = D.assessments;
-    rowA.append(boardList(board('Coming up'), pending.map(assessRow), 4,
-      'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']));
-    rowA.append(boardList(board('Open loops'), D.loops.map(loopRow), 5,
-      "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']));
-    rowA.append(boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
+    const exams = (D.exams || D.assessments.filter((a) => isDay(a.date))).slice().sort((a, c) => a.days_left - c.days_left);
+    const examsBoard = boardList(board('Exams and deadlines'), exams.map(examRow), 4,
+      'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']);
+    const loops = boardList(board('Open loops'), D.loops.map(loopRow), 5,
+      "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']);
+    const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
       'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
-      ['Ideas', 'ideas']));
-
-    const rowB = $('home-row-b');
-    const weekAgo = new Date(dayNum(TODAY) * 864e5 - 7 * 864e5).toISOString().slice(0, 10);
-    const recent = D.pages.filter((p) => p.updated >= weekAgo)
-      .sort((a, b) => (b.updated > a.updated ? 1 : b.updated < a.updated ? -1 : (dateOf(b) || '') > (dateOf(a) || '') ? 1 : -1));
-    rowB.append(boardList(board('Recently saved', { note: `${recent.length.toLocaleString('en')} ${recent.length === 1 ? 'page' : 'pages'} this week` }),
-      recent.slice(0, 10).map((p) => brow({ id: p.id, title: p.title, sub: `${fmtDay(p.updated)} · ${kindWord(p.kind)}`,
-        left: lobeChip(p.cluster), brainId: p.id })), 10,
-      'Nothing saved in the last 7 days. Chats save what they learn as you talk.'));
-    rowB.append(boardList(board('Cortex wants to ask'), D.needs.slice(0, 3).map((n) => brow({
+      ['Ideas', 'ideas']);
+    const ask = boardList(board('Cortex wants to ask'), D.needs.slice(0, 3).map((n) => brow({
       title: n.area ? `Something about your ${n.area}` : 'Something about you',
       sub: n.count > 1 ? `came up in ${n.count} chats` : 'came up in a chat',
       prompt: 'Ask me what Cortex wants to know' })), 3,
-    'Nothing to ask right now. Cortex adds a question here when a chat lacks something about you.'));
+    'Nothing to ask right now. Cortex adds a question here when a chat lacks something about you.');
+    const rowA = $('home-row-a'), rowB = $('home-row-b');
+    if (!LIVE) {  // the snapshot has no feed and no chat
+      rowA.replaceChildren(examsBoard, loops, back);
+      rowB.replaceChildren(ask);
+      return;
+    }
+    // the quick chat is built once: a live update never takes its text or focus
+    if (!chatBoard) chatBoard = quickChat();
+    for (const c of [...rowA.children]) if (c !== chatBoard) c.remove();
+    rowA.prepend(feedBoard(), examsBoard);
+    if (!chatBoard.isConnected) rowA.append(chatBoard);
+    rowB.className = 'home-row three';
+    rowB.replaceChildren(loops, back, ask);
   }
 
   /* ---- Brain section ---- */
@@ -1368,8 +1582,13 @@
     else if (li.classList.contains('lobe')) { setExpanded(li, true); selectLobe(li.dataset.id); }
     else explorePage(li.dataset.id);
   }
-  function buildOutline() {
-    const tree = $('outline');
+  // The tree's rows from D (again on a live update: open lobes and closed regions stay so).
+  function fillOutline() {
+    const tree = $('outline'), gone = tree.nextElementSibling;
+    const okey = (li) => li.dataset.id || li.querySelector('.nm').textContent;
+    const was = new Map([...tree.querySelectorAll('[aria-expanded]')].map((li) => [okey(li), li.getAttribute('aria-expanded')]));
+    tree.replaceChildren();
+    if (gone && gone.classList.contains('empty')) gone.remove();
     const lobes = D.brain.lobes.filter((l) => l.count > 0);
     for (const [r, word] of REGIONS) {
       const ls = lobes.filter((l) => regionOf(l) === r);
@@ -1390,9 +1609,17 @@
       }
     }
     if (!lobes.length) tree.after(el('p', 'empty', 'No lobes yet. Pages you save gather into lobes here.'));
+    for (const li of tree.querySelectorAll('[aria-expanded]')) {
+      const open = was.get(okey(li));
+      if (open && open !== li.getAttribute('aria-expanded')) setExpanded(li, open === 'true');
+    }
     const first = tree.querySelector('[role="treeitem"]');
     if (first) first.tabIndex = 0;
-    const visible = () => [...tree.querySelectorAll('[role="treeitem"]')].filter((li) => !li.parentElement.closest('[role="group"][hidden]'));
+  }
+  function buildOutline() {
+    fillOutline();
+    const tree = $('outline');
+    const visible =() => [...tree.querySelectorAll('[role="treeitem"]')].filter((li) => !li.parentElement.closest('[role="group"][hidden]'));
     const move = (li) => {
       if (!li) return;
       for (const x of tree.querySelectorAll('[role="treeitem"][tabindex="0"]')) x.tabIndex = -1;
@@ -1515,13 +1742,9 @@
     $('bq').addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const q = $('bq').value.trim();
-        if (!q) { brain.highlight(null); $('bq-note').textContent = ''; return; }
-        const hits = search(q);
-        brain.highlight(hits.map((h) => h.h.p.id));
-        const msg = hits.length ? `${plural(hits.length, 'page')} lit` : 'No pages match.';
+        const msg = findInBrain();
         $('bq-note').textContent = msg;
-        live(msg);
+        if (msg) live(msg);
       }, 160);
     });
     $('rail-toggle').addEventListener('click', () => {
@@ -1531,6 +1754,14 @@
     });
     if (phone()) $('rail-toggle').click();
     syncMode(brain.mode);
+  }
+  // the Find box's matches lit in the brain (an empty box: none); its message
+  function findInBrain() {
+    const q = $('bq').value.trim();
+    if (!q) { brain.highlight(null); return ''; }
+    const hits = search(q);
+    brain.highlight(hits.map((h) => h.h.p.id));
+    return hits.length ? `${plural(hits.length, 'page')} lit` : 'No pages match.';
   }
   let brainUi = false;
   function ensureBrainUi() { if (!brainUi) { brainUi = true; renderBrainSection(); } }
@@ -1589,13 +1820,7 @@
       pr.append(b);
     }
     const lob = $('llobe');
-    for (const c of D.clusters) {
-      if (!c.count) continue;
-      const o = el('option', null, `${code(c.title)} · ${c.title} (${c.count})`);
-      o.value = c.id;
-      lob.append(o);
-    }
-    lob.disabled = lob.options.length < 2;  // no lobes yet: nothing to choose
+    fillLobes();
     lob.addEventListener('change', () => { LIB.lobe = lob.value; LIB.shown = 100; renderLibraryRows(); });
     $('lsort').addEventListener('change', () => { LIB.sort = $('lsort').value; renderLibraryRows(); });
     let timer = 0;
@@ -1610,6 +1835,17 @@
     });
     $('lmore').addEventListener('click', () => { LIB.shown += 100; renderLibraryRows(); });
     renderLibraryRows();
+  }
+  function fillLobes() {
+    const lob = $('llobe');
+    lob.replaceChildren(lob.options[0]);  // All lobes
+    for (const c of D.clusters) {
+      if (!c.count) continue;
+      const o = el('option', null, `${code(c.title)} · ${c.title} (${c.count})`);
+      o.value = c.id;
+      lob.append(o);
+    }
+    lob.disabled = lob.options.length < 2;  // no lobes yet: nothing to choose
   }
   function renderLibraryRows() {
     if (!rendered.has('library')) return;
@@ -2843,6 +3079,100 @@
 
   const RENDER = { home: renderHome, brain: ensureBrainUi, library: renderLibrary, you: renderYou,
     timeline: renderTimeline, ideas: renderIdeas, study: renderStudy, help: renderHelp };
+
+  /* ---- live home: poll the version every 3 s while shown, apply each delta in place ---- */
+  function reindex() {  // every lookup derived from D, refilled in place
+    TODAY = D.day || D.as_of.slice(0, 10);
+    NAME = D.owner && D.owner.name ? D.owner.name : '';
+    PAGES.clear();
+    for (const p of D.pages) PAGES.set(p.id, p);
+    GN.clear();
+    for (const n of D.graph.nodes) GN.set(n.id, n);
+    LOBES.clear();
+    for (const c of D.clusters) LOBES.set(c.id, c);
+    BRAIN_IDS.clear();
+    if (D.brain && D.brain.nodes) for (const id of D.brain.nodes.ids) BRAIN_IDS.add(id);
+    countDegrees();
+    BACK = HAY = CMDS = null;
+  }
+  const CLEAR = { you: ['view-you'], timeline: ['view-timeline'], ideas: ['view-ideas'], help: ['view-help'],
+    study: ['sprint', 'tiles', 'plan', 'coming', 'open-mistakes', 'weeks', 'timeline', 'mstats', 'mirror'] };
+  // A section again from D, in place: Library and Brain keep their controls and filters.
+  function rerender(name) {
+    if (name === 'library') {
+      if (!LOBES.has(LIB.lobe)) LIB.lobe = '';
+      fillLobes();
+      LIB.hits = LIB.q ? new Set(search(LIB.q).map((h) => h.h.p.id)) : null;
+      renderLibraryRows();
+    } else if (name === 'brain') {
+      // shortcut: the 2D map keeps the data it was first drawn with, until the page reloads
+      if (brainUi && !brainFailed) { fillOutline(); if (brain) renderLegend(brain.mode); }
+    } else {
+      for (const id of CLEAR[name] || []) $(id).replaceChildren();
+      if (name === 'study') $('sprint').hidden = false;
+      RENDER[name]();
+    }
+  }
+  const focusSig = (e) => [e.tagName, e.id, e.getAttribute('aria-label'), e.textContent.trim().slice(0, 80)].join('\n');
+  let V = D.v;
+  function applyDelta(d) {
+    const had = new Set(BRAIN_IDS);
+    if (d.full) { delete d.full; D = d; }
+    else {
+      Object.assign(D, d.sections);
+      if (d.pages) {
+        const by = new Map(D.pages.map((p) => [p.id, p]));
+        for (const p of d.pages.upsert) by.set(p.id, p);
+        for (const id of d.pages.removed) by.delete(id);
+        D.pages = d.pages.order.map((id) => by.get(id)).filter(Boolean);
+      }
+      if (d.brain) D.brain = d.brain.blob;
+    }
+    V = d.v;
+    reindex();
+    // what the user is in keeps its place: scroll, focus, the reader, the search overlay
+    const y = window.scrollY, act = document.activeElement;
+    const sig = act && act !== document.body ? focusSig(act) : null;
+    renderHeader();
+    for (const s of rendered) if (s !== current) stale.add(s);
+    rerender(current);
+    if (readerId && !reader.hidden) {
+      if (!PAGES.has(readerId) && !GN.has(readerId)) closeReader();
+      else if (!reader.classList.contains('inspector') && (d.full || (d.pages && d.pages.upsert.some((p) => p.id === readerId))
+        || (d.sections && (d.sections.graph || d.sections.details)))) openReader(readerId, true);
+    }
+    if (!pal.hidden && pq.value.trim()) {
+      const at = palSel;
+      renderPalette();
+      palSel = Math.max(0, Math.min(at, palItems.length - 1));
+      markPal();
+    }
+    if (d.brain || d.full) remountBrain(d.brain ? d.brain.added : [...BRAIN_IDS].filter((id) => !had.has(id)));
+    window.scrollTo(0, y);
+    if (sig && !act.isConnected) {
+      const same = [...document.querySelectorAll(act.tagName)].find((x) => focusSig(x) === sig);
+      if (same) same.focus({ preventScroll: true });
+    }
+  }
+  let pollTimer = 0, polling = false;
+  async function poll() {
+    clearTimeout(pollTimer);
+    if (polling || document.hidden) return;  // hidden: no timer; showing the tab polls at once
+    polling = true;
+    let d = null;
+    try {
+      const { v } = await api('/api/home/version');
+      if (v !== V) d = await api('/api/home/delta?since=' + encodeURIComponent(V));
+      offline(false);
+    } catch (e) { offline(true); }
+    polling = false;
+    pollTimer = setTimeout(poll, 3000);
+    if (d && d.v !== V) applyDelta(d);
+  }
+  if (LIVE) {
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+    pollTimer = setTimeout(poll, 3000);
+  }
 
   /* ---- start ---- */
   applyTheme(theme);

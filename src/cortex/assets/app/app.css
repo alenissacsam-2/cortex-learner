@@ -122,12 +122,13 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
   position: sticky; top: calc(var(--hdr) + 58px); display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--rule); border-radius: 2px;
 }
-.side button {
+.side button, .side a {
   border: 0; border-bottom: 1px solid var(--rule); background: none; text-align: left;
   padding: 0 12px; min-height: 40px; color: var(--ink-2);
 }
+.side a { display: flex; align-items: center; text-decoration: none; }
 .side button:last-child { border-bottom: 0; }
-.side button:hover { color: var(--ink); }
+.side button:hover, .side a:hover { color: var(--ink); }
 .side button[aria-current="page"] { background: var(--band); color: var(--band-ink); font-weight: 600; }
 main { min-width: 0; max-width: 1080px; }
 main h1:first-child { margin-top: 0; }
