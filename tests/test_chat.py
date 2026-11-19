@@ -874,3 +874,12 @@ def test_the_runner_is_only_looked_up_when_the_model_is_needed(vault):
     assert asked == [1]
     assert [(e["code"], e["message"]) for e in events if e["t"] == "err"] == [
         ("no_local_model", "only a loopback runner")]
+
+
+def test_a_site_the_model_filed_under_a_dont_save_category_is_never_listed(vault):
+    _site_days(vault, {"2026-11-17": {"plain.example||0": {"n": 3}, "github.com||0": {"n": 1}}},
+               llm={"plain.example": {"category": "adult"}})
+    out = chat.site_list(vault, "which sites did I visit?", None, ALL_ON)
+    assert "github.com" in out and "plain.example" not in out
+    d = date(2026, 11, 17)
+    assert "plain.example" not in chat.digest(vault, d, d, ALL_ON, TODAY)

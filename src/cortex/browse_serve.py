@@ -221,8 +221,12 @@ def auto_sources(v: Vault) -> list:
     user imported before (keys in the browse state), never one they never ticked."""
     from cortex.browse import build, sources
 
-    done = build.load_state(v).get("sources") or {}
-    return [s for s in sources.chosen(load_settings()) if s.key in done]
+    try:  # a profile folder the OS refuses (PermissionError) must not stop the receiver
+        done = build.load_state(v).get("sources") or {}
+        return [s for s in sources.chosen(load_settings()) if s.key in done]
+    except OSError as e:
+        log.warning("browse: browsers not listed (%s)", type(e).__name__)
+        return []
 
 
 def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> dict:
@@ -413,7 +417,10 @@ class Processor:
 
     def loop(self, stop: threading.Event, every: float = 1.0) -> None:
         while not stop.wait(every):
-            self.tick()
+            try:
+                self.tick()
+            except Exception as e:  # noqa: BLE001  one bad tick never ends the receiver's runs
+                log.warning("browse: background check failed: %s", type(e).__name__)
 
     def status(self) -> dict:
         from cortex.browse import build

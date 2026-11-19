@@ -328,7 +328,10 @@ def _sides(settings: Settings, llm: dict, days: dict):
     def where(key: str) -> bool | None:
         site, cat, pd = _split(key)
         h = host_side(host_of(site))
-        if h is None or privacy.audience(cat or None, settings) == "skip":
+        # a Don't-save category drops the counts whether the key carries it or only the site's
+        # category says so (the local model may file a site under adult after it was stored)
+        if h is None or "skip" in (privacy.audience(cat or None, settings),
+                                   privacy.audience(scat(site), settings)):
             return None
         return (pd or h or privacy.audience(cat or None, settings) == "local"
                 or privacy.audience(scat(site), settings) != "cloud")

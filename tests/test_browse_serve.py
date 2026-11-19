@@ -850,3 +850,36 @@ def test_auto_import_hours_falls_back_on_bad_values():
     assert bs.auto_import_hours({"browse": {"auto_import_hours": 0}}) == 0
     for bad in (-1, 169, "6", True, float("nan")):
         assert bs.auto_import_hours({"browse": {"auto_import_hours": bad}}) == 6
+
+
+def test_a_failing_check_never_ends_the_receivers_loop(tmp_path, monkeypatch):
+    import threading
+
+    from cortex import browse_serve
+    from cortex.vault import Vault
+    (tmp_path / ".cortex").mkdir()
+    proc = browse_serve.Processor(Vault(tmp_path))
+    calls = []
+
+    def tick():
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("a profile folder")
+        stop.set()
+        return False
+    stop = threading.Event()
+    monkeypatch.setattr(proc, "tick", tick)
+    proc.loop(stop, every=0.01)
+    assert len(calls) == 2  # the error was logged and the loop went on
+
+
+def test_auto_sources_is_empty_when_the_browsers_cannot_be_listed(tmp_path, monkeypatch):
+    from cortex import browse_serve
+    from cortex.browse import sources
+    from cortex.vault import Vault
+    (tmp_path / ".cortex").mkdir()
+
+    def denied(*a, **k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(sources, "chosen", denied)
+    assert browse_serve.auto_sources(Vault(tmp_path)) == []
