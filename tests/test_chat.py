@@ -741,3 +741,92 @@ def test_a_data_answer_needs_no_model(vault, monkeypatch):
     assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Cortex", "Cortex"]
     _, events = _turn(vault, None, "what is Dijkstra's algorithm?", None)
     assert [e["code"] for e in events if e["t"] == "err"] == ["not_set_up"]
+
+
+# ---- the digest: a day or week from Cortex's own data ----------------------------------------
+
+@pytest.mark.parametrize("text, want", [
+    ("What did I do yesterday?", "digest"), ("summarize my day", "digest"),
+    ("Summarize my week", "digest"), ("What happened this week?", "digest"),
+    ("recap last week", "digest"), ("Give me a summary of yesterday", "digest"),
+    ("What have I been up to?", "digest"), ("what have I been up to this week?", "digest"),
+    ("so what did I do over the past week", "digest"), ("what have I done today", "digest"),
+    ("What did I study yesterday?", "range"),
+    ("What did I read about engines yesterday?", None), ("summarize this article", None),
+    ("what did I do on reddit yesterday?", None), ("what happened", None),
+    ("summarize", None), ("what did I do", None), ("recap the French revolution", None),
+    ("what happened in the news yesterday?", None),
+])
+def test_digest_questions_caught_and_not(text, want):
+    assert chat_study.kind(text, chat._when(text, TODAY)) == want
+
+
+def test_digest_days_default_to_today_or_this_week():
+    def days(q):
+        return chat_study.digest_days(q, chat._when(q, TODAY), TODAY)
+    assert days("summarize my day") == (TODAY, TODAY)
+    assert days("what have I been up to?") == days("summarize my week") == (date(2026, 11, 16),
+                                                                            TODAY)
+    assert days("recap last week") == (date(2026, 11, 9), date(2026, 11, 15))
+    assert days("what is Dijkstra's algorithm?") is None
+    q = "what did I do yesterday?"  # chat.digest answers it, under the source switches
+    assert chat.study_answer(None, q, chat._when(q, TODAY), TODAY) is None
+
+
+def _digest_vault(vault):
+    _study_events(vault)
+    day = {f"site{i:02}.example||0": {"n": 20 - i} for i in range(12)}
+    day["miruro.tv||1"] = {"n": 30}  # a private category: only with the private switch
+    _site_days(vault, {"2026-11-17": day, "2026-11-10": {"old.example||0": {"n": 99}}})
+    root = vault.root
+    note(root, "notes/rust-ownership.md", "title: Rust **ownership**\ndate: 2026-11-17\n",
+         "# Rust ownership\n\nBorrowing rules.")
+    note(root, "notes/diary-entry.md", "title: Diary entry\nprivate: true\ndate: 2026-11-17\n",
+         "# Diary\n\nSecret things.")
+    note(root, "resources/chat-heaps.md", "title: Heaps chat\nkind: resource\n",
+         "# Heaps chat\n\nTimeline: [[2026-11-01]] · Source: Gemini · Date: 2026-11-17\n")
+    note(root, "journal/2026-11-17.md", "title: Journal 2026-11-17\nkind: journal\n"
+         "date: 2026-11-17\n", "## Log\n- 09:30 Started **graphs** [revision](x)\n- 21:00 Tired\n")
+    return vault
+
+
+def test_a_digest_lists_each_section_under_the_switches(vault):
+    _digest_vault(vault)
+    d = date(2026, 11, 17)
+    out = chat.digest(vault, d, d, ALL_ON, TODAY)
+    assert out.startswith("**Your day** on 17 Nov:")
+    assert "**2 concepts** studied on 17 Nov" in out and "**Array basics**" in out
+    assert "**13 sites** visited (204 visits), most first:" in out
+    assert "- **miruro.tv** · video · 30 visits" in out
+    assert "- and 3 more sites" in out and "site10.example" not in out  # capped at 10
+    assert "old.example" not in out
+    assert "**2 notes** written or changed:" in out
+    assert "- Rust ownership" in out and "- Diary entry" in out  # markdown stripped
+    assert "**1 saved AI chat**:\n\n- Heaps chat" in out
+    assert "**Journal** (2 lines):\n\n- 09:30 Started graphs revision\n- 21:00 Tired" in out
+    assert "Private concept" not in out  # D1: the private concept's study stays hidden
+    assert out.endswith("Not included: private study subjects; site categories set to Don't "
+                        "save (adult), never stored.")
+    shut = chat.digest(vault, d, d, dict(ALL_ON, private=False), TODAY)
+    assert "Diary entry" not in shut and "miruro" not in shut and "Rust ownership" in shut
+    assert "private pages (switched off in Chat settings)" in shut
+    bare = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False, browsing=False,
+                                         private=False), TODAY)
+    assert "sites" not in bare and "Rust" not in bare and "Journal" not in bare
+    assert "Heaps" not in bare and "**2 concepts** studied" in bare
+    empty = chat.digest(vault, date(2026, 11, 3), date(2026, 11, 3), ALL_ON, TODAY)
+    assert empty.startswith("Cortex has nothing recorded on 3 Nov. Not included:")
+
+
+def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch):
+    _digest_vault(vault)
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
+    _, events = _turn(vault, None, "What did I do yesterday?", None)
+    assert not [e for e in events if e["t"] == "err"]
+    assert [e["s"] for e in events if e["t"] == "step"] == ["Putting together your day on 17 Nov"]
+    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Cortex", "Cortex"]
+    text = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert text.startswith("**Your day** on 17 Nov:") and "Rust ownership" in text
+    _, events = _turn(vault, None, "summarize my week", None)
+    assert [e["s"] for e in events if e["t"] == "step"] == [
+        "Putting together your week from 16 Nov to 18 Nov"]
