@@ -428,7 +428,16 @@
     put('status', wn.show && wn.show.length ? newsBoard(wn.show, true) : null,
       board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
         ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
+      d.first_run ? null : chatImportBoard(d.chat_import !== false),
       d.update ? updatesBoard(d.update, wn.current) : null);
+  }
+  /* app.chat_import: past AI chats saved as chat pages every 5 minutes, no model (on by default) */
+  function chatImportBoard(on) {
+    const cb = h('input', { type: 'checkbox', id: 'chat-import', checked: on });
+    cb.addEventListener('change', () => post('/api/app/chat-import', { enabled: cb.checked }, () => savedMark(cb)));
+    return board('Past AI chats', {},
+      h('div', { class: 'field' }, h('label', { class: 'check', for: 'chat-import' }, cb, h('span', { text: 'Save new AI chats to your notes automatically' })),
+        h('p', { class: 'help', text: 'Every 5 minutes, Claude Code chats and the chats you imported become chat pages: your own messages only (a coding session as a short summary of files and commits, never code), with keys and passwords removed. No AI model is used. Chats in a category you set to skip are never saved.' })));
   }
 
   /* What's new: shown once after an update (Got it records it), and any time from Updates */

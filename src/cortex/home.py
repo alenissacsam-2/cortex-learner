@@ -422,7 +422,7 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
             add(e["ts"], d, "result", i, look.title(i),
                 " ".join(str(p[k]) for k in ("outcome", "score") if p.get(k) is not None),
                 "study")
-        elif pk in ("chat_saved", "chat_learned"):
+        elif pk in ("chat_saved", "chat_learned") and not p.get("auto"):  # auto: page dates
             pages = [x for x in p.get("pages") or [] if isinstance(x, str)]
             i = pages[0] if pages else None
             add(e["ts"], d, "chat", i, str(p.get("title") or "Chat"), str(p.get("source") or ""),

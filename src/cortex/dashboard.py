@@ -61,7 +61,8 @@ GROUPS = {"journal": "journal", "me": "you", "session": "sessions",  # page kind
           "browse": "browsing",  # private browse pages are never read
           **dict.fromkeys(("assessment", "application", "track"), "placements")}
 NO_HUB = {"project": "projects", "decision": "projects", "loop": "projects", "person": "people"}
-MEDIA, CHATS = {"youtube", "notebooklm"}, {"claude", "gemini", "perplexity"}
+MEDIA = {"youtube", "notebooklm"}
+CHATS = {"claude", "claude code", "chatgpt", "gemini", "perplexity"}  # page_source, lowercased
 
 
 def _title(note) -> str:

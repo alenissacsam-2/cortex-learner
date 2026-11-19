@@ -285,7 +285,7 @@ class App:
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
-            "/api/app/notify": self.notify_set}
+            "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -303,12 +303,13 @@ class App:
 
     # ---- GET (never changes anything) ----
     def status(self) -> dict:
+        from cortex import chat_import
         v = status.vault(self.root)
         ready = v["ok"] and (_connect_skipped() or any(
             t["connected"] for t in targets.describe(self.entry())))
         return {"rows": status.rows(self.root, self.receiver.status()),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
-                "whats_new": news.card(),
+                "whats_new": news.card(), "chat_import": chat_import.enabled(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def connect(self) -> dict:
@@ -611,6 +612,31 @@ class App:
                                    cancellable=True, quiet_errors=True)
         except Busy:  # a job started meanwhile: the next check tries again
             return None
+
+    def chat_import_auto(self) -> dict | None:
+        """Start a chat import job (chat_import.run) when the setting is on, a vault is set up,
+        no job runs and a transcript is new or changed (stats only); None when it did not."""
+        from cortex import chat_import
+        from cortex.vault import Vault
+        if not chat_import.enabled() or not self.entry() or self.jobs.running():
+            return None
+        root = self.root
+        if not chat_import.pending(Vault(root)):
+            return None
+        try:
+            return self.jobs.start("Chat import", "status",
+                                   lambda job: actions.chat_import(job, root),
+                                   cancellable=True, quiet_errors=True)
+        except Busy:  # a job started meanwhile: the next pass tries again
+            return None
+
+    def chat_import_set(self, body: dict) -> dict:
+        """Turn the automatic chat import on or off (`app.chat_import`)."""
+        from cortex import chat_import
+        from cortex.app import desktop
+        on = _bool(body, "enabled")
+        desktop._merge_app(lambda a: {**a, "chat_import": on})
+        return {"enabled": chat_import.enabled()}
 
     def chat_begin(self, body: dict) -> tuple:
         """Check a chat turn and take the one chat slot: (vault, id or None, text). Busy while
@@ -1380,8 +1406,19 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next check tries again)
                 echo(f"cortex app: automatic import check failed ({type(e).__name__})")
 
+    def chats():  # app.chat_import: the first pass a minute after start, then every 5 minutes
+        from cortex import chat_import
+        wait = chat_import.FIRST_S
+        while not app.stop.wait(wait):
+            wait = chat_import.EVERY_S
+            try:
+                app.chat_import_auto()
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: automatic chat import check failed ({type(e).__name__})")
+
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=auto, daemon=True, name="cortex-app-auto-import").start()
+    threading.Thread(target=chats, daemon=True, name="cortex-app-chat-import").start()
     return srv, app, url
 
 
