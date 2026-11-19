@@ -775,7 +775,8 @@ def _sweep_routes(root, monkeypatch):
     chats = [{"id": chat_id, "title": "Heaps", "updated": "2026-11-19T10:00:00Z", "count": 2}]
     chat_state = {**app.chat_state(), "missing": [], "model": "qwen3.5-2b", "chats": chats}
     routes = {
-        "/api/status": app.status(), "/api/setup": app.setup(), "/api/connect": app.connect(),
+        "/api/status": app.status(), "/api/setup": app.setup(),
+        "/api/connect": {**app.connect(), "skill_zip_found": True},  # not whatever dist/ holds
         "/api/llm": {**app.llm(), "model": "qwen3.5:4b", "runner": "ollama"},
         "/api/browse": app.browse(), "/api/vault": app.vault(), "/api/chat": chat_state,
         "/api/chat/list": {"chats": chats},
