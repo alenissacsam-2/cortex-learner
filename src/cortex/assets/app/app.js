@@ -128,6 +128,7 @@
     let data = {};
     try { data = await r.json(); } catch (e) { /* no body */ }
     if (r.status === 401) gone('This page lost its key. ' + REOPEN);
+    if (r.status === 409) poll(true);  // busy: show the job this page did not start (an automatic import)
     if (!r.ok) throw new Error(data.error || `The app answered ${r.status}.`);
     return data;
   }
@@ -235,7 +236,7 @@
 
   /* ---- jobs: one at a time, a progress line under the header ---- */
   const outputs = {};
-  let polling = false, hideTimer;
+  let polling = false, pollAgain = false, hideTimer;
   async function job(path, body) {
     const r = await post(path, body);
     if (r) poll();
@@ -253,11 +254,14 @@
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
   }
+  // initial: only a job still running (on open, the periodic look, a busy refusal); a job this
+  // page started while a look is under way is followed once that look ends, never dropped
   async function poll(initial) {
-    if (polling) return;
+    if (polling) { if (!initial) pollAgain = true; return; }
     polling = true;
     try {
       for (;;) {
+        if (pollAgain) { pollAgain = false; initial = false; }
         const v = await api('/api/job');
         const j = v.job;
         if (!j || (initial && !j.running)) break;  // on open: only a job still running
@@ -266,7 +270,10 @@
         if (!j.running) { finish(j); break; }
         await sleep(600);
       }
-    } catch (e) { /* the app stopped: gone() said so */ } finally { polling = false; }
+    } catch (e) { /* the app stopped: gone() said so */ } finally {
+      polling = false;
+      if (pollAgain && !dead) { pollAgain = false; poll(); }
+    }
   }
   function idle() {
     $('jobline').classList.remove('running', 'ok', 'bad', 'ended');
@@ -1368,4 +1375,6 @@
   else api('/api/status').then((d) => show(d.land), () => show('status'));
   idle();
   poll(true);
+  // the app starts the automatic history import by itself: the job line shows it within 15 s
+  setInterval(() => { if (!dead && !document.hidden) poll(true); }, 15000);
 })();
