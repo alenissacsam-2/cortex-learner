@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cortex.browse import build, privacy, sources
-from cortex.vault import Vault
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault
 
 DROPPED = ("SIGNINMARKER", "BANKMARKER", "SECRETMARKER")
 SENSITIVE = ("HEALTHMARKER", "ADULTMARKER")
@@ -132,7 +132,7 @@ def run(echo: Callable[[str], None] = print) -> bool:
                   and not first.get("sources_failed"))
             pages = {k: v for k, v in _files(root).items() if k.startswith("browse/")}
             check("pages written only under browse/private",
-                  lambda: pages and all(k.startswith("browse/private/") for k in pages))
+                  lambda: pages and all(k.startswith(PRIVATE_BROWSE_DIR + "/") for k in pages))
             every = b"".join(_files(root).values())
             check("sign-in, bank and secret rows are nowhere in the vault",
                   lambda: not any(m.encode() in every for m in DROPPED))

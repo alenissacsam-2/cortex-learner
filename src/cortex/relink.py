@@ -24,6 +24,7 @@ from cortex.index import EDGE_KEYS, _edge_targets, _target
 from cortex.vault import (
     HEADING_RE,
     ID_RE,
+    PRIVATE_BROWSE_DIR,
     Note,
     Vault,
     VaultError,
@@ -240,7 +241,7 @@ def _hidden(root: Path, p: Path, text: str) -> bool:
     """A page whose links and path the report never names: browse/private/ and any page
     `is_private` calls private (people pages unless `private: false`)."""
     parts = p.relative_to(root).parts
-    if parts[:2] == ("browse", "private"):
+    if parts[:2] == tuple(PRIVATE_BROWSE_DIR.split("/")):
         return True
     try:
         sp = _split(text)

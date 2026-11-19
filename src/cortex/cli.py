@@ -30,7 +30,7 @@ from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from cortex.session import _git
 from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
-from cortex.vault import Vault, VaultError
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 EPILOG = ("About you: claims [--unasked|--summary], needs, probes, voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
@@ -62,7 +62,7 @@ SECTIONS = ("me", "tracks", "concepts", "areas", "domains", "mistakes", "problem
             "projects", "decisions", "loops", "raw")
 PRE_PUSH = "#!/bin/sh\necho 'cortex: this vault is local only; push refused.' >&2\nexit 1\n"
 WORKSPACE_IGNORE = ".obsidian/workspace*.json"
-PRIVATE_BROWSE_IGNORE = "browse/private/"  # v7 C3: private browsing never enters git
+PRIVATE_BROWSE_IGNORE = PRIVATE_BROWSE_DIR + "/"  # v7 C3: private browsing never enters git
 GITIGNORE = f".cortex/*\n!.cortex/config.yaml\n{WORKSPACE_IGNORE}\n{PRIVATE_BROWSE_IGNORE}\n"
 SESSION_ID_RE = re.compile(r"^s_[0-9A-HJKMNP-TV-Z]{26}$")
 OLD_COLOR_GROUPS = [("[cortex_status:solid]", "1D9E75"), ("[cortex_status:learning]", "BA7517"),

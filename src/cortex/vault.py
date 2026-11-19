@@ -28,6 +28,8 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 log = logging.getLogger(__name__)
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,80}$")
+# The private browse folder, vault-relative: kept from Claude, git and the index.
+PRIVATE_BROWSE_DIR = "browse/private"
 
 # SPEC §15a.2: fields marked * per kind. TOOL_PROPS are written only by set_tool_props.
 SET_FIELD_WHITELIST = {
@@ -398,7 +400,7 @@ class Vault:
             return []
         if kind != "browse":
             return list(folder.glob("*.md"))
-        hidden = folder / "private"
+        hidden = self.root / PRIVATE_BROWSE_DIR
         return [p for p in folder.rglob("*.md") if not p.is_relative_to(hidden)]
 
     def iter_notes(self, kind: str | None = None) -> Iterator[Note]:

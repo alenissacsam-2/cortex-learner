@@ -16,7 +16,7 @@ from cortex.clients import claude_desktop_config_paths
 from cortex.contract import MAX_CHARS as CONTRACT_MAX_CHARS
 from cortex.events import EventLog
 from cortex.session import _git, git_choice
-from cortex.vault import Vault
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault
 
 
 def check_python() -> tuple[str, str, str, str]:
@@ -106,12 +106,12 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
         return "PASS", name, "private browsing pages are kept in git by your choice", ""
     if not (root / ".git").exists():
         return "PASS", name, "no repo (see Vault git)", ""
-    if _git(root, "ls-files", "--", "browse/private").stdout.strip():
+    if _git(root, "ls-files", "--", PRIVATE_BROWSE_DIR).stdout.strip():
         return ("WARN", name, "browse/private/ is still tracked by git",
                 "Run `cortex browse import` once (it untracks the folder), or run "
                 "`git rm -r --cached browse/private` in the vault and commit.")
-    if _git(root, "check-ignore", "-q", "browse/private/x.md").returncode:
-        if not (root / "browse" / "private").exists():  # an older vault, nothing private yet
+    if _git(root, "check-ignore", "-q", PRIVATE_BROWSE_DIR + "/x.md").returncode:
+        if not (root / PRIVATE_BROWSE_DIR).exists():  # an older vault, nothing private yet
             return ("PASS", name, "no private pages yet; the .gitignore line is added before "
                     "the first one", "")
         return ("WARN", name, "browse/private/ is not in the vault's .gitignore",

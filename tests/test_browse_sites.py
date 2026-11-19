@@ -504,3 +504,22 @@ def test_deepen_keeps_only_related_sites_that_share_a_category_or_hub(vault, his
                            for q in by[s]), (site, s)
             kept += len(rel)
     assert kept  # the chess sites still find each other
+
+
+def test_a_visit_at_0359_counts_as_the_previous_study_day_everywhere(vault, tmp_path):
+    """04:00 on the 9th and 03:59 on the 10th are one study day: the site page, the CSV and
+    site-days all say 2026-11-09."""
+    t = m(0).replace(hour=4)
+    local, roaming = tmp_path / "local", tmp_path / "roaming"
+    chromium(local / "Google" / "Chrome" / "User Data" / "Default" / "History",
+             [(t, "https://lichess.org/study/abc", "Chess openings for beginners", 300),
+              (t + timedelta(hours=23, minutes=59), "https://lichess.org/study/def",
+               "Chess middlegame plans", 300)])
+    imp(vault, (local, roaming))
+    v = visible(vault)
+    page = v["browse/sites/gaming/browse-lichess.org.md"].decode()
+    assert "first seen 2026-11-09 · last seen 2026-11-09" in page
+    assert 'first_seen: "2026-11-09"' in page and 'last_seen: "2026-11-09"' in page
+    assert "lichess.org,gaming,2,10,2026-11-09,2026-11-09," in v["browse/sites.csv"].decode()
+    days = json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
+    assert [d for d, keys in days.items() if any("lichess" in k for k in keys)] == ["2026-11-09"]
