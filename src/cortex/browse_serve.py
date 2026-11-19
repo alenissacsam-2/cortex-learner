@@ -317,10 +317,11 @@ def summary(r: dict, took: float) -> str:
 
 
 class Processor:
-    """Runs `run_import` when a session ended (debounced), records sat idle, or the last import
-    is older than browse.auto_import_hours (checked AUTO_FIRST_S after start, then every
-    AUTO_EVERY_S); `tick` is the only runner and never overlaps itself. `clock` (monotonic) and
-    `now` (wall time, for the last import's age) are injectable for tests."""
+    """Runs `run_import` on the sources imported before (`auto_sources`) when a session ended
+    (debounced), records sat idle, or the last import is older than browse.auto_import_hours
+    (checked AUTO_FIRST_S after start, then every AUTO_EVERY_S); `tick` is the only runner and
+    never overlaps itself. `clock` (monotonic) and `now` (wall time, for the last import's age)
+    are injectable for tests."""
 
     def __init__(self, v: Vault, clock=time.monotonic, say=_say, now=None):
         self.v, self.clock, self.say = v, clock, say
@@ -379,8 +380,10 @@ class Processor:
                      else f"  {key}: {n} visits read, {new} new")
 
         try:
-            only = {"srcs": picked} if aged else {}  # the automatic import: imported before only
-            self.last = summary(run_import(self.v, progress=progress, **only),
+            # nothing here is a click: only the browsers and profiles imported before are read;
+            # the extension's inbox is processed even when none qualifies
+            srcs = picked if aged else auto_sources(self.v)
+            self.last = summary(run_import(self.v, progress=progress, srcs=srcs),
                                 time.perf_counter() - t0)
         except Exception as e:  # logged by type only: a message may hold a URL or title
             self.last = f"failed: {type(e).__name__}"
