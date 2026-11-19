@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+from cortex import session
 from cortex.app import actions, status, targets
 
 # The models Setup offers: edit tags and sizes here. Sizes are approximate (4-bit downloads).
@@ -220,7 +221,8 @@ def state(root: Path | None, scanned: dict | None = None) -> dict:
         # moved: the config names a folder that is gone; Setup asks instead of recreating it
         "vault": {"done": v["ok"], "path": v["path"], "default": str(cli._default_vault()),
                   "moved": bool(v["path"]) and not v.get("exists")},
-        "git": {"found": targets._which("git") is not None, "install": git_plan()},
+        "git": {"found": targets._which("git") is not None, "install": git_plan(),
+                "enabled": session.git_choice()[0]},
         "embed": {"done": e["downloaded"], "indexed": e.get("indexed"), **EMBED},
         "runner": {"done": "running" in (o_state, l_state), "recommend": "ollama",
                    "ollama": {"found": ollama_exe() is not None, "serving": ollama is not None,

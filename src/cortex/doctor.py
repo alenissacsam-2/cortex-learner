@@ -15,7 +15,7 @@ from cortex.app import targets
 from cortex.clients import claude_desktop_config_paths
 from cortex.contract import MAX_CHARS as CONTRACT_MAX_CHARS
 from cortex.events import EventLog
-from cortex.session import _git
+from cortex.session import _git, git_choice
 from cortex.vault import Vault
 
 
@@ -57,6 +57,9 @@ def check_onedrive(root: Path) -> tuple[str, str, str, str]:
 def check_git(root: Path) -> tuple[str, str, str, str]:
     name = "Vault git: no remote, push blocked"
     root = Path(root).resolve()
+    if not git_choice()[0]:
+        return ("PASS", name, "git is off in your settings (your choice): Cortex keeps no "
+                "history of the vault and `cortex undo` is off", "")
     if not (root / ".git").is_dir() and shutil.which("git") is None:
         return ("WARN", name, "git is not installed, so the vault has no history and undo does "
                 "nothing", "Install git (Windows: Setup → Vault → Install Git, or `winget "
@@ -81,6 +84,11 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
 
     name = "Private browsing out of git"
     root = Path(root)
+    git_on, kept = git_choice()
+    if not git_on:
+        return "PASS", name, "git is off in your settings (see Vault git)", ""
+    if kept:
+        return "PASS", name, "private browsing pages are kept in git by your choice", ""
     if not (root / ".git").exists():
         return "PASS", name, "no repo (see Vault git)", ""
     if _git(root, "ls-files", "--", "browse/private").stdout.strip():
@@ -110,6 +118,8 @@ def check_git_identity(root: Path) -> tuple[str, str, str, str]:
     """N11: with no git identity every session commit fails silently, so `cortex undo` has
     nothing to revert."""
     name = "Vault git identity"
+    if not git_choice()[0]:
+        return "PASS", name, "git is off in your settings (see Vault git)", ""
     if not (Path(root) / ".git").is_dir():
         return "PASS", name, "no repo (see Vault git)", ""
     email = _git(Path(root), "config", "user.email").stdout.strip()

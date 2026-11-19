@@ -1066,7 +1066,19 @@
         [btn('Build dashboard', () => job('/api/vault/dashboard', {})), d.dashboard ? btn('Open dashboard', () => post('/api/open', { what: 'dashboard' })) : null]),
       row('Backups', d.backups ? `${d.backups}, last ${d.last_backup}` : 'none yet', 'A zip of the whole vault in .cortex/backups. Copy it to another drive now and then.',
         [btn('Back up vault', () => job('/api/vault/backup', {}))]),
-      row('Health', null, 'Checks Python, the vault folder, git and a few common problems.', [btn('Run doctor', () => job('/api/vault/doctor', {}))])));
+      row('Health', null, 'Checks Python, the vault folder, git and a few common problems.', [btn('Run doctor', () => job('/api/vault/doctor', {}))])),
+      gitBoard(d.git || { enabled: true, private_browsing: false }));
+  }
+  function gitBoard(g) {
+    const on = h('input', { type: 'checkbox', id: 'g-on', checked: g.enabled });
+    const priv = h('input', { type: 'checkbox', id: 'g-private', checked: g.private_browsing, disabled: !g.enabled });
+    on.addEventListener('change', () => { priv.disabled = !on.checked; });
+    const save = () => post('/api/vault/git', { enabled: on.checked, private_browsing: priv.checked }, () => { toast('Saved.'); load('vault'); });
+    return board('History', { btn: ['Save', save] },
+      h('div', { class: 'field' }, h('label', { class: 'check' }, on, h('span', { text: 'Keep the vault’s history in git (lets you undo sessions; uses more disk as the vault grows)' })),
+        h('p', { class: 'help', text: 'On (the default): each session is saved as a git commit you can undo. Off: no new history is kept and undo is off; history already there is left as it is.' })),
+      h('div', { class: 'field' }, h('label', { class: 'check' }, priv, h('span', { text: 'Include private browsing pages in git history' })),
+        h('p', { class: 'help', text: 'Off (the default): private browsing pages stay out of git. On: they are saved in the history with everything else, so undo covers them and deleting one later leaves a copy in old commits.' })));
   }
 
   /* Setup */
@@ -1111,7 +1123,7 @@
       h('div', { class: 'field' }, h('label', { for: 'vault-path', text: 'The folder for your notes' }),
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
         h('p', { class: 'help', text: 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
-      gi && !gi.found ? row('Git (history and undo)', 'not installed', 'Without git, Cortex keeps no history of your vault, so undo does nothing. Free.',
+      gi && !gi.found && gi.enabled !== false ? row('Git (history and undo)', 'not installed', 'Without git, Cortex keeps no history of your vault, so undo does nothing. Free.',
         [gi.install.run ? btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})) : ext(gi.install.page, 'Get Git')]) : null], first);
 
     const e = d.embed;

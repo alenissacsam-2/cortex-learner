@@ -398,6 +398,9 @@ def untrack_private(vault: Vault) -> bool:
         if PRIVATE_IGNORE not in old.splitlines():
             vault.write_text(ignore, old + ("" if old.endswith("\n") or not old else "\n")
                              + PRIVATE_IGNORE + "\n")
+    from cortex.session import git_choice
+    if not git_choice()[0]:  # git off in settings: the repo, if any, is left alone
+        return False
     tracked = _gitz(root, "ls-files", "-z", "--", "browse/private")
     if tracked.returncode or not tracked.stdout.strip("\0"):
         return False
@@ -430,6 +433,31 @@ def untrack_private(vault: Vault) -> bool:
                     made = True
         _gitz(top, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", spec)
     return made
+
+
+def drop_private_ignore(vault: Vault) -> bool:
+    """`git.private_browsing` on: take Cortex's own `browse/private/` line (that exact line,
+    nothing else) out of the vault's .gitignore, so session commits take the private pages.
+    True when the file changed."""
+    ignore = vault.root / ".gitignore"
+    if not ignore.is_file():
+        return False
+    old = ignore.read_text(encoding="utf-8")
+    new = "".join(ln for ln in old.splitlines(keepends=True)
+                  if ln.rstrip("\r\n") != PRIVATE_IGNORE)
+    if new == old:
+        return False
+    vault.write_text(ignore, new)
+    return True
+
+
+def sync_private(vault: Vault) -> bool:
+    """Apply the `git.private_browsing` choice: on, drop the ignore line; off (the default),
+    `untrack_private` as before. True when a commit or .gitignore change was made."""
+    from cortex.session import git_choice
+    if not ((vault.root / ".git").exists() or (vault.root / ".gitignore").is_file()):
+        return False  # nothing to apply (the selftest's throwaway vault): no config read
+    return drop_private_ignore(vault) if git_choice()[1] else untrack_private(vault)
 
 
 def private_in_history(root) -> int:

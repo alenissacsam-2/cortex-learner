@@ -16,7 +16,7 @@ In every new Claude Code chat:
 - **Prime.** Your first message is matched against your vault, and the chat starts already knowing your profile, your teaching rules, the preferences that fit the message, and a few related pages.
 - **Recording.** The chat saves durable things as they come up: a fact about you, a source you shared, an insight, a real decision, a quiz answer. It tells you briefly when it wrote something.
 - **Asking first.** Anything about who you are (a preference or personality line) is saved only after your yes. In Claude Code you'll get a small "save this line about you?" dialog.
-- **Undo.** Each chat's writes are one commit in the vault's git. `cortex undo <session>` reverts it.
+- **Undo.** Each chat's writes are one commit in the vault's git. `cortex undo <session>` reverts it. You can turn git off (see "Vault history in git" in section 9); undo is then off.
 
 The Claude desktop **Chat tab** gets the same tools but no automatic prime, so the chat calls `cortex_prime` itself.
 
@@ -331,5 +331,12 @@ It adds time on screen and a short text excerpt of pages you read. It works in C
 - **What changed and how to undo it:** `cortex claims --unasked` lists what chats saved about you, each with its undo; `cortex undo <session>` reverts one chat.
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
+
+### Vault history in git: your choice
+
+The app's **Vault** page has two settings under **History** (in `~/.cortex/config.yaml` they are `git: {enabled: ..., private_browsing: ...}`):
+
+- **Keep the vault's history in git** (on by default). Each chat's changes become a git commit, so `cortex undo <session>` can revert them. Git keeps every old version of every page, so the vault folder grows over time; with a very large vault you may prefer to turn it off. Off: Cortex makes no commits, `cortex init` does not create a repo, `cortex undo` explains that it needs this setting, and `cortex doctor` reports git as off by your choice. A history that already exists is left as it is, and turning the setting back on carries on from it. Everything else (imports, chat, the app, the AI apps) works the same without git.
+- **Include private browsing pages in git history** (off by default; only with the first setting on). Off: `browse/private/` stays out of git. On: Cortex takes its own `browse/private/` line out of the vault's `.gitignore`, and your private browsing pages are committed with everything else, so they take disk space in the history too, undo covers them, and a page you later remove or forget stays in old commits. Turning it off again puts the line back and stops tracking the folder at the next browse import (or when you save the setting in the app).
 
 **One catch:** the Claude desktop **Chat tab** uses a separately uploaded copy of the skill, which predates `harvest`, `sweep` and `mock`. To get them there, download `cortex-skill.zip` from the latest release (github.com/alenissacsam-2/cortex-learner/releases) and upload it again in Chat's skill settings (from a source checkout: `uv run python scripts/build_skills.py` builds it into `dist/`). Claude Code already has them after a restart.
