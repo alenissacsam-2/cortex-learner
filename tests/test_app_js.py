@@ -1044,3 +1044,56 @@ def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, mon
                             ["/api/browse/login", {"on": True}]]
     assert out["browseOn"] == [False, False]
     assert out["statusOn"] == [False, ["Import new history now", "Open"]]
+
+
+NEWS = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const card = () => $('whats-new');
+const lines = (b) => b.querySelectorAll('li').map((l) => l.textContent);
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    out.first = $('status').childNodes[0] === card();
+    out.shown = [card().querySelector('h2').textContent, lines(card())];
+    card().querySelectorAll('button').find((b) => b.textContent === 'Got it').fire('click');
+    await tick();
+    out.posted = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
+    out.hidden = card() === null;
+    out.toast = $('toast-msg').textContent;
+    // any time: Updates' What's new opens this version's card, with Close and no Got it
+    $('status').querySelectorAll('button').find((b) => b.textContent === 'What’s new').fire('click');
+    out.reopened = [card().querySelectorAll('button').map((b) => b.textContent), lines(card()),
+      document.activeElement === card().querySelector('h2')];
+    card().querySelectorAll('button').find((b) => b.textContent === 'Close').fire('click');
+    out.closed = card() === null;
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_whats_new_card_shows_got_it_records_and_the_link_reopens_it(
+        root_committed, tmp_path, monkeypatch):
+    """After an update Status leads with the What's new card (text, never HTML); Got it posts
+    once, hides it and says where to find it; Updates' What's new opens it again with Close."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    new = {"version": "0.2.3", "items": ["Faster <b>lists</b>.", "Dates."], "do": ["Reload it."]}
+    old = {"version": "0.2.2", "items": ["Chat steps."], "do": []}
+    routes["/api/status"]["whats_new"] = {"show": [new, old], "current": new}
+    out = _run(node, tmp_path, "news", NEWS, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["first"]
+    assert out["shown"] == ["What’s new in Cortex 0.2.3",
+                            ["Faster <b>lists</b>.", "Dates.", "Reload it.", "Chat steps."]]
+    assert out["posted"] == [["/api/whats_new/seen", {}]] and out["hidden"]
+    assert out["toast"] == "Read it again any time: Updates, What’s new."
+    assert out["reopened"] == [["Close"], ["Faster <b>lists</b>.", "Dates.", "Reload it."], True]
+    assert out["closed"]

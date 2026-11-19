@@ -2305,3 +2305,74 @@ def test_a_busy_port_is_refused_not_shared(vault):
             server.run(vault, open_browser=False, port=busy, echo=lambda *a: None)
     finally:
         other.close()
+
+
+# ---- What's new: shown once after an update -----------------------------------------------
+
+
+@pytest.fixture
+def newsfile(tmp_path, monkeypatch):
+    from cortex.app import news
+
+    p = tmp_path / "whats_new.json"
+    p.write_text(json.dumps({v: {"items": [f"item {v}"], "do": []}
+                             for v in ("0.2.1", "0.2.2", "0.2.3", "0.3.0")}), encoding="utf-8")
+    monkeypatch.setattr(news, "NEWS", p)
+    return news
+
+
+def test_whats_new_fresh_install_records_silently(newsfile, monkeypatch):
+    from cortex import taint, update
+
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    assert newsfile.card()["show"] == []  # nothing remembered: nothing shown
+    newsfile.start()
+    assert taint.config()["app"]["whats_new_seen"] == "0.2.3"
+    assert newsfile.card() == {"show": [], "current": {"version": "0.2.3", "items": [
+        "item 0.2.3"], "do": []}}
+
+
+def test_whats_new_an_existing_user_without_a_record_sees_everything_since_0_2_1(
+        newsfile, tmp_path, monkeypatch):
+    from cortex import taint, update
+
+    taint.write_config({"vault": str(tmp_path / "v")})  # set up before this card existed
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    newsfile.start()
+    assert taint.config()["app"]["whats_new_seen"] == newsfile.BEFORE_NEWS == "0.2.1"
+    assert [e["version"] for e in newsfile.card()["show"]] == ["0.2.3", "0.2.2"]
+
+
+def test_whats_new_after_an_update_shows_the_versions_between_then_got_it(
+        newsfile, app, monkeypatch):
+    from cortex import taint, update
+
+    taint.write_config({"app": {"other": 1, "whats_new_seen": "0.2.1"}})
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    newsfile.start()  # something is remembered: left alone
+    got = call(app, "GET", "/api/status")[1]["whats_new"]
+    assert [e["version"] for e in got["show"]] == ["0.2.3", "0.2.2"]  # newest first, no 0.3.0
+    assert got["current"]["version"] == "0.2.3"
+    assert taint.config()["app"]["whats_new_seen"] == "0.2.1"  # GET changes nothing
+    assert call(app, "POST", "/api/whats_new/seen", {})[0] == 200
+    assert taint.config()["app"] == {"other": 1, "whats_new_seen": "0.2.3"}
+    assert call(app, "GET", "/api/status")[1]["whats_new"]["show"] == []
+
+
+@pytest.mark.parametrize("bad", ["not a version", 3, ["0.2.1"], None])
+def test_whats_new_a_bad_record_is_ignored(newsfile, monkeypatch, bad):
+    from cortex import taint, update
+
+    taint.write_config({"app": {"whats_new_seen": bad}})
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    assert newsfile.card()["show"] == []
+    newsfile.start()  # treated as a fresh install
+    assert taint.config()["app"]["whats_new_seen"] == "0.2.3"
+
+
+def test_whats_new_ships_plain_entries():
+    from cortex.app import news
+
+    for v, e in news._entries().items():
+        assert news._v(v) and 3 <= len(e["items"]) <= 6 and isinstance(e["do"], list), v
+        assert all(isinstance(x, str) and x for x in e["items"] + e["do"]), v

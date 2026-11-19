@@ -401,16 +401,42 @@
           r.action ? btn(r.action.label, () => show(r.action.go, true)) : null));
     });
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-    put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
-      ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
-      d.update ? updatesBoard(d.update) : null);
+    const wn = d.whats_new || {};
+    put('status', wn.show && wn.show.length ? newsBoard(wn.show, true) : null,
+      board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
+        ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
+      d.update ? updatesBoard(d.update, wn.current) : null);
+  }
+
+  /* What's new: shown once after an update (Got it records it), and any time from Updates */
+  function newsBoard(entries, pending) {
+    const hide = () => { b.remove(); ($('s-status').querySelector('h1') || $('s-status')).focus(); };  // focus stays on the page
+    const b = board(`What’s new in Cortex ${entries[0].version}`, {
+      id: 'whats-new',
+      btn: pending ? ['Got it', () => post('/api/whats_new/seen', {}, () => { hide(); toast.ok('Read it again any time: Updates, What’s new.'); })]
+        : ['Close', hide],
+    }, ...entries.map((e) => h('div', { class: 'pad md' },
+      entries.length > 1 ? h('h3', { text: `Cortex ${e.version}` }) : null,
+      h('ul', {}, e.items.map((t) => h('li', { text: t }))),
+      e.do && e.do.length ? [h('p', {}, h('b', { text: 'What to do' })), h('ol', { class: 'how' }, e.do.map((t) => h('li', { text: t })))] : null)));
+    b.querySelector('h2').setAttribute('tabindex', '-1');
+    return b;
+  }
+  function openNews(cur) {
+    let b = $('whats-new');
+    if (!b) {
+      b = newsBoard([cur], false);
+      $('status').replaceChildren(b, ...$('status').childNodes);
+    }
+    b.querySelector('h2').focus();
   }
 
   /* Updates: GitHub is asked only on a click, never in the background */
   let upd = null;  // the last check or update job
-  function updatesBoard(u) {
+  function updatesBoard(u, cur) {
     const r = upd && upd.result;
-    const out = [row(`Cortex ${u.current}`, null, null, [btn('Check for updates', () => { upd = null; return job('/api/update/check', {}); })])];
+    const out = [row(`Cortex ${u.current}`, null, null, [cur ? btn('What’s new', () => openNews(cur)) : null,
+      btn('Check for updates', () => { upd = null; return job('/api/update/check', {}); })])];
     if (upd && upd.error) out.push(row('That did not work', null, upd.error, null));
     else if (r && r.cancelled) out.push(row('Cancelled', null, 'Nothing was installed; update again any time.', null));
     else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
