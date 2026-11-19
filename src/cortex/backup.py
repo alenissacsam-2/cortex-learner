@@ -1,8 +1,9 @@
 """Vault backup copies: one zip of the whole vault, .git included, and the durable browse stores
-in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/,
-vectors-private.npz), which hold browsing the browsers have already forgotten. Left out: old
-backups, the pairing token, the receiver's not-yet-imported inbox-*.jsonl files, the local
-chat history (.cortex/browse/chat), lock files, the rebuilt dashboard and stray *.tmp files.
+in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, the
+receiver's not-yet-imported inbox-*.jsonl, filtered like the archive, and vectors-private.npz),
+which hold browsing the browsers have already forgotten. Left out: old backups, the pairing
+token, the local chat history (.cortex/browse/chat), lock files, the rebuilt dashboard and
+stray *.tmp files.
 A zip holds private browsing: keep it as private as the vault. The last KEEP zips are kept."""
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ def backup(root: Path, dest_dir: Path | None = None) -> Path:
                 dirnames[:] = [n for n in dirnames if d / n not in skip_dirs]
                 for name in filenames:
                     p = d / name
-                    if p in skip_files or p.suffix == ".tmp" or (
-                            d == browse and name.startswith("inbox-") and p.suffix == ".jsonl"):
+                    if p in skip_files or p.suffix == ".tmp":
                         continue
                     z.write(p, p.relative_to(root).as_posix())
         os.replace(tmp, dest)

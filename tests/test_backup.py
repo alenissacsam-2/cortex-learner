@@ -64,8 +64,9 @@ def test_keeps_durable_browse_stores_and_leaves_out_secrets(tmp_path):
     (b / "inbox-archive").mkdir(parents=True)
     (b / "chat").mkdir()
     keep = ["site-days.json", "sites.json", "verdicts.json", "state.json",
-            "vectors-private.npz", "inbox-archive/inbox-2026-11-01.jsonl"]
-    drop = ["token", "lock", "inbox-2026-11-19.jsonl", "chat/01JABCDEFGHJKMNPQRSTVWXYZ0.jsonl"]
+            "vectors-private.npz", "inbox-archive/inbox-2026-11-01.jsonl",
+            "inbox-2026-11-19.jsonl"]  # filtered on arrival, like the archive
+    drop = ["token", "lock", "chat/01JABCDEFGHJKMNPQRSTVWXYZ0.jsonl"]
     for name in keep + drop:
         (b / name).write_text("x", encoding="utf-8")
     with zipfile.ZipFile(backup.backup(root)) as z:
