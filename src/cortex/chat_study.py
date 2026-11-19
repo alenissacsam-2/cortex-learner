@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from cortex import levels, planner, render
 from cortex.catalog import Catalog
@@ -63,7 +63,20 @@ _ASKS = {k: re.compile(_LEAD + "(?:" + "|".join(v) + ")" + _TAIL) for k, v in _A
 _RANGE = re.compile(_LEAD + r"(?:what|which (?:topics|concepts)) (?:did|have) i (?:study|studied"
                     r"|practi[cs]ed?|revised?|reviewed|review|worked on|work on)|what was i "
                     r"(?:studying|practi[cs]ing|revising|reviewing)")
-STEP = {"plan": "Reading your study plan", "due": "Reading your due reviews",
+# "what did I do yesterday?", "summarize my week", "recap last week", "what have I been up to?":
+# the question with its date phrase cut out, as _RANGE. Without a date phrase, "my day" is today,
+# and "my week" or "what have I been up to" this week; any other leftover word ("what did I do
+# on reddit yesterday?", "summarize this article") does not match.
+_DIGEST = re.compile(
+    _LEAD + r"(?:(?P<upto>what (?:have|had) i been (?:up to|doing)|what was i (?:up to|doing))"
+    r"|what did i do|what (?:have|had) i done|what happened"
+    r"|(?:can you |could you )?(?:summari[sz]e|recap|sum up)(?: for me)?"
+    r"|(?:give|show|tell)(?: me)? (?:a |my )?(?:quick |short |brief )?(?:summary|recap|rundown"
+    r"|digest)|(?:a |my )?(?:quick |short |brief )?(?:summary|recap|digest))"
+    r"(?: (?:of|in|on|over|during|for|from|across|with))?(?: (?:my|the))?(?: (?P<unit>day|week))?"
+    + _TAIL)
+NO_STUDY = "Cortex has no study recorded"
+STEP = {"plan":"Reading your study plan", "due": "Reading your due reviews",
         "weak": "Reading your weak spots and mistakes", "range": "Reading what you studied",
         "progress": "Reading your progress"}
 
@@ -76,11 +89,31 @@ def _norm(text: str) -> str:
     return " ".join(s.split())
 
 
+def _digest(text: str, got):
+    """The _DIGEST match of `text` when it names its days (a date phrase, "my day", "my week",
+    "what have I been up to"), else None."""
+    m = _DIGEST.fullmatch(_norm(text[:got[2][0]] + " " + text[got[2][1]:] if got else text))
+    return m if m and (got or m["unit"] or m["upto"]) else None
+
+
+def digest_days(text: str, got, today: date) -> tuple[date, date] | None:
+    """The (first, last) day a digest question asks about, or None for any other question."""
+    if not (m := _digest(text, got)):
+        return None
+    if got:
+        return got[0], got[1]
+    return (today, today) if m["unit"] == "day" else (today - timedelta(today.weekday()), today)
+
+
 def kind(text: str, got=None) -> str | None:
-    """Which study question `text` is (plan, due, weak, range, progress), or None. `got` is
+    """Which study question `text` is (plan, due, weak, range, progress), "digest" for a
+    question about everything done on some days (chat.digest answers it), or None. `got` is
     chat._when's (first, last, span) for its own date phrase; a range question needs one."""
-    if got and _RANGE.fullmatch(_norm(text[:got[2][0]] + " " + text[got[2][1]:])):
+    rest = _norm(text[:got[2][0]] + " " + text[got[2][1]:]) if got else ""
+    if got and _RANGE.fullmatch(rest):
         return "range"
+    if _digest(text, got):
+        return "digest"
     s = _norm(text)
     return next((k for k, rx in _ASKS.items() if rx.fullmatch(s)), None)
 
@@ -106,7 +139,7 @@ def study_answer(vault: Vault, text: str, got, today: date) -> str | None:
     """The answer to a study question about the learner's own plan, due reviews, weak spots,
     a date range's study, or progress; None for any other question."""
     k = kind(text, got)
-    return None if k is None else answer(vault, k, got, today)
+    return None if k in (None, "digest") else answer(vault, k, got, today)  # digest: chat.digest
 
 
 def answer(vault: Vault, k: str, got, today: date) -> str:
@@ -202,7 +235,7 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
             if it.verdict is not None:
                 tally[it.verdict] += 1
         if not did:
-            return f"Cortex has no study recorded {when}."
+            return f"{NO_STUDY} {when}."
         lines = [f"**{_plural(len(did), 'concept')}** studied {when}:", ""]
         for c in sorted(did, key=lambda c: (-sum(did[c].values()), c))[:SHOWN]:
             t = did[c]
