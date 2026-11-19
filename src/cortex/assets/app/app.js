@@ -21,6 +21,7 @@
       if (v == null || v === false) continue;
       if (k === 'class') e.className = v;
       else if (k === 'text') e.textContent = String(v);
+      else if (k === 'onclick' && tag === 'button') e.addEventListener('click', pressable(e, v));
       else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
       else if (k === 'value' || k === 'checked' || k === 'disabled') e[k] = v;
       else e.setAttribute(k, v === true ? '' : String(v));
@@ -32,6 +33,20 @@
     const e = document.createElementNS(SVGNS, tag);
     for (const k in attrs || {}) e.setAttribute(k, attrs[k]);
     return e;
+  }
+  // a click whose handler returns a promise (post, job, api, a copy) marks its button busy
+  // until it settles: aria-busy, disabled and the dots in app.css; a second click is ignored
+  function pressable(b, fn) {
+    return (ev) => {
+      if (b.getAttribute('aria-busy') === 'true') return undefined;
+      const r = fn(ev);
+      if (!r || typeof r.then !== 'function') return r;
+      b.setAttribute('aria-busy', 'true');
+      b.disabled = true;
+      const done = () => { b.removeAttribute('aria-busy'); b.disabled = false; };
+      r.then(done, done);
+      return r;
+    };
   }
   const btn = (text, onclick, cls, extra) => h('button', { class: cls || 'btn', type: 'button', text, onclick, ...extra });
   const ext = (href, text) => h('a', { href, text, target: '_blank', rel: 'noopener noreferrer' });
@@ -77,6 +92,8 @@
       'M17.7 17.7l1.4 1.4', 'M4.9 19.1l1.4-1.4', 'M17.7 6.3l1.4-1.4'],
     moon: ['M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z'],
     copy: ['M9 9h10v10H9z', 'M5 15V5h10'],
+    check: ['M5 12.5l4.5 4.5L19 7.5'],
+    x: ['M6 6l12 12', 'M18 6L6 18'],
     open: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v5H5V6h5'],
   };
   function icon(name) {
@@ -114,13 +131,49 @@
     if (!r.ok) throw new Error(data.error || `The app answered ${r.status}.`);
     return data;
   }
-  let toastTimer;
-  function toast(msg, long) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.hidden = false;
+  /* toast: one message at a time; #toast-msg is the live region (role alert for an error).
+     The card stays in the page, faded out, so the region is always there to announce. */
+  let toastTimer = null, toastEnd = 0, toastLeft = 0, toastOn = false, toastHeld = false;
+  function toastHide() {
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, long ? 6000 : 2200);
+    toastTimer = null;
+    toastOn = false;
+    $('toast').classList.remove('on');
+    $('toast-x').hidden = true;
+    setTimeout(() => { if (!toastOn) $('toast-msg').textContent = ''; }, 120);  // after the fade out
+  }
+  function toastRun(ms) {
+    clearTimeout(toastTimer);
+    toastEnd = Date.now() + ms;
+    toastTimer = setTimeout(toastHide, ms);
+  }
+  function toast(msg, long, kind) {  // kind: 'error', 'ok' or none (info)
+    const m = $('toast-msg');
+    m.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    m.textContent = msg;
+    $('toast').className = 'toast on' + (kind ? ' ' + kind : '');
+    $('toast-x').hidden = false;
+    toastOn = true;
+    toastLeft = long || kind === 'error' ? 6000 : Math.min(4000, 2500 + 25 * String(msg).length);
+    if (!toastHeld) toastRun(toastLeft);
+  }
+  toast.error = (msg) => toast(msg, true, 'error');
+  toast.ok = (msg) => toast(msg, false, 'ok');
+  // a screen reader hears a short confirmation (Saved, Copied) through the same live region
+  function announce(msg) {
+    if (toastOn) return;  // a visible toast is being read already
+    const m = $('toast-msg');
+    m.setAttribute('role', 'status');
+    m.textContent = msg;
+    setTimeout(() => { if (!toastOn && m.textContent === msg) m.textContent = ''; }, 1500);
+  }
+  function toastHold() {
+    toastHeld = true;
+    if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; toastLeft = Math.max(1000, toastEnd - Date.now()); }
+  }
+  function toastRelease() {
+    toastHeld = false;
+    if (toastOn) toastRun(toastLeft);
   }
   async function post(path, body, done) {
     try {
@@ -128,9 +181,30 @@
       if (done) done(r);
       return r;
     } catch (e) {
-      toast(e.message, true);
+      toast.error(e.message);
       return null;
     }
+  }
+  // a check and a word beside a control for 1.5 s (a setting saved on change), also announced
+  function savedMark(ctrl) {
+    const mark = h('span', { class: 'saved', 'aria-hidden': 'true' }, icon('check'), 'Saved');
+    if (ctrl.parentNode && ctrl.parentNode.tagName === 'LABEL') ctrl.parentNode.append(mark);
+    else ctrl.after(mark);
+    announce('Saved');
+    setTimeout(() => mark.remove(), 1500);
+  }
+  // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast
+  function copyBtn(text, failMsg, cls, withIcon) {
+    const face = () => (withIcon ? [icon('copy'), 'Copy'] : ['Copy']);
+    let timer;
+    const b = btn('', () => navigator.clipboard.writeText(text()).then(() => {
+      clearTimeout(timer);
+      b.replaceChildren(icon('check'), 'Copied');
+      announce('Copied');
+      timer = setTimeout(() => b.replaceChildren(...face()), 1500);
+    }, () => toast.error(failMsg)), cls);
+    b.replaceChildren(...face());
+    return b;
   }
 
   /* ---- boards and rows ---- */
@@ -170,8 +244,11 @@
   function showJob(j) {
     clearTimeout(hideTimer);
     const r = j.result || {};
-    $('jobline').classList.remove('idle');
-    $('job-name').textContent = j.running ? j.name : `${j.name}: ${j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done'}`;
+    const word = j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done';
+    // running: the moving bar under the line; done: a brief success tint; failed: the error tint
+    $('jobline').classList.remove('idle', 'running', 'ok', 'bad', 'ended');
+    $('jobline').classList.add(j.running ? 'running' : word === 'done' ? 'ok' : word === 'failed' ? 'bad' : 'ended');
+    $('job-name').textContent = j.running ? j.name : `${j.name}: ${word}`;
     $('job-line').textContent = j.running ? j.line : (j.error || '');
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
@@ -192,13 +269,16 @@
     } catch (e) { /* the app stopped: gone() said so */ } finally { polling = false; }
   }
   function idle() {
+    $('jobline').classList.remove('running', 'ok', 'bad', 'ended');
     $('jobline').classList.add('idle');
     $('job-name').textContent = 'Nothing running';
     $('job-line').textContent = 'Long actions show their progress here, one at a time.';
     $('job-time').textContent = '';
     $('job-cancel').hidden = true;
   }
+  const jobFailed = (j) => { const r = j.result || {}; return !!j.error || (r.ok === false && !r.cancelled && !r.need); };
   function finish(j) {
+    if (jobFailed(j)) toast.error(j.error || `${j.name}: failed.`);
     if (guide && guide.wait && j.section === 'setup') {  // a guided import's own job: shown in its panel
       const w = guide.wait;
       guide.wait = null;
@@ -210,8 +290,8 @@
       if (j.result && j.result.launched) gone('Cortex is closing to install the update. It reopens by itself when it is done; you can close this tab.');
     }
     else {
-      const r = j.result || {};  // a command that stopped with an error (ok: false) failed too
-      outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: !!j.error || (r.ok === false && !r.cancelled && !r.need) };
+      // a command that stopped with an error (ok: false) failed too
+      outputs[j.section] = { title: j.name, nodes: resultNodes(j), error: jobFailed(j) };
       if (desktopChanged(j)) toast(RESTART_DESKTOP, true);
     }
     hideTimer = setTimeout(idle, 8000);
@@ -251,7 +331,7 @@
     if (j.section === 'connect' && r.rows) out.push(r.rows.length ? changeList(r.rows) : note('Nothing changed.'));
     if (desktopChanged(j)) out.push(row('Next: restart Claude Desktop', null, RESTART_DESKTOP, null));
     if (r.kind === 'scan') out.push(r.rows.length ? scanTable(r.rows) : note('No browser history found on this computer.'));
-    if (r.counts) out.push(countsTable(r.counts));
+    if (r.counts) out.push(Object.keys(r.counts).length ? countsTable(r.counts) : note('Nothing to count.'));
     if (r.answer) out.push(row('Answer', `${r.answer} in ${r.seconds} s`, r.runner, null));
     if (r.need === 'embed') out.push(row('Search model needed', null, r.lines[0], [btn('Download the search model', () => job('/api/setup/embed', {}), 'btn lit')]));
     else if (r.lines && r.lines.length) out.push(h('pre', { class: 'out', text: r.lines.join('\n') }));
@@ -273,8 +353,8 @@
     $('section-select').value = s;
     if (location.hash !== '#' + s) history[focus ? 'pushState' : 'replaceState'](null, '', '#' + s);  // a click is a Back step
     load(s);
-    if (focus) {  // the heading lands below the sticky header (scroll-margin-top in app.css)
-      $('s-' + s).focus({ preventScroll: true });
+    if (focus) {  // focus on the heading (screen readers say where they are); the section lands below the sticky header (scroll-margin-top in app.css)
+      ($('s-' + s).querySelector('h1') || $('s-' + s)).focus({ preventScroll: true });
       $('s-' + s).scrollIntoView({ block: 'start' });
     }
   }
@@ -305,7 +385,8 @@
       h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
         r.action ? btn(r.action.label, () => show(r.action.go, true)) : null)));
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-    put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] }, ...rows),
+    put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
+      ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
       d.update ? updatesBoard(d.update) : null);
   }
 
@@ -313,7 +394,7 @@
   let upd = null;  // the last check or update job
   function updatesBoard(u) {
     const r = upd && upd.result;
-    const out = [row(`Cortex ${u.current}`, null, null, [btn('Check for updates', () => { upd = null; job('/api/update/check', {}); })])];
+    const out = [row(`Cortex ${u.current}`, null, null, [btn('Check for updates', () => { upd = null; return job('/api/update/check', {}); })])];
     if (upd && upd.error) out.push(row('That did not work', null, upd.error, null));
     else if (r && r.cancelled) out.push(row('Cancelled', null, 'Nothing was installed; update again any time.', null));
     else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
@@ -326,7 +407,7 @@
         [ext(r.notes_url, 'What’s new'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
       if (r.command) {
         out.push(h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: r.command }),
-          btn('Copy', () => navigator.clipboard.writeText(r.command).then(() => toast('Copied.'), () => toast('Copy failed; select the command and copy it.'))))));
+          copyBtn(() => r.command, 'Copy failed; select the command and copy it.'))));
       }
     }
     return board('Updates', { note: 'checked only when you click' }, ...out);
@@ -340,8 +421,10 @@
     llm: ['Local model', 'not running', 'Writes the answer on this computer, never in the cloud. Start Ollama or LM Studio, or set one up (a download of a few GB).', 'Set up a local model'],
   };
   const EXAMPLES = ['What did I read about binary search?', 'Which sites did I visit yesterday?', 'What mistakes do I keep making?'];
+  // answered from Cortex's own data, with no search model and no local model (chat.site_list, chat_study)
+  const DATA_EXAMPLES = ['Which sites did I visit yesterday?', 'What should I study today?', 'What is due for review?', 'Where am I weak?'];
   const KIND = { note: 'note', chat: 'chat', browse: 'browsing' };
-  const chatS = { d: null, id: null, msgs: [], draft: '', busy: null, setOpen: false, focus: false };
+  const chatS = { d: null, id: null, msgs: [], draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null };
   const last = (e) => e.childNodes[e.childNodes.length - 1];
 
   function inline(text, cite) {  // **bold**, `code` and [n] citations; everything else is text
@@ -408,7 +491,10 @@
         if (!at || at.tagName === 'SPAN') at = body;
         at.append(h('span', { class: 'caret', 'aria-hidden': 'true' }));
       }
-      el.replaceChildren(who, body, sourceRow(m.sources, m.searched) || '',
+      // a finished answer gets Copy: its text without the [n] markers; the sources stay out
+      const copy = !streaming && m.text ? h('div', { class: 'msg-acts' }, copyBtn(() => m.text.replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, ''),
+        'Copy failed; select the answer and copy it.', 'btn quiet', true)) : '';
+      el.replaceChildren(who, body, copy, sourceRow(m.sources, m.searched) || '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
@@ -432,7 +518,7 @@
       try {
         const r = await api('/api/chat/get?id=' + encodeURIComponent(id));
         Object.assign(chatS, { id, msgs: r.messages });
-      } catch (e) { toast(e.message, true); return; }
+      } catch (e) { toast.error(e.message); return; }
     }
     chatS.focus = true;
     renderChat(chatS.d);
@@ -440,30 +526,30 @@
   async function reloadChats() {
     try { chatS.d.chats = (await api('/api/chat/list')).chats; } catch (e) { /* the page says so */ }
   }
-  function saveSetting(body) {
-    post('/api/chat/settings', body, (s) => { chatS.d.settings = s; });
+  function saveSetting(body, ctrl) {  // on change: a Saved mark beside the control
+    return post('/api/chat/settings', body, (s) => { chatS.d.settings = s; savedMark(ctrl); });
   }
   function settingsPanel(s) {
     const length = h('select', { id: 'chat-length' }, ['short', 'normal', 'long'].map((v) => h('option', { value: v, text: v[0].toUpperCase() + v.slice(1) })));
     length.value = s.length;
-    length.addEventListener('change', () => saveSetting({ length: length.value }));
+    length.addEventListener('change', () => saveSetting({ length: length.value }, length));
     const temp = h('input', { type: 'range', id: 'chat-temp', min: '0', max: '1', step: '0.1', value: String(s.temperature) });
-    temp.addEventListener('change', () => saveSetting({ temperature: Number(temp.value) }));
+    temp.addEventListener('change', () => saveSetting({ temperature: Number(temp.value) }, temp));
     const k = h('select', { id: 'chat-k' }, [4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => h('option', { value: String(n), text: String(n) })));
     k.value = String(s.passages);
-    k.addEventListener('change', () => saveSetting({ passages: Number(k.value) }));
+    k.addEventListener('change', () => saveSetting({ passages: Number(k.value) }, k));
     const srcNames = { notes: 'Notes and mistakes', chats: 'Saved AI chats', browsing: 'Browsing', private: 'Private browsing' };
     const srcs = Object.entries(srcNames).map(([key, label]) => {
       const cb = h('input', { type: 'checkbox', id: 'chat-src-' + key, checked: s.sources[key] });
-      cb.addEventListener('change', () => saveSetting({ sources: { [key]: cb.checked } }));
+      cb.addEventListener('change', () => saveSetting({ sources: { [key]: cb.checked } }, cb));
       return h('label', { class: 'check', for: 'chat-src-' + key }, cb, h('span', { text: label }));
     });
     const keep = h('input', { type: 'checkbox', id: 'chat-keep', checked: s.history });
-    keep.addEventListener('change', () => saveSetting({ history: keep.checked }));
+    keep.addEventListener('change', () => saveSetting({ history: keep.checked }, keep));
     const wipe = () => confirmDialog('Delete all chats?', 'Delete',
       [h('p', { class: 'ink-2', text: 'Every saved chat is deleted from this computer. This cannot be undone.' })],
       () => post('/api/chat/delete', { all: true }, (r) => {
-        toast(`Deleted ${r.deleted} chat${r.deleted === 1 ? '' : 's'}.`);
+        toast.ok(`Deleted ${r.deleted} chat${r.deleted === 1 ? '' : 's'}.`);
         Object.assign(chatS, { id: null, msgs: [] });
         load('chat');
       }));
@@ -494,7 +580,7 @@
         load('chat');
       }), 'chat-del', { 'aria-label': `Delete chat: ${c.title}` }))));
     side.replaceChildren(btn('New chat', () => openChat(null), 'btn lit chat-new'),
-      chats.length ? list : h('p', { class: 'ink-3 small', text: 'Your chats appear here.' }));
+      chats.length ? list : h('p', { class: 'ink-3 small', text: 'No chats yet. Ask something to start one.' }));
     pick.replaceChildren(h('option', { value: '', text: 'New chat' }),
       ...chats.map((c) => h('option', { value: c.id, text: `${c.title} · ${daysAgo(c.updated)}` })));
     pick.value = chatS.id || '';
@@ -514,13 +600,15 @@
     const log = h('div', { class: 'chat-log', id: 'chat-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
     for (const m of chatS.msgs) log.append(m.role === 'user' ? userMsg(m) : botMsg(m).el);
     const missing = d.missing || [];
-    if (!chatS.msgs.length) {  // the examples fill the message box, so only with one
+    if (!chatS.msgs.length) {  // the examples fill the message box
       log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
-        missing.length ? null : h('div', { class: 'inline' }, EXAMPLES.map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
+        missing.length ? h('p', { text: 'Until then, Chat can still answer questions about your sites and your studying, like these:' }) : null,
+        h('div', { class: 'inline' }, (missing.length ? DATA_EXAMPLES : EXAMPLES).map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
     }
+    // something missing: what to set up, above the message box (site and study questions still work)
+    const need = missing.length ? missingRows(missing, d.llm_error ? `The local model is not used: ${d.llm_error}` : null) : null;
     let foot;
-    if (missing.length) foot = missingRows(missing, d.llm_error ? `The local model is not used: ${d.llm_error}` : null);
-    else {
+    {
       const ta = h('textarea', { id: 'chat-input', rows: '1', value: chatS.draft, placeholder: 'Message Cortex', 'aria-label': 'Message', spellcheck: 'true' });
       const grow = () => { ta.rows = String(Math.min(6, Math.max(1, ta.value.split('\n').length))); };
       grow();
@@ -530,15 +618,35 @@
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!chatS.busy) send(ta, go, log); }
       });
-      foot = h('div', { class: 'composer' }, h('div', { class: 'crow' }, ta, go),
-        h('p', { class: 'help', text: `Runs on this computer with ${d.model || 'your local model'}. Nothing leaves it.` }));
+      // shown while an answer streams and the reader has scrolled up: jumps to the end
+      chatS.pill = h('button', { class: 'btn new-text', type: 'button', hidden: true, onclick: () => { chatS.follow = true; chatS.pill.hidden = true; toEnd(); } }, '↓ New text');
+      foot = h('div', { class: 'composer' }, chatS.pill, h('div', { class: 'crow' }, ta, go),
+        h('p', { class: 'help', text: missing.length ? 'Runs on this computer. Nothing leaves it.' : `Runs on this computer with ${d.model || 'your local model'}. Nothing leaves it.` }));
     }
-    const main = h('div', { class: 'chat-main' }, h('div', { class: 'chat-bar' }, pick, settingsPanel(d.settings)), log, foot);
+    const main = h('div', { class: 'chat-main' }, h('div', { class: 'chat-bar' }, pick, settingsPanel(d.settings)), need, log, foot);
     $('chat').replaceChildren(h('div', { class: 'chat' }, side, main));
     drawSide();
     if (chatS.focus && $('chat-input')) $('chat-input').focus();
     chatS.focus = false;
   }
+
+  // the page follows a streaming answer only while the reader is at the bottom; scrolled up,
+  // it stays put and the New text pill offers the jump
+  const toEnd = () => window.scrollTo(0, document.documentElement.scrollHeight);
+  const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48;
+  function followEnd() {
+    if (chatS.follow) toEnd();
+    else if (chatS.pill) chatS.pill.hidden = false;
+  }
+  window.addEventListener('scroll', () => {
+    const end = atEnd();
+    if (chatS.busy) chatS.follow = end;
+    if (end && chatS.pill) chatS.pill.hidden = true;
+  }, { passive: true });
+  // Esc stops a streaming answer, like Stop
+  $('chat').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && chatS.busy) { e.preventDefault(); chatS.busy.ctrl.abort(); }
+  });
 
   async function send(ta, go, log) {
     const text = ta.value.trim();
@@ -555,7 +663,9 @@
     const tick = setInterval(() => { if (!m.text) bot.draw(true); }, 1000);
     log.append(bot.el);
     log.setAttribute('aria-busy', 'true');  // a screen reader hears the answer once, when it is done
-    bot.el.scrollIntoView({ block: 'end' });
+    chatS.follow = true;
+    if (chatS.pill) chatS.pill.hidden = true;
+    toEnd();
     ta.value = chatS.draft = '';
     ta.rows = '1';
     ta.focus();
@@ -595,7 +705,7 @@
           else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; }
           else if (ev.t === 'err') failed = ev;
-          if (ev.t !== 'err') bot.draw(ev.t !== 'done');
+          if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }
       }
     } catch (e) {
@@ -615,10 +725,13 @@
         chatS.msgs.pop();
         ta.value = chatS.draft = text;
       }
+      ta.focus({ preventScroll: true });
       return;
     }
     if (m.text || m.stopped) chatS.msgs.push(m);
     bot.draw(false);
+    followEnd();
+    ta.focus({ preventScroll: true });
     await reloadChats();
     drawSide();
   }
@@ -653,7 +766,7 @@
     const apply = () => {
       const want = {};
       for (const b of boxes) if (!b.disabled) want[b.dataset.id] = b.checked && b.priv && b.priv.checked ? 'private' : b.checked;
-      post('/api/connect/plan', { want }, (p) => {
+      return post('/api/connect/plan', { want }, (p) => {
         if (!p.rows.length) { toast('Nothing to change.'); return; }
         confirmChanges(p.rows, () => job('/api/connect/apply', { want }));
       });
@@ -701,7 +814,7 @@
     sel.value = at < 0 ? '' : String(at);
     const chosen = () => (sel.value === '' ? null : choices[Number(sel.value)] || null);
     const loadBtn = btn('Load', () => job('/api/llm/load', { model: chosen().model }));
-    const save = () => { const c = chosen(); post('/api/llm/settings', { model: c.model, runner: c.runner }, () => { toast('Saved.'); load('llm'); }); };
+    const save = () => { const c = chosen(); return post('/api/llm/settings', { model: c.model, runner: c.runner }, () => { toast.ok('Saved.'); load('llm'); }); };
     const saveBtn = btn('Save choice', save), testBtn = btn('Test', () => job('/api/llm/test', {}));
     const sync = () => {  // nothing chosen: nothing to save, load or test
       const c = chosen();
@@ -715,11 +828,12 @@
       h('option', { value: '', text: 'Same as the model above' }),
       choices.map((c) => h('option', { value: c.model, text: c.model, selected: c.model === d.background_model })));
     if (d.background_model && !choices.some((c) => c.model === d.background_model)) bgSel.append(h('option', { value: d.background_model, text: `${d.background_model} (not found now)`, selected: true }));
-    const bgSave = btn('Save', () => post('/api/llm/settings', { background_model: bgSel.value }, () => { toast('Saved.'); load('llm'); }));
+    const bgSave = btn('Save', () => post('/api/llm/settings', { background_model: bgSel.value }, () => { toast.ok('Saved.'); load('llm'); }));
     const enabled = h('input', { type: 'checkbox', id: 'llm-on', checked: d.enabled });
-    enabled.addEventListener('change', () => post('/api/llm/settings', { enabled: enabled.checked }, () => { toast(enabled.checked ? 'Local model on.' : 'Local model off.'); load('llm'); }));
+    enabled.addEventListener('change', () => post('/api/llm/settings', { enabled: enabled.checked }, () => { toast.ok(enabled.checked ? 'Local model on.' : 'Local model off.'); load('llm'); }));
     const model = board('Model', { note: d.model ? `chosen: ${d.model}` : 'none chosen' },
       d.error ? note(`Not used: ${d.error}`) : null,
+      choices.length ? null : note('No models installed yet. Download an Ollama model below, or set one up under Setup → Local model.'),
       h('div', { class: 'field' }, h('label', { for: 'llm-model', text: 'Model (installed in Ollama or LM Studio)' }),
         h('div', { class: 'inline' }, sel, saveBtn, loadBtn, testBtn),
         h('p', { class: 'help' }, 'Load is for LM Studio models: it starts LM Studio and loads the model. Ollama loads its models by itself. Test sends one made-up sentence and shows the answer and time. ',
@@ -731,7 +845,7 @@
         h('p', { class: 'help', text: 'Browsing imports and site descriptions run while you are away, so a larger, slower model can do them better (for example a 9B model while Chat uses a 2B one). If it does not answer, the model above is used. Two models can sit in memory at once, so with 8 GB of graphics memory or less, leave this as the same model.' })));
     // download another Ollama model by name; the list above reloads when the job ends
     const name = h('input', { type: 'text', id: 'llm-pull', placeholder: 'qwen3.5:4b', spellcheck: 'false', autocomplete: 'off' });
-    const pull = () => { const v = name.value.trim(); if (v) job('/api/llm/pull', { name: v }); else toast('Type a model name first.'); };
+    const pull = () => { const v = name.value.trim(); if (v) return job('/api/llm/pull', { name: v }); toast('Type a model name first.'); return null; };
     const rec = d.recommend, hw = d.hardware;
     const download = board('Download an Ollama model', {},
       hw && rec ? row('This computer', `${hw.label} → ${rec.label} suits it`, null,
@@ -765,7 +879,7 @@
     const go = () => {
       const keys = hist.sources.map((s) => s.key).filter((k) => !untick.has(k));
       if (!keys.length) { toast('Tick at least one browser.'); return; }
-      job('/api/browse/import', { sources: keys, from });
+      return job('/api/browse/import', { sources: keys, from });
     };
     return [intro, ...rows, h('div', { class: 'foot' }, h('div', { class: 'inline' },
       btn('Scan (counts only)', () => job('/api/browse/scan', { from })),
@@ -778,12 +892,12 @@
   function tokenBox() {
     return pairToken ? h('div', { class: 'pad' }, h('strong', { text: 'The key for the extension (shown once):' }),
       h('div', { class: 'token' }, h('code', { text: pairToken }),
-        btn('Copy', () => navigator.clipboard.writeText(pairToken).then(() => toast('Copied.'), () => toast('Copy failed; select the key and copy it.'))))) : null;
+        copyBtn(() => pairToken, 'Copy failed; select the key and copy it.'))) : null;
   }
   function extensionBtn(paired) {
     return btn('Set up the extension', () => {
-      if (paired && !window.confirm('Set it up again? The key the extension has now stops working.')) return;
-      post('/api/browse/setup', {}, (r) => {
+      if (paired && !window.confirm('Set it up again? The key the extension has now stops working.')) return null;
+      return post('/api/browse/setup', {}, (r) => {
         pairToken = r.token;
         toast(r.receiver === 'busy' ? 'Paired, but the receiver could not start: port 8799 is used by another program. Close it, then press Start under Browsing.'
           : r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
@@ -826,7 +940,7 @@
   }
   function check() {
     Object.assign(guide, { step: 3, preview: null, done: null });
-    guided('/api/import/preview', 'preview');
+    return guided('/api/import/preview', 'preview');
   }
   const mb = (n) => (n / 2 ** 20).toFixed(1);
   const sentText = (s) => `${Math.floor(100 * s.loaded / (s.total || 1))}% · ${mb(s.loaded)} of ${mb(s.total)} MB`;
@@ -958,7 +1072,7 @@
     const save = () => post('/api/browse/cloud', {
       cloud_processing: on.checked, provider: prov.value, model: model.value.trim(),
       base_url: prov.value === 'custom' ? base.value.trim() : '', api_key_env: env.value.trim(),
-    }, () => { toast('Saved.'); load('browse'); });
+    }, () => { toast.ok('Saved.'); load('browse'); });
     const name = c.api_key_env || 'NAME';
     const runs = c.runs.length ? h('div', { class: 'table-scroll' }, h('table', {},
       h('thead', {}, h('tr', {}, ['When', 'Provider', 'Model'].map((t) => h('th', { text: t })),
@@ -1001,7 +1115,7 @@
         visible_to_claude: vis.checked, private_mcp: local.checked,
         audience: Object.fromEntries(cats.map((x) => [x.c, x.sel.value])),
         deny: $('b-deny').value, allow: $('b-allow').value, private: $('b-private').value,
-      }, () => { toast('Saved.'); load('browse'); });
+      }, () => { toast.ok('Saved.'); load('browse'); });
       parts.push(board('Privacy', { btn: ['Save', save] },
         h('div', { class: 'field' }, h('label', { class: 'check' }, vis, h('span', { text: 'Cloud AI apps can read' })),
           h('p', { class: 'help', text: 'Off (the default): browsing goes only to private pages that Obsidian and local models read; no cloud AI app (Claude, Gemini, ChatGPT, Cursor…) sees it. On: Cortex also writes pages that cloud AI apps read through Cortex: your topics and time, interest lines in your journal, and the sites you visit with their page titles, the searches that led to them and the searches made on them. That covers all your browsing except the categories below set to Local AI only (or Don\'t save), which never reach a cloud AI app.' })),
@@ -1022,15 +1136,15 @@
         : d.receiver === 'busy' ? 'port 8799 is used by another program' : 'stopped',
         'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
         [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
-          : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast('Receiver started.'); load('browse'); }))]),
+          : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }))]),
       d.login.supported
         ? row('Start at login', d.login.exists ? 'on' : 'off', 'Adds or removes a login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
           [btn(d.login.exists ? 'Remove' : 'Add', () => job('/api/browse/login', { on: !d.login.exists }))])
         : row('Start at login', 'not on this system', 'Windows only: start the receiver from your login items instead.'),
       d.login.command ? h('div', { class: 'pad' }, h('pre', { text: d.login.command })) : null);
     const pairBtn = btn(d.paired ? 'Pair again' : 'Pair', () => {
-      if (d.paired && !window.confirm('Pair again? The key the extension has now stops working.')) return;
-      post('/api/browse/pair', {}, (r) => { pairToken = r.token; load('browse'); });
+      if (d.paired && !window.confirm('Pair again? The key the extension has now stops working.')) return null;
+      return post('/api/browse/pair', {}, (r) => { pairToken = r.token; load('browse'); });
     });
     const extn = board('Extension', {},
       row('Pairing', d.paired ? 'paired' : 'not paired', d.last_contact ? `Last contact ${d.last_contact}.` : 'No contact recorded yet.', [extensionBtn(d.paired), pairBtn]),
@@ -1073,7 +1187,7 @@
     const on = h('input', { type: 'checkbox', id: 'g-on', checked: g.enabled });
     const priv = h('input', { type: 'checkbox', id: 'g-private', checked: g.private_browsing, disabled: !g.enabled });
     on.addEventListener('change', () => { priv.disabled = !on.checked; });
-    const save = () => post('/api/vault/git', { enabled: on.checked, private_browsing: priv.checked }, () => { toast('Saved.'); load('vault'); });
+    const save = () => post('/api/vault/git', { enabled: on.checked, private_browsing: priv.checked }, () => { toast.ok('Saved.'); load('vault'); });
     return board('History', { btn: ['Save', save] },
       h('div', { class: 'field' }, h('label', { class: 'check' }, on, h('span', { text: 'Keep the vault’s history in git (lets you undo sessions; uses more disk as the vault grows)' })),
         h('p', { class: 'help', text: 'On (the default): each session is saved as a git commit you can undo. Off: no new history is kept and undo is off; history already there is left as it is.' })),
@@ -1088,8 +1202,8 @@
   function skip(id, on) {
     const was = skipped.has(id);
     if (on) skipped.add(id); else skipped.delete(id);
-    if (id === 'connect' && was !== on) post('/api/setup/skip', { skipped: on }, () => load('setup'));
-    else load('setup');
+    if (id === 'connect' && was !== on) return post('/api/setup/skip', { skipped: on }, () => load('setup'));
+    return load('setup');
   }
   function step(id, title, done, summary, body, first) {
     const cur = id === first;
@@ -1097,9 +1211,9 @@
     const band = h('div', { class: 'band' }, h('h2', { text: title }),
       h('span', { class: 'band-note' }, done ? h('span', { class: 'done-mark', text: '✓ ' }) : null,
         done ? summary || 'Done' : skipped.has(id) ? 'Skipped' : cur ? dm('NEXT', 2, 'Next') : 'Later'),
-      collapsed ? btn(done ? 'Edit' : 'Open', () => { opened.add(id); if (id === 'connect') skip(id, false); else load('setup'); }, 'band-btn',
+      collapsed ? btn(done ? 'Edit' : 'Open', () => { opened.add(id); return id === 'connect' ? skip(id, false) : load('setup'); }, 'band-btn',
         { 'aria-label': `${done ? 'Edit' : 'Open'}: ${title}` })
-        : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); skip(id, true); }, 'band-btn')
+        : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); return skip(id, true); }, 'band-btn')
           : done || skipped.has(id) ? btn('Hide', () => { opened.delete(id); load('setup'); }, 'band-btn') : null);
     return h('div', { class: 'board step' + (collapsed ? ' collapsed' : '') + (cur ? ' current' : '') }, band, ...body);
   }
@@ -1177,7 +1291,7 @@
 
     const connectFound = () => {
       const want = Object.fromEntries(todo.map((t) => [t.id, true]));
-      post('/api/connect/plan', { want }, (p) => {
+      return post('/api/connect/plan', { want }, (p) => {
         if (!p.rows.length) { toast('Nothing to change.'); return; }
         confirmChanges(p.rows, () => job('/api/connect/apply', { want }));
       });
@@ -1226,7 +1340,10 @@
   $('quit').addEventListener('click', () => confirmDialog('Stop Cortex?', 'Quit',
     [h('p', { class: 'ink-2', text: 'Running jobs are cancelled; your vault is not affected.' })],
     () => post('/api/quit', {}, () => gone('The Cortex app has stopped. You can close this tab.'))));
-  $('job-cancel').addEventListener('click', () => post('/api/job/cancel', {}));
+  $('job-cancel').addEventListener('click', pressable($('job-cancel'), () => post('/api/job/cancel', {})));
+  $('toast-x').append(icon('x'));
+  $('toast-x').addEventListener('click', toastHide);
+  for (const [t, fn] of [['mouseenter', toastHold], ['mouseleave', toastRelease], ['focusin', toastHold], ['focusout', toastRelease]]) $('toast').addEventListener(t, fn);
   document.querySelectorAll('.side button').forEach((b) => b.addEventListener('click', () => show(b.dataset.s, true)));
   $('section-select').addEventListener('change', (e) => show(e.target.value, true));
   window.addEventListener('popstate', () => { const s = location.hash.slice(1); if (s !== current) show(s, true); });  // Back switches sections
