@@ -645,6 +645,65 @@ console.log(JSON.stringify(out));
     assert json.loads(r.stdout) == [True, False, None]
     assert squatter.got and not any(srv.token in g for g in squatter.got)
 
+
+def test_extension_proves_the_receiver_at_every_flush(tmp_path):
+    """extension/background.js under node with a stub chrome and fetch: a list sync and a
+    flush each ask /v1/hello first, never a cached proof, so a program that took the port
+    after a good send gets neither the token nor the visits; the backoff still follows."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    bg = (Path(__file__).parents[1] / "extension" / "background.js").as_uri()
+    script = tmp_path / "flush.mjs"
+    script.write_text("""
+import { createHmac } from "node:crypto";
+const TOKEN = "k".repeat(43), listeners = {}, calls = [];
+const ev = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
+const area = (m) => ({
+  get: async (k) => typeof k === "string" ? (k in m ? { [k]: m[k] } : {})
+    : Object.fromEntries(Object.entries(k).map(([x, d]) => [x, x in m ? m[x] : d])),
+  set: async (o) => { Object.assign(m, o); }, remove: async (k) => { delete m[k]; } });
+const local = { token: TOKEN, queue: [] }, session = {};
+globalThis.chrome = {
+  storage: { local: area(local), session: area(session), onChanged: ev("changed") },
+  tabs: { onActivated: ev("a"), onUpdated: ev("u"), onRemoved: ev("r") },
+  windows: { onFocusChanged: ev("f"), onRemoved: ev("w"), WINDOW_ID_NONE: -1 },
+  idle: { setDetectionInterval() {}, onStateChanged: ev("i") },
+  runtime: { onStartup: ev("s"), onMessage: ev("msg") },
+  alarms: { get: async () => ({}), create() {}, onAlarm: ev("alarm") } };
+let squat = false;
+const answer = (b) => ({ ok: true, status: 200, json: async () => b });
+globalThis.fetch = async (url, o = {}) => {
+  const u = new URL(url), auth = (o.headers || {}).Authorization;
+  calls.push(u.pathname + (auth ? " +token" : ""));
+  if (squat) return answer({ proof: "not the receiver" });  // answers anything, 200
+  if (u.pathname === "/v1/hello")
+    return answer({ proof: createHmac("sha256", TOKEN).update(u.searchParams.get("n")).digest("hex") });
+  return answer({ deny_domains: [] });
+};
+await import(process.argv[2]);
+const round = async () => {
+  local.queue.push({ url: "https://a.example/", title: "A", start: Date.now(), active_ms: 1 });
+  calls.length = 0;
+  listeners.msg("flush");
+  await new Promise((r) => setTimeout(r, 300));
+  return { calls: [...calls], status: local.status, left: local.queue.length, backoff: local.backoff };
+};
+const out = [await round()];
+squat = true;  // the receiver stopped; another program took the port
+out.push(await round());
+squat = false;
+out.push(await round());
+console.log(JSON.stringify(out));
+""", encoding="utf-8")  # noqa: E501  (JavaScript)
+    r = subprocess.run([node, str(script), bg], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    good = ["/v1/hello", "/v1/ping +token", "/v1/hello", "/v1/batch +token"]
+    assert json.loads(r.stdout) == [
+        {"calls": good, "status": "ok", "left": 0, "backoff": 0},
+        {"calls": ["/v1/hello", "/v1/hello"], "status": "down", "left": 1, "backoff": 1},
+        {"calls": good, "status": "ok", "left": 0, "backoff": 0}]
+
 @pytest.mark.parametrize("which", ["browse", "app"])
 def test_connections_over_the_cap_are_closed_at_once(vault, home, monkeypatch, which):
     """A local program cannot exhaust threads with idle connections (both servers)."""
