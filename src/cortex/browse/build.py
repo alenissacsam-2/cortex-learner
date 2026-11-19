@@ -47,7 +47,7 @@ from cortex.vault import Vault, VaultError, _dump_fm, _to_yaml, secret_pattern
 log = logging.getLogger(__name__)
 
 DIR, PRIVATE_DIR = "browse", "browse/private"
-EXPIRING_DAYS = 30  # a browser's oldest day this old may be partly expired (Chromium keeps ~90)
+EXPIRING_DAYS = 85  # a browser's oldest day this old is being expired (Chromium keeps 90)
 STATE = ".cortex/browse/state.json"
 INDEX_ID, PRIVATE_INDEX_ID = "browse-index", "browse-private-index"
 # a page goes under its nearest hub only from this cosine: the floor calibrated for short text
@@ -808,7 +808,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             cursors[s.key] = {"cursor": top if top is not None else old, "ran": ran}
         for v in vs:  # which browser: Chat can list one browser's sites
             v.source = v.source or s.browser
-        if vs:
+        if vs and old is not None:  # a first import counts its oldest day whole
             edges.add(local_day(min(v.start for v in vs), tz))
         visits += vs
     pending = state.get("pending")  # days an earlier run rebuilt while a source was failing
@@ -843,8 +843,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     # browsers forgot (a rebuild would lose its earlier hours); so is a day only the archive
     # holds, older than every History read (rebuilt from the archive alone, it would lose the
     # browsers' visits)
-    month_ago = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
-    edge = {d for d in edges if d <= month_ago} | {d for d in alone if d < horizon}
+    expiring = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
+    edge = {d for d in edges if d <= expiring} | {d for d in alone if d < horizon}
     if edge := edge & set(sites._load(vault, sites.DAYS)):
         visits = [v for v in visits if local_day(v.start, tz) not in edge]
         inbox = [v for v in inbox if local_day(v.start, tz) not in edge]

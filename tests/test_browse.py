@@ -1254,7 +1254,7 @@ def test_a_partly_expired_oldest_day_keeps_its_stored_counts(tmp_path, vault):
     def go(**kw):
         build.run(Vault(vault), sources.discover(local, roaming),
                   replace(ADULT_PRIVATE, visible_to_claude=True), embed=Embed(), tz=UTC,
-                  now=m(0, 40), **kw)
+                  now=m(0, 90), **kw)
         days = build.sites._load(Vault(vault), build.sites.DAYS)
         return {d: sum(a["n"] for a in v.values()) for d, v in days.items()}
     assert go() == {"2026-11-09": 2, "2026-11-10": 1}  # the first import counts it
