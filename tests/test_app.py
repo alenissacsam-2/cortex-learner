@@ -646,6 +646,42 @@ def test_auto_import_starts_the_history_import_when_due(app, vault, home, monkey
     assert job["section"] == "browse" and job["result"]["ok"] and runs == [["comet/Default"]]
 
 
+def test_an_untick_at_import_keeps_the_profile_out_of_automatic_imports(app, vault, home,
+                                                                        monkeypatch):
+    """The import request's unticked keys go to browse.skip_profiles (other browse keys kept),
+    the history list sends them as skip, auto_sources leaves them out; ticking again clears."""
+    from cortex import browse_serve
+    from cortex.browse import build, sources
+    from cortex.vault import Vault
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source("chrome", "Default", home / "a"),
+        sources.Source("comet", "Default", home / "b")])
+    cfg = home / ".cortex" / "config.yaml"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("browse:\n  auto_import_hours: 3\n", encoding="utf-8")
+    state = vault / build.STATE
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"sources": {"chrome/Default": {"cursor": 1},
+                                             "comet/Default": {"cursor": 1}}}), encoding="utf-8")
+    assert call(app, "POST", "/api/browse/import",
+                {"sources": ["comet/Default"], "skip": "chrome/Default"})[0] == 400
+    call(app, "POST", "/api/browse/import", {"sources": ["comet/Default"],
+                                             "skip": ["chrome/Default"]})
+    wait_job(app)  # no search model: the job stops first; the choice is saved all the same
+    b = status.config()["browse"]
+    assert b == {"auto_import_hours": 3, "skip_profiles": ["chrome/Default"]}
+    _, got, _, _ = call(app, "GET", "/api/browse")
+    assert [(s["key"], s["skip"]) for s in got["history"]["sources"]] == \
+        [("chrome/Default", True), ("comet/Default", False)]
+    assert [s.key for s in browse_serve.auto_sources(Vault(vault))] == ["comet/Default"]
+    call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default", "comet/Default"],
+                                             "skip": []})
+    wait_job(app)
+    assert status.config()["browse"]["skip_profiles"] == []
+    assert [s.key for s in browse_serve.auto_sources(Vault(vault))] == \
+        ["chrome/Default", "comet/Default"]
+
+
 def _vault(root):
     from cortex.vault import Vault
     return Vault(root)

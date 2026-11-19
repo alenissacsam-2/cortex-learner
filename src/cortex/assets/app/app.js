@@ -877,11 +877,15 @@
 
   /* Past history: one list for the Setup step and the Browsing section */
   const BROWSERS = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', comet: 'Comet', firefox: 'Firefox' };
-  const untick = new Set();
+  const untick = new Set(), seeded = new Set();
+  function seedUntick(hist) {  // browse.skip_profiles starts unticked; the user's clicks win after
+    for (const s of hist.sources) if (!seeded.has(s.key)) { seeded.add(s.key); if (s.skip) untick.add(s.key); }
+  }
   function importTicked(hist, from) {  // only new visits: the import skips the days it has
-    const keys = hist.sources.map((s) => s.key).filter((k) => !untick.has(k));
+    seedUntick(hist);
+    const all = hist.sources.map((s) => s.key), keys = all.filter((k) => !untick.has(k));
     if (!keys.length) { toast('Tick at least one browser.'); return; }
-    return job('/api/browse/import', { sources: keys, from });
+    return job('/api/browse/import', { sources: keys, skip: all.filter((k) => untick.has(k)), from });
   }
   /* The Browsing section's last import and browse.auto_import_hours (0 = off) */
   // shown while automatic import is on and the receiver does not start at login (Status, Browsing)
@@ -907,6 +911,7 @@
     if (!hist || !hist.available) return [note('Not available in this version yet.')];
     const intro = h('p', { class: 'pad ink-2', text: 'Cortex can read the history your browsers already keep, on this computer only, and turn it into private day pages. The first time can take a while. If the local model is on, it writes the day summaries; when its time budget runs out, later days get simple rule-made lines.' });
     if (!hist.sources.length) return [intro, note('No browser history found on this computer (looked for Comet, Chrome, Edge, Brave and Firefox).')];
+    seedUntick(hist);
     const rows = hist.sources.map((s) => {
       const id = `h-${from}-${s.key.replace(/[^A-Za-z0-9]/g, '_')}`;
       const cb = h('input', { type: 'checkbox', id, checked: !untick.has(s.key) });
@@ -920,7 +925,7 @@
           counted ? h('span', { class: 'val', text: `${s.visits.toLocaleString()} visits` }) : null),
         h('span', { class: 'sub', text: sub })));
     });
-    return [intro, ...rows, h('div', { class: 'foot' }, h('div', { class: 'inline' },
+    return [intro, ...rows, h('p', { class: 'help', text: 'Unticked profiles are also left out of the automatic imports.' }), h('div', { class: 'foot' }, h('div', { class: 'inline' },
       btn('Scan (counts only)', () => job('/api/browse/scan', { from })),
       btn('Import my past history', () => importTicked(hist, from), 'btn lit'),
       h('span', { class: 'sub', text: hist.imported ? `Last import ${hist.imported}.` : 'Never imported.' })))];

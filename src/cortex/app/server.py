@@ -616,9 +616,26 @@ class App:
         root, keys = self.need_root(), body.get("sources")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
             raise ValueError("Tick at least one browser.")
+        skip = body.get("skip", [])
+        if not isinstance(skip, list) or not all(isinstance(k, str) for k in skip):
+            raise ValueError("skip must list profile keys")
+        self._skip_profiles(skip, keys)
         return self.jobs.start("Importing past history", self._section(body),
                                lambda job: actions.history_import(job, root, set(keys)),
                                cancellable=True, quiet_errors=True)
+
+    @staticmethod
+    def _skip_profiles(skip: list, ticked: list) -> None:
+        """Keep `browse.skip_profiles` as the user's last ticks: the unticked keys added, the
+        ticked ones removed; the automatic imports (`sources.chosen`) leave those out."""
+        from cortex import cli
+        old = status.config().get("browse")
+        old = old if isinstance(old, dict) else {}
+        had = old.get("skip_profiles")
+        had = [k for k in had if isinstance(k, str)] if isinstance(had, list) else []
+        new = sorted((set(had) | set(skip)) - set(ticked))
+        if new != sorted(had):
+            cli._write_config(browse={**old, "skip_profiles": new})
 
     def dashboard(self, body: dict) -> dict:
         root = self.need_root()
