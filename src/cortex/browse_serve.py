@@ -26,7 +26,7 @@ from cortex import browse
 from cortex.browse import Settings, lists, load_settings
 from cortex.browse.privacy import in_domains
 from cortex.events import local_day
-from cortex.vault import Vault, secret_pattern
+from cortex.vault import Vault, VaultError, secret_pattern
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ KINDS = {"page", "video", "search"}
 IDLE_PROCESS_S = 20 * 60  # no batch for this long after records were stored: process them
 DEBOUNCE_S = 10  # a session end waits this long, so several in a row make one run
 DEEPEN_IDLE_S = 30 * 60  # no batch for this long: the local LLM's deepen pass, once
+AUTO_IMPORT_HOURS = 6  # browse.auto_import_hours default; 0 turns the automatic import off
+AUTO_FIRST_S = 60  # the first automatic-import check after a start
+AUTO_EVERY_S = 10 * 60  # then this often
 _EXT_ORIGIN = re.compile(r"(chrome-extension|moz-extension)://[A-Za-z0-9-]{1,64}")
 
 # ---- privacy filter (spec section 2): cortex.browse's filter, shared with the importer ----
@@ -252,6 +255,40 @@ def run_deepen(v: Vault, say=None, budget_s: float | None = None) -> dict | None
     return r
 
 
+def auto_import_hours(config: dict | None = None) -> float:
+    """`browse.auto_import_hours` (0-168; 0 = off); a missing or bad value is the default."""
+    if config is None:
+        from cortex.taint import config as read
+        config = read()
+    b = config.get("browse") if isinstance(config, dict) else None
+    h = b.get("auto_import_hours", AUTO_IMPORT_HOURS) if isinstance(b, dict) else None
+    ok = isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 168
+    return h if ok else AUTO_IMPORT_HOURS
+
+
+def auto_import_due(v: Vault, now: datetime | None = None) -> bool:
+    """True when the last import is older than `auto_import_hours` and the browse-wide lock is
+    free (no import, deepen or forget runs). Never before the user's first import: a fresh
+    install reads no history until they ask once."""
+    from cortex.browse import build, sites
+
+    hours = auto_import_hours()
+    last = build.load_state(v).get("last_run")
+    if not hours or not isinstance(last, str):
+        return False
+    try:
+        t = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    if (now or datetime.now(UTC)) - t < timedelta(hours=hours):
+        return False
+    try:
+        with sites.busy(v, 0):  # a peek: the import takes it again for its whole run
+            return True
+    except (VaultError, OSError):
+        return False
+
+
 def _say(text: str) -> None:
     """One line on the receiver's terminal: counts and states only, never a URL or title."""
     print(f"{time.strftime('%H:%M:%S')}  {text}", flush=True)
@@ -267,11 +304,15 @@ def summary(r: dict, took: float) -> str:
 
 
 class Processor:
-    """Runs `run_import` when a session ended (debounced) or records sat idle; `tick` is the
-    only runner and never overlaps itself. `clock` is injectable for tests."""
+    """Runs `run_import` when a session ended (debounced), records sat idle, or the last import
+    is older than browse.auto_import_hours (checked AUTO_FIRST_S after start, then every
+    AUTO_EVERY_S); `tick` is the only runner and never overlaps itself. `clock` (monotonic) and
+    `now` (wall time, for the last import's age) are injectable for tests."""
 
-    def __init__(self, v: Vault, clock=time.monotonic, say=_say):
+    def __init__(self, v: Vault, clock=time.monotonic, say=_say, now=None):
         self.v, self.clock, self.say = v, clock, say
+        self.now = now or (lambda: datetime.now(UTC))
+        self._auto_at = clock() + AUTO_FIRST_S
         self.processing = False
         self.last: str = ""  # the last run's counts-only summary, for the popup
         self._lock = threading.Lock()
@@ -298,6 +339,10 @@ class Processor:
             now = self.clock()
             idle = self._stored_at is not None and now - self._stored_at >= IDLE_PROCESS_S
             due = idle or (self._due is not None and now >= self._due)
+            aged = False
+            if not due and not self.processing and now >= self._auto_at:
+                self._auto_at = now + AUTO_EVERY_S
+                aged = due = auto_import_due(self.v, self.now())
             deep = not due and not self._deepened and now - self._last_batch >= DEEPEN_IDLE_S
             if self.processing or not (due or deep):
                 return False
@@ -308,6 +353,8 @@ class Processor:
                 self._deepened = True
         if deep:
             return self._deepen()
+        if aged:
+            self.say(f"last import over {auto_import_hours():g} hours ago: importing new history")
         self.say("processing your browsing (the first run reads your whole history and can "
                  "take several minutes)…")
         t0 = time.perf_counter()

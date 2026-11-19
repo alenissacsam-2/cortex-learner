@@ -178,7 +178,7 @@ p.pad { margin: 0; }
   min-height: 24px;
 }
 .linkbtn:hover { text-decoration-color: var(--lit); }
-input[type="text"], select, textarea {
+input[type="text"], input[type="number"], select, textarea {
   background: var(--panel); border: 1px solid var(--edge); border-radius: 2px; padding: 6px 10px;
   color: var(--ink); min-width: 0;
 }
@@ -195,6 +195,7 @@ input[type="checkbox"] { accent-color: var(--lit); width: 16px; height: 16px; ma
 .fields3 .field:last-child { border-right: 0; }
 .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .inline input[type="text"] { flex: 1 1 320px; }
+input[type="number"] { width: 6em; }
 
 /* connect rows: tick | app | state */
 .trow { grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; }

@@ -7,7 +7,7 @@ import shutil
 import socket
 import subprocess
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -545,3 +545,57 @@ def test_second_server_on_same_port_refused(vault):
             bs.make_server(vault, s.server_address[1]).server_close()
     finally:
         s.server_close()
+
+
+def _last_run(vault, when: datetime) -> None:
+    from cortex.browse import build
+    p = vault / build.STATE  # what a finished import leaves
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"last_run": when.strftime("%Y-%m-%dT%H:%M:%SZ")}), encoding="utf-8")
+
+
+def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, monkeypatch):
+    """browse.auto_import_hours: due by the last import's age, first checked a minute after
+    start then every 10 minutes; never before a first import, never with 0, never while the
+    browse-wide lock is held (a forget or deepen)."""
+    from cortex.browse import build, sites
+    runs, lines = [], []
+    monkeypatch.setattr(bs, "run_import", lambda v, progress=None: runs.append(1) or {})
+    monkeypatch.setattr(bs, "run_deepen", lambda v, say=None: None)  # no local model
+    now = datetime(2026, 11, 19, 12, tzinfo=UTC)
+    t = [0.0]
+    p = bs.Processor(bs.Vault(vault), clock=lambda: t[0], say=lines.append, now=lambda: now)
+    t[0] = bs.AUTO_FIRST_S - 1
+    _last_run(vault, now - timedelta(hours=7))
+    assert not p.tick() and not runs  # not before the first check
+    (vault / build.STATE).unlink()
+    t[0] = bs.AUTO_FIRST_S
+    assert not p.tick() and not runs  # never imported: the first import is the user's
+    _last_run(vault, now - timedelta(hours=7))
+    t[0] += 1
+    assert not p.tick()  # the next check is 10 minutes later
+    t[0] += bs.AUTO_EVERY_S
+    with sites.busy(bs.Vault(vault)):  # a forget or deepen holds the lock: not now
+        assert not p.tick() and not runs
+    t[0] += bs.AUTO_EVERY_S
+    assert p.tick() and runs == [1]
+    assert any("last import over 6 hours ago" in x for x in lines)
+    _last_run(vault, now - timedelta(hours=5))  # fresh enough
+    t[0] += bs.AUTO_EVERY_S
+    assert not p.tick() and runs == [1]
+    (home / ".cortex").mkdir(exist_ok=True)
+    cfg = home / ".cortex" / "config.yaml"
+    cfg.write_text("browse:\n  auto_import_hours: 4\n", encoding="utf-8")
+    t[0] += bs.AUTO_EVERY_S
+    assert p.tick() and runs == [1, 1]
+    cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
+    t[0] += bs.AUTO_EVERY_S
+    assert not p.tick() and runs == [1, 1]
+
+
+def test_auto_import_hours_falls_back_on_bad_values():
+    assert bs.auto_import_hours({}) == 6
+    assert bs.auto_import_hours({"browse": {"auto_import_hours": 12}}) == 12
+    assert bs.auto_import_hours({"browse": {"auto_import_hours": 0}}) == 0
+    for bad in (-1, 169, "6", True, float("nan")):
+        assert bs.auto_import_hours({"browse": {"auto_import_hours": bad}}) == 6
