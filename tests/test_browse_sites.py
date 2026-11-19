@@ -234,6 +234,28 @@ def test_deepen_never_moves_a_site_out_of_a_sensitive_category(vault, hist):
     assert_clean(vault, (*HIDDEN_MARKERS, "ana.github"))
 
 
+def test_a_site_the_model_files_under_a_skip_category_leaves_every_store(vault, hist):
+    skip = replace(OWNER, skip_categories=("adult",))
+    imp(vault, hist, skip)
+
+    def stored():
+        priv = b"".join(p.read_bytes() for p in (vault / "browse" / "private").glob(
+            "browse-private-*.md")).lower()
+        return priv + (vault / sites.DAYS).read_bytes().lower()
+    assert b"ana.github.io" in stored() and b"blog post" in stored()
+    llm = FakeLLM(lambda name, c: {"category": "adult" if name == "ana.github.io" else "news",
+                                   "description": "x", "related": [], "topics": []})
+    r = sites.deepen(Vault(vault), llm, localllm.Budget(100), skip, tz=UTC)
+    assert r["purged_day_pages"] >= 1 and r["purged_site_keys"] >= 1
+    assert b"ana.github.io" not in stored() and b"blog post" not in stored()
+    cache = json.loads((vault / sites.CACHE).read_text(encoding="utf-8"))["llm"]
+    assert "ana.github.io" not in cache and "lichess.org" in cache  # only that site went
+    assert b"chess openings" in stored()
+    # nothing left to purge: the next pass does not scan the stores again
+    assert not any(k.startswith("purged_") for k in sites.deepen(
+        Vault(vault), FakeLLM(), localllm.Budget(100), skip, tz=UTC))
+
+
 def test_run_deepen_needs_a_runner_and_updates_the_vectors(vault, monkeypatch):
     called = []
     monkeypatch.setattr(bs, "local_runner", lambda budget_s=None: (None, None))

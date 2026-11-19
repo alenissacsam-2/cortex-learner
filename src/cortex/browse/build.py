@@ -772,6 +772,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     # the filter's own rules): every day still held is redone below, and first everything
     # stored is filtered again (C2), the days the browsers forgot included
     reset = state.get("settings") != fp
+    purged = reset  # then the vectors are pruned at the end
     if reset and not dry_run:
         tell("settings changed: filtering what is stored again")
         report.update({f"refiltered_{k}": n for k, n in forget.purge(
@@ -868,9 +869,18 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         report.update(c)
         if local_only(runner) is not None and vis and not dry_run:
             tell(f"local model: checking the titles and searches of {len(items)} visits")
+        had = sites.load_verdicts(vault)
         items, c = vet(vault, items, settings, runner, budget, ask=vis and not dry_run,
                        save=not dry_run)
         report.update(c)
+        # a text the model now files under a Don't-save category may sit on a day this run
+        # does not rebuild (kept unvetted before): every store loses it now
+        skip = frozenset(v for h, v in sites.load_verdicts(vault).items()
+                         if had.get(h) != v and privacy.audience(v, settings) == "skip")
+        if skip and not dry_run:
+            purged = True
+            report.update({f"refiltered_{k}": n for k, n in forget.purge(
+                vault, forget.Rule(cats=skip), write=False).items()})
         if embed is not None:
             tell("topics: reading the topic hubs")
         hub_ids, unit, titles = (hubs(vault, embed, save=not dry_run) if embed is not None
@@ -920,7 +930,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         report["archive_pruned"] = _prune_archive(vault, min(horizon or floor, floor))
     # every run, so a settings change (a category hidden since) reaches the site pages
     report.update(sites.write(vault, settings, tz, say=say, days=days, bad=bad))
-    if reset:
+    if purged:
         report["refiltered_vectors"] = forget.prune_vectors(vault)["vectors"]
     vault.write_text(vault.root / STATE, json.dumps({
         "pending": (start or pending) if report["sources_failed"] else None,

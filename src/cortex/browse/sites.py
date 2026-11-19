@@ -906,9 +906,28 @@ def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=Non
     _save(vault, CACHE, {"llm": llm, "hashes": cache["hashes"]})
     say(f"deepen: {c['described']} described, {c['failed']} unanswered, "
         f"{c.get('left', 0)} left for next time")
-    r = write(vault, fresh() if fresh else settings, tz, say=say, days=days, bad=bad)
+    s = fresh() if fresh else settings
+    # a site the model filed under a Don't-save category after it was stored leaves every
+    # store now (the private day pages too), not at the next settings change; any such entry
+    # counts, so a pass stopped after saving the category is caught by the next one
+    skip = frozenset(cat for site, e in llm.items() if isinstance(e, dict) and e.get("category")
+                     and privacy.audience(cat := site_category(site, llm), s) == "skip")
+    gone: Counter = Counter()
+    if skip:
+        from cortex.browse import forget  # forget imports this module
+
+        # the browse lock is reentrant per Vault and thread, so purge's own take passes
+        gone = forget.purge(vault, forget.Rule(cats=skip), write=False)
+        days, bad = load_days(vault)
+    r = write(vault, s, tz, say=say, days=days, bad=bad)
+    if gone:
+        from cortex.browse import build, forget
+
+        build.write_index(vault, visible=s.visible_to_claude)
+        gone.update(forget.prune_vectors(vault))
     return {"asked": c["asked"], "described": c["described"], "failed": c["failed"],
-            "left": c.get("left", 0), "no_runner": c["no_runner"], **r}
+            "left": c.get("left", 0), "no_runner": c["no_runner"], **r,
+            **{f"purged_{k}": n for k, n in gone.items()}}
 
 
 def update_vectors(vault: Vault, say=None) -> dict | None:
