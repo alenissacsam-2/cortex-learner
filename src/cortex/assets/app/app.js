@@ -592,6 +592,7 @@
           else if (ev.t === 'done') m.seconds = ev.seconds;
           else if (ev.t === 'think') m.thinking = true;
           else if (ev.t === 'tok') m.text += ev.s;
+          else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') bot.draw(ev.t !== 'done');

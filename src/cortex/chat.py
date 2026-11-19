@@ -14,6 +14,7 @@ import math
 import re
 import threading
 import time
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
 from cortex import ask, localllm, semantic, taint
@@ -139,6 +140,8 @@ _RULES = [  # first match wins
     (r"\b(?:today|tonight|this\s+morning|this\s+afternoon|this\s+evening)\b",
      lambda m, t: (t, t)),
     (rf"\b{_NUM}\s+(day|week|month)s?\s+ago\b", _ago),
+    (rf"\b(?:last|past|previous)\s+{_NUM}\s*(?:to|-|–|or)\s*{_NUM}\s+(day|week|month)s?\b",
+     lambda m, t: (t - max(_n(m[1]), _n(m[2])) * _UNIT[m[3].lower()] * _D, t)),  # the wider
     (rf"\b(?:last|past|previous)\s+{_NUM}\s+(day|week|month)s?\b",
      lambda m, t: (t - _n(m[1]) * _UNIT[m[2].lower()] * _D, t)),
     (r"\bpast\s+(week|month)\b", lambda m, t: (t - _UNIT[m[1].lower()] * _D, t)),
@@ -306,6 +309,93 @@ def delete_all(vault: Vault) -> int:
 
 # ---- a turn ------------------------------------------------------------------------------------
 
+# "which sites did I visit in the past 4 months?": answered from the stored day counts, every
+# site in the range, never from a few passages (a small model lists some and repeats them)
+_SITES_Q = re.compile(r"\b(?:sites?|websites?|domains?)\b", re.I)
+_LIST_Q = re.compile(r"\b(?:all|list|unique|every|distinct|visit\w*|went|go|gone|open\w*"
+                     r"|brows\w*|used?)\b", re.I)
+_BROWSER = re.compile(r"\b(chrome|edge|brave|comet|firefox|opera|vivaldi|arc)\b", re.I)
+SITES_SHOWN = 150
+_MD = re.compile(r"[*_`\[\]<>#|]")  # a model-written description stays plain text
+
+
+def site_list(vault: Vault, text: str, got, sources: dict) -> str | None:
+    """The answer to a question asking for a list of sites, or None for any other question:
+    every site visited in `got`'s days (None: all days), most visits first, with its category
+    and the local model's one-line description, under Chat's own source switches (`browsing`,
+    `private`) and the browsing settings (a denied or Don't save site is never stored)."""
+    if not (_SITES_Q.search(text) and _LIST_Q.search(text)):
+        return None
+    if not (sources.get("browsing") or sources.get("private")):
+        return "Browsing is switched off in Chat settings, so I cannot list sites."
+    from cortex.browse import load_settings, sites
+
+    days, _ = sites.load_days(vault)
+    llm = sites.load_cache(vault)["llm"]
+    settings = load_settings()
+    side, scat = sites._sides(settings, llm, days)
+    lo, hi = (got[0].isoformat(), got[1].isoformat()) if got else ("", "9999")
+    seen: dict[str, dict] = {}
+    for day, keys in days.items():
+        if not lo <= day <= hi or not isinstance(keys, dict):
+            continue
+        for key, a in keys.items():
+            h = side(day, key) if isinstance(a, dict) else None
+            if h is None or not sources.get("private" if h else "browsing"):
+                continue
+            site, cat, _pd = sites._split(key)
+            e = seen.setdefault(site, {"n": 0, "days": set(), "hidden": False,
+                                       "cat": cat or scat(site)})
+            e["n"] += int(a.get("n", 0) or 0)
+            e["days"].add(day)
+            e["hidden"] |= bool(h)
+    when = f"from {_span(got[0], got[1])}" if got else "in everything Cortex has stored"
+    notes = []
+    if m := _BROWSER.search(text):
+        notes.append("Cortex adds up visits from every browser it imports and does not keep "
+                     f"which one a visit came from, so this is not {m[1].title()} alone.")
+    stored = min((d for d in days if isinstance(days[d], dict)), default=None)
+    if stored and lo < stored:
+        notes.append(f"Cortex has browsing from {stored} on; browsers keep about 90 days of "
+                     "history, so older days are here only if they were imported then.")
+    if skipped := sorted(settings.skip_categories):
+        notes.append(f"Categories set to Don't save ({', '.join(skipped)}) are never stored, so "
+                     "they cannot be listed; change that under Browsing in the app.")
+    if not seen:
+        return " ".join([f"No sites are stored {when}."] + notes)
+    order = sorted(seen.items(), key=lambda kv: (-kv[1]["n"], kv[0]))
+    lines = [f"**{len(order)} site{'s' * (len(order) != 1)}** {when}, most visits first:", ""]
+    for site, e in order[:SITES_SHOWN]:
+        entry = llm.get(site) if isinstance(llm.get(site), dict) else {}
+        said = entry.get("h" if e["hidden"] else "v") or entry.get("v") or entry.get("h")
+        desc = _MD.sub("", str((said or {}).get("desc") or "")).strip()
+        cat = "" if e["cat"] in ("", "other") else f" · {e['cat']}"
+        nd = len(e["days"])
+        lines.append(f"- **{site}**{cat} · {e['n']} visit{'s' * (e['n'] != 1)} on {nd} "
+                     f"day{'s' * (nd != 1)}" + (f": {desc}" if desc else ""))
+    if len(order) > SITES_SHOWN:
+        lines.append(f"- and {len(order) - SITES_SHOWN} more with fewer visits")
+    return "\n".join(lines + ([""] + notes if notes else []))
+
+
+def _looping(text: str) -> bool:
+    """A small model caught in a loop: some line of 20+ characters said three times."""
+    seen = Counter(ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 20)
+    return bool(seen) and seen.most_common(1)[0][1] >= 3
+
+
+def _once(text: str) -> str:
+    """`text` with each repeated line of 20+ characters kept only the first time."""
+    out, seen = [], set()
+    for ln in text.splitlines():
+        k = ln.strip()
+        if len(k) >= 20 and k in seen:
+            continue
+        seen.add(k)
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _span(a: date, b: date) -> str:
     """'17 Nov' or '10 Nov to 16 Nov', for the progress line."""
     return f"{a.day} {a:%b}" if a == b else f"{a.day} {a:%b} to {b.day} {b:%b}"
@@ -376,13 +466,23 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
     query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
-    emit({"t": "step", "s": "Searching your notes and browsing"
-          + (f" from {_span(got[0], got[1])}" if got else "")})
-    found = ask._passages(vault, query, s["passages"],
-                          between=got and (got[0].isoformat(), got[1].isoformat()),
-                          sources=s["sources"], topic=topic(said, got[2]) if got else "")
+    span = f" from {_span(got[0], got[1])}" if got else ""
+    found: list = []
     parts: list = []
-    if not found:
+    # a site list keeps to its own dates: a follow-up's borrowed ones are for passages only
+    if (listed := site_list(vault, text, got if said is text else None,
+                            s["sources"])) is not None:
+        emit({"t": "step", "s": "Counting the sites you visited" + span})
+        parts.append(listed)
+        emit({"t": "tok", "s": listed})
+    else:
+        emit({"t": "step", "s": "Searching your notes and browsing" + span})
+        found = ask._passages(vault, query, s["passages"],
+                              between=got and (got[0].isoformat(), got[1].isoformat()),
+                              sources=s["sources"], topic=topic(said, got[2]) if got else "")
+    if listed is not None:
+        pass
+    elif not found:
         parts.append(NO_ANSWER)
         emit({"t": "tok", "s": NO_ANSWER})
     else:
@@ -404,6 +504,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                        on_thinking=thinking):
                 parts.append(piece)
                 emit({"t": "tok", "s": piece})
+                if "\n" in piece and _looping("".join(parts)):  # stop a loop, each line once
+                    parts[:] = [_once("".join(parts))]
+                    emit({"t": "text", "s": parts[0]})
+                    break
         except (OSError, ValueError):  # no answer, a timeout, a refused url
             pass
     answer = "".join(parts).strip()

@@ -467,9 +467,9 @@ def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
     monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
                                                                                       **kw))
     _turn(vault, cid, "what do I know about Dijkstra's algorithm?", s.runner())
-    _turn(vault, cid, "which sites did I visit yesterday?", s.runner())
+    _turn(vault, cid, "what did I browse yesterday?", s.runner())
     assert asked == ["what do I know about Dijkstra's algorithm?",
-                     "which sites did I visit yesterday?"]
+                     "what did I browse yesterday?"]
 
 
 def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
@@ -571,3 +571,62 @@ def test_bad_text_is_refused(vault, stream):
     for bad in ("", "   ", "x" * (chat.MAX_TEXT + 1), None):
         with pytest.raises(ValueError):
             _turn(vault, None, bad, stream().runner())
+
+
+def _site_days(vault, days, llm=None):
+
+
+    from cortex.browse import sites
+    for rel, data in ((sites.DAYS, days), (sites.CACHE, {"llm": llm or {}, "hashes": {}})):
+        p = vault.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+
+ALL_ON = {"notes": True, "chats": True, "browsing": True, "private": True}
+
+
+def test_a_site_question_lists_every_site_once_with_its_counts(vault):
+    _site_days(vault, {
+        "2026-11-17": {"miruro.tv||1": {"n": 4}, "github.com||0": {"n": 9}},
+        "2026-11-16": {"miruro.tv||1": {"n": 2}},
+        "2026-10-01": {"old.example||0": {"n": 50}},
+    }, llm={"miruro.tv": {"h": {"desc": "An **anime** streaming [site](x)"}}})
+    got = (date(2026, 11, 16), date(2026, 11, 17), "")
+    out = chat.site_list(vault, "list all the unique sites I visited in Comet", got, ALL_ON)
+    assert out.startswith("**2 sites** from 16 Nov to 17 Nov")
+    lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
+    assert lines == ["- **github.com** · programming · 9 visits on 1 day",
+                     "- **miruro.tv** · 6 visits on 2 days: An anime streaming site(x)"]
+    assert "not Comet alone" in out and "old.example" not in out
+    assert "Don't save (adult" in out          # the default skips adult: never stored, said so
+    no_private = dict(ALL_ON, private=False)
+    assert "miruro" not in chat.site_list(vault, "which sites did I visit", got, no_private)
+    assert chat.site_list(vault, "what did I read about sites of battles?", got, ALL_ON) is None
+    assert chat.site_list(vault, "what websites did I go to?", got, ALL_ON) is not None
+    assert chat.site_list(vault, "what did I learn yesterday?", got, ALL_ON) is None
+
+
+def test_a_site_question_before_the_stored_days_says_so(vault):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
+    got = chat._when("which sites did I visit in the past 4 to 5 months?", date(2026, 11, 19))
+    assert got[0] == date(2026, 6, 22)
+    out = chat.site_list(vault, "which sites did I visit in the past 4 to 5 months?", got, ALL_ON)
+    assert "**1 site** from 22 Jun to 19 Nov" in out and "from 2026-11-17 on" in out
+
+
+def test_reply_answers_a_site_question_without_the_model(vault, stream):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 3}}})
+    s = stream("ollama", ["never used"])
+    _, events = _turn(vault, None, "which sites did I visit yesterday?", s.runner())
+    steps = [e["s"] for e in events if e["t"] == "step"]
+    assert steps == ["Counting the sites you visited from 17 Nov"]
+    assert "**github.com** · programming · 3 visits on 1 day" in "".join(e["s"] for e in events
+                                                         if e["t"] == "tok")
+
+
+def test_a_looping_answer_is_cut_to_its_lines_once():
+    line = "- YouTube (Private): watched videos on many topics"
+    text = "\n".join(["Intro", line, "- Miruro.tv: anime", line, line])
+    assert chat._looping(text) and not chat._looping("\n".join(["Intro", line, line]))
+    assert chat._once(text) == "\n".join(["Intro", line, "- Miruro.tv: anime"])
