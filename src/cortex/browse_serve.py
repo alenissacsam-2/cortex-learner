@@ -379,7 +379,8 @@ class Processor:
                      else f"  {key}: {n} visits read, {new} new")
 
         try:
-            self.last = summary(run_import(self.v, progress=progress, srcs=picked),
+            only = {"srcs": picked} if aged else {}  # the automatic import: imported before only
+            self.last = summary(run_import(self.v, progress=progress, **only),
                                 time.perf_counter() - t0)
         except Exception as e:  # logged by type only: a message may hold a URL or title
             self.last = f"failed: {type(e).__name__}"
