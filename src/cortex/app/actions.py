@@ -291,6 +291,25 @@ def history_import(job, root: Path, keys: set[str], takeout: list | None = None)
     return {"ok": True, "counts": status.safe(summary)}
 
 
+def chat_import(job, root: Path) -> dict:
+    """One `chat_import.run` pass, committed. `quiet` (no notification) when nothing was saved
+    or failed; a failed chat makes the job fail (`ok: false`). Counts only."""
+    from cortex import chat_import as ci
+    v = _vault(root)
+    try:
+        counts = ci.run(v, progress=lambda k, n, s: job.say(ci.eta(k, n, s)),
+                        cancelled=job.cancelled.is_set)
+    except Exception as e:
+        print(f"cortex app: chat import failed ({type(e).__name__})")  # type only: no chat text
+        raise
+    finally:
+        _commit(v, "chats")
+    wrote = counts.get("saved", 0) + counts.get("updated", 0)
+    job.say(f"{wrote} chat page{_s(wrote)} written" if wrote else "no new chats")
+    return {"ok": not counts.get("failed"), "quiet": not (wrote or counts.get("failed")),
+            "cancelled": bool(counts.get("stopped")), "counts": status.safe(counts)}
+
+
 # ---- guided imports (chat exports through cortex.chats; Google activity through browse) ----
 
 GOOGLE_NOTE = ("Google activity goes through your browsing privacy filter, like your browser "

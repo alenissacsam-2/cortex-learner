@@ -843,17 +843,35 @@ def chats_cmd(since: Annotated[str | None, typer.Option(help="Only chats updated
 
 @app.command("import-chats")
 @_errors
-def import_chats_cmd(export: Annotated[Path, typer.Argument(
+def import_chats_cmd(export: Annotated[Path | None, typer.Argument(
         help="The export: a claude.ai or ChatGPT .zip, a Google Takeout .zip of Gemini Apps "
-             "activity (JSON or HTML), or Perplexity thread .md files (one, a folder or a .zip).")],
+             "activity (JSON or HTML), or Perplexity thread .md files (one, a folder or a .zip).")]
+        = None,
         source: Annotated[str | None, typer.Option(
             help="Force the service when detection fails: claude, chatgpt, gemini or "
-                 "perplexity.")] = None) -> None:
+                 "perplexity.")] = None,
+        auto: Annotated[bool, typer.Option(
+            "--auto", help="Instead: write a chat page for each Claude Code chat and imported "
+                           "conversation not saved yet or changed since (what the app does "
+                           "every 5 minutes); no model.")] = False,
+        vault: VaultOpt = None) -> None:
     """Import conversations from a claude.ai, ChatGPT, Gemini or Perplexity export so /cortex can
     learn from them like Claude Code chats. The service is detected from the file. Secrets are
-    redacted; re-importing a newer export updates them."""
+    redacted; re-importing a newer export updates them. With --auto, save past chats as chat
+    pages instead: your own turns only (a coding session as a short summary)."""
     from cortex import chats, importers
 
+    if auto:
+        from cortex import chat_import
+        counts = chat_import.run(_vault(vault), progress=lambda k, n, s: typer.echo(
+            chat_import.eta(k, n, s)) if k == n or k % 25 == 0 else None)
+        wrote = counts.get("saved", 0) + counts.get("updated", 0)
+        said = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items()))
+        typer.echo(f"{wrote} chat page{'s' * (wrote != 1)} written"
+                   + (f" ({said})." if counts else "; no new or changed chats."))
+        return
+    if export is None:
+        raise VaultError("invalid_argument", "Give the export to import, or --auto.")
     got = chats.import_export(export, source)
     source, n = got
     typer.echo(f"Imported {n} {chats.GUIDES[source]['name']} conversation{'s' * (n != 1)} "

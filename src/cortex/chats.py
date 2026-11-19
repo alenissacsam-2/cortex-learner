@@ -463,21 +463,26 @@ def _turns(path: Path):
                 d = json.loads(line)
             except ValueError:
                 continue
-            if (not isinstance(d, dict) or d.get("type") not in ("user", "assistant")
-                    or d.get("isSidechain") or d.get("isMeta")
-                    or not isinstance(d.get("message"), dict)):
-                continue
-            content = d["message"].get("content")
-            if isinstance(content, str):
-                blocks = [content]
-            elif isinstance(content, list):  # tool_use, tool_result, thinking, image: dropped
-                blocks = [b.get("text") for b in content
-                          if isinstance(b, dict) and b.get("type") == "text"]
-            else:
-                continue
-            text = "\n".join(_WRAPPER.sub("", b) for b in blocks if isinstance(b, str)).strip()
-            if text:
+            if text := _text(d):
                 yield d["type"], str(d.get("timestamp") or ""), text
+
+
+def _text(d) -> str:
+    """The cleaned text of one transcript line's user or assistant turn; '' for anything else
+    (a sidechain or meta line, a tool call or result, thinking, an image)."""
+    if (not isinstance(d, dict) or d.get("type") not in ("user", "assistant")
+            or d.get("isSidechain") or d.get("isMeta")
+            or not isinstance(d.get("message"), dict)):
+        return ""
+    content = d["message"].get("content")
+    if isinstance(content, str):
+        blocks = [content]
+    elif isinstance(content, list):  # tool_use, tool_result, thinking, image: dropped
+        blocks = [b.get("text") for b in content
+                  if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        return ""
+    return "\n".join(_WRAPPER.sub("", b) for b in blocks if isinstance(b, str)).strip()
 
 
 def path_for(chat_id: str) -> Path:

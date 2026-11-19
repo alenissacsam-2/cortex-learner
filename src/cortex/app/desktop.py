@@ -195,9 +195,11 @@ class Notifier:
                 echo(f"Cortex app: the notification check failed ({type(e).__name__})")
 
     def job_ended(self, job) -> None:
-        """"<job> finished" or "<job> failed"; a cancelled job says nothing. Job names are the
-        app's own words, never a page's title."""
-        if job.cancelled.is_set() or not notify_settings()["jobs"]:
+        """"<job> finished" or "<job> failed"; a cancelled job, or a background one whose result
+        is `quiet` (it found nothing to do), says nothing. Job names are the app's own words,
+        never a page's title."""
+        quiet = isinstance(job.result, dict) and job.result.get("quiet") is True
+        if job.cancelled.is_set() or quiet or not notify_settings()["jobs"]:
             return
         failed = job.error is not None or (
             isinstance(job.result, dict) and job.result.get("ok") is False)
