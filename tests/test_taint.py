@@ -220,6 +220,33 @@ def test_write_config_refuses_an_unreadable_config(raw):
     assert sorted(p.name for p in _cfg().parent.iterdir()) == ["config.yaml"]
 
 
+def test_write_config_merges_a_sub_dict_under_the_lock():
+    """Audit: two app handlers saving different `browse:` keys at once both survive, since the
+    function form re-reads the config inside config.lock."""
+    import threading
+    taint.write_config({"vault": "D:/V", "browse": {"keep": 1}})
+    start = threading.Barrier(2)
+
+    def go(key):
+        start.wait()
+        for i in range(25):
+            taint.write_config(lambda cfg, i=i: {"browse": {**cfg.get("browse", {}), key: i}})
+
+    threads = [threading.Thread(target=go, args=(k,)) for k in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert taint.config() == {"vault": "D:/V", "browse": {"keep": 1, "a": 24, "b": 24}}
+
+    def in_place(cfg):  # editing the given dict in place still writes
+        cfg["browse"]["keep"] = 2
+        return {"browse": cfg["browse"]}
+    taint.write_config(in_place)
+    assert taint.config()["browse"]["keep"] == 2
+    assert sorted(p.name for p in _cfg().parent.iterdir()) == ["config.yaml"]
+
+
 def test_write_config_over_an_empty_file():
     _cfg().parent.mkdir(parents=True)
     _cfg().write_bytes(b"")

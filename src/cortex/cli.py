@@ -29,6 +29,7 @@ from cortex.catalog import Catalog, resolve_or_inbox, slugify
 from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from cortex.session import _git
+from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
 from cortex.vault import Vault, VaultError
 
 EPILOG = ("About you: claims [--unasked|--summary], needs, probes, voice, export context · "
@@ -460,9 +461,7 @@ def doctor(vault: VaultOpt = None) -> None:
 
 # ---- setup wizard, sample vault -------------------------------------------------
 
-REPO = "alenissacsam-2/cortex-learner"  # the GitHub repo that holds the plugin marketplace
 RELEASES = f"https://github.com/{REPO}/releases"
-CHECKOUT = Path(__file__).resolve().parents[2]  # the source checkout of an editable install
 FIRST_PROMPTS = ("what do you know about me?", "/cortex",
                  "remember that I prefer short answers")
 PRIVACY = ("Privacy: the vault stays in a folder on this disk; Cortex has no account or "
@@ -1671,7 +1670,7 @@ def exclude_add(path: Path) -> None:
     if f := taint.excluded(p):
         typer.echo(f"already excluded (by {f})")
         return
-    _write_config(exclude=[*taint.exclude_list(), p])
+    taint.write_config(lambda cfg: {"exclude": [*taint.exclude_list(cfg), p]})
     typer.echo(f"excluded {p} (new Claude Code sessions there: no priming, no Cortex tools)")
 
 
@@ -1680,12 +1679,15 @@ def exclude_add(path: Path) -> None:
 def exclude_remove(path: Path) -> None:
     """Stop excluding a folder (as listed by `cortex exclude list`)."""
     p = path.expanduser().resolve()
-    folders = taint.exclude_list()
-    keep = [f for f in folders if Path(f).expanduser().resolve() != p]
-    if len(keep) == len(folders):
-        raise VaultError("invalid_argument", f"{p} is not in the exclude list; see "
-                         "`cortex exclude list`.")
-    _write_config(exclude=keep)
+
+    def merge(cfg: dict) -> dict:  # under the config lock
+        folders = taint.exclude_list(cfg)
+        keep = [f for f in folders if Path(f).expanduser().resolve() != p]
+        if len(keep) == len(folders):
+            raise VaultError("invalid_argument", f"{p} is not in the exclude list; see "
+                             "`cortex exclude list`.")
+        return {"exclude": keep}
+    taint.write_config(merge)
     typer.echo(f"no longer excluded: {p}")
 
 

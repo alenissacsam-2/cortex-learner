@@ -377,31 +377,34 @@ class App:
                                             "rows": targets.apply_all(want, base, job.say)})
 
     def llm_settings(self, body: dict) -> dict:
-        from cortex import cli
-        old = status.config().get("localllm")
-        new = dict(old) if isinstance(old, dict) else {}
-        if "enabled" in body:
-            new["enabled"] = _bool(body, "enabled")
-        if "model" in body:
-            m = body["model"]
-            if not isinstance(m, str) or not m:  # never write `model: null`
-                raise ValueError("Choose a model first.")
-            if len(m) > 200 or not all(c.isalnum() or c in "._:@/-" for c in m):
-                raise ValueError("not a model name")
-            r = body.get("runner", "lmstudio")  # no runner: an LM Studio choice, as before
-            if r not in wizard.RUNNERS:
-                raise ValueError("runner must be ollama or lmstudio")
-            new["model"], new["runner"] = m, r
-        if "background_model" in body:  # "" or null: the main model does background work too
-            b = body["background_model"] or ""
-            if not isinstance(b, str) or len(b) > 200 or not all(
-                    c.isalnum() or c in "._:@/-" for c in b):
-                raise ValueError("not a model name")
-            if b:
-                new["background_model"] = b
-            else:
-                new.pop("background_model", None)
-        cli._write_config(localllm=new)
+        from cortex import taint
+
+        def merge(cfg: dict) -> dict:  # under the config lock
+            old = cfg.get("localllm")
+            new = dict(old) if isinstance(old, dict) else {}
+            if "enabled" in body:
+                new["enabled"] = _bool(body, "enabled")
+            if "model" in body:
+                m = body["model"]
+                if not isinstance(m, str) or not m:  # never write `model: null`
+                    raise ValueError("Choose a model first.")
+                if len(m) > 200 or not all(c.isalnum() or c in "._:@/-" for c in m):
+                    raise ValueError("not a model name")
+                r = body.get("runner", "lmstudio")  # no runner: an LM Studio choice, as before
+                if r not in wizard.RUNNERS:
+                    raise ValueError("runner must be ollama or lmstudio")
+                new["model"], new["runner"] = m, r
+            if "background_model" in body:  # "" or null: the main model does background work too
+                b = body["background_model"] or ""
+                if not isinstance(b, str) or len(b) > 200 or not all(
+                        c.isalnum() or c in "._:@/-" for c in b):
+                    raise ValueError("not a model name")
+                if b:
+                    new["background_model"] = b
+                else:
+                    new.pop("background_model", None)
+            return {"localllm": new}
+        taint.write_config(merge)
         return {"ok": True}
 
     def llm_load(self, body: dict) -> dict:
@@ -423,7 +426,7 @@ class App:
     def browse_settings(self, body: dict) -> dict:
         """Save `browse:`, keeping its other keys and the rest of the config. The page sends
         per-category lists; the legacy adult/sensitive pair is then written to match them."""
-        from cortex import cli
+        from cortex import taint
         from cortex.browse import lists
         for key, ok in (("adult", ("skip", "private")), ("sensitive", ("private", "skip"))):
             if key in body and body[key] not in ok:
@@ -435,37 +438,40 @@ class App:
                 raise ValueError("audience must give every category skip, local or cloud")
             body = {**body, "skip_categories": [c for c, v in aud.items() if v == "skip"],
                     "hidden_from_claude": [c for c, v in aud.items() if v == "local"]}
-        old = status.config().get("browse")
-        new = {**(old if isinstance(old, dict) else {}),
-               **{k: body[k] for k in ("adult", "sensitive") if k in body},
-               "visible_to_claude": _bool(body, "visible_to_claude"),
-               "deny_domains": _domains(body.get("deny", []), "deny"),
-               "allow_domains": _domains(body.get("allow", []), "allow"),
-               "private_domains": _domains(body.get("private", []), "private")}
-        for key in ("hidden_from_claude", "skip_categories"):
-            if key in body:
-                v = body[key]
-                if not isinstance(v, list) or not all(c in lists.CATEGORIES for c in v):
-                    raise ValueError(f"{key} must list categories from "
-                                     f"{', '.join(lists.CATEGORIES)}")
-                new[key] = [c for c in lists.CATEGORIES if c in v]
-        if "skip_categories" in body:
-            skip = new["skip_categories"]
-            new["adult"] = "skip" if "adult" in skip else "private"
-            new["sensitive"] = "skip" if all(c in skip for c in lists.CATEGORIES
-                                             if c != "adult") else "private"
-        if "private_mcp" in body:
-            new["private_mcp"] = _bool(body, "private_mcp")
-        if "hidden_from_claude" in body:  # C9: stored as the cloud allowlist; new ones stay local
-            hidden = new.pop("hidden_from_claude")
-            new["cloud_categories"] = [c for c in lists.CATEGORIES if c not in hidden]
-        cli._write_config(browse=new)
+
+        def merge(cfg: dict) -> dict:  # under the config lock
+            old = cfg.get("browse")
+            new = {**(old if isinstance(old, dict) else {}),
+                   **{k: body[k] for k in ("adult", "sensitive") if k in body},
+                   "visible_to_claude": _bool(body, "visible_to_claude"),
+                   "deny_domains": _domains(body.get("deny", []), "deny"),
+                   "allow_domains": _domains(body.get("allow", []), "allow"),
+                   "private_domains": _domains(body.get("private", []), "private")}
+            for key in ("hidden_from_claude", "skip_categories"):
+                if key in body:
+                    v = body[key]
+                    if not isinstance(v, list) or not all(c in lists.CATEGORIES for c in v):
+                        raise ValueError(f"{key} must list categories from "
+                                         f"{', '.join(lists.CATEGORIES)}")
+                    new[key] = [c for c in lists.CATEGORIES if c in v]
+            if "skip_categories" in body:
+                skip = new["skip_categories"]
+                new["adult"] = "skip" if "adult" in skip else "private"
+                new["sensitive"] = "skip" if all(c in skip for c in lists.CATEGORIES
+                                                 if c != "adult") else "private"
+            if "private_mcp" in body:
+                new["private_mcp"] = _bool(body, "private_mcp")
+            if "hidden_from_claude" in body:  # C9: stored as the cloud allowlist; new stay local
+                hidden = new.pop("hidden_from_claude")
+                new["cloud_categories"] = [c for c in lists.CATEGORIES if c not in hidden]
+            return {"browse": new}
+        taint.write_config(merge)
         return {"ok": True}
 
     def cloud(self, body: dict) -> dict:
         """Save the cloud model: `browse.cloud_processing` and `cloudllm` (other keys kept).
         Never a key: only the name of the variable that holds it. Empty fields are removed."""
-        from cortex import cli, cloudllm
+        from cortex import cloudllm, taint
         from cortex.vault import secret_pattern
         if extra := set(body) - set(CLOUD_FIELDS):
             raise ValueError(f"unknown field {sorted(extra)[0]!r}: the key itself is never "
@@ -494,23 +500,25 @@ class App:
             need["base_url"] = "the Base URL"
         if on and (gap := [w for k, w in need.items() if got[k] is None]):
             raise ValueError(f"To turn the cloud model on, fill in {' and '.join(gap)} first.")
-        old = status.config()
-        c = old.get("cloudllm") if isinstance(old.get("cloudllm"), dict) else {}
-        c = {k: v for k, v in c.items() if k not in CLOUD_FIELDS}
-        b = old.get("browse") if isinstance(old.get("browse"), dict) else {}
-        cli._write_config(cloudllm={**c, **{k: v for k, v in got.items() if v is not None}},
-                          browse={**b, "cloud_processing": on})
+
+        def merge(old: dict) -> dict:  # under the config lock
+            c = old.get("cloudllm") if isinstance(old.get("cloudllm"), dict) else {}
+            c = {k: v for k, v in c.items() if k not in CLOUD_FIELDS}
+            b = old.get("browse") if isinstance(old.get("browse"), dict) else {}
+            return {"cloudllm": {**c, **{k: v for k, v in got.items() if v is not None}},
+                    "browse": {**b, "cloud_processing": on}}
+        taint.write_config(merge)
         return {"ok": True}
 
     def auto_settings(self, body: dict) -> dict:
         """Save `browse.auto_import_hours` (0-168; 0 = off), the other browse keys kept."""
-        from cortex import cli
+        from cortex import taint
         h = body.get("hours")
         if not (isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 168):
             raise ValueError("hours must be a number from 0 (off) to 168")
-        old = status.config().get("browse")
-        cli._write_config(browse={**(old if isinstance(old, dict) else {}),
-                                  "auto_import_hours": int(h) if h == int(h) else h})
+        taint.write_config(lambda cfg: {"browse": {
+            **(cfg["browse"] if isinstance(cfg.get("browse"), dict) else {}),
+            "auto_import_hours": int(h) if h == int(h) else h}})
         return {"ok": True}
 
     def auto_import(self) -> dict | None:
@@ -630,14 +638,16 @@ class App:
     def _skip_profiles(skip: list, ticked: list) -> None:
         """Keep `browse.skip_profiles` as the user's last ticks: the unticked keys added, the
         ticked ones removed; the automatic imports (`sources.chosen`) leave those out."""
-        from cortex import cli
-        old = status.config().get("browse")
-        old = old if isinstance(old, dict) else {}
-        had = old.get("skip_profiles")
-        had = [k for k in had if isinstance(k, str)] if isinstance(had, list) else []
-        new = sorted((set(had) | set(skip)) - set(ticked))
-        if new != sorted(had):
-            cli._write_config(browse={**old, "skip_profiles": new})
+        from cortex import taint
+
+        def merge(cfg: dict) -> dict:  # under the config lock; unchanged: no write
+            old = cfg.get("browse")
+            old = old if isinstance(old, dict) else {}
+            had = old.get("skip_profiles")
+            had = [k for k in had if isinstance(k, str)] if isinstance(had, list) else []
+            new = sorted((set(had) | set(skip)) - set(ticked))
+            return {"browse": {**old, "skip_profiles": new}} if new != sorted(had) else {}
+        taint.write_config(merge)
 
     def dashboard(self, body: dict) -> dict:
         root = self.need_root()
@@ -653,12 +663,12 @@ class App:
         """Save `git:` (enabled, private_browsing), keeping its other keys, then apply the
         private-browsing choice to the vault's .gitignore (and index) now, not at the next
         browse import."""
-        from cortex import cli
+        from cortex import taint
         from cortex.browse import forget
-        old = status.config().get("git")
-        new = {**(old if isinstance(old, dict) else {}), "enabled": _bool(body, "enabled"),
+        new = {"enabled": _bool(body, "enabled"),
                "private_browsing": _bool(body, "private_browsing")}
-        cli._write_config(git=new)
+        taint.write_config(lambda cfg: {"git": {
+            **(cfg["git"] if isinstance(cfg.get("git"), dict) else {}), **new}})
         if self.entry() is not None:
             forget.sync_private(self._vault())
         return {"ok": True}
@@ -707,10 +717,14 @@ class App:
     def setup_skip(self, body: dict) -> dict:
         """Skip the Connect step (Status becomes the landing page), or un-skip it."""
         from cortex import taint
-        skip, app = _bool(body, "skipped"), status.config().get("app")
-        app = {k: v for k, v in app.items() if k != "connect_skipped"} \
-            if isinstance(app, dict) else {}
-        taint.write_config({"app": {**app, "connect_skipped": True} if skip else app})
+        skip = _bool(body, "skipped")
+
+        def merge(cfg: dict) -> dict:  # under the config lock
+            app = cfg.get("app")
+            app = {k: v for k, v in app.items() if k != "connect_skipped"} \
+                if isinstance(app, dict) else {}
+            return {"app": {**app, "connect_skipped": True} if skip else app}
+        taint.write_config(merge)
         return {"ok": True}
 
     def setup_vault(self, body: dict) -> dict:

@@ -76,10 +76,12 @@ def save_settings(body: dict) -> dict:
                               "history": "history must be true or false",
                               "sources": "sources must map notes, chats, browsing and private "
                                          "to true or false"}[k])
-    cur = get_settings()
-    new = {**cur, **body, "sources": {**cur["sources"], **body.get("sources", {})}}
-    old = taint.config().get("chat")
-    taint.write_config({"chat": {**(old if isinstance(old, dict) else {}), **new}})
+
+    def merge(cfg: dict) -> dict:  # under the config lock
+        cur, old = get_settings(cfg), cfg.get("chat")
+        new = {**cur, **body, "sources": {**cur["sources"], **body.get("sources", {})}}
+        return {"chat": {**(old if isinstance(old, dict) else {}), **new}}
+    taint.write_config(merge)
     return get_settings()
 
 

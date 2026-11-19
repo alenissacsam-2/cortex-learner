@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 MARKER = ".cortex/taint"
@@ -40,10 +41,14 @@ def config() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def write_config(data: dict) -> Path:
-    """Set `data`'s keys in ~/.cortex/config.yaml, keeping its other keys. Refuses to overwrite
-    a config that exists, is not empty and does not parse to a dict (a merge with {} would wipe
-    `vault:` and `exclude:`). Under ~/.cortex/config.lock: mkstemp, then os.replace with retry."""
+def write_config(data: dict | Callable[[dict], dict]) -> Path:
+    """Set `data`'s keys in ~/.cortex/config.yaml, keeping its other keys. `data` may be a
+    function: it gets the config as read under the lock and returns the keys to set, so a
+    read-merge-write of a sub-dict (`browse:`, `app:`) cannot lose a concurrent writer's change.
+    Refuses to overwrite a config that exists, is not empty and does not parse to a dict (a merge
+    with {} would wipe `vault:` and `exclude:`). Under ~/.cortex/config.lock: mkstemp, then
+    os.replace with retry; an unchanged config is not rewritten."""
+    import copy
     import tempfile
 
     from ruamel.yaml import YAML, YAMLError
@@ -81,10 +86,14 @@ def write_config(data: dict) -> Path:
         if not isinstance(old, dict):
             raise VaultError("invalid_argument", f"{path} is not a key: value mapping; fix it "
                              "or delete it, then try again.")
+        # a copy: a function that edits a sub-dict in place must not make `new == old`
+        new = {**old, **(data(copy.deepcopy(old)) if callable(data) else data)}
+        if new == old:
+            return path
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                YAML(typ="safe").dump({**old, **data}, f)
+                YAML(typ="safe").dump(new, f)
             for attempt in range(REPLACE_TRIES):
                 try:
                     os.replace(tmp, path)
@@ -108,8 +117,8 @@ def _vault_root() -> Path | None:
     return Path(v) if v else None
 
 
-def exclude_list() -> list[str]:
-    ex = config().get("exclude") or []
+def exclude_list(cfg: dict | None = None) -> list[str]:
+    ex = (config() if cfg is None else cfg).get("exclude") or []
     return [str(e) for e in ([ex] if isinstance(ex, str) else ex) if e]
 
 
