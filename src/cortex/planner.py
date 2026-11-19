@@ -112,6 +112,24 @@ def plans(vault, catalog, private: set[str] | None = None, pcs: dict | None = No
     return out
 
 
+DEADLINE_FIELDS = ("deadline", "placement_date")  # a track's real date, first one set wins
+
+
+def deadlines(vault, day: date | str) -> list[dict]:
+    """A plan's real deadline (its `deadline`, else old notes' `placement_date`), which stays
+    beside exams although plan steps have no dates: {kind: "deadline", id, title, date, days}
+    for each non-private track dated `day` or later, soonest first (ties by id)."""
+    day = date.fromisoformat(day) if isinstance(day, str) else day
+    out = []
+    for track in vault.iter_notes("track"):
+        d = next((x for f in DEADLINE_FIELDS if (x := _day(track.fields.get(f) or ""))), None)
+        if d and d >= day and not is_private(track):
+            out.append({"kind": "deadline", "id": track.id,
+                        "title": str(track.fields.get("title") or track.id),
+                        "date": d.isoformat(), "days": (d - day).days})
+    return sorted(out, key=lambda x: (x["date"], x["id"]))
+
+
 def last_active(vault, catalog, events: list[dict], pcs: dict | None = None,
                 tracks: list[dict] | None = None) -> dict[str, dict]:
     """subject -> {ts, day} of the latest study on it: a grade, ask, taught or evidence log on

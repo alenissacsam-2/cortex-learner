@@ -135,6 +135,12 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
     rows = [assessment(a) for a in planner.assessments(vault) if a["id"] not in private]
     coming = [a for a in rows if a["outcome"] == "pending"
               and (a["days_left"] is None or a["days_left"] >= 0)]
+    # a plan's real deadline sits beside the exams (plan steps themselves have no dates)
+    coming += [{"id": d["id"], "company": plain(d["title"]) or d["id"], "kind": "deadline",
+                "date": d["date"], "days_left": d["days"], "outcome": "pending", "score": None,
+                "readiness": {"solid": 0, "total": 0, "share": None, "weighted": None,
+                              "forecast": None, "calibrating": None}, "domains": []}
+               for d in planner.deadlines(vault, today_d)]
     coming.sort(key=lambda a: (a["days_left"] is None, a["days_left"] or 0))
 
     mtitle = {n.id: _title(n) for n in notes["mistake"]}

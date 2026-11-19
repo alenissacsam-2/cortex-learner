@@ -739,7 +739,8 @@ class Cortex:
         display = render.start_card(
             mode=mode, today=today,
             assessments=planner.assessments(self.vault),
-            open_mistakes=[(titles.get(m.id, m.id), m.count) for m in open_m], date=today_s)
+            open_mistakes=[(titles.get(m.id, m.id), m.count) for m in open_m], date=today_s,
+            deadlines=planner.deadlines(self.vault, today_s))
         extra = {}
         if mode == "week":
             w = extra["week"] = planner.week_summary(self.vault, self.catalog, now=s.started)

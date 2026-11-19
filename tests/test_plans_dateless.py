@@ -96,6 +96,43 @@ def test_switching_subjects_puts_the_latest_first_with_no_dates_or_pressure(root
         "dbms-plan": (1, 2), "sprint-test": (2, 3)}
 
 
+def test_an_old_tracks_placement_date_stays_as_a_deadline_beside_exams(root, home):
+    """A track's `placement_date` (or `deadline`) is a real deadline: it shows with days left
+    in Coming up (Today.md, the start card, the dashboard's assessments as kind `deadline`);
+    its steps still carry no date."""
+    now = datetime.now(UTC)
+    day = date.fromisoformat(events.local_day(now))
+    due = (day + timedelta(days=9)).isoformat()
+    path = root / "tracks/sprint-test.md"
+    path.write_text(path.read_text(encoding="utf-8").replace(
+        "current_day: 2", f'current_day: 2\nplacement_date: "{due}"'), encoding="utf-8")
+    v = Vault(root)
+    assert planner.deadlines(v, day) == [{"kind": "deadline", "id": "sprint-test",
+                                          "title": "Test sprint", "date": due, "days": 9}]
+    assert planner.deadlines(v, day + timedelta(days=10)) == []  # a passed one leaves
+
+    assert CliRunner().invoke(app, ["today", "--vault", str(root)]).exit_code == 0
+    md = (root / "Today.md").read_text(encoding="utf-8")
+    seen = {}
+
+    async def body(call):
+        seen["card"] = (await call("cortex_start", {"mode": "learn"}))["display"]
+
+    run(root, body)
+    assert "- Test sprint: 9 days left" in md.splitlines()
+    assert "Test sprint: 9 days left" in seen["card"]
+    data = dashboard.build_data(v, now=now)
+    dl = [a for a in data["assessments"] if a["kind"] == "deadline"]
+    assert [(a["id"], a["company"], a["days_left"], a["date"]) for a in dl] == [
+        ("sprint-test", "Test sprint", 9, due)]
+    steps = json.dumps([i for i in data["today"] if i["kind"] == "track"])
+    assert due not in steps and not DAY_WORDS.search(steps)
+    for text in (md, seen["card"]):
+        for line in text.splitlines():
+            if "Two Sum II" in line or "Drill set" in line:
+                assert due not in line and not ISO.search(line), line
+
+
 def test_last_active_is_a_pure_fold_and_a_touch_counts(root):
     now = datetime(2026, 11, 19, 12, tzinfo=UTC)
     v, _ = two_subjects(root, now)

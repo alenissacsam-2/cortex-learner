@@ -116,6 +116,19 @@ def _pending(assessments: list[dict]) -> list[dict]:
             if (a.get("outcome") or "pending") == "pending" and not a.get("private")]
 
 
+def _deadline(d: Mapping) -> str:
+    n = d["days"]
+    left = "due today" if n == 0 else "1 day left" if n == 1 else f"{n} days left"
+    return f"{esc(d['title'])}: {left}"
+
+
+def _coming(assessments: list[dict], deadlines: list[dict]) -> list[str]:
+    """Coming up: pending assessments and plan deadlines by date, undated tests last."""
+    rows = [(a.get("date") or "~", _assessment(a)) for a in _pending(assessments)] + [
+        (d["date"], _deadline(d)) for d in deadlines]
+    return [text for _, text in sorted(rows, key=lambda r: r[0])]
+
+
 def _unchecked_titles(today: list[dict]) -> list[str]:
     return [esc(i["title"]) for i in today if i.get("kind") == "unchecked"]
 
@@ -202,9 +215,10 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
 
 
 def start_card(*, mode: str, today: list[dict], assessments: list[dict],
-               open_mistakes: list[tuple[str, int]], date: str) -> str:
+               open_mistakes: list[tuple[str, int]], date: str,
+               deadlines: list[dict] = ()) -> str:
     """Plan steps carry no day or date (v8: a plan is an ordered list per subject); only
-    assessments under Coming up have dates."""
+    assessments and plan deadlines (planner.deadlines) under Coming up have dates."""
     head = ["Cortex", MODE_LABEL.get(mode, esc(mode))]
     if mode == "sweep" and today:  # dogfood r4 #7: the plan's length, not a promised 10
         head[1] += f" ({len(today)} cold question{'s' if len(today) > 1 else ''})"
@@ -224,9 +238,9 @@ def start_card(*, mode: str, today: list[dict], assessments: list[dict],
     unchecked = _unchecked_titles(today)  # the plan's lane: privacy-filtered, 7-day rule
     if unchecked:
         lines.append("**Taught, not yet checked:** " + ", ".join(unchecked))
-    coming = _pending(assessments)[:COMING_UP]
+    coming = _coming(assessments, deadlines)[:COMING_UP]
     if coming:
-        lines.append("**Coming up:** " + "; ".join(_assessment(a) for a in coming))
+        lines.append("**Coming up:** " + "; ".join(coming))
     if open_mistakes:
         lines.append("**Open mistakes:** " + ", ".join(
             f"⚑ {esc(t)} ({n}×)" for t, n in open_mistakes[:MISTAKES_SHOWN]))
@@ -311,8 +325,9 @@ def end_card(*, counts: dict, moved: list[dict], unchecked: list[str], new_mista
 
 
 def today_md(*, today: list[dict], assessments: list[dict], as_of: str,
-             cues: Mapping[str, str] | None = None) -> str:
-    """`cues` maps concept -> last question asked on it (raw); re-check items show it."""
+             cues: Mapping[str, str] | None = None, deadlines: list[dict] = ()) -> str:
+    """`cues` maps concept -> last question asked on it (raw); re-check items show it.
+    `deadlines` (planner.deadlines) join the assessments under Coming up."""
     cues = cues or {}
     lines = [TODAY_HEADER, f"# Today · {esc(as_of)}", "", "## Plan"]
     for i in today:
@@ -334,9 +349,9 @@ def today_md(*, today: list[dict], assessments: list[dict], as_of: str,
     unchecked = _unchecked_titles(today)
     if unchecked:
         lines += ["", "## Taught but not checked"] + [f"- {t}" for t in unchecked]
-    coming = _pending(assessments)
+    coming = _coming(assessments, deadlines)
     if coming:
-        lines += ["", "## Coming up"] + [f"- {_assessment(a)}" for a in coming]
+        lines += ["", "## Coming up"] + [f"- {c}" for c in coming]
     lines += ["", "Refresh with /cortex or `cortex brief`", ""]
     return "\n".join(lines)
 

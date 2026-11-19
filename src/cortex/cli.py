@@ -1203,7 +1203,8 @@ def today(minutes: Annotated[int | None, typer.Option(
     items = _print_today(v, now, planner.check_minutes(minutes))
     v.write_text(v.root / "Today.md", render.today_md(
         today=items, assessments=planner.assessments(v),
-        as_of=local_day(now), cues=planner.last_questions(v)))
+        as_of=local_day(now), cues=planner.last_questions(v),
+        deadlines=planner.deadlines(v, local_day(now))))
 
 
 @app.command()
