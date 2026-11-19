@@ -910,7 +910,10 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     return {**report, "visible_to_claude": vis}
 
 
-FILTER_VERSION = 2  # bump when the filter's rules change, so stored browsing is re-filtered
+# bump when the filter's rules change, so stored browsing is re-filtered and every day the
+# browsers still hold is rebuilt once (3: per-browser counts and Don't-save by the site's
+# category, 0.2.3)
+FILTER_VERSION = 3
 
 
 def fingerprint(settings: Settings) -> str:
