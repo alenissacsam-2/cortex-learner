@@ -1,6 +1,7 @@
 """Retrieval and answers for `cortex ask` and the app's Chat: passages from the private browse
-search and the main recall, and answer with a local model only. Never cloudllm: the passages
-include local-only browsing. Passages are untrusted page text, wrapped as data."""
+search, the main recall and a search of private notes (`private_pages`), and answer with a
+local model only. Never cloudllm: the passages include local-only browsing and private notes.
+Passages are untrusted page text, wrapped as data."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.index import Index, _wrap
 from cortex.topics import page_date
-from cortex.vault import Vault
+from cortex.vault import Vault, VaultError
 
 BUDGET = 6000  # passage characters, so a 2B model's context is not overrun
 PASSAGE = 1500
@@ -33,10 +34,14 @@ SYSTEM = (
     "passages you use by number, as [1], [2]. Be brief.")
 SOURCES = {"notes": True, "chats": True, "browsing": True, "private": True}
 _CITE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")  # 3 digits: int() of a huge one raises
+_PRIVATE: dict = {}  # (vault root, path) -> (chunk texts, starts, vectors): memory only, never disk
 
 
 def _switch(p: dict) -> str:
-    """The source switch a passage falls under: notes, chats, browsing or private."""
+    """The source switch a passage falls under: notes, chats, browsing or private (private
+    browsing and private notes)."""
+    if p.get("private"):
+        return "private"
     if p["kind"] != "browse":
         return "notes" if p["kind"] == "note" else "chats"
     return "private" if p["path"].startswith("browse/private/") else "browsing"
@@ -98,12 +103,62 @@ def _dated(vault: Vault, idx: Index, between: tuple[str, str], topic: str) -> li
     return sorted(out, key=lambda p: (p["day"], p["path"]), reverse=True)
 
 
+def private_pages(vault: Vault, idx: Index) -> dict[str, tuple[str, dict]]:
+    """{id: (path, page shaped as `idx._notes` keeps one)} of the pages `idx` leaves out as
+    private (`vault.is_private`, or under a private subject). For the local model only: the
+    shared index and its vectors, so the MCP server and the dashboard, never hold them."""
+    out = {}
+    for path, i in [*idx._ids.items()]:
+        if i not in idx._private:
+            continue
+        try:
+            note = vault.read_path(path)
+        except VaultError:
+            continue
+        out[i] = (path.relative_to(vault.root).as_posix(),
+                  {"kind": note.kind, "title": str(note.fields.get("title") or i),
+                   "fields": note.fields, "body": note.body})
+    return out
+
+
+def _private_hits(vault: Vault, idx: Index, question: str, k: int) -> list[dict]:
+    """Up to `k` private pages whose best chunk scores semantic.MIN_COS or more against
+    `question`, best first, as passages. Their vectors stay in memory (`_PRIVATE`)."""
+    embed = semantic.load_embedder()
+    pages = private_pages(vault, idx) if embed is not None and question.strip() else {}
+    if not pages:
+        return []
+    q = semantic._embed(embed, [semantic.QUERY_PREFIX + question.strip()])[0]
+    chunks = {i: semantic._chunks(n) for i, (_, n) in pages.items()}
+    todo = [i for i, (p, _) in pages.items()
+            if (hit := _PRIVATE.get((vault.root, p))) is None
+            or hit[0] != [t for _, t in chunks[i]] or hit[2].shape[1] != len(q)]
+    vecs, at = semantic.embed_all(embed, [t for i in todo for _, t in chunks[i]]), 0
+    for i in todo:
+        c = chunks[i]
+        _PRIVATE[(vault.root, pages[i][0])] = ([t for _, t in c], [s for s, _ in c],
+                                               vecs[at:at + len(c)])
+        at += len(c)
+    scored = []
+    for i, (p, _) in pages.items():
+        _, starts, v = _PRIVATE[(vault.root, p)]
+        sims = v @ q
+        if sims[b := int(np.argmax(sims))] >= semantic.MIN_COS:
+            scored.append((-float(sims[b]), p, i, starts[b]))
+    return [{"path": p, "title": pages[i][1]["title"], "text": dict(chunks[i])[s],
+             "kind": "chat" if semantic.is_chat(pages[i][1]) else "note",
+             "day": _note_day(vault, i, pages[i][1], p), "private": True}
+            for _, p, i, s in sorted(scored)[:k]]
+
+
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
               sources: dict | None = None, topic: str = "") -> list[dict]:
-    """[{path, title, text, kind (note|chat|browse), day}]: browse pages and recalled notes
-    taken in turn, deduped by path, at most `k`, cut to BUDGET characters in all. `sources`
-    turns SOURCES off one by one. With `between` (first and last ISO day) only pages dated
-    inside it, then the pages of those days by `topic` (`_dated`); undated pages drop out."""
+    """[{path, title, text, kind (note|chat|browse), day}]: browse pages, recalled notes and
+    private notes (`_private_hits`, under the `private` switch) taken in turn, deduped by path,
+    at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off one by one. With
+    `between` (first and last ISO day) only pages dated inside it, then the pages of those days
+    by `topic` (`_dated`); undated pages drop out. shortcut: `_dated` lists no private note (only
+    a search hit dated in range comes back); add them there if dated questions miss them."""
     src = {**SOURCES, **(sources or {})}
     want = k if between is None else vectors.MAX_K  # the range filters after the search
     browse = [{"path": h["path"], "title": h["title"], "text": h["text"], "kind": "browse",
@@ -124,7 +179,8 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
                       "kind": "browse" if p.startswith("browse/") else
                       "chat" if semantic.is_chat(n) else "note",
                       "day": _note_day(vault, h["id"], n, p)})
-    found = chain.from_iterable(zip_longest(browse, notes))
+    private = _private_hits(vault, idx, question, want) if src["private"] else []
+    found = chain.from_iterable(zip_longest(browse, notes, private))
     if between is not None:
         def listed():  # read only when the search left room
             yield from _dated(vault, idx, between, topic)

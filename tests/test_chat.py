@@ -355,6 +355,65 @@ def test_source_switches(vault):
     assert only_private and all(p["kind"] == "browse" for p in only_private)
 
 
+SECRET = "notes/secret-garage.md"  # a private note: Chat's local model only, never Claude
+
+
+def _secret(vault):
+    note(vault.root, SECRET, "title: Secret garage\nprivate: true\n",
+         "# Secret garage\n\nCar motor zanzibarquux stash.")
+    return vault
+
+
+def test_the_private_switch_covers_private_notes(vault, stream):
+    _secret(vault)
+    found = ask._passages(vault, "car motor", 8)
+    hit = next(p for p in found if p["path"] == SECRET)
+    assert hit["kind"] == "note" and "zanzibarquux" in hit["text"]
+    assert SECRET not in _paths(ask._passages(vault, "car motor", 8, sources={"private": False}))
+    assert SECRET not in _paths(ask._passages(vault, "pasta recipe", 8))  # under MIN_COS
+    only = ask._passages(vault, "car motor", 8,
+                         sources={"notes": False, "chats": False, "browsing": False})
+    assert SECRET in _paths(only)
+    s = stream("ollama", ["It is in [1]."])
+    _turn(vault, None, "car motor", s.runner())
+    assert "zanzibarquux" in s.bodies[-1]["messages"][-1]["content"]  # the local model reads it
+    off = dict(chat.get_settings(), sources=dict(ask.SOURCES, private=False))
+    _turn(vault, None, "car motor", s.runner(), settings=off)
+    assert "zanzibarquux" not in json.dumps(s.bodies[-1])
+
+
+def test_chat_private_notes_never_reach_mcp_or_the_dashboard(vault):
+    """The guard: after Chat searched the private note, the shared index, its vector cache,
+    the MCP tools and the dashboard still never hold it."""
+    from conftest import run
+
+    from cortex import dashboard
+
+    _secret(vault)
+    assert SECRET in _paths(ask._passages(vault, "car motor zanzibarquux", 8))
+    marks = ("secret-garage", "Secret garage", "zanzibarquux")
+    got = []
+
+    async def body(call):
+        q = "car motor garage stash"  # context and prime echo the query: no mark in it
+        got.append(await call("cortex_find", {"query": q}))
+        got.append(await call("cortex_recall", {"query": q}))
+        got.append(await call("cortex_recall", {"query": q, "chats": True}))
+        got.append(await call("cortex_read", {"id": "secret-garage"}))
+        got.append(await call("cortex_prime", {"prompt": q}))
+        got.append(await call("cortex_context", {"topic": q}))
+
+    run(vault.root, body)
+    assert got[1]["hits"] or got[0]["hits"]  # the query does find the public car note
+    read = got.pop(3)  # its error message echoes the id asked for, nothing else
+    assert read["error"] == "unknown_id" and not any(m in json.dumps(read) for m in marks[1:])
+    for out in got:
+        assert not any(m in json.dumps(out) for m in marks), out
+    assert "secret-garage" not in semantic._read(vault.root)  # the shared vector cache
+    blob = json.dumps(dashboard.build_data(vault, now=datetime(2026, 11, 18, 12).astimezone()))
+    assert not any(m in blob for m in marks)
+
+
 # ---- history and storage ---------------------------------------------------------------------
 
 def test_history_keeps_the_last_turns_within_budget(monkeypatch):
@@ -815,10 +874,15 @@ def test_reply_answers_a_study_question_without_the_model(vault, stream):
     cid, events = _turn(vault, None, "What did I study yesterday?", s.runner())
     assert [e["s"] for e in events if e["t"] == "step"] == ["Reading what you studied from 17 Nov"]
     text = "".join(e["s"] for e in events if e["t"] == "tok")
-    assert text.startswith("**2 concepts** studied on 17 Nov") and s.bodies == []
+    assert text.startswith("**3 concepts** studied on 17 Nov") and s.bodies == []
+    assert "**Private concept**" in text  # the private switch (on by default): the local side
     saved = chat.load(vault, cid)
     assert saved[-1]["role"] == "assistant" and saved[-1]["text"] == text
     assert saved[-1]["sources"] == [] and "searched" not in saved[-1]
+    off = dict(chat.get_settings(), sources=dict(ALL_ON, private=False))
+    _, events = _turn(vault, None, "What did I study yesterday?", s.runner(), settings=off)
+    text = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert text.startswith("**2 concepts** studied on 17 Nov") and "Private" not in text
 
 
 def test_a_data_answer_needs_no_model(vault, monkeypatch):
@@ -895,22 +959,24 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     d = date(2026, 11, 17)
     out = chat.digest(vault, d, d, ALL_ON, TODAY)
     assert out.startswith("**Your day** on 17 Nov:")
-    assert "**2 concepts** studied on 17 Nov" in out and "**Array basics**" in out
+    assert "**3 concepts** studied on 17 Nov" in out and "**Array basics**" in out
+    assert "**Private concept**" in out  # the private switch: the local side names it
     assert "**13 sites** visited (204 visits), most first:" in out
     assert "- **miruro.tv** · video · 30 visits" in out
     assert "- and 3 more sites" in out and "site10.example" not in out  # capped at 10
     assert "old.example" not in out
-    assert "**1 note** written or changed:" in out
+    assert "**2 notes** written or changed:" in out
     assert "- Rust ownership" in out  # markdown stripped
-    assert "Diary entry" not in out  # a private note never shows, whatever the switches
+    assert "- Diary entry" in out  # a private note, under the private switch
     assert "**1 saved AI chat**:\n\n- Heaps chat" in out
     assert "**Journal** (2 lines):\n\n- 09:30 Started graphs revision\n- 21:00 Tired" in out
-    assert "Private concept" not in out  # D1: the private concept's study stays hidden
-    assert out.endswith("Not included: private notes and study subjects; site categories set "
-                        "to Don't save (adult), never stored.")
+    assert out.endswith("Not included: site categories set to Don't save (adult), never stored.")
     shut = chat.digest(vault, d, d, dict(ALL_ON, private=False), TODAY)
     assert "Diary entry" not in shut and "miruro" not in shut and "Rust ownership" in shut
-    assert "private pages (switched off in Chat settings)" in shut
+    assert "**2 concepts** studied on 17 Nov" in shut and "Private concept" not in shut  # D1
+    assert "private notes, subjects and browsing (switched off in Chat settings)" in shut
+    only_private = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False), TODAY)
+    assert "- Diary entry" in only_private and "Rust" not in only_private
     bare = chat.digest(vault, d, d, dict(ALL_ON, notes=False, chats=False, browsing=False,
                                          private=False), TODAY)
     assert "sites" not in bare and "Rust" not in bare and "Journal" not in bare
@@ -1007,7 +1073,8 @@ def test_today_starts_at_four_in_the_morning(vault, monkeypatch):
     chat.reply(vault, None, "What did I study today?", None, events.append, threading.Event(),
                chat.get_settings())
     assert [e["s"] for e in events if e["t"] == "step"] == ["Reading what you studied from 17 Nov"]
-    assert "**2 concepts** studied on 17 Nov" in "".join(e["s"] for e in events if e["t"] == "tok")
+    # 3: the private switch is on by default, so the private concept counts too
+    assert "**3 concepts** studied on 17 Nov" in "".join(e["s"] for e in events if e["t"] == "tok")
 
 
 def test_an_undated_note_changed_before_four_counts_on_the_day_before(vault):

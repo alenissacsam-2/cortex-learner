@@ -596,7 +596,7 @@
     const k = h('select', { id: 'chat-k' }, [4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => h('option', { value: String(n), text: String(n) })));
     k.value = String(s.passages);
     k.addEventListener('change', () => saveSetting({ passages: Number(k.value) }, k));
-    const srcNames = { notes: 'Notes and mistakes', chats: 'Saved AI chats', browsing: 'Browsing', private: 'Private browsing' };
+    const srcNames = { notes: 'Notes and mistakes', chats: 'Saved AI chats', browsing: 'Browsing', private: 'Private notes and browsing' };
     const srcs = Object.entries(srcNames).map(([key, label]) => {
       const cb = h('input', { type: 'checkbox', id: 'chat-src-' + key, checked: s.sources[key] });
       cb.addEventListener('change', () => saveSetting({ sources: { [key]: cb.checked } }, cb));

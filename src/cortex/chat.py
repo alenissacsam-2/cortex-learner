@@ -1,7 +1,7 @@
 """The app's local chat: multi-turn questions over the archive (notes, saved AI chats, mistakes
-and browsing, private pages included), answered by a LOCAL model only (`localllm`, never
-cloudllm). Each turn retrieves afresh through `ask._passages`, wrapped as untrusted data; the
-earlier turns go to the model as plain text only.
+and browsing, private notes and browsing included under the `private` switch), answered by a
+LOCAL model only (`localllm`, never cloudllm). Each turn retrieves afresh through
+`ask._passages`, wrapped as untrusted data; the earlier turns go to the model as plain text only.
 
 History is kept in `<vault>/.cortex/browse/chat/<ulid>.jsonl`, one JSON line per message. That
 folder is inside the private browse tree on purpose (an answer can quote private browsing):
@@ -490,10 +490,9 @@ def _capped(head: str, items: list, more: str = "more") -> list:
 def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     """[(day, kind, id, title, body, is_chat)] of notes, saved AI chats and journal pages dated
     in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's `notes` and
-    `chats` switches. Private pages (their own `private: true`, or under a private subject)
-    never appear: the index keeps them out of Chat's search too, and the `private` switch is
-    about private browsing, not notes (whether Chat may read private notes is the owner's
-    open decision)."""
+    `chats` switches. Private pages (`ask.private_pages`: their own `private: true`, or under a
+    private subject) come under the `private` switch instead: the local model may read them
+    (owner's decision, 19 Nov 2026)."""
     from cortex.catalog import Catalog
     from cortex.index import Index
 
@@ -507,7 +506,9 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
             idx.refresh()
         paths = {i: p for p, i in idx._ids.items()}
         stats = dict(idx._stats)
-        pages = [*idx._notes.items()]  # chat.list shadows the builtin
+        private = {i: n for i, (_, n) in ask.private_pages(vault, idx).items()} \
+            if sources.get("private") else {}
+        pages = [*idx._notes.items(), *private.items()]  # chat.list shadows the builtin
     # (day, is_chat) per file version: both read the whole body (~1 ms a note), so they are
     # kept between answers for the files that did not change
     old, memo = _DAYS.get(vault.root, {}), {}
@@ -518,7 +519,7 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
         k = (paths[i], stats.get(paths[i]))
         d, is_chat = memo[k] = old.get(k) or (ask._note_day(vault, i, n, paths[i]),
                                               semantic.is_chat(n))
-        if lo <= d <= hi and sources.get("chats" if is_chat else "notes"):
+        if lo <= d <= hi and (i in private or sources.get("chats" if is_chat else "notes")):
             out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat))
     _DAYS[vault.root] = memo
     return sorted(out, key=lambda p: (p[0], p[3]))
@@ -536,7 +537,8 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
     if unit == "week" and (lo, hi) == (_monday(today), today):
         unit = "week so far"  # on a Monday too, when it is one day so far
     sections = []
-    studied = chat_study.answer(vault, "range", (lo, hi, None), today) \
+    studied = chat_study.answer(vault, "range", (lo, hi, None), today,
+                                bool(sources.get("private"))) \
         if sources.get("notes") else chat_study.NO_STUDY
     if not studied.startswith(chat_study.NO_STUDY):
         sections.append(studied.splitlines())
@@ -566,19 +568,19 @@ def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
     if journal:
         sections.append(_capped(f"**Journal** ({_plural(len(journal), 'line')}):", journal))
     off = [label for k, label in (("notes", "notes and journal"), ("chats", "saved AI chats"),
-                                  ("browsing", "browsing"), ("private", "private pages"))
+                                  ("browsing", "browsing"),
+                                  ("private", "private notes, subjects and browsing"))
            if not sources.get(k)]
-    left = ["private notes and study subjects"]
-    left += [f"{', '.join(off)} (switched off in Chat settings)"] if off else []
+    left = [f"{', '.join(off)} (switched off in Chat settings)"] if off else []
     if skipped:
         left.append(f"site categories set to Don't save ({', '.join(skipped)}), never stored")
-    tail = "Not included: " + "; ".join(left) + "."
+    tail = ["Not included: " + "; ".join(left) + "."] if left else []
     if not sections:
-        return f"Cortex has nothing recorded {when}. {tail}"
+        return " ".join([f"Cortex has nothing recorded {when}.", *tail])
     out = [f"**Your {unit}** {when}:"]
     for sec in sections:
         out += ["", *sec]
-    return "\n".join([*out, "", tail])
+    return "\n".join([*out, *([""] + tail if tail else [])])
 
 
 def _looping(text: str) -> bool:
@@ -711,7 +713,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         step = chat_study.STEP[asked] + (span if asked == "range" else "")
 
         def data():
-            return chat_study.study_answer(vault, text, own, today, not prev) \
+            return chat_study.study_answer(vault, text, own, today, not prev,
+                                           bool(s["sources"].get("private"))) \
                 if s["sources"].get("notes") else NOTES_OFF
     listed = None if data is None else ""  # a data answer: filled in after its step
     if listed is None and semantic.load_embedder() is None:

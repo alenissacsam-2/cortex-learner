@@ -2,8 +2,9 @@
 "what did I study yesterday?", "how am I doing?") answered from Cortex's own learner model,
 never from a few retrieved passages and never by a model. Each answer reuses the planner and
 the levels fold, hides what the planner hides (private domains, areas, concepts, tracks and
-mistake notes: D1) and shows state words, never internal numbers. Anything else is None, so
-the passages and the local model answer it."""
+mistake notes: D1) unless Chat's `private` switch is on (the local model may read them; today's
+plan still hides them, as planner.today does) and shows state words, never internal numbers.
+Anything else is None, so the passages and the local model answer it."""
 
 from __future__ import annotations
 
@@ -194,18 +195,20 @@ def _state(st) -> str:
     return f"{levels.GLYPH[s]} {levels.LABEL[s]}"
 
 
-def study_answer(vault: Vault, text: str, got, today: date, first: bool = True) -> str | None:
+def study_answer(vault: Vault, text: str, got, today: date, first: bool = True,
+                 private: bool = False) -> str | None:
     """The answer to a study question about the learner's own plan, due reviews, weak spots,
     a date range's study, or progress; None for any other question."""
     k = kind(text, got, today, first)
     if k == "due" and got:
         got = _ahead(text, got, today)
         got = (got[0], _due_by(text, got), got[2])
-    return None if k in (None, "digest") else answer(vault, k, got, today)  # digest: chat.digest
+    return None if k in (None, "digest") else answer(vault, k, got, today, private)
 
 
-def answer(vault: Vault, k: str, got, today: date) -> str:
-    """The answer for study question kind `k` (see `kind`) as of local day `today`."""
+def answer(vault: Vault, k: str, got, today: date, private: bool = False) -> str:
+    """The answer for study question kind `k` (see `kind`) as of local day `today`. `private`
+    (Chat's switch, for the local model only) names private subjects and mistakes too."""
     day = today.isoformat()
     catalog = Catalog.load(vault)
     log = EventLog(vault)
@@ -226,7 +229,7 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
     if hit is None or hit[0] != key:
         hit = _STATES[vault.root] = (key, levels.fold(events, day, pc, high))
     states, mistakes = hit[1]
-    hide = planner.hidden(vault, catalog)
+    hide = set() if private else planner.hidden(vault, catalog)
 
     def name(cid: str) -> str:
         e = catalog.entries.get(cid)
@@ -267,7 +270,7 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
         return "\n".join(lines)
 
     notes = list(vault.iter_notes("mistake"))
-    hush = {n.id for n in notes if is_private(n)}  # D1: a private mistake is never named
+    hush = set() if private else {n.id for n in notes if is_private(n)}  # D1 unless `private`
     open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                     key=lambda m: (-m.count, m.id))  # as the start card
 
