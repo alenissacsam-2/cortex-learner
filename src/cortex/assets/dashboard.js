@@ -19,6 +19,7 @@
   const NAME = D.owner && D.owner.name ? D.owner.name : '';
   const SVGNS = d3.namespaces.svg;
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const motion = (ms) => (REDUCED.matches ? 0 : ms);  // a d3 transition's length: instant under reduced motion
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -126,6 +127,7 @@
     moon: ['M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z'],
     close: ['M6 6l12 12', 'M18 6L6 18'],
     chevron: ['M9 6l6 6-6 6'],
+    check: ['M5 12.5l4.5 4.5L19 7.5'],
     help: ['M12 3a9 9 0 1 0 0.01 0', 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7', 'M12 17h.01'],
   };
   function icon(name) {
@@ -152,11 +154,20 @@
   const hideTip = () => { tip.hidden = true; };
   const toastEl = $('toast');
   let toastTimer = 0;
-  function toast(msg) {
+  function toast(msg, kind) {  // kind: 'error' (read out as an alert, stays 6 s) or none
     toastEl.textContent = msg;
+    toastEl.className = 'toast' + (kind ? ' ' + kind : '');
+    toastEl.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     toastEl.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2200);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, kind === 'error' ? 6000 : 2200);
+  }
+  // a short confirmation a screen reader hears without a toast (Copied on a labelled button)
+  function announce(msg) {
+    const a = $('announce');
+    if (!a) return;
+    a.textContent = msg;
+    setTimeout(() => { if (a.textContent === msg) a.textContent = ''; }, 1500);
   }
   function fallbackCopy(text) {
     const ta = el('textarea');
@@ -171,15 +182,34 @@
     ta.remove();
     return ok;
   }
-  async function copyText(text) {
+  // Copy: the button turns to a check (and Copied, when it has words) for 1.5 s, as in the app;
+  // an icon-only button also says Copied in the toast. A failure says so in an error toast.
+  const copyFaces = new WeakMap(), copyTimers = new WeakMap();
+  async function copyText(text, b) {
     let ok = false;
     try {
       if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
     } catch (e) { ok = false; }
     if (!ok) ok = fallbackCopy(text);
-    toast(ok ? 'Copied. Paste it into Claude.' : 'Copy failed. Select the text and copy it.');
+    if (!ok) { copyFace(b); toast('Copy failed. Select the text and copy it.', 'error'); return; }
+    if (!b) { toast('Copied. Paste it into Claude.'); return; }
+    if (!copyFaces.has(b)) copyFaces.set(b, [...b.childNodes]);
+    const words = copyFaces.get(b).some((n) => n.textContent.trim());
+    clearTimeout(copyTimers.get(b));
+    b.replaceChildren(icon('check'), ...(words ? [' Copied'] : []));
+    if (words) announce('Copied'); else toast('Copied. Paste it into Claude.');
+    copyTimers.set(b, setTimeout(() => copyFace(b), 1500));
   }
-  const copyBtn = (prompt, cls) => iconBtn('copy', 'Copy: ' + prompt, () => copyText(prompt), cls);
+  function copyFace(b) {  // the button's own face again
+    if (!b || !copyFaces.has(b)) return;
+    clearTimeout(copyTimers.get(b));
+    b.replaceChildren(...copyFaces.get(b));
+    copyFaces.delete(b);
+  }
+  function copyBtn(prompt, cls) {
+    const b = iconBtn('copy', 'Copy: ' + prompt, () => copyText(prompt, b), cls);
+    return b;
+  }
   // copied text becomes the user's own message, so it carries ids only, never note titles
   const loopPrompt = (id) => `Let's work on the open loop [[${id}]] from Cortex.`;
 
@@ -239,10 +269,11 @@
   }
 
   /* ---- Markdown reader: DOM nodes only ---- */
+  let selfId = null;  // the page being drawn: a link to itself is plain text, not a button that does nothing
   function wikilink(id, label) {
     if (!PAGES.has(id)) return el('span', 'wl-missing', (label || id).trim());
     const text = (label || PAGES.get(id).title).trim();
-    return button('wl', text, () => openReader(id));
+    return id === selfId ? el('span', null, text) : button('wl', text, () => openReader(id));
   }
   // Inline Markdown as DOM nodes: text nodes only, images dropped, [label](url) keeps the label.
   const INLINE = new RegExp(['(`+)([\\s\\S]*?)\\1', '!\\[[^\\]]*\\]\\([^)]*\\)',
@@ -439,6 +470,7 @@
   }
   function pageView(p) {
     const out = [];
+    selfId = p.id;
     if (p.summary) out.push(el('p', 'summary', p.summary));
     if (p.tags.length) {
       const box = el('div', 'chip-list');
@@ -468,7 +500,7 @@
     }
     out.push(el('h4', null, 'Backlinks'));
     const back = backlinks(p.id);
-    if (!back.length) out.push(el('p', 'empty', 'No backlinks.'));
+    if (!back.length) out.push(el('p', 'empty', 'No backlinks: no other page links here yet.'));
     else {
       const ul = el('ul', 'backlinks');
       for (const { p: from, line } of back) {
@@ -479,6 +511,7 @@
       }
       out.push(ul);
     }
+    selfId = null;
     return out;
   }
   // The right-side panel, emptied and titled: the reader, or the brain's compact inspector.
@@ -529,7 +562,7 @@
     return a;
   }
   function promptBtn(p) {
-    const cp = button('btn', null, () => copyText(promptFor(p)));
+    const cp = button('btn', null, () => copyText(promptFor(p), cp));
     cp.append(icon('copy'), ' Copy prompt');
     cp.title = promptFor(p);
     return cp;
@@ -594,7 +627,7 @@
       box.append(el('h4', null, 'File this chat under…'));
       for (const l of beacons) {
         const t = LOBES.get(l).title, b = button('btn', null,
-          () => copyText(`File the chat [[${p.id}]] under the topic [[${l.replace(/^domain:/, '')}]] in Cortex.`));
+          () => copyText(`File the chat [[${p.id}]] under the topic [[${l.replace(/^domain:/, '')}]] in Cortex.`, b));
         b.append(icon('copy'), ' ' + t);
         b.title = `Copy: file this chat under ${t}`;
         row.append(b);
@@ -1206,7 +1239,7 @@
       if (PAGES.has(it.id)) syncRow(r, it.id);
       b.body.append(r);
     }
-    if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due.'));
+    if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due. Run /cortex in Claude to start something new.'));
     else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
     else b.root.append(el('div', 'foot', 'That is everything due today.'));
     host.replaceChildren(D.first_run && !items.length ? firstRunBoard() : b.root);
@@ -1356,6 +1389,7 @@
         addGroup(li);
       }
     }
+    if (!lobes.length) tree.after(el('p', 'empty', 'No lobes yet. Pages you save gather into lobes here.'));
     const first = tree.querySelector('[role="treeitem"]');
     if (first) first.tabIndex = 0;
     const visible = () => [...tree.querySelectorAll('[role="treeitem"]')].filter((li) => !li.parentElement.closest('[role="group"][hidden]'));
@@ -1561,6 +1595,7 @@
       o.value = c.id;
       lob.append(o);
     }
+    lob.disabled = lob.options.length < 2;  // no lobes yet: nothing to choose
     lob.addEventListener('change', () => { LIB.lobe = lob.value; LIB.shown = 100; renderLibraryRows(); });
     $('lsort').addEventListener('change', () => { LIB.sort = $('lsort').value; renderLibraryRows(); });
     let timer = 0;
@@ -1603,7 +1638,9 @@
     $('lcount').textContent = `${rows.length.toLocaleString('en')} of ${D.pages.length.toLocaleString('en')} pages`
       + (rows.length > LIB.shown ? `, showing the first ${LIB.shown.toLocaleString('en')}` : '');
     if (!rows.length) {
-      $('ltable').replaceChildren(el('p', 'empty', 'No pages match. Clear the search, preset, lobe or tag to see more.'));
+      $('ltable').replaceChildren(el('p', 'empty', D.pages.length
+        ? 'No pages match. Clear the search, preset, lobe or tag to see more.'
+        : 'No pages yet. Import your chats or notes, or save something from a Claude chat.'));
       $('lmore').hidden = true;
       return;
     }
@@ -1646,7 +1683,7 @@
     const grid = el('div', 'you-grid');
     const wait = board('Waiting for your yes', { action: copyBtn('/cortex reflect', 'band-btn') });
     const un = D.you.unconfirmed || [];
-    if (!un.length) wait.body.append(el('p', 'empty', 'Nothing waiting.'));
+    if (!un.length) wait.body.append(el('p', 'empty', 'Nothing waiting. Lines a chat proposes about you wait here for your yes.'));
     for (const u of un) {
       const r = el('div', 'brow');
       const t = el('div', 't');
@@ -1685,7 +1722,7 @@
     const pr = (D.you.probes || {}).overall || { n: 0 };
     const pf = el('div', 'foot');
     if (pr.n) pf.textContent = `Predicted you right ${Math.round(pr.twin * pr.n)} of ${pr.n}.`;
-    else pf.append('No probes yet: try /cortex probe ', copyBtn('/cortex probe'));
+    else pf.append('No probes yet. Paste /cortex probe into Claude to see how well Cortex predicts you. ', copyBtn('/cortex probe'));
     kb.root.append(pf);
     grid.append(wait.root, kb.root);
     host.append(grid);
@@ -1695,7 +1732,9 @@
     const me = D.pages.filter((p) => p.kind === 'me').sort((a, b) => (a.id === 'profile' ? -1 : b.id === 'profile' ? 1 : a.title.localeCompare(b.title)));
     const lb = board('About you', { note: plural(me.length, 'page') });
     const view = board('Profile');
+    const peeks = [];
     const showMe = (p) => {
+      for (const [b, id] of peeks) b.setAttribute('aria-pressed', String(id === p.id));  // which page is beside
       view.band.firstChild.textContent = p.title;
       const body = el('div', 'md me-view');
       body.append(md(p.body));
@@ -1705,11 +1744,12 @@
     for (const p of me) {
       const r = brow({ id: p.id, title: p.title, sub: p.summary || '', prompt: `/cortex about ${p.id}`, brainId: p.id });
       const peek = iconBtn('chevron', 'Show beside the list', () => showMe(p));
+      peeks.push([peek, p.id]);
       r.lastChild.prepend(peek);
       lb.body.append(r);
     }
     const prof = me.find((p) => p.id === 'profile') || me[0];
-    if (prof) showMe(prof); else view.body.append(el('p', 'empty', 'No profile yet.'));
+    if (prof) showMe(prof); else view.body.append(el('p', 'empty', 'No profile yet. Tell any Claude chat about yourself.'));
     g2.append(lb.root, view.root);
     host.append(g2);
 
@@ -1919,7 +1959,7 @@
     const plan = $('plan');
     if (D.first_run) plan.append(firstRunBoard());
     else if (D.plan_cleared) plan.append(el('div', 'board done-card', 'Done for today ✓'));
-    else if (!D.today.length) plan.append(el('p', 'empty', 'Nothing planned yet.'));
+    else if (!D.today.length) plan.append(el('p', 'empty', 'Nothing planned yet. Run /cortex in Claude to pick what to learn next.'));
     for (const [kind, head] of GROUPS) {
       const items = D.today.filter((i) => i.kind === kind);
       if (!items.length) continue;
@@ -1969,7 +2009,7 @@
         c.append(chips);
       }
       const acts = el('div', 'chip-list');
-      const cp = button('btn', null, () => copyText(`/cortex mock ${a.id}`));
+      const cp = button('btn', null, () => copyText(`/cortex mock ${a.id}`, cp));
       cp.append(icon('copy'), ' Copy mock prompt');
       acts.append(cp);
       c.append(acts);
@@ -1977,7 +2017,7 @@
     }
     const om = $('open-mistakes');
     const open = D.mistakes.filter((m) => m.status === 'open').slice(0, 5);
-    if (!open.length) om.append(el('p', 'empty', 'No open mistakes.'));
+    if (!open.length) om.append(el('p', 'empty', 'No open mistakes. A wrong answer in a graded check shows up here until it is fixed.'));
     for (const m of open) {
       const row = el('div', 'mrow');
       const left = el('span');
@@ -2015,7 +2055,7 @@
 
     const tl = $('timeline');
     const rows = D.history.assessments;
-    if (!rows.length) tl.append(el('p', 'empty', 'No assessments yet.'));
+    if (!rows.length) tl.append(el('p', 'empty', 'No assessments yet. Tell any Claude chat about a test and its date.'));
     for (const a of rows) {
       const r = el('div', 'trow');
       const who = el('span');
@@ -2033,7 +2073,7 @@
     }
     // display-only; a band under its minimum shows its count, not a share
     const mir = $('mirror'), C = D.confidence || [];
-    if (!C.some((r) => r.n)) mir.append(el('p', 'empty', 'No answers with a "how sure" (1-4) yet.'));
+    if (!C.some((r) => r.n)) mir.append(el('p', 'empty', 'No answers with a "how sure" (1-4) yet. Say how sure you are when you answer in /cortex review.'));
     else {
       mir.append(el('p', 'small muted', 'Each time you answer, you say how sure you are. This is how often you were right at each level, over all your answers.'));
       for (const r of C) {
@@ -2246,6 +2286,7 @@
         o.value = n.id;
         sel.append(o);
       }
+      sel.disabled = sel.options.length < 2;  // no domains yet: nothing to choose
       sel.addEventListener('change', () => {
         F.domain = sel.value;
         apply();
@@ -2359,6 +2400,9 @@
       const t0 = performance.now();
       sim.stop().tick(PRETICKS);  // most of the settling happens before the first paint
       R = nodes.length > 1500 ? canvasRenderer() : svgRenderer();
+      if (nodes.every((n) => n.kind === 'you')) {
+        $('graph').prepend(el('p', 'empty', 'No topics or pages on the map yet. Run /cortex learn in Claude to start one.'));
+      }
       R.tick();
       sim.restart();
       let first = true;
@@ -2552,6 +2596,11 @@
       }
       table.append(thead, tbody);
       $('table').replaceChildren(table);
+      if (!rows.length) {
+        $('table').append(el('p', 'empty', D.graph.nodes.some((n) => n.kind === 'concept')
+          ? 'No topics match. Turn a state or kind back on, or clear the search.'
+          : 'No topics yet. Run /cortex learn in Claude to start one.'));
+      }
     }
 
     function onZoom(t) {
@@ -2647,11 +2696,11 @@
         },
         fit(set, ms) {
           const [w, h] = size();
-          svg.transition().duration(ms).call(zoom.transform, fitTransform(set, w, h));
+          svg.transition().duration(motion(ms)).call(zoom.transform, fitTransform(set, w, h));
         },
         center(n) {
           const [w, h] = size();
-          svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity
+          svg.transition().duration(motion(500)).call(zoom.transform, d3.zoomIdentity
             .translate(w / 2, h / 2).scale(Math.max(k, 1.6)).translate(-n.x, -n.y));
         },
       };
@@ -2785,9 +2834,9 @@
       return {
         tick: schedule,
         update: schedule,
-        fit(set) { sel2.transition().duration(500).call(zoom.transform, fitTransform(set, w, h)); },
+        fit(set) { sel2.transition().duration(motion(500)).call(zoom.transform, fitTransform(set, w, h)); },
         center(n) {
-          sel2.transition().duration(500).call(zoom.transform, d3.zoomIdentity
+          sel2.transition().duration(motion(500)).call(zoom.transform, d3.zoomIdentity
             .translate(w / 2, h / 2).scale(Math.max(k, 1.6)).translate(-n.x, -n.y));
         },
       };

@@ -48,6 +48,14 @@ h3 { font-size: 14px; margin: 18px 0 6px; }
 h4 { font-size: 13px; margin: 16px 0 4px; color: var(--ink-2); }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
+/* buttons: colour changes ease (never size or layout); a press sinks 1px with a tint (as the app) */
+button, .btn { transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out; }
+button:active:not(:disabled) {
+  transform: translateY(1px); background-image: linear-gradient(var(--rule), var(--rule));
+  transition-duration: .08s;
+}
+section[role="tabpanel"]:not([hidden]) { animation: fade-in .12s ease-out; }
+@keyframes fade-in { from { opacity: 0; } }
 a { color: var(--lit); text-underline-offset: 3px; }
 [hidden] { display: none !important; }
 .muted, .ink-2 { color: var(--ink-2); }
@@ -88,6 +96,7 @@ input[type="search"]::placeholder { color: var(--ink-3); }
 .tabs button[aria-selected="false"] { color: var(--ink-2); }
 .tabs button[aria-selected="true"] { border-bottom-color: var(--band-ink); font-weight: 600; }
 .tabs button:hover { border-bottom-color: var(--rule); }
+.tabs button[aria-selected="false"]:hover { color: var(--band-ink); }
 .section-select { display: none; }
 .hright { justify-self: end; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .stale { color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
@@ -531,6 +540,7 @@ table.props { margin-top: 2px; }
   background: var(--band); color: var(--band-ink); border: 1px solid var(--edge); border-radius: 2px;
   padding: 8px 16px; font-weight: 600;
 }
+.toast.error { border-left: 4px solid var(--refresh); }
 .tip {
   position: fixed; z-index: 35; pointer-events: none; background: var(--band); color: var(--ink);
   border: 1px solid var(--edge); padding: 5px 9px; border-radius: 2px; font-size: 12.5px; max-width: 300px;
@@ -594,8 +604,16 @@ table.props { margin-top: 2px; }
     border-top: 1px solid var(--edge);
   }
 }
+/* hover on the plain controls that had none: the press tint */
+.chips button:hover, .viewswitch button:hover, .rail-toggle:hover, .more:hover, .band-btn:hover,
+th button:hover, .outline-toggle:hover, .icon-btn:hover { background-image: linear-gradient(var(--rule), var(--rule)); }
+/* SVG controls: a lit stroke as well, since not every engine paints an outline on SVG shapes */
+.tl-grid circle.hit:focus-visible { stroke: var(--lit); stroke-width: 1.5; }
+.node:focus-visible circle, .node:focus-visible path { stroke: var(--lit) !important; stroke-width: 2.5; }
+/* reduced motion: no transforms or animation, every state change instant */
 @media (prefers-reduced-motion: reduce) {
-  .node, .link, .labels text, .outline .ti .ico { transition: none; }
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  button:active:not(:disabled) { transform: none; }
 }
 /* muted text on a band-coloured row stays at 4.5:1 in day (ink-3 on yellow is not) */
 .hit[aria-selected="true"] .sub, .hit:hover .sub, .outline .ti:hover .n,
