@@ -9,10 +9,10 @@ is HTML (`MyActivity.html`); `html_rows` reads it into the same rows, here and f
 from __future__ import annotations
 
 import html
-import json
 import re
 import unicodedata
 import zipfile
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -82,7 +82,7 @@ def records(path: Path) -> Rows:
     (the .zip, its folder or one MyActivity.json or .html), oldest first. A visit lasts until
     the next one, at most GAP_CAP, as in `sources.read`."""
     path = Path(path)
-    from cortex.importers import _files  # the one zip, folder or file reader, size-capped
+    from cortex.importers import _files, json_value  # the one size-capped reader
     files = _files(path)
     if path.suffix.lower() == ".zip" or path.is_dir():
         files = [f for f in files if wanted(f[0])]
@@ -95,13 +95,14 @@ def records(path: Path) -> Rows:
         de = "meineaktivitäten" in unicodedata.normalize("NFC", name.lower().replace(" ", ""))
         try:
             html_file = name.lower().endswith((".html", ".htm"))
-            data, skipped = html_rows(read(), name) if html_file else (json.loads(read()), 0)
+            data, skipped = html_rows(read(), name) if html_file else (json_value(read), 0)
             out.skipped += skipped
+            if not isinstance(data, list | Iterator):
+                raise VaultError("invalid_argument",
+                                 f"{name} should hold a list of activity rows.")
+            out += [v for e in data if (v := _visit(e, de))]  # C11: a big file streams here
         except (OSError, ValueError, zipfile.BadZipFile) as e:
             raise VaultError("invalid_argument", f"Cannot read {name}: {e}") from None
-        if not isinstance(data, list):
-            raise VaultError("invalid_argument", f"{name} should hold a list of activity rows.")
-        out += [v for e in data if (v := _visit(e, de))]
     out.sort(key=lambda v: v.start)
     for v, nxt in zip(out, [*out[1:], None], strict=True):
         v.secs = min(max((nxt.start - v.start).total_seconds(), 0.0), GAP_CAP) if nxt \

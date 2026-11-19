@@ -11,7 +11,9 @@ not down-rank it as a chat page. Text is secret-redacted, every write goes throu
 
 from __future__ import annotations
 
+import codecs
 import hashlib
+import json
 import re
 import zipfile
 from collections import defaultdict
@@ -24,8 +26,10 @@ from cortex.catalog import slugify
 from cortex.vault import Vault, VaultError
 
 MAX_BYTES = 5 * 1024 * 1024  # bigger files are attachments or dumps, not notes
-MAX_ENTRY = 200 * 1024 * 1024  # one export file (a chat or activity JSON, a calendar)
+MAX_ENTRY = 200 * 1024 * 1024  # one export file read whole (a calendar, a JSON non-list)
+MAX_STREAM = 2 * 1024**3  # C11: one JSON list read element by element (conversations.json)
 MAX_TOTAL = 2 * 1024**3  # everything one import decompresses, so a zip bomb fails early
+STREAM_CHUNK = 1 << 20
 NOTE_SUFFIXES = (".md", ".txt")
 LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
@@ -79,7 +83,7 @@ def _files(path: Path) -> list[tuple[str, int, float, partial]]:
     level: Notion nests its export parts), a folder, or one file. The one reader every
     importer and `detect` use. `read()` refuses a file over MAX_ENTRY (MAX_BYTES for a note)
     or past MAX_TOTAL for the whole call, before it decompresses it; `read(n)` reads only the
-    first n bytes."""
+    first n bytes; `read(items=True)` streams a JSON list up to MAX_STREAM (json_value)."""
     path, left = Path(path), [MAX_TOTAL]
     try:
         if path.suffix.lower() == ".zip":
@@ -108,8 +112,18 @@ def _zip_files(z: zipfile.ZipFile, left: list[int], nested: bool = False) -> lis
     return out
 
 
-def _read(name: str, size: int, opener, left: list[int], n: int | None = None) -> bytes:
-    """A file's bytes, streamed and capped so a zip bomb fails before it fills memory."""
+def _too_big(name: str, one: int) -> VaultError:
+    return VaultError("invalid_argument", f"{name} is too big to import: the limit is "
+                      f"{one // 2**20:,} MB for one file and {MAX_TOTAL // 2**20:,} MB "
+                      "for a whole export, uncompressed.")
+
+
+def _read(name: str, size: int, opener, left: list[int], n: int | None = None,
+          items: bool = False):
+    """A file's bytes, streamed and capped so a zip bomb fails before it fills memory. With
+    `items`, an iterator over the elements of its top-level JSON array (see _items)."""
+    if items:
+        return _items(name, size, opener, left)
     with opener() as f:
         if n is not None:
             return f.read(n)
@@ -118,11 +132,79 @@ def _read(name: str, size: int, opener, left: list[int], n: int | None = None) -
         # the declared size is checked first; reading cap + 1 catches a size that lies
         data = f.read(cap + 1) if size <= cap else b""
         if size > cap or len(data) > cap:
-            raise VaultError("invalid_argument", f"{name} is too big to import: the limit is "
-                             f"{one // 2**20:,} MB for one file and {MAX_TOTAL // 2**20:,} MB "
-                             "for a whole export, uncompressed.")
+            raise _too_big(name, one)
         left[0] -= len(data)
         return data
+
+
+def _items(name: str, size: int, opener, left: list[int]):
+    """C11: the elements of a file's top-level JSON array, decoded one at a time from chunked
+    reads, so an export up to MAX_STREAM never sits in memory whole: only one element (at
+    most MAX_ENTRY) and one chunk do. Malformed or truncated JSON raises ValueError."""
+    cap = min(MAX_STREAM, left[0])
+    if size > cap:
+        raise _too_big(name, MAX_STREAM)
+    dec, utf8 = json.JSONDecoder(), codecs.getincrementaldecoder("utf-8-sig")()
+    buf, pos, eof, got = "", 0, False, 0
+    with opener() as f:
+
+        def more(n: int = STREAM_CHUNK) -> None:  # keeps buf[pos:], appends the next chunk
+            nonlocal buf, pos, eof, got
+            chunk = f.read(n)
+            got += len(chunk)
+            if got > cap:  # a declared size that lies
+                raise _too_big(name, MAX_STREAM)
+            left[0] -= len(chunk)
+            eof = not chunk
+            buf, pos = buf[pos:] + utf8.decode(chunk, final=eof), 0
+
+        def peek() -> str:  # the next character that is not whitespace, "" at the end
+            nonlocal pos
+            while True:
+                while pos < len(buf) and buf[pos] in " \t\r\n":
+                    pos += 1
+                if pos < len(buf) or eof:
+                    return buf[pos:pos + 1]
+                more()
+
+        if peek() != "[":
+            raise ValueError("not a JSON list")
+        pos += 1
+        if peek() == "]":
+            return
+        while True:
+            peek()
+            try:
+                item, end = dec.raw_decode(buf, pos)
+            except json.JSONDecodeError:
+                if eof:
+                    raise
+                if len(buf) - pos > MAX_ENTRY:
+                    raise ValueError(f"an item over {MAX_ENTRY // 2**20:,} MB, or malformed "
+                                     "JSON") from None
+                more(max(STREAM_CHUNK, len(buf) - pos))  # doubles: a big item parses O(n)
+                continue
+            if end == len(buf) and not eof:  # a number may go on in the next chunk
+                more()
+                continue
+            pos = end
+            sep = peek()
+            if sep not in (",", "]"):
+                raise ValueError("expected , or ] after an item: the file is cut short or "
+                                 "malformed")
+            yield item
+            if sep == "]":
+                return
+            pos += 1
+
+
+def json_value(read):
+    """C11: a chat or activity export file's JSON. A top-level array comes back as a lazy
+    iterator over its elements (_items: up to MAX_STREAM, memory bounded); anything else,
+    including a UTF-16 file, is parsed whole (up to MAX_ENTRY)."""
+    if read(64).lstrip(b"\xef\xbb\xbf \t\r\n")[:1] == b"[":
+        return read(items=True)
+    return json.loads(read())
 
 
 def detect(path: Path) -> list[str]:
