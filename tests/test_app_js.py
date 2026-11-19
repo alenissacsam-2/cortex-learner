@@ -24,7 +24,11 @@ HARNESS = r"""
 const fs = require('fs'), vm = require('vm');
 const [appPath, htmlPath, dataPath] = process.argv.slice(2);
 const DATA = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-const errors = [], sinks = [], fetched = [], xhrs = [], replaced = [];
+const errors = [], sinks = [], fetched = [], xhrs = [], replaced = [], held = [], clipboard = [];
+const release = () => { for (const r of held.splice(0)) r(); };
+const stream = {}, winL = {}, scrolls = [];
+Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: {
+  writeText: async (t) => { if (DATA.fail) throw new Error('denied'); clipboard.push(t); } } } });
 process.on('unhandledRejection', (e) => errors.push(String(e && e.stack || e)));
 process.on('uncaughtException', (e) => errors.push(String(e && e.stack || e)));
 
@@ -42,6 +46,13 @@ class Node {
     }
   }
   replaceChildren(...ns) { for (const c of this.childNodes) c.parentNode = null; this.childNodes = []; this.append(...ns); }
+  remove() { if (this.parentNode) { this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; } }
+  after(n) {
+    const p = this.parentNode;
+    if (n.parentNode) n.remove();
+    n.parentNode = p;
+    p.childNodes.splice(p.childNodes.indexOf(this) + 1, 0, n);
+  }
 }
 class Text extends Node {
   constructor(data) { super(); this.data = data; }
@@ -49,23 +60,27 @@ class Text extends Node {
   set textContent(v) { this.data = String(v); }
 }
 class Element extends Node {
-  constructor(tag) { super(); this.tagName = tag.toUpperCase(); this.attributes = {}; this.listeners = {}; this.dataset = {}; this.hidden = false; }
+  constructor(tag) { super(); this.tagName = tag.toUpperCase(); this.attributes = {}; this.listeners = {}; this.dataset = {}; this.hidden = false;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(this.tagName)) this.value = '';
+    if (this.tagName === 'INPUT') this.checked = false; }
   get className() { return this.attributes.class || ''; }
   set className(v) { this.attributes.class = String(v); }
   get classList() {
     const set = (cs) => { this.className = cs.join(' '); };
     const cs = () => this.className.split(/\s+/).filter(Boolean);
-    return { add: (c) => set([...cs(), c]), remove: (c) => set(cs().filter((x) => x !== c)) };
+    return { add: (...c) => set([...cs(), ...c]), remove: (...c) => set(cs().filter((x) => !c.includes(x))),
+      contains: (c) => cs().includes(c) };
   }
   get id() { return this.attributes.id || ''; }
   setAttribute(k, v) { this.attributes[k] = String(v); }
   getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; }
+  removeAttribute(k) { delete this.attributes[k]; }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   fire(t, ev) { for (const fn of this.listeners[t] || []) fn({ preventDefault() {}, target: this, ...ev }); }
-  focus() {}
+  focus() { document.activeElement = this; }
   scrollIntoView() {}
-  showModal() {}
-  close() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   *walk() { for (const c of this.childNodes) if (c instanceof Element) { yield c; yield* c.walk(); } }
   matches(s) { return s.startsWith('.') ? this.className.split(/\s+/).includes(s.slice(1)) : this.tagName === s.toUpperCase(); }
   querySelectorAll(sel) {
@@ -104,7 +119,8 @@ Object.assign(globalThis, {
   location: { search: '?t=KEY123', hash: '' },
   history: { replaceState: (s, t, u) => replaced.push(u), pushState: (s, t, u) => replaced.push('push ' + u) },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
-  addEventListener() {}, confirm: () => true,
+  addEventListener: (t, fn) => (winL[t] = winL[t] || []).push(fn), confirm: () => true,
+  scrollTo: (x, y) => scrolls.push(y), innerHeight: 800, scrollY: 0,
   document: {
     documentElement: new Element('html'), body,
     getElementById: (id) => [...body.walk()].find((e) => e.id === id) || null,
@@ -114,10 +130,24 @@ Object.assign(globalThis, {
   fetch: async (path, opts) => {
     const o = opts || {};
     fetched.push({ path, method: o.method || 'GET', token: (o.headers || {})['X-Cortex-Token'], body: o.body ? JSON.parse(o.body) : null });
+    if (o.method === 'POST' && DATA.hold) await new Promise((r) => held.push(r));  // until release()
+    if (o.method === 'POST' && DATA.fail) return { status: 500, ok: false, json: async () => ({ error: 'boom ' + path }) };
     if (path === '/api/chat' && o.method === 'POST') {  // the NDJSON stream, in pieces
+      // DATA.streamOpen: the stream stays open after its parts; stream.push adds more, Stop aborts it
       const parts = DATA.stream.slice();
+      let waiter = null;
+      stream.push = (x) => { parts.push(x); if (waiter) waiter(); };
       return { status: 200, ok: true, body: { getReader: () => ({
-        read: async () => (parts.length ? { value: Buffer.from(parts.shift()), done: false } : { done: true }) }) } };
+        read: () => new Promise((res, rej) => {
+          if (o.signal) o.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+          const next = () => {
+            waiter = null;
+            if (parts.length) res({ value: Buffer.from(parts.shift()), done: false });
+            else if (DATA.streamOpen) waiter = next;
+            else res({ done: true });
+          };
+          next();
+        }) }) } };
     }
     const data = DATA.routes[path] || { job: 'stub', seq: 1 };
     return { status: 200, ok: true, json: async () => JSON.parse(JSON.stringify(data)) };
@@ -204,7 +234,9 @@ const out = {};
     await tick();
     out.missing = $('chat').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent, r.querySelector('button').textContent]);
     out.composer = $('chat-input') !== null;
-    out.examplesOff = $('chat').querySelector('.chat-empty').querySelectorAll('button').length;
+    out.examplesOff = $('chat').querySelector('.chat-empty').querySelectorAll('button').map((b) => b.textContent);
+    out.until = $('chat').querySelector('.chat-empty').querySelectorAll('p').map((p) => p.textContent);
+    out.needAbove = $('chat').querySelector('.chat-main').childNodes.map((c) => c.className);
     out.pushed = replaced.filter((u) => u.startsWith('push '));
     // with both: an example fills the composer, Enter sends, the answer streams in with sources
     const chats = [{ id: '01KA0000000000000000000000', title: 'Which sites did I visit yesterday?', updated: new Date().toISOString(), count: 2 }];
@@ -335,6 +367,22 @@ const out = {};
 """  # noqa: E501  (JavaScript)
 
 
+DATA_EXAMPLES = ["Which sites did I visit yesterday?", "What should I study today?",
+                 "What is due for review?", "Where am I weak?"]
+
+
+def test_data_examples_need_no_model():
+    """D14: each example shown while the search or local model is missing is one that
+    chat.reply answers from Cortex's own data (a site list or a study question)."""
+    from cortex import chat, chat_study
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "const DATA_EXAMPLES = " + json.dumps(DATA_EXAMPLES).replace('"', "'").replace(
+        "','", "', '") + ";" in js
+    for q in DATA_EXAMPLES:
+        sites = chat._SITES_Q.search(q) and chat._LIST_Q.search(q)
+        assert sites or chat_study.kind(q) is not None, q
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -410,7 +458,12 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     # R3-2: Ask names both missing pieces at once; a section click is a Back step (R3-10)
     assert out["missing"] == [["Search model", "Set up the search model"],
                               ["Local model", "Set up a local model"]]
-    assert out["composer"] is False and out["pushed"] == ["push #connect", "push #chat"]
+    # D14: something missing keeps the message box, with what to set up above it
+    assert out["composer"] is True and out["pushed"] == ["push #connect", "push #chat"]
+    assert out["needAbove"] == ["chat-bar", "board", "chat-log", "composer"]
+    assert out["until"] == ["Ask about anything you've saved or browsed.",
+                            "Until then, Chat can still answer questions about your sites and "
+                            "your studying, like these:"]
     # Chat: the example fills the composer; Enter sends; the stream renders safely with sources
     assert out["empty"] == "Ask about anything you've saved or browsed."
     assert out["filled"] == "Which sites did I visit yesterday?"
@@ -455,7 +508,8 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     # QA fixes: after the app stops only the banner stays live; a refetch marks the old board
     assert out["inertBefore"] == [False] * 3 and out["inertAfter"] == [True] * 3
     assert out["refresh"] == ["refreshing", "true", "", "false"]
-    assert out["examplesOff"] == 0  # no message box, so no example questions to fill it
+    # while something is missing the examples are the questions Cortex answers from its own data
+    assert out["examplesOff"] == DATA_EXAMPLES
     assert out["noModels"] == [True, True, True] and out["ollamaWord"] == "installed, not running"
     assert out["current"] == ["Skip"] and out["reopened"] == ["Skipped", ["Hide"]]
     assert "Open Chat" in out["tryIt"]
@@ -478,8 +532,9 @@ def test_a_command_that_failed_shows_as_failed(tmp_path):
                    re.S)[0]
     script = tmp_path / "show.cjs"
     script.write_text(
-        "const els = {};\nconst $ = (id) => els[id] || (els[id] = { classList: { remove() {} }, "
-        "textContent: '', hidden: false });\nlet hideTimer;\n" + fn
+        "const els = {};\nconst $ = (id) => els[id] || (els[id] = { "
+        "classList: { remove() {}, add() {} }, textContent: '', hidden: false });\n"
+        "let hideTimer;\n" + fn
         + "const name = (r) => { showJob({ name: 'Job', running: false, seconds: 1, "
           "error: null, result: r }); return $('job-name').textContent; };\n"
           "console.log(JSON.stringify([name({ ok: false, lines: ['no network'] }), "
@@ -489,3 +544,318 @@ def test_a_command_that_failed_shows_as_failed(tmp_path):
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["Job: failed", "Job: done", "Job: cancelled",
                                     "Job: stopped: needs the search model"]
+
+
+# ---- every control, clicked: the QA sweep (A3, B5, B6) ----------------------------------------
+
+SWEEP = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { sections: {}, errors };
+const navTo = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };
+const label = (e) => e.tagName === 'BUTTON' ? (e.getAttribute('aria-label') || e.textContent) : e.id;
+// every button, and every input/select with a change handler, as [kind, key]; a repeated key
+// gets its occurrence number
+function controls(s) {
+  const seen = {}, found = [];
+  for (const e of $(s).walk()) {
+    const kind = e.tagName === 'BUTTON' ? 'click' : ['INPUT', 'SELECT'].includes(e.tagName) && (e.listeners.change || []).length ? 'change' : null;
+    if (!kind) continue;
+    const k = label(e);
+    seen[k] = (seen[k] || 0) + 1;
+    found.push({ kind, key: seen[k] > 1 ? `${k} #${seen[k]}` : k, el: e });
+  }
+  return found;
+}
+// what a local action can change without a request: values, ticks, shown and enabled controls
+const ui = (s, skip) => [...$(s).walk()].filter((x) => x !== skip).map((x) => [x.value, x.checked, x.hidden, x.disabled, x.className].join('|')).join(';')
+  + ';' + ($('chat-input') || {}).value;
+function change(e) {  // a different value: a checkbox flips, a select or range moves
+  const type = e.getAttribute('type');
+  if (type === 'checkbox' || type === 'radio') e.checked = !e.checked;
+  else if (e.tagName === 'SELECT') {
+    const opts = [...e.walk()].filter((o) => o.tagName === 'OPTION').map((o) => o.value);
+    e.value = opts.find((v) => v !== e.value && v !== '') || opts[0];
+  } else e.value = type === 'range' ? '0.7' : 'qwen3.5:4b';
+  e.fire('change');
+}
+async function hit(s, key, fail) {
+  DATA.fail = fail;
+  await navTo(s);
+  let c = controls(s).find((x) => x.key === key);
+  if (!c && s === 'chat') {  // New chat closed the saved one: open it again
+    controls(s).find((x) => x.el.className === 'chat-open').el.fire('click');
+    await tick();
+    c = controls(s).find((x) => x.key === key);
+  }
+  if (!c) return { gone: true };
+  const e = c.el, n0 = fetched.length, clip0 = clipboard.length, hash0 = replaced.length;
+  $('toast').className = 'toast';
+  $('toast-msg').textContent = '';
+  $('confirm').open = false;
+  $('jobline').className = 'jobline idle';
+  const text0 = $(s).textContent, ui0 = ui(s, e);
+  DATA.hold = true;
+  if (c.kind === 'click') { e.fire('click'); e.fire('click'); } else change(e);  // a double click
+  await tick();
+  const r = { busyMid: e.getAttribute('aria-busy') === 'true', disabledMid: !!e.disabled };
+  DATA.hold = false;
+  release();
+  await tick();
+  r.busyAfter = e.getAttribute('aria-busy') === 'true';
+  r.disabledAfter = !!e.disabled;
+  r.dialog = $('confirm').open ? $('confirm-title').textContent : null;
+  if (r.dialog) { $('confirm-ok').onclick(); await tick(); release(); await tick(); }
+  const sent = fetched.slice(n0);
+  r.posts = sent.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
+  r.reloaded = sent.some((f) => f.method === 'GET' && f.path === '/api/' + s);
+  r.toast = [$('toast').className, $('toast-msg').textContent];
+  r.saved = [...$(s).walk()].some((x) => x.className === 'saved');
+  r.jobline = $('jobline').className;
+  r.clipboard = clipboard.slice(clip0);
+  r.nav = replaced.slice(hash0).filter((u) => u.startsWith('push '));
+  r.changed = $(s).textContent !== text0 || ui(s, e) !== ui0;
+  return r;
+}
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    for (const s of DATA.sections) {
+      await navTo(s);
+      if (s === 'chat') {  // a saved chat open: its answer's Copy, citation and source chip too
+        controls(s).find((c) => c.el.className === 'chat-open').el.fire('click');
+        await tick();
+      }
+      // clicks first: a radio changed later (Setup's model) renames the button that uses it
+      const keys = controls(s).map((c) => [c.kind, c.key]).sort((a, b) => (a[0] === b[0] ? 0 : a[0] === 'click' ? -1 : 1));
+      out.sections[s] = {};
+      for (const [kind, key] of keys) {
+        if (DATA.skip.includes(key)) continue;
+        out.sections[s][key] = { kind, ok: await hit(s, key, false), bad: await hit(s, key, true) };
+      }
+    }
+    DATA.fail = false;
+    // Chat (D10-D13): the page follows the stream only at the bottom; scrolled up, the New
+    // text pill shows; Esc stops; a finished answer has Copy; the message box keeps focus
+    await navTo('chat');
+    controls('chat').find((c) => c.key === 'New chat').el.fire('click');
+    await tick();
+    document.documentElement.scrollHeight = 3000;
+    const ev = (o) => JSON.stringify(o) + '\n';
+    const C = {};
+    DATA.streamOpen = true;
+    DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'Hello' })];
+    $('chat-input').value = 'q1';
+    $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+    await tick();
+    const pill = $('chat').querySelector('.new-text');
+    C.streaming = [$('chat-send').textContent, scrolls.length > 0, pill.hidden];
+    const n = scrolls.length;
+    scrollY = 1000;  // the reader scrolls up, away from the end
+    for (const fn of winL.scroll) fn();
+    stream.push(ev({ t: 'tok', s: ' more [1]' }));
+    await tick();
+    C.scrolledUp = [scrolls.length === n, pill.hidden];
+    pill.fire('click');
+    C.jumped = [scrolls.length === n + 1, pill.hidden];
+    $('chat').fire('keydown', { key: 'Escape' });
+    await tick();
+    const bots = () => $('chat-log').querySelectorAll('.msg').filter((m) => m.className === 'msg bot');
+    let bot = bots()[0];
+    C.stopped = [$('chat-send').textContent, bot.textContent.includes('Stopped before the end.'), document.activeElement === $('chat-input')];
+    const copy = bot.querySelector('.msg-acts').querySelector('button');
+    copy.fire('click');
+    await tick();
+    C.copied = [clipboard[clipboard.length - 1], copy.textContent];
+    // a whole answer: Copy leaves the citations out; the box has focus again
+    DATA.streamOpen = false;
+    scrollY = 2200;
+    DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'A heap [1] is a tree [1, 2].' })
+      + ev({ t: 'src', sources: [{ n: 1, path: 'a.md', title: 'A', kind: 'note' }] }) + ev({ t: 'done', seconds: 1 })];
+    $('chat-input').value = 'q2';
+    document.activeElement = null;
+    $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+    await tick();
+    bot = bots()[1];
+    bot.querySelector('.msg-acts').querySelector('button').fire('click');
+    await tick();
+    C.whole = [clipboard[clipboard.length - 1], document.activeElement === $('chat-input'), $('chat-send').textContent];
+    out.chat = C;
+    // a job that fails says so in an error toast, and the job line takes the error tint
+    DATA.routes['/api/job'] = { job: { name: 'Back up', section: 'vault', running: false, seconds: 2, error: 'disk full', result: null } };
+    await navTo('vault');
+    controls('vault').find((c) => c.key === 'Back up vault').el.fire('click');
+    await tick();
+    out.jobFail = { toast: [$('toast').className, $('toast-msg').getAttribute('role'), $('toast-msg').textContent], line: $('jobline').className };
+    // the toast's close button hides it; the error stays 6 s otherwise
+    $('toast-x').fire('click');
+    out.closed = [$('toast').className, $('toast-x').hidden];
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def _run(node, tmp_path, name, script, data):
+    (tmp_path / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
+    (tmp_path / f"{name}.cjs").write_text(script, encoding="utf-8")
+    r = subprocess.run([node, str(tmp_path / f"{name}.cjs"), str(APP_JS),
+                        str(server.ASSETS / "index.html"), str(tmp_path / f"{name}.json")],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _sweep_routes(root, monkeypatch):
+    """The server's own answers for every section, with no runner, process or network."""
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(localllm, "_request", no_runner)
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("started a process"))
+    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
+    monkeypatch.setattr(status, "ollama_models", lambda: ["qwen3.5:4b"])
+    monkeypatch.setattr(status, "lms_models", lambda: [
+        {"key": "qwen/qwen3.5-2b", "name": "Qwen 3.5 2B", "size": 2 * 10**9, "params": "2B"}])
+    monkeypatch.setattr(wizard, "hardware", lambda: {
+        "kind": "gpu", "gb": 8.0, "label": "8 GB of graphics memory (NVIDIA)"})
+    (root / ".cortex").mkdir(exist_ok=True)
+    app = server.App(root)
+    chat_id = "01KA0000000000000000000000"
+    chats = [{"id": chat_id, "title": "Heaps", "updated": "2026-11-19T10:00:00Z", "count": 2}]
+    chat_state = {**app.chat_state(), "missing": [], "model": "qwen3.5-2b", "chats": chats}
+    routes = {
+        "/api/status": app.status(), "/api/setup": app.setup(), "/api/connect": app.connect(),
+        "/api/llm": {**app.llm(), "model": "qwen3.5:4b", "runner": "ollama"},
+        "/api/browse": app.browse(), "/api/vault": app.vault(), "/api/chat": chat_state,
+        "/api/chat/list": {"chats": chats},
+        f"/api/chat/get?id={chat_id}": {"id": chat_id, "messages": [
+            {"role": "user", "text": "heaps?"},
+            {"role": "assistant", "text": "A heap [1] is a tree.", "model": "m",
+             "sources": [{"n": 1, "path": "notes/heap.md", "title": "Heap", "kind": "note"}]}]},
+        "/api/chat/settings": chat_state["settings"],
+        "/api/connect/plan": {"rows": [{"change": "add", "label": "Claude Code", "file": "x"}]},
+        "/api/browse/setup": {"token": "PAIRKEY", "opened": True},
+        "/api/browse/pair": {"token": "PAIRKEY"}, "/api/chat/delete": {"deleted": 1},
+        "/api/open": {"obsidian": True},
+        "/api/job": {"job": {"name": "Sweep", "section": "sweep", "running": False,
+                             "seconds": 1, "error": None, "result": {"ok": True}}},
+    }
+    routes["/api/status"]["update"] = {"current": "0.1.0", "mode": "installer"}
+    return routes
+
+
+CHAT_ID = "01KA0000000000000000000000"
+# what each control sends when the app says yes (a confirm dialog's OK included); every
+# control not named here is a local action (a section, a guide, a filled field) and sends nothing
+SENDS = {
+    "status": {"Check for updates": [["/api/update/check", {}]]},
+    "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
+                           ["/api/connect/apply", {"want": {}}]],
+                "Open folder": [["/api/open", {"what": "skill_zip"}]]},
+    "llm": {
+        "Save choice": [["/api/llm/settings", {"model": "qwen3.5:4b", "runner": "ollama"}]],
+        "Load": [["/api/llm/load", {"model": "qwen3.5:4b"}]],
+        "Test": [["/api/llm/test", {}]],
+        "Save": [["/api/llm/settings", {"background_model": ""}]],
+        "llm-on": [["/api/llm/settings", {"enabled": True}]]},
+    "browse": {
+        "Save": [["/api/browse/settings", {
+            "visible_to_claude": False, "private_mcp": False,
+            "audience": {"adult": "skip", **dict.fromkeys(
+                ["health", "money", "betting", "dating", "sexuality", "drugs", "selfharm"],
+                "local")},
+            "deny": "", "allow": "", "private": ""}]],
+        "Save #2": [["/api/browse/cloud", {"cloud_processing": False, "provider": "",
+                                           "model": "", "base_url": "", "api_key_env": ""}]],
+        "Start": [["/api/browse/receiver", {"on": True}]],
+        "Add": [["/api/browse/login", {"on": True}]],
+        "Set up the extension": [["/api/browse/setup", {}]],
+        "Pair": [["/api/browse/pair", {}]],
+        "Open folder": [["/api/open", {"what": "extension"}]],
+        "Process now": [["/api/browse/process", {}]],
+        "Run self-test": [["/api/browse/selftest", {}]],
+        "Open private folder in Obsidian": [["/api/open", {"what": "private"}]]},
+    "vault": {
+        "Open vault in Obsidian": [["/api/open", {"what": "vault"}]],
+        "Open folder": [["/api/open", {"what": "folder"}]],
+        "Build dashboard": [["/api/vault/dashboard", {}]],
+        "Back up vault": [["/api/vault/backup", {}]],
+        "Run doctor": [["/api/vault/doctor", {}]],
+        "Save": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},
+    "chat": {
+        "Delete chat: Heaps": [["/api/chat/delete", {"id": CHAT_ID}]],
+        "Delete all chats": [["/api/chat/delete", {"all": True}]],
+        "1 · Heapnote": [["/api/open", {"what": "page", "path": "notes/heap.md"}]],
+        "chat-length": [["/api/chat/settings", {"length": "short"}]],
+        "chat-temp": [["/api/chat/settings", {"temperature": 0.7}]],
+        "chat-k": [["/api/chat/settings", {"passages": 4}]],
+        **{f"chat-src-{k}": [["/api/chat/settings", {"sources": {k: False}}]]
+           for k in ("notes", "chats", "browsing", "private")},
+        "chat-keep": [["/api/chat/settings", {"history": False}]]},
+    "setup": {
+        "Use this folder": [["/api/setup/vault", {"path": "<vault>"}]],
+        "Skip": [["/api/setup/skip", {"skipped": True}]],
+        "Download search model (about 150 MB, from huggingface.co)": [["/api/setup/embed", {}]],
+        "Index my notes": [["/api/setup/index", {}]],
+        "Set up Qwen 3.5 4B (downloaded)": [["/api/setup/model",
+                                             {"model": "4b", "runner": "ollama"}]]},
+}
+
+
+def test_every_control_sends_once_shows_busy_and_says_what_happened(
+        root_committed, tmp_path, monkeypatch):
+    """QA: every button and every input/select with a change handler in every section, clicked
+    twice (a double click) while the app holds the answer, then with the app saying yes, then
+    with the app failing. It sends the expected request once, is busy (aria-busy, disabled)
+    only while waiting, says what happened (toast, Saved mark, job line, dialog or a redrawn
+    section) and turns a failure into an error toast. Past history and the import guides are
+    left out (another change owns them; the test data has no browser history)."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [], "skip": [],
+            "sections": ["status", "connect", "llm", "browse", "vault", "chat", "setup"]}
+    out = _run(node, tmp_path, "sweep", SWEEP, data)
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    S = out["sections"]
+    sent = {s: {k: v["ok"]["posts"] for k, v in cs.items() if v["ok"].get("posts")}
+            for s, cs in S.items()}
+    assert sent["setup"]["Use this folder"][0][1]["path"] == str(root_committed)
+    sent["setup"]["Use this folder"][0][1]["path"] = "<vault>"
+    assert sent == SENDS
+    for s, cs in S.items():
+        for k, v in cs.items():
+            ok, bad, where = v["ok"], v["bad"], (s, k)
+            assert not ok.get("gone"), where
+            posts = [json.dumps(x) for x in ok["posts"]]
+            assert len(posts) == len(set(posts)), where  # a double click sends once
+            if posts and v["kind"] == "click" and not ok["dialog"]:  # busy only while waiting
+                assert ok["busyMid"] and ok["disabledMid"], where
+                assert not ok["busyAfter"] and not ok["disabledAfter"], where
+            told = ("on" in ok["toast"][0] or ok["saved"] or ok["jobline"] != "jobline idle"
+                    or ok["dialog"] or ok["reloaded"] or ok["nav"] or ok["changed"]
+                    or ok["clipboard"])
+            # opening a folder or a page shows the file explorer or Obsidian, not the page;
+            # New text is hidden until an answer streams (the chat checks below click it)
+            assert told or (posts and ok["posts"][0][0] == "/api/open") or k == "↓ New text", where
+            if posts or ok["clipboard"]:  # a failure is an error toast, read out as an alert
+                assert bad["toast"][0] == "toast on error", where
+                assert bad["toast"][1].startswith(("boom /api/", "Copy failed")), where
+    assert all(S["chat"][k]["ok"]["saved"] for k in SENDS["chat"] if k.startswith("chat-"))
+    assert S["chat"]["Copy"]["ok"]["clipboard"] == ["A heap is a tree."]
+    assert S["chat"]["Delete all chats"]["ok"]["dialog"] == "Delete all chats?"
+    assert S["connect"]["Apply…"]["ok"]["dialog"] == "Apply these changes?"
+    # Chat (D10-D13): follows the stream at the end; scrolled up, it stays and shows New text;
+    # the pill jumps; Esc stops; Copy leaves the [n] markers out; the box keeps focus
+    assert out["chat"] == {"streaming": ["Stop", True, True], "scrolledUp": [True, False],
+                           "jumped": [True, True], "stopped": ["Send", True, True],
+                           "copied": ["Hello more", "Copied"],
+                           "whole": ["A heap is a tree.", True, "Send"]}
+    # B5/B7: a failed job: an error toast (role alert) and the job line's error tint; Close
+    assert out["jobFail"] == {"toast": ["toast on error", "alert", "disk full"],
+                              "line": "jobline bad"}
+    assert out["closed"] == ["toast error", True]

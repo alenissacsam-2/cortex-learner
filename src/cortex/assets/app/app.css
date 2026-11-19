@@ -5,7 +5,7 @@
   --rule: rgba(255, 176, 0, .16); --lit: #ffb000; --unlit: #3a2c10;
   --ink: #efe7d6; --ink-2: #b9ab90; --ink-3: #958870;
   --edge: rgba(255, 176, 0, .34); --scrim: rgba(0, 0, 0, .62);
-  --refresh: #d0607f;
+  --refresh: #d0607f; --ok-ink: #1D9E75;  /* success ink: 5.4:1 on the panel */
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
@@ -14,7 +14,7 @@
     --rule: rgba(17, 17, 17, .14); --lit: #111111; --unlit: #e8d27a;
     --ink: #141414; --ink-2: #4a4740; --ink-3: #6a665c;
     --edge: rgba(17, 17, 17, .3); --scrim: rgba(17, 17, 17, .4);
-    --refresh: #993556; color-scheme: light;
+    --refresh: #993556; --ok-ink: #08603f; color-scheme: light;
   }
 }
 :root[data-theme="day"] {
@@ -22,7 +22,7 @@
   --rule: rgba(17, 17, 17, .14); --lit: #111111; --unlit: #e8d27a;
   --ink: #141414; --ink-2: #4a4740; --ink-3: #6a665c;
   --edge: rgba(17, 17, 17, .3); --scrim: rgba(17, 17, 17, .4);
-  --refresh: #993556; color-scheme: light;
+  --refresh: #993556; --ok-ink: #08603f; color-scheme: light;
 }
 :root {
   --solid: #1D9E75; --learning: #BA7517; --hollow: var(--ink-3); --hdr: 56px;
@@ -98,6 +98,16 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
 .job-line { color: var(--ink-2); min-width: 0; flex: 1; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
 .job-time { color: var(--ink-3); white-space: nowrap; }
+/* running: a thin bar slides under the line; done: a brief success tint; failed: the error tint */
+.jobline { position: relative; overflow: hidden; transition: background-color .12s ease-out; }
+.jobline.running::after {
+  content: ''; position: absolute; left: 0; bottom: 0; width: 30%; height: 2px; background: var(--lit);
+  animation: job-slide 1.2s ease-in-out infinite;
+}
+@keyframes job-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.jobline.ok { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); animation: job-ok 2.4s ease-out forwards; }
+@keyframes job-ok { 0%, 50% { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); } to { background: var(--panel); } }
+.jobline.bad { background: color-mix(in srgb, var(--refresh) 16%, var(--panel)); border-bottom-color: var(--refresh); }
 .gone { margin: 0; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--edge); }
 
 /* shell: the left nav and the sections */
@@ -118,7 +128,9 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
 .side button[aria-current="page"] { background: var(--band); color: var(--band-ink); font-weight: 600; }
 main { min-width: 0; max-width: 1080px; }
 main h1:first-child { margin-top: 0; }
-section:focus { outline: none; }
+section:focus, section h1:focus { outline: none; }  /* focused on a switch, not by the user */
+section:not([hidden]) { animation: fade-in .12s ease-out; }
+@keyframes fade-in { from { opacity: 0; } }
 section { scroll-margin-top: calc(var(--hdr) + 48px); }  /* below the sticky header and job line */
 
 /* boards */
@@ -162,6 +174,30 @@ p.pad { margin: 0; }
 .glyph { display: inline-block; min-width: 1em; text-align: center; }
 .g-ok { color: var(--solid); } .g-warn { color: var(--learning); } .g-off { color: var(--hollow); }
 .g-bad { color: var(--refresh); }
+
+/* buttons: colour changes ease (never size or layout); a press sinks 1px with a tint */
+button, .btn { transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out; }
+button:active:not(:disabled) {
+  transform: translateY(1px); background-image: linear-gradient(var(--rule), var(--rule));
+  transition-duration: .08s;
+}
+/* busy (a click waiting on the app): the label goes clear, keeping the width, and three dots pulse */
+button[aria-busy="true"], button[aria-busy="true"] * { color: transparent !important; }
+button[aria-busy="true"] { position: relative; cursor: progress; }
+button[aria-busy="true"]:disabled { opacity: 1; }
+button[aria-busy="true"]::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+  border-radius: 50%; background: var(--ink-3); box-shadow: -7px 0 var(--ink-3), 7px 0 var(--ink-3);
+  animation: busy-dots 0.9s linear infinite;
+}
+@keyframes busy-dots {
+  0%, 100% { background: var(--ink-3); box-shadow: -7px 0 var(--lit), 7px 0 var(--ink-3); }
+  33% { background: var(--lit); box-shadow: -7px 0 var(--ink-3), 7px 0 var(--ink-3); }
+  66% { background: var(--ink-3); box-shadow: -7px 0 var(--ink-3), 7px 0 var(--lit); }
+}
+.saved { display: inline-flex; gap: 4px; align-items: center; color: var(--ok-ink); font-size: 12.5px;
+  font-weight: 600; margin-left: 8px; }
+.saved .ico { width: 14px; height: 14px; vertical-align: 0; }
 
 /* buttons and fields */
 .btn {
@@ -289,11 +325,21 @@ dialog.confirm h2 { margin: 0 0 10px; }
   grid-row: span 3; }
 .chg .f { overflow-wrap: anywhere; color: var(--ink-2); }
 .chg .d { color: var(--ink-3); overflow-wrap: anywhere; }
+/* the toast stays in the page (its live region with it), faded out until a message comes */
 .toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40;
+  position: fixed; left: 50%; bottom: 24px; z-index: 40; display: flex; gap: 12px; align-items: center;
   background: var(--band); color: var(--band-ink); border: 1px solid var(--edge); border-radius: 2px;
-  padding: 8px 16px; font-weight: 600; max-width: 90vw;
+  padding: 8px 8px 8px 16px; font-weight: 600; max-width: 90vw;
+  opacity: 0; transform: translate(-50%, 8px); pointer-events: none;
+  transition: opacity .12s ease-in, transform .12s ease-in;
 }
+.toast.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto;
+  transition-duration: .16s; transition-timing-function: ease-out; }
+.toast.ok { border-left: 4px solid var(--ok-ink); }
+.toast.error { border-left: 4px solid var(--refresh); }
+.toast-x { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0;
+  background: none; color: inherit; border-radius: 2px; flex: none; }
+.toast-x:hover { background-image: linear-gradient(var(--rule), var(--rule)); }
 
 /* Chat: past chats on the left, the thread on the right, the composer pinned at the bottom */
 .chat { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -312,6 +358,7 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .chat-del { opacity: 0; border: 0; background: none; color: var(--ink-3); font-size: 12px; padding: 4px 8px; }
 .chat-item:hover .chat-del, .chat-item:focus-within .chat-del { opacity: 1; }
 .chat-del:hover { color: var(--refresh); }
+.chat-list :focus-visible { outline-offset: -2px; }  /* the list scrolls, so an outside ring would be clipped */
 .chat-pick { display: none; }
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: calc(100vh - var(--hdr) - 220px); }
 .chat-bar { position: relative; display: flex; justify-content: flex-end; gap: 8px; }
@@ -347,6 +394,11 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .chip .ct { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; }
 .chip .tag { color: var(--ink-3); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
 .composer { position: sticky; bottom: 0; background: var(--ground); border-top: 1px solid var(--rule); padding: 10px 0 12px; }
+.new-text { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; margin: 0 auto; width: max-content;
+  background: var(--panel); }
+.msg-acts { margin-top: 6px; }
+.btn.quiet { border-color: transparent; color: var(--ink-3); padding: 2px 6px; }
+.btn.quiet:hover:not(:disabled) { border-color: var(--edge); color: var(--ink); }
 .composer .crow { display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { flex: 1; min-height: 0; resize: none; field-sizing: content; overflow-y: auto;
   font: 400 14px/1.45 system-ui, "Segoe UI", sans-serif; max-height: calc(6 * 1.45em + 14px); }
@@ -378,4 +430,15 @@ dialog.confirm h2 { margin: 0 0 10px; }
   .btn { white-space: normal; text-align: left; }
   .trow .acts, .opt .acts { grid-column: 2; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* reduced motion: no transforms or animation, every state change instant; busy shows a still … */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+  button:active:not(:disabled), .toast, .toast.on { transform: none; }
+  .toast { left: 0; right: 0; margin: 0 auto; width: max-content; }
+  button[aria-busy="true"]::after {
+    content: '…'; inset: 0; left: 0; top: 0; width: auto; height: auto; margin: 0; display: grid;
+    place-items: center; border-radius: 0; background: none; box-shadow: none; color: var(--ink-2);
+  }
+  .jobline.running::after { width: 100%; opacity: .6; }
+  .jobline.ok { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); }
+}
