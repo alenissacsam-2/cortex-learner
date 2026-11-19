@@ -47,6 +47,7 @@ from cortex.vault import Vault, VaultError, _dump_fm, _to_yaml, secret_pattern
 log = logging.getLogger(__name__)
 
 DIR, PRIVATE_DIR = "browse", "browse/private"
+EXPIRING_DAYS = 30  # a browser's oldest day this old may be partly expired (Chromium keeps ~90)
 STATE = ".cortex/browse/state.json"
 INDEX_ID, PRIVATE_INDEX_ID = "browse-index", "browse-private-index"
 # a page goes under its nearest hub only from this cosine: the floor calibrated for short text
@@ -775,6 +776,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     if not dry_run:
         forget.sync_private(vault)
     visits, cursors, first = [], {}, None
+    edges = set()  # each browser's oldest held day, which it has partly expired
     for s in srcs:
         tell(f"{s.key}: reading its history")
         try:
@@ -803,6 +805,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             cursors[s.key] = {"cursor": top if top is not None else old, "ran": ran}
         for v in vs:  # which browser: Chat can list one browser's sites
             v.source = v.source or s.browser
+        if vs:
+            edges.add(local_day(min(v.start for v in vs), tz))
         visits += vs
     pending = state.get("pending")  # days an earlier run rebuilt while a source was failing
     if isinstance(pending, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", pending):
@@ -827,6 +831,14 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     # the days some source holds now; any other day (forgotten by the browser, or from Takeout
     # only) keeps its pages and counts
     held = {local_day(v.start, tz) for v in visits + inbox}
+    # a browser's oldest day (when old enough to be expiring: a new profile's is not) is partly
+    # expired: once counted, it keeps what was stored and is read no more, like a day the
+    # browsers forgot (a rebuild would lose its earlier hours)
+    month_ago = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
+    if edge := {d for d in edges if d <= month_ago} & set(sites._load(vault, sites.DAYS)):
+        visits = [v for v in visits if local_day(v.start, tz) not in edge]
+        inbox = [v for v in inbox if local_day(v.start, tz) not in edge]
+        held -= edge
     oldest = min(held, default=None)
     start = since or first
     if reset and oldest is not None and (start is None or oldest < start):

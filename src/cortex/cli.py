@@ -2260,11 +2260,16 @@ def _browse_sources(browser: str | None, profile: str | None) -> list:
     from cortex.browse.privacy import load_settings
 
     # an explicit --browser wins; otherwise `browse.browsers` in config (default: every one).
-    # A named --profile is read even when unticked (`browse.skip_profiles`)
+    # A named --profile is read even when unticked (`browse.skip_profiles`), but only when the
+    # name is that one profile: "Default" never also reads another browser's unticked Default
     s = load_settings()
-    found = (sources.discover() if browser
-             else sources.chosen(replace(s, skip_profiles=()) if profile else s))
-    return sources.pick(found, browser, profile)
+    if browser:
+        return sources.pick(sources.discover(), browser, profile)
+    got = sources.pick(sources.chosen(s), None, profile)
+    if profile and not got:
+        named = sources.pick(sources.chosen(replace(s, skip_profiles=())), None, profile)
+        got = named if len(named) == 1 else []
+    return got
 
 
 def _local_llm(config: dict | None = None, background: bool = False):

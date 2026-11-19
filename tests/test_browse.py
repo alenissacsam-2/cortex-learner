@@ -1241,6 +1241,29 @@ def test_r2_m1_a_day_the_browser_forgot_keeps_its_page(tmp_path, vault):
     assert (vault / "browse" / "browse-2026-11-09.md").is_file()
 
 
+def test_a_partly_expired_oldest_day_keeps_its_stored_counts(tmp_path, vault):
+    """A browser's oldest held day, weeks old, has lost its earliest visits: a rebuild keeps
+    what was counted for it instead of redoing it from what is left."""
+    local, roaming = tmp_path / "local", tmp_path / "roaming"
+    hist = local / "Google" / "Chrome" / "User Data" / "Default" / "History"
+    rows = [(m(0), "https://lichess.org/a", "chess openings"),
+            (m(1), "https://lichess.org/b", "chess puzzles"),
+            (m(0, 1), "https://lichess.org/c", "chess endgames")]
+    chromium(hist, rows)
+
+    def go(**kw):
+        build.run(Vault(vault), sources.discover(local, roaming),
+                  replace(ADULT_PRIVATE, visible_to_claude=True), embed=Embed(), tz=UTC,
+                  now=m(0, 40), **kw)
+        days = build.sites._load(Vault(vault), build.sites.DAYS)
+        return {d: sum(a["n"] for a in v.values()) for d, v in days.items()}
+    assert go() == {"2026-11-09": 2, "2026-11-10": 1}  # the first import counts it
+    hist.unlink()
+    chromium(hist, rows[1:])  # the browser expired the day's first visit
+    assert go(since="2026-11-09") == {"2026-11-09": 2, "2026-11-10": 1}
+    assert (vault / "browse" / "browse-2026-11-09.md").is_file()
+
+
 def test_r2_l1_rows_with_bad_times_are_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
@@ -1618,6 +1641,11 @@ def test_an_explicit_profile_is_read_even_when_unticked(tmp_path, monkeypatch):
     monkeypatch.setattr("cortex.taint.config", lambda: cfg)
     assert [s.key for s in cli._browse_sources(None, None)] == ["chrome/Default"]
     assert [s.key for s in cli._browse_sources(None, "work")] == ["chrome/Work"]
+    found.append(sources.Source("comet", "Default", tmp_path / "c"))
+    cfg["browse"].update(browsers=[], skip_profiles=["chrome/Work", "comet/Default"])
+    assert [s.key for s in cli._browse_sources(None, "default")] == ["chrome/Default"]
+    cfg["browse"]["skip_profiles"] = ["chrome/Default", "comet/Default"]
+    assert cli._browse_sources(None, "default") == []  # two unticked: the name is not one
     cfg["browse"]["browsers"] = ["firefox"]
     assert cli._browse_sources(None, "work") == []  # browse.browsers still holds
     assert [s.key for s in cli._browse_sources("chrome", "work")] == ["chrome/Work"]
