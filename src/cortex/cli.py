@@ -2255,11 +2255,15 @@ def _browse_sources(browser: str | None, profile: str | None) -> list:
     if browser is not None and browser.lower() not in sources.BROWSERS:
         raise VaultError("invalid_argument",
                          f"--browser must be one of {', '.join(sources.BROWSERS)}.")
+    from dataclasses import replace
+
     from cortex.browse.privacy import load_settings
 
-    # an explicit --browser or --profile wins (even an unticked profile); otherwise
-    # `browse.browsers` and `browse.skip_profiles` in config
-    found = sources.discover() if browser or profile else sources.chosen(load_settings())
+    # an explicit --browser wins; otherwise `browse.browsers` in config (default: every one).
+    # A named --profile is read even when unticked (`browse.skip_profiles`)
+    s = load_settings()
+    found = (sources.discover() if browser
+             else sources.chosen(replace(s, skip_profiles=()) if profile else s))
     return sources.pick(found, browser, profile)
 
 
