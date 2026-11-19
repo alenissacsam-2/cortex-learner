@@ -209,7 +209,7 @@ def test_close_pipeline(mgr, clock, root):
     assert len(notes) == 1
     text = notes[0].read_text(encoding="utf-8")
     assert "20 min" in text and "Two pointers (two-pointers)" in text
-    assert "pointers\\](http" in text and "\\<b\\>" in text  # summary neutralised
+    assert "Worked on two pointers" in text and "http" not in text and "<b>" not in text
     assert "# Today" in (root / "Today.md").read_text(encoding="utf-8")
     assert 'cortex_status: "learning"' in (root / "concepts/two-pointers.md").read_text(
         encoding="utf-8")
@@ -219,6 +219,19 @@ def test_close_pipeline(mgr, clock, root):
     assert "session learn: 0 changes, 1 graded" in (root / "journal/2026-11-13.md").read_text(
         encoding="utf-8")
     assert "] session | learn, 0 changes" in (root / "log.md").read_text(encoding="utf-8")
+
+
+def test_session_page_escapes_hostile_text():
+    """Session pages follow render.esc like cards: no links, images, URLs, controls; capped."""
+    bad = "[click](http://evil.example) ![img](http://x/p.png) https://raw.example/a \x1b[31m\x00"
+    rows = [{"id": "c1", "title": bad, "before": None, "after": "learning"}]
+    text = sm_mod._session_md("S1", "learn", T0, T0 + timedelta(minutes=5), {}, rows,
+                              [{"id": "c2", "title": bad}], bad + " x" * 2500)
+    assert "http" not in text and "evil" not in text and "](" not in text and "img" not in text
+    assert "\x1b" not in text and "\x00" not in text
+    assert "click" in text  # the link text stays
+    summary = text.split("## Summary\n")[1].strip()
+    assert len(summary) <= sm_mod.SUMMARY_MAX and summary.endswith("…")
 
 
 def test_close_unchecked_follows_the_7_day_rule(mgr, clock, root):

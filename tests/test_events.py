@@ -284,3 +284,31 @@ def test_void_assessment_result_resets_outcome(ev):
     assert ev.vault.read("assessment", "acme-oa-2026").fields["outcome"] == "pass"
     void(ev, e)
     assert ev.vault.read("assessment", "acme-oa-2026").fields["outcome"] == "pending"
+
+
+def assess(ev, outcome, score=None, hours=0):
+    return events.log_assessment(ev, session="cli", source="self", assessment="acme-oa",
+                                 outcome=outcome, score=score, now=NOON + timedelta(hours=hours))
+
+
+def test_void_assessment_result_drops_its_score(ev):
+    e = assess(ev, "pass", 87)
+    void(ev, e)
+    f = ev.vault.read("assessment", "acme-oa").fields
+    assert f["outcome"] == "pending" and "score" not in f
+
+
+def test_void_assessment_result_restores_the_last_live_score(ev):
+    assess(ev, "pass", "72%")
+    assess(ev, "pass", hours=1)  # no score: the note keeps 72%
+    e = assess(ev, "fail", 40, hours=2)
+    void(ev, e)
+    f = ev.vault.read("assessment", "acme-oa").fields
+    assert f["outcome"] == "pass" and f["score"] == "72%"
+
+
+def test_void_assessment_result_keeps_a_hand_edited_score(ev):
+    e = assess(ev, "pass", 87)
+    ev.vault.set_field("assessment", "acme-oa", "score", 90)
+    void(ev, e)
+    assert ev.vault.read("assessment", "acme-oa").fields["score"] == 90
