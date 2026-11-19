@@ -1,6 +1,10 @@
-"""Vault backup copies: one zip of the whole vault, .git included; old backups, the browse
-receiver's folder (.cortex/browse: raw extension records, the pairing token), the rebuilt
-dashboard and stray *.tmp files excluded. The last KEEP zips are kept."""
+"""Vault backup copies: one zip of the whole vault, .git included, and the durable browse stores
+in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, the
+receiver's not-yet-imported inbox-*.jsonl, filtered like the archive, and vectors-private.npz),
+which hold browsing the browsers have already forgotten. Left out: old backups, the pairing
+token, the local chat history (.cortex/browse/chat), lock files, the rebuilt dashboard and
+stray *.tmp files.
+A zip holds private browsing: keep it as private as the vault. The last KEEP zips are kept."""
 
 from __future__ import annotations
 
@@ -21,16 +25,19 @@ def backup(root: Path, dest_dir: Path | None = None) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"cortex-{datetime.now():%Y%m%d-%H%M%S}.zip"
     tmp = dest.with_suffix(".zip.tmp")
+    skip_dirs = (skip, dest_dir, browse / "chat")
+    skip_files = (tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
+                  browse / "lock", browse / "token")
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
             for dirpath, dirnames, filenames in os.walk(root):
                 d = Path(dirpath)
-                dirnames[:] = [n for n in dirnames if d / n not in (skip, dest_dir, browse)]
+                dirnames[:] = [n for n in dirnames if d / n not in skip_dirs]
                 for name in filenames:
                     p = d / name
-                    if p not in (tmp, dest, root / ".cortex" / "lock",
-                                 root / ".cortex" / "dashboard.html") and p.suffix != ".tmp":
-                        z.write(p, p.relative_to(root).as_posix())
+                    if p in skip_files or p.suffix == ".tmp":
+                        continue
+                    z.write(p, p.relative_to(root).as_posix())
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)

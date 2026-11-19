@@ -102,7 +102,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex doctor` | Health check |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
 | `cortex eval` | How well search and the study forecasts are doing |
-| `cortex backup` | Zips the whole vault |
+| `cortex backup` | Zips the whole vault, private browsing and its stored visit history included (not the pairing token or chat history; see [PRIVACY.md](PRIVACY.md#your-data)). Keep the zip as private as the vault |
 | `cortex exclude add <folder>` | Turns Cortex off in a folder (e.g. a work repo) |
 | `cortex kill` | Emergency stop for anything that acts as you |
 

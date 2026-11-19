@@ -899,7 +899,8 @@ def test_m5_consumed_inbox_files_are_deleted_and_backups_skip_them(vault, browse
     with zipfile.ZipFile(backup.backup(vault, vault.parent / "bk")) as z:
         names = z.namelist()
     assert "browse/browse-2026-11-09.md" in names
-    assert not [n for n in names if n.startswith(".cortex/browse/")]
+    assert ".cortex/browse/inbox-archive/inbox-2026-11-09.jsonl" in names  # only copy left
+    assert ".cortex/browse/token" not in names
 
 
 def test_l2_an_extension_record_merges_only_with_the_same_verdict(vault, browsers):
