@@ -15,7 +15,7 @@ from cortex.app import targets
 from cortex.clients import claude_desktop_config_paths
 from cortex.contract import MAX_CHARS as CONTRACT_MAX_CHARS
 from cortex.events import EventLog
-from cortex.session import _git, git_choice
+from cortex.session import _git, git_choice, git_exe
 from cortex.vault import PRIVATE_BROWSE_DIR, Vault
 
 
@@ -57,7 +57,7 @@ def check_onedrive(root: Path) -> tuple[str, str, str, str]:
 def _old_repo(root: Path) -> bool:
     """git is off but the vault still has a repo git can read: its remotes and history still
     matter for privacy, so those read-only checks still run."""
-    return (root / ".git").exists() and shutil.which("git") is not None
+    return (root / ".git").exists() and git_exe() is not None
 
 
 def _remote_warn(name: str, remotes: list[str], off: bool) -> tuple[str, str, str, str]:
@@ -75,11 +75,12 @@ def check_git(root: Path) -> tuple[str, str, str, str]:
             return _remote_warn(name, remotes, off=True)
         return ("PASS", name, "git is off in your settings (your choice): Cortex keeps no "
                 "history of the vault and `cortex undo` is off", "")
-    if not (root / ".git").is_dir() and shutil.which("git") is None:
+    if not (root / ".git").is_dir() and git_exe() is None:
         return ("WARN", name, "git is not installed, so the vault has no history and undo does "
-                "nothing", "Install git (Windows: Setup → Vault → Install Git, or `winget "
-                "install --id Git.Git -e`; else git-scm.com), restart Cortex, then use the "
-                "vault folder again in Setup (or run `cortex init <vault>`).")
+                "nothing", "Install git: in the Cortex app, Status → Git → Install Git "
+                "(Windows; or run `winget install --id Git.Git -e --scope user`); else get it "
+                "from git-scm.com. The app then starts the vault's history by itself; from a "
+                "terminal, run `cortex init <vault>` after the install.")
     if not (root / ".git").is_dir():
         return "FAIL", name, "the vault has no git repo", "Run `cortex init <vault>`."
     if not (root / ".git" / "hooks" / "pre-push").is_file():

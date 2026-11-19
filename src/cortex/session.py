@@ -12,7 +12,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -304,8 +306,42 @@ def git_choice(config: dict | None = None) -> tuple[bool, bool]:
 GIT_TIMEOUT_S = 60  # a hung git (pinentry, a hook, antivirus) must not hold the vault lock
 
 
+def _registry_path() -> str:
+    """PATH as the registry holds it now (user, then machine): an install after this process
+    started (winget's Git) is on it, though not on os.environ's copy. Empty off Windows."""
+    if sys.platform != "win32":
+        return ""
+    import winreg
+    out = []
+    for hive, key in ((winreg.HKEY_CURRENT_USER, "Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE,
+                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(hive, key) as k:
+                out.append(os.path.expandvars(str(winreg.QueryValueEx(k, "Path")[0])))
+        except OSError:
+            continue
+    return os.pathsep.join(out)
+
+
+def git_exe() -> str | None:
+    """git on PATH, else where Git for Windows installs it (machine or user scope), else on
+    PATH as the registry has it now: a git installed while Cortex runs is found at once."""
+    if found := shutil.which("git"):
+        return found
+    if sys.platform != "win32":
+        return None
+    dirs = [str(Path(base, *sub, "Git", "cmd")) for base, sub in (
+        (os.environ.get("ProgramFiles"), ()), (os.environ.get("LOCALAPPDATA"), ("Programs",)))
+        if base]
+    dirs += _registry_path().split(os.pathsep)
+    return shutil.which("git", path=os.pathsep.join(d for d in dirs if d.strip()))
+
+
 def _run_git(cmd: list[str], input: str | None = None) -> subprocess.CompletedProcess:
-    """git with UTF-8 I/O; a timeout comes back as a failed run (returncode 1), with a warning."""
+    """git with UTF-8 I/O; a timeout comes back as a failed run (returncode 1), with a warning.
+    `cmd[0]` "git" becomes the git `git_exe` finds."""
+    cmd = [git_exe() or cmd[0], *cmd[1:]]
     try:
         return subprocess.run(cmd, input=input, capture_output=True, encoding="utf-8",
                               timeout=GIT_TIMEOUT_S, creationflags=NO_WINDOW)

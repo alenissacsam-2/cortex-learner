@@ -198,6 +198,13 @@ def _bool(body: dict, key: str) -> bool:
     return v
 
 
+def _disk(body: dict, where: Path, need: int) -> dict | None:
+    """{"disk": message} when a download of `need` bytes would leave less than 1 GB free in
+    `where` and the owner has not chosen to continue anyway (`override`), else None."""
+    ok, msg = wizard.free_space_ok(where, need)
+    return None if ok or body.get("override") is True else {"disk": msg}
+
+
 def _domains(v, key: str) -> list[str]:
     if isinstance(v, str):
         v = v.replace(",", "\n").split()
@@ -235,6 +242,7 @@ class App:
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
+            "/api/llm/size": self.llm_size,
             "/api/browse/settings": self.browse_settings, "/api/browse/cloud": self.cloud,
             "/api/browse/auto": self.auto_settings,
             "/api/browse/receiver": self.receive, "/api/chat": None,  # do_POST streams it
@@ -413,8 +421,19 @@ class App:
             raise ValueError("choose a model first")
         return self.jobs.start(f"Loading {m}", "llm", lambda job: actions.llm_load(job, m))
 
+    def llm_size(self, body: dict) -> dict:
+        """A model's download size, asked before the page offers to download it (one request
+        to ollama.com for a name Setup does not list)."""
+        n = wizard.ollama_size(body.get("name"))
+        return {"name": body["name"], "bytes": n, "size": wizard.size_text(n),
+                "source": "ollama.com"}
+
     def llm_pull(self, body: dict) -> dict:
+        from cortex import localllm
         name = wizard.ollama_name(body.get("name"))
+        if not localllm._local_name(status.ollama_models() or [], name) and (
+                stop := _disk(body, wizard.models_dir("ollama"), wizard.ollama_size(name))):
+            return stop
         return self.jobs.start(f"Downloading {name}", "llm",
                                lambda job: wizard.pull_ollama(job, name), cancellable=True)
 
@@ -755,11 +774,21 @@ class App:
                                lambda job: wizard.index(job, root), cancellable=True)
 
     def setup_install(self, body: dict) -> dict:
+        if stop := _disk(body, wizard.install_dir(), wizard.OLLAMA_BYTES):
+            return stop
         return self.jobs.start("Installing Ollama", "setup", wizard.install_ollama,
                                cancellable=True)
 
     def setup_git(self, body: dict) -> dict:
-        return self.jobs.start("Installing Git", "setup", wizard.install_git, cancellable=True)
+        """winget's Git for this Windows account; scope "machine" only when the owner chose
+        it after that failed. `from` "status": the result shows on Status."""
+        scope = "machine" if body.get("scope") == "machine" else "user"
+        if stop := _disk(body, wizard.install_dir(), wizard.GIT_BYTES):
+            return stop
+        root = self.root
+        return self.jobs.start("Installing Git", "status" if body.get("from") == "status"
+                               else "setup", lambda job: wizard.install_git(job, scope, root),
+                               cancellable=True)
 
     def _model_runner(self, body: dict) -> tuple[str, str]:
         m, r = body.get("model"), body.get("runner")
@@ -768,8 +797,17 @@ class App:
             raise ValueError("runner must be ollama or lmstudio")
         return m, r
 
+    @staticmethod
+    def _model_disk(body: dict, m: str, r: str) -> dict | None:
+        """The free-space refusal for a Setup model this runner does not hold yet."""
+        have = wizard._have(wizard.model(m), status.ollama_models(),
+                            status.lms_models() if r == "lmstudio" else [])[r]
+        return None if have else _disk(body, wizard.models_dir(r), wizard.model(m)["bytes"])
+
     def setup_pull(self, body: dict) -> dict:
         m, r = self._model_runner(body)
+        if stop := self._model_disk(body, m, r):
+            return stop
         return self.jobs.start(f"Downloading {wizard.model(m)['label']}", "setup",
                                lambda job: wizard.pull(job, m, r), cancellable=True)
 
@@ -788,6 +826,8 @@ class App:
     def setup_model(self, body: dict) -> dict:
         """One click: download the model, then test it and turn it on."""
         m, r = self._model_runner(body)
+        if stop := self._model_disk(body, m, r):
+            return stop
 
         def run(job):
             out = wizard.pull(job, m, r)

@@ -38,6 +38,19 @@ def _no_real_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_installs(tmp_path_factory, monkeypatch):
+    """Tests find git only on PATH (never in the real Program Files or the registry's PATH),
+    and never the real LM Studio `lms` on PATH (a test must not run it)."""
+    from cortex import session
+
+    monkeypatch.setenv("ProgramFiles", str(tmp_path_factory.mktemp("programfiles")))
+    monkeypatch.setattr(session, "_registry_path", lambda: "")
+    real = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if cmd == "lms"
+                        else real(cmd, *a, **k))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_run_key(monkeypatch):
     """Tests never read or write the real HKCU Run key (Start at login on Windows): an
     in-memory value instead. Returns the dict holding it."""

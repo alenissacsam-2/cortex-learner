@@ -182,7 +182,7 @@ def test_status_shapes(app, vault):
     _, js, _, _ = call(app, "GET", "/api/status")
     assert js["first_run"] is False and js["vault"] == str(vault.resolve())
     ids = [r["id"] for r in js["rows"]]
-    assert ids == ["vault", "embed", "apps", "llm", "receiver", "extension", "processing",
+    assert ids == ["vault", "git", "embed", "apps", "llm", "receiver", "extension", "processing",
                    "history", "dashboard"]
     for r in js["rows"]:
         assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
@@ -829,6 +829,8 @@ def test_llm_pull_runs_ollama_pull_with_the_name(app, monkeypatch):
     started = []
     monkeypatch.setattr(actions, "_popen", lambda args, **k: (
         started.append(args), FakeProc(b"pulling 50%\rsuccess\n"))[1])
+    monkeypatch.setattr(wizard, "ollama_size", lambda name: 10**9)  # never ollama.com
+    monkeypatch.setattr(wizard, "free_space_ok", lambda p, n: (True, ""))
     assert call(app, "POST", "/api/llm/pull", {"name": "-x"})[0] == 400
     assert call(app, "POST", "/api/llm/pull", {"name": "gpt-oss:20b-cloud"})[0] == 400
     call(app, "POST", "/api/llm/pull", {"name": "gemma3:2b"})  # not installed
@@ -2196,29 +2198,189 @@ class _Proc:
 
 
 def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
-    """A16: without git, doctor WARNs (not FAIL) and Setup offers winget's Git."""
+    """A16: without git, doctor WARNs (not FAIL) and Setup offers winget's Git. Deps A1/A2:
+    winget never asks (stdin is closed), installs for this account only, and the vault's
+    history starts right after the install, with no quit and reopen."""
     import shutil
     import sys
 
-    from cortex import doctor
+    from cortex import cli, doctor, session
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    monkeypatch.setattr(wizard, "free_space_ok", lambda p, n: (True, ""))
     g = server.App(vault).setup()["git"]
     assert g["found"] is False
-    assert g["install"]["run"] == ["winget", "install", "--id", "Git.Git", "-e", "--source",
-                                   "winget"]
-    started = []
+    assert g["install"]["run"] == ["winget", "install", "--id", "Git.Git", "-e", "--scope", "user",
+                                   "--source", "winget", "--disable-interactivity",
+                                   "--accept-package-agreements", "--accept-source-agreements"]
+    assert "Git.Git" in g["install"]["source"] and g["install"]["size"] == "about 70 MB"
+    assert g["install"]["license"].startswith("https://")  # shown beside the button
+    started, inits = [], []
     monkeypatch.setattr(actions, "_popen", lambda args, **k: (
         started.append((args, k)), _Proc(b"Successfully installed\n"))[1])
+    # git is found where the installer put it (the app's PATH predates the install)
+    monkeypatch.setattr(session, "git_exe", lambda: "C:\\Users\\me\\Programs\\Git\\cmd\\git.exe")
+    monkeypatch.setattr(cli, "_init", lambda root, default=False: (
+        inits.append((root, default)), (["git init"], [], []))[1])
     call(app, "POST", "/api/setup/git", {})
     job = wait_job(app)
-    assert job["result"]["ok"] and "Quit Cortex and open it again" in job["result"]["lines"][-1]
+    assert job["section"] == "setup" and job["result"]["ok"]
+    assert job["result"]["lines"][-2:] == ["git init",
+                                          "Git is installed and your vault's history has started."]
+    assert [(r.resolve(), d) for r, d in inits] == [(vault.resolve(), False)]
+    assert "Quit Cortex" not in json.dumps(job)
     assert started[0][0] == g["install"]["run"] and "creationflags" in started[0][1]
     nogit = vault.parent / "nogit"
     nogit.mkdir()
+    monkeypatch.setattr(session, "git_exe", lambda: None)
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     st, _, detail, fix = doctor.check_git(nogit)
     assert st == "WARN" and "not installed" in detail and "Git.Git" in fix
+    assert "Status → Git → Install Git" in fix and "restart Cortex" not in fix
+
+
+def test_git_user_scope_failure_offers_the_admin_install(app, vault, monkeypatch):
+    """Deps A1: a failed user-scope install says so and offers a second install whose button
+    says Windows will ask for admin permission; nothing elevates by itself. The Status row's
+    install shows its result on Status."""
+    import sys
+
+    from cortex import cli, session
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    monkeypatch.setattr(wizard, "free_space_ok", lambda p, n: (True, ""))
+    monkeypatch.setattr(cli, "_init", lambda *a, **k: pytest.fail("no git, no init"))
+    started = []
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: (
+        started.append(args), _Proc(b"No applicable installer found\n", rc=1))[1])
+    call(app, "POST", "/api/setup/git", {"from": "status"})
+    job = wait_job(app)
+    r = job["result"]
+    assert job["section"] == "status" and r["ok"] is False and len(started) == 1
+    assert "for your Windows account only" in r["admin"] and r["license"].startswith("https://")
+    assert "admin permission" in r["admin"]
+    call(app, "POST", "/api/setup/git", {"scope": "machine"})
+    job = wait_job(app)
+    assert started[1][started[1].index("--scope") + 1] == "machine"
+    assert "admin" not in job["result"]  # only the user-scope failure offers it
+    with pytest.raises(ValueError, match="scope"):
+        wizard.git_plan("everyone")
+
+
+def test_downloads_check_free_space_first(app, vault, monkeypatch):
+    """Deps A6: Install Ollama, Install Git and a model download check the free space first;
+    too little starts nothing and says how much, until the owner continues anyway."""
+    import sys
+
+    from cortex import session
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(targets, "_which", lambda c: f"C:/bin/{c}.exe")
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    monkeypatch.setattr(status, "ollama_models", lambda: [])
+    asked = []
+    monkeypatch.setattr(wizard, "free_space_ok", lambda p, n: (
+        asked.append(n), (False, "Needs about 2.0 GB; 1.1 GB free on C:."))[1])
+    for path, body, need in (("/api/setup/install", {}, wizard.OLLAMA_BYTES),
+                             ("/api/setup/git", {}, wizard.GIT_BYTES),
+                             ("/api/setup/model", {"model": "2b", "runner": "ollama"}, 2 * 10**9),
+                             ("/api/llm/pull", {"name": "qwen3.5:2b"}, 2 * 10**9)):
+        code, js, _, _ = call(app, "POST", path, body)
+        assert code == 200 and js == {"disk": "Needs about 2.0 GB; 1.1 GB free on C:."}, path
+        assert asked[-1] == need and app.jobs.cur is None, path
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: _Proc(b"done\n"))
+    code, js, _, _ = call(app, "POST", "/api/setup/install", {"override": True})
+    assert code == 200 and js["job"] == "Installing Ollama" and wait_job(app)["result"]["ok"]
+    # a model the runner already holds needs no space
+    monkeypatch.setattr(status, "ollama_models", lambda: ["qwen3.5:2b"])
+    n = len(asked)
+    monkeypatch.setattr(actions, "_popen", lambda args, **k: _Proc(b"up to date\n"))
+    assert "job" in call(app, "POST", "/api/llm/pull", {"name": "qwen3.5:2b"})[1]
+    wait_job(app)
+    assert len(asked) == n
+
+
+def test_free_name_model_size_comes_from_the_registry_on_click(app, monkeypatch):
+    """Deps A7: a Setup model's size is known; another name's is its manifest's total on
+    ollama.com, asked once (on the click), never a download."""
+    import urllib.error
+
+    seen = []
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        seen.append((req.full_url, req.get_header("Accept")))
+        if "nosuch" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 404, "not found", {}, None)
+        if "offline" in req.full_url:
+            raise urllib.error.URLError("no network")
+        return Resp(json.dumps({"config": {"size": 500}, "layers": [
+            {"size": 3_400_000_000}, {"size": 1_000}]}).encode())
+    monkeypatch.setattr(wizard.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(wizard, "_SIZES", {})
+    assert call(app, "POST", "/api/llm/size", {"name": "qwen3.5:4b"})[1] == {
+        "name": "qwen3.5:4b", "bytes": 3 * 10**9, "size": "about 3.0 GB", "source": "ollama.com"}
+    assert seen == []  # a Setup model: no request
+    js = call(app, "POST", "/api/llm/size", {"name": "llama3.2"})[1]
+    assert js["bytes"] == 3_400_001_500 and js["size"] == "about 3.4 GB"
+    assert seen == [("https://registry.ollama.ai/v2/library/llama3.2/manifests/latest",
+                     "application/vnd.docker.distribution.manifest.v2+json")]
+    assert wizard.ollama_size("llama3.2") == 3_400_001_500 and len(seen) == 1  # remembered
+    wizard.ollama_size("someone/model:7b")
+    assert seen[-1][0].endswith("/v2/someone/model/manifests/7b")
+    code, js, _, _ = call(app, "POST", "/api/llm/size", {"name": "nosuch:1b"})
+    assert code == 400 and "no model named nosuch:1b" in js["error"]
+    code, js, _, _ = call(app, "POST", "/api/llm/size", {"name": "offline:1b"})
+    assert code == 400 and "could not get the size" in js["error"]
+    code, js, _, _ = call(app, "POST", "/api/llm/size", {"name": "--help"})
+    assert code == 400 and len(seen) == 4  # a bad name asks nobody
+
+
+def test_status_git_row_installs_and_llm_row_judges_the_chosen_runner(vault, monkeypatch):
+    """Deps A13: Status has a Git row with Setup's Install Git (and its License link).
+    Deps A12: the Local model row names the configured runner and is ok only when that runner
+    holds the chosen model."""
+    import sys
+
+    from cortex import session
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    row = status.git_row()
+    assert row["state"] == "off" and row["value"] == "not installed"
+    assert "Git.Git" in row["install"]["label"] and "about 70 MB" in row["install"]["label"]
+    assert row["install"]["license"] == wizard.GIT_LICENSE and row["page"] is None
+    monkeypatch.setattr(targets, "_which", lambda c: None)  # no winget: the page instead
+    assert status.git_row()["install"] is None and status.git_row()["page"] == wizard.GIT_PAGE
+    monkeypatch.setattr(session, "git_exe", lambda: "C:/git/cmd/git.exe")
+    assert status.git_row()["state"] == "ok" and "install" not in status.git_row()
+
+    def llm(runner, ollama, loaded=(), lms=None, model="qwen3.5:2b"):
+        monkeypatch.setattr(status, "llm", lambda: {
+            "enabled": True, "runner": runner, "model": model, "loaded": list(loaded),
+            "ollama": ollama, "lms": lms, "server_port": None})
+        r = status.llm_row()
+        return r["state"], r["value"]
+    monkeypatch.setattr(status, "lms_models", lambda: [])
+    # LM Studio chosen: Ollama answering with other models does not make it ok
+    assert llm("lmstudio", ["llama3:8b"], lms="C:/lms.exe") == ("warn", "LM Studio, qwen3.5:2b")
+    assert llm("lmstudio", None, loaded=["qwen3.5:2b"], lms="C:/lms.exe") == (
+        "ok", "LM Studio, qwen3.5:2b")
+    monkeypatch.setattr(status, "lms_models", lambda: [{"key": "qwen3.5:2b", "name": "Q"}])
+    assert llm("lmstudio", None, lms="C:/lms.exe")[0] == "ok"  # it loads when needed
+    # Ollama chosen: ok only when Ollama holds the model, even with LM Studio installed
+    assert llm("ollama", ["llama3:8b"], lms="C:/lms.exe") == ("warn", "Ollama, qwen3.5:2b")
+    assert llm("ollama", ["qwen3.5:2b"], lms="C:/lms.exe") == ("ok", "Ollama, qwen3.5:2b")
+    assert llm("ollama", None) == ("warn", "Ollama, qwen3.5:2b")
+    assert llm("auto", None) == ("warn", "no runner, qwen3.5:2b")
+    assert llm("auto", ["QWEN3.5:2B"]) == ("ok", "Ollama, qwen3.5:2b")
 
 
 def test_installer_wording(app, monkeypatch):

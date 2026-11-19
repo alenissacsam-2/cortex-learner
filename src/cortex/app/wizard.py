@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from cortex import session
@@ -22,13 +26,13 @@ from cortex.app import actions, status, targets
 # The models Setup offers: edit tags and sizes here. Sizes are approximate (4-bit downloads).
 MODELS = [
     {"id": "2b", "label": "Qwen 3.5 2B", "min_gb": 0, "ollama": "qwen3.5:2b",
-     "lms": "qwen/qwen3.5-2b", "size": "about 2 GB",
+     "lms": "qwen/qwen3.5-2b", "size": "about 2 GB", "bytes": 2 * 10**9,
      "tradeoff": "Fast on any computer; good enough to sort pages into topics."},
     {"id": "4b", "label": "Qwen 3.5 4B", "min_gb": 6, "ollama": "qwen3.5:4b",
-     "lms": "qwen/qwen3.5-4b", "size": "about 3 GB",
+     "lms": "qwen/qwen3.5-4b", "size": "about 3 GB", "bytes": 3 * 10**9,
      "tradeoff": "Better one-line summaries; wants 6 GB of graphics memory or RAM."},
     {"id": "9b", "label": "Qwen 3.5 9B", "min_gb": 10, "ollama": "qwen3.5:9b",
-     "lms": "qwen/qwen3.5-9b", "size": "about 6 GB",
+     "lms": "qwen/qwen3.5-9b", "size": "about 6 GB", "bytes": 6 * 10**9,
      "tradeoff": "The best answers; slow without 10 GB or more."},
 ]
 EMBED = {"size": "about 150 MB", "source": "huggingface.co"}
@@ -37,9 +41,17 @@ EMBED = {"size": "about 150 MB", "source": "huggingface.co"}
 ORDER = ("vault", "connect", "embed", "history", "llm")
 OLLAMA_PAGE = "https://ollama.com/download"
 LMSTUDIO_PAGE = "https://lmstudio.ai/download"
-OLLAMA_SIZE = "about 1 GB"
+OLLAMA_SIZE, OLLAMA_BYTES = "about 1 GB", 10**9
+OLLAMA_LICENSE = "https://github.com/ollama/ollama/blob/main/LICENSE"
 GIT_PAGE = "https://git-scm.com/downloads"
-GIT_SIZE = "about 70 MB"
+GIT_SIZE, GIT_BYTES = "about 70 MB", 70 * 10**6
+GIT_LICENSE = "https://git-scm.com/about/free-and-open-source"
+# winget run from the app has no console to answer on (stdin is closed): never ask. The
+# agreements are accepted only by a button shown beside the package's License link.
+WINGET = ["--source", "winget", "--disable-interactivity", "--accept-package-agreements",
+          "--accept-source-agreements"]
+REGISTRY = "https://registry.ollama.ai"  # where `ollama pull` downloads from
+SPARE_BYTES = 10**9  # free space a download must leave behind
 LINUX_INSTALL = "curl -fsSL https://ollama.com/install.sh | sh"
 RUNNERS = {"ollama": "Ollama", "lmstudio": "LM Studio"}  # Ollama is the recommended one
 STOPPED = "{} is installed but not running: click Start (or run `cortex llm start`)."
@@ -120,9 +132,9 @@ def install_plan() -> dict:
     """How to install Ollama here: a command the app may run on click, or one shown only."""
     if sys.platform == "win32":
         ok = targets._which("winget") is not None
-        return {"run": ["winget", "install", "--id", "Ollama.Ollama", "-e", "--source", "winget"]
-                if ok else None, "source": "winget, from ollama.com", "size": OLLAMA_SIZE,
-                "page": OLLAMA_PAGE}
+        return {"run": ["winget", "install", "--id", "Ollama.Ollama", "-e", *WINGET]
+                if ok else None, "source": "winget package Ollama.Ollama, from ollama.com",
+                "size": OLLAMA_SIZE, "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
     if sys.platform == "darwin":
         ok = targets._which("brew") is not None
         return {"run": ["brew", "install", "ollama"] if ok else None,
@@ -222,7 +234,7 @@ def state(root: Path | None, scanned: dict | None = None) -> dict:
         # moved: the config names a folder that is gone; Setup asks instead of recreating it
         "vault": {"done": v["ok"], "path": v["path"], "default": str(cli._default_vault()),
                   "moved": bool(v["path"]) and not v.get("exists")},
-        "git": {"found": targets._which("git") is not None, "install": git_plan(),
+        "git": {"found": session.git_exe() is not None, "install": git_plan(),
                 "enabled": session.git_choice()[0]},
         "embed": {"done": e["downloaded"], "indexed": e.get("indexed"), **EMBED},
         "runner": {"done": "running" in (o_state, l_state), "recommend": "ollama",
@@ -280,22 +292,88 @@ def index(job, root: Path) -> dict:
     return actions.run_proc(job, [_cortex(), "model", "build", "--vault", str(root)])
 
 
-def git_plan() -> dict:
-    """How to get git (the vault's history and undo): winget on Windows, else its page."""
-    run = (["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]
+def git_plan(scope: str = "user") -> dict:
+    """How to get git (the vault's history and undo): winget on Windows, else its page.
+    `scope` "user" needs no admin; "machine" is offered only after that failed, and Windows
+    then asks for admin permission itself (Cortex never elevates)."""
+    if scope not in ("user", "machine"):
+        raise ValueError("scope must be user or machine")
+    run = (["winget", "install", "--id", "Git.Git", "-e", "--scope", scope, *WINGET]
            if sys.platform == "win32" and targets._which("winget") else None)
-    return {"run": run, "source": "winget, from git-scm.com", "size": GIT_SIZE, "page": GIT_PAGE}
+    return {"run": run, "source": "winget package Git.Git, from git-scm.com", "size": GIT_SIZE,
+            "page": GIT_PAGE, "license": GIT_LICENSE}
 
 
-def install_git(job) -> dict:
-    plan = git_plan()
+ADMIN_GIT = ("Git could not be installed for your Windows account only. It can be installed "
+             "for everyone on this computer instead; Windows will ask for admin permission.")
+
+
+def install_git(job, scope: str = "user", root: Path | None = None) -> dict:
+    """winget's Git, then (git on, `root` a vault) the vault's history starts at once: the
+    app finds the new git itself, so nobody quits and reopens Cortex. A failed user-scope
+    install says so and sets "admin" (the page then offers the machine-scope install)."""
+    plan = git_plan(scope)
     if not plan["run"]:
         raise ValueError(f"Install git yourself from {plan['page']}")
     out = actions.run_proc(job, plan["run"])
-    if out["ok"]:
-        out["lines"].append("Git is installed. Quit Cortex and open it again, then click Use "
-                            "this folder under Vault to start your vault's history.")
+    if out["cancelled"]:
+        return out
+    if not out["ok"]:
+        if scope == "user":  # the page offers the machine-scope install with its License link
+            out |= {"admin": ADMIN_GIT, "license": plan["license"]}
+        return out
+    if session.git_exe() is None:
+        out["lines"].append("Git is installed, but Cortex cannot find it yet. Quit Cortex and "
+                            "open it again, then click Use this folder under Vault.")
+        return out
+    if root is None or not session.git_choice()[0] or not (root / ".cortex").is_dir():
+        out["lines"].append("Git is installed.")
+        return out
+    from cortex import cli
+    from cortex.vault import VaultError
+    try:
+        did, _, warned = cli._init(root)
+    except VaultError as e:
+        out["lines"].append(f"Git is installed, but starting your vault's history failed: {e} "
+                            "Click Use this folder under Vault to try again.")
+        return out
+    out["lines"] += [str(x) for x in [*did, *warned]]
+    out["lines"].append("Git is installed and your vault's history has started.")
     return out
+
+
+def size_text(n: int) -> str:
+    """"about 2.0 GB" or "about 70 MB"."""
+    return f"about {n / 10**9:.1f} GB" if n >= 10**9 else f"about {max(1, round(n / 10**6))} MB"
+
+
+def free_space_ok(path, need_bytes: int) -> tuple[bool, str]:
+    """(ok, message) for a download of `need_bytes` into `path` (its nearest existing folder
+    counts): ok while it leaves SPARE_BYTES free. The message says both sizes, for example
+    "Needs about 2.0 GB; 1.1 GB free on C:." A failed check never blocks."""
+    p = Path(path).expanduser().absolute()
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        free = shutil.disk_usage(p).free
+    except OSError:
+        return True, ""
+    msg = f"Needs {size_text(need_bytes)}; {free / 10**9:.1f} GB free on {p.drive or 'this disk'}."
+    if free >= need_bytes + SPARE_BYTES:
+        return True, msg
+    return False, msg + " Free up some space first, or continue anyway."
+
+
+def install_dir() -> Path:
+    """Where winget's per-user installs go (Ollama, Git), for the free-space check."""
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home())
+
+
+def models_dir(runner: str) -> Path:
+    """Where a runner keeps its models, for the free-space check."""
+    if runner == "ollama":
+        return Path(os.environ.get("OLLAMA_MODELS") or Path.home() / ".ollama")
+    return Path.home() / ".lmstudio"
 
 
 def install_ollama(job) -> dict:
@@ -320,6 +398,42 @@ def ollama_name(name) -> str:
     if localllm._cloud(name):
         raise ValueError("That is a cloud model; Cortex downloads local models only.")
     return name
+
+
+_SIZES: dict[str, int] = {}  # a model's download size, once the registry told it
+
+
+def ollama_size(name: str) -> int:
+    """The download size in bytes of Ollama model `name`: a Setup model's from MODELS, else
+    the total of its manifest on ollama.com's registry (one request, made on the owner's
+    click). ValueError in plain words when the registry does not know it or cannot be
+    reached."""
+    name = ollama_name(name)
+    if m := next((m for m in MODELS if m["ollama"] == name), None):
+        return m["bytes"]
+    if name in _SIZES:
+        return _SIZES[name]
+    repo, _, tag = name.partition(":")
+    repo = repo if "/" in repo else "library/" + repo
+    req = urllib.request.Request(f"{REGISTRY}/v2/{repo}/manifests/{tag or 'latest'}", headers={
+        "Accept": "application/vnd.docker.distribution.manifest.v2+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read(1_000_000))
+        total = sum(int(x.get("size") or 0)
+                    for x in [data.get("config") or {}, *(data.get("layers") or [])])
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(f"ollama.com has no model named {name}. Check the name on "
+                             "ollama.com/library.") from None
+        total = 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        total = 0
+    if total <= 0:
+        raise ValueError(f"Cortex could not get the size of {name} from ollama.com. Check your "
+                         "internet connection and try again.")
+    _SIZES[name] = total
+    return total
 
 
 def pull_ollama(job, name: str) -> dict:

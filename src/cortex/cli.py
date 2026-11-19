@@ -389,7 +389,7 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
         return _init_pointer(root, default, did, skipped, warned)
     if (root / ".git").exists():
         skipped.append("git init")
-    elif shutil.which("git") is None:
+    elif session_mod.git_exe() is None:
         warned.append("git not found: no vault history or push block yet; install git, then "
                       "rerun `cortex init` or `cortex setup`")
     else:
@@ -405,12 +405,12 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
         os.chmod(hook, 0o755)
         did.append("pre-push hook")
     # without an identity every session commit fails silently and `cortex undo` does nothing
-    if ((root / ".git").is_dir() and shutil.which("git")
+    if ((root / ".git").is_dir() and session_mod.git_exe()
             and not _git(root, "config", "user.email").stdout.strip()):
         _git(root, "config", "user.name", "Cortex")
         _git(root, "config", "user.email", "cortex@localhost")
         did.append("git identity Cortex <cortex@localhost> (this vault only)")
-    if (root / ".git").is_dir() and shutil.which("git") and vault.writes:
+    if (root / ".git").is_dir() and session_mod.git_exe() and vault.writes:
         # the starter pages get a first version, so `cortex undo` has one to go back to
         if session_mod._commit(vault, "cortex: init", vault.wrote_since(0)):
             did.append("git commit cortex: init")
@@ -528,7 +528,7 @@ def setup(
     if status == "FAIL":
         typer.echo(f"      fix: {fix}")
         raise typer.Exit(1)
-    if shutil.which("git") is None and session_mod.git_choice()[0]:
+    if session_mod.git_exe() is None and session_mod.git_choice()[0]:
         typer.echo("WARN  git not found: the vault gets no history or push block until you "
                    "install git and rerun `cortex setup`.")
     if shutil.which("cortex") is None:

@@ -308,9 +308,16 @@ const out = {};
     out.loadOff.push(llmBtn('Load').disabled);
     const hwRow = L.querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'This computer');
     out.hwLine = hwRow.querySelector('.val').textContent;
+    out.useBtn = llmBtn('Use ').textContent;
     llmBtn('Use ').fire('click');
     out.pullName = $('llm-pull').value;
+    DATA.routes['/api/llm/size'] = { name: 'qwen3.5:4b', bytes: 3e9, size: 'about 3.0 GB', source: 'ollama.com' };
     llmBtn('Download').fire('click');
+    await tick();
+    out.sized = fetched.filter((f) => f.path === '/api/llm/size').map((f) => f.body);
+    out.pullConfirm = [$('confirm-title').textContent, $('confirm-ok').textContent, $('confirm-body').textContent,
+      fetched.some((f) => f.path === '/api/llm/pull')];
+    $('confirm-ok').onclick();
     await tick();
     out.pulls = fetched.filter((f) => f.path === '/api/llm/pull').map((f) => f.body);
     sel.value = '0';
@@ -494,7 +501,12 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
                              ["LM Studio", ["Qwen 3.5 2B · 2B · 2.0 GB"]]]
     assert out["chosen"] == "0" and out["loadOff"] == [True, False]
     assert out["hwLine"] == "8 GB of graphics memory (NVIDIA) → Qwen 3.5 4B suits it"
-    assert out["pullName"] == "qwen3.5:4b" and out["pulls"] == [{"name": "qwen3.5:4b"}]
+    # Deps A7: the size first (asked on the click), the download only after the confirm
+    assert out["useBtn"] == "Use qwen3.5:4b (about 3 GB)"
+    assert out["pullName"] == "qwen3.5:4b" and out["sized"] == [{"name": "qwen3.5:4b"}]
+    assert out["pullConfirm"] == ["Download qwen3.5:4b?", "Download",
+                                  "about 3.0 GB, from ollama.com.", False]
+    assert out["pulls"] == [{"name": "qwen3.5:4b"}]
     assert out["llmSaved"] == [{"model": "qwen3.5:4b", "runner": "ollama"}]
     assert out["updBefore"] == {"rows": ["Cortex 0.1.0"], "asked": False}
     assert out["avail"] == {"rows": ["Cortex 0.1.0", "Cortex 0.2.0 is available"],
@@ -519,6 +531,23 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert "Open Chat" in out["tryIt"]
     assert out["whatLines"] == [["Files:", "Commands Cortex runs:"],  # found apps first
                                 ["Set up a vault first; the entry points at it."]]
+
+
+def test_installs_offer_admin_override_and_licenses():
+    """Deps A1/A6/A13: a failed user-scope Git install offers the machine one, saying Windows
+    asks for admin permission; a free-space refusal starts nothing until Continue anyway
+    resends with override; every winget button has its License link beside it; the Status
+    Git row runs the same install, its result shown on Status."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert ("btn('Install Git for all users (Windows will ask for admin permission)', () => "
+            "job('/api/setup/git', { scope: 'machine', from: j.section })" in js)
+    assert "if (r && r.disk) {" in js and "'Continue anyway'" in js
+    assert "() => job(path, { ...body, override: true }));\n      return null;" in js
+    assert js.count("ext(r.license, 'License')") == 1
+    assert "ext(gi.install.license, 'License')" in js  # Homebrew accepts nothing: no link
+    assert "inst.license ? ext(inst.license, 'License') : null" in js
+    assert "r.install ? btn(r.install.label, () => job('/api/setup/git', { from: 'status' })" in js
+    assert "r.install ? ext(r.install.license, 'License')" in js
 
 
 def test_setup_and_browsing_name_the_same_browsers():
