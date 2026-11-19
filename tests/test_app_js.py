@@ -46,6 +46,7 @@ class Node {
     }
   }
   replaceChildren(...ns) { for (const c of this.childNodes) c.parentNode = null; this.childNodes = []; this.append(...ns); }
+  contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
   remove() { if (this.parentNode) { this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; } }
   after(n) {
     const p = this.parentNode;
@@ -140,7 +141,9 @@ Object.assign(globalThis, {
       stream.push = (x) => { parts.push(x); if (waiter) waiter(); };
       return { status: 200, ok: true, body: { getReader: () => ({
         read: () => new Promise((res, rej) => {
-          if (o.signal) o.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+          const stop = () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          if (o.signal && o.signal.aborted) { stop(); return; }  // aborted before the stream: fetch rejects too
+          if (o.signal) o.signal.addEventListener('abort', stop);
           const next = () => {
             waiter = null;
             if (parts.length) res({ value: Buffer.from(parts.shift()), done: false });
@@ -870,37 +873,37 @@ SENDS = {
                "Start at login": [["/api/browse/login", {"on": True}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
                            ["/api/connect/apply", {"want": {}}]],
-                "Open folder": [["/api/open", {"what": "skill_zip"}]]},
+                "Open folder: Claude Desktop skill": [["/api/open", {"what": "skill_zip"}]]},
     "llm": {
         "Save choice": [["/api/llm/settings", {"model": "qwen3.5:4b", "runner": "ollama"}]],
         "Load": [["/api/llm/load", {"model": "qwen3.5:4b"}]],
         "Test": [["/api/llm/test", {}]],
-        "Save": [["/api/llm/settings", {"background_model": ""}]],
+        "Save: Model for background work": [["/api/llm/settings", {"background_model": ""}]],
         "llm-on": [["/api/llm/settings", {"enabled": True}]]},
     "browse": {
-        "Save": [["/api/browse/settings", {
+        "Save: Privacy": [["/api/browse/settings", {
             "visible_to_claude": False, "private_mcp": False,
             "audience": {"adult": "skip", **dict.fromkeys(
                 ["health", "money", "betting", "dating", "sexuality", "drugs", "selfharm"],
                 "local")},
             "deny": "", "allow": "", "private": ""}]],
-        "Save #2": [["/api/browse/cloud", {"cloud_processing": False, "provider": "",
+        "Save: Cloud model": [["/api/browse/cloud", {"cloud_processing": False, "provider": "",
                                            "model": "", "base_url": "", "api_key_env": ""}]],
-        "Start": [["/api/browse/receiver", {"on": True}]],
+        "Start: Receiver": [["/api/browse/receiver", {"on": True}]],
         "Add": [["/api/browse/login", {"on": True}]],
         "Set up the extension": [["/api/browse/setup", {}]],
         "Pair": [["/api/browse/pair", {}]],
-        "Open folder": [["/api/open", {"what": "extension"}]],
+        "Open folder: Extension": [["/api/open", {"what": "extension"}]],
         "Process now": [["/api/browse/process", {}]],
         "Run self-test": [["/api/browse/selftest", {}]],
         "Open private folder in Obsidian": [["/api/open", {"what": "private"}]]},
     "vault": {
         "Open vault in Obsidian": [["/api/open", {"what": "vault"}]],
-        "Open folder": [["/api/open", {"what": "folder"}]],
+        "Open folder: Vault": [["/api/open", {"what": "folder"}]],
         "Build dashboard": [["/api/vault/dashboard", {}]],
         "Back up vault": [["/api/vault/backup", {}]],
         "Run doctor": [["/api/vault/doctor", {}]],
-        "Save": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},
+        "Save: History": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},
     "chat": {
         "Delete chat: Heaps": [["/api/chat/delete", {"id": CHAT_ID}]],
         "Delete all chats": [["/api/chat/delete", {"all": True}]],
@@ -913,7 +916,7 @@ SENDS = {
         "chat-keep": [["/api/chat/settings", {"history": False}]]},
     "setup": {
         "Use this folder": [["/api/setup/vault", {"path": "<vault>"}]],
-        "Skip": [["/api/setup/skip", {"skipped": True}]],
+        "Skip: Connect AI apps": [["/api/setup/skip", {"skipped": True}]],
         "Download search model (about 150 MB, from huggingface.co)": [["/api/setup/embed", {}]],
         "Index my notes": [["/api/setup/index", {}]],
         "Set up Qwen 3.5 4B (downloaded)": [["/api/setup/model",
@@ -1103,3 +1106,116 @@ def test_whats_new_card_shows_got_it_records_and_the_link_reopens_it(
     assert out["toast"] == "Read it again any time: Updates, What’s new."
     assert out["reopened"] == [["Close"], ["Faster <b>lists</b>.", "Dates.", "Reload it."], True]
     assert out["closed"]
+
+
+EDGES = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const go = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };
+const named = (s, name) => $(s).querySelectorAll('button').find((b) => (b.getAttribute('aria-label') || b.textContent) === name);
+const posts = (p) => fetched.filter((f) => f.method === 'POST' && f.path === p).map((f) => f.body);
+const toastNow = () => $('toast-msg').textContent;
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    // 1. Check this file, clicked twice: busy while the check is posted, posted once
+    await go('setup');
+    named('setup', 'Start: ChatGPT').fire('click');
+    await tick();
+    named('setup', 'I have the file').fire('click');
+    await tick();
+    $('imp-path').value = 'C:\\x\\export.zip';
+    const check = named('setup', 'Check this file');
+    DATA.hold = true;
+    check.fire('click');
+    check.fire('click');
+    await tick();
+    out.check = { busy: check.getAttribute('aria-busy'), posts: posts('/api/import/preview') };
+    DATA.hold = false;
+    release();
+    await tick();
+    // 3. a Setup radio changed keeps focus: the new radio of the same name and value
+    const radio = $('setup').querySelectorAll('input').find((r) => r.getAttribute('name') === 'model' && !r.checked);
+    radio.focus();
+    radio.checked = true;
+    radio.fire('change');
+    await tick();
+    const a = document.activeElement;
+    out.radio = [a !== radio, a.id === radio.id, $('setup').contains(a)];
+    // 3. Save: Privacy keeps focus on the redrawn Save; focus outside the section stays there
+    await go('browse');
+    const save = named('browse', 'Save: Privacy');
+    save.focus();
+    save.fire('click');
+    await tick();
+    out.save = [document.activeElement !== save, document.activeElement === named('browse', 'Save: Privacy')];
+    $('quit').focus();
+    named('browse', 'Save: Privacy').fire('click');
+    await tick();
+    out.outside = document.activeElement === $('quit');
+    // 4. Stop (receiver) says so like Start; the focused button is gone, so the heading takes focus
+    Object.assign(DATA.routes['/api/browse'], { in_app: true, receiver: 'running' });
+    await go('browse');
+    const stop = named('browse', 'Stop: Receiver');
+    Object.assign(DATA.routes['/api/browse'], { in_app: false, receiver: 'stopped' });
+    stop.focus();
+    stop.fire('click');
+    await tick();
+    out.stop = [$('toast').className, toastNow(), document.activeElement === ($('s-browse').querySelector('h1') || $('s-browse')),
+      !!named('browse', 'Start: Receiver')];
+    // 4. an empty hours field is not 0: it says what to enter and sends nothing
+    $('b-auto').value = '';
+    $('b-auto').fire('change');
+    await tick();
+    out.empty = [toastNow(), posts('/api/browse/auto')];
+    for (const v of ['200', '12', '0']) { $('b-auto').value = v; $('b-auto').fire('change'); await tick(); }
+    out.hours = posts('/api/browse/auto');
+    // 2. Send double-clicked: the second click is not a Stop; a Stop later is
+    await go('chat');
+    DATA.streamOpen = true;
+    const ev = (o) => JSON.stringify(o) + '\n';
+    DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'Hello' })];
+    $('chat-input').value = 'q1';
+    $('chat-send').fire('click');
+    $('chat-send').fire('click');
+    await tick();
+    const stopped = () => $('chat-log').textContent.includes('Stopped before the end.');
+    out.double = [$('chat-send').textContent, stopped(), posts('/api/chat').length];
+    const now = Date.now;
+    Date.now = () => now() + 1000;
+    $('chat-send').fire('click');
+    await tick();
+    Date.now = now;
+    out.later = [$('chat-send').textContent, stopped()];
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_path,
+                                                            monkeypatch):
+    """Check this file is busy while it posts, so a double click checks once; a double click on
+    Send is not a Stop (a Stop later is); a redraw keeps focus on the same control (a radio,
+    Save: Privacy), on the heading when that control is gone, and leaves focus outside the
+    section alone; Stop (receiver) confirms in a toast; an empty hours field sends nothing."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/browse"]["history"] = {
+        "available": True, "imported": None, "scanned": False,
+        "sources": [{"key": "chrome/Default", "browser": "chrome", "profile": "Default"}]}
+    out = _run(node, tmp_path, "edges", EDGES, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["check"] == {"busy": "true",
+                            "posts": [{"source": "chatgpt", "path": "C:\\x\\export.zip"}]}
+    assert out["radio"] == [True, True, True]
+    assert out["save"] == [True, True] and out["outside"] is True
+    assert out["stop"] == ["toast on ok", "Receiver stopped.", True, True]
+    assert out["empty"] == ["Enter hours from 0 to 168; 0 turns it off.", []]
+    assert out["hours"] == [{"hours": 12}, {"hours": 0}]
+    assert out["double"] == ["Stop", False, 1]
+    assert out["later"] == ["Send", True]

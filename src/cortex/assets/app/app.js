@@ -213,7 +213,7 @@
     const o = opts || {};
     const band = h('div', { class: 'band' }, h('h2', { text: title }),
       o.note != null ? h('span', { class: 'band-note' }, o.note) : null,
-      o.btn ? btn(o.btn[0], o.btn[1], 'band-btn') : null);
+      o.btn ? btn(o.btn[0], o.btn[1], 'band-btn', o.btn[2]) : null);
     return h('div', { class: 'board' + (o.cls ? ' ' + o.cls : ''), id: o.id }, band, ...kids);
   }
   const STATE = { ok: ['●', 'Ready'], warn: ['◐', 'Check'], off: ['○', 'Off'], bad: ['↻', 'Failed'] };
@@ -383,7 +383,20 @@
       box.setAttribute('aria-busy', 'false');
     }
   }
-  const put = (s, ...nodes) => $(s).replaceChildren(...nodes.filter(Boolean), outputBoard(s) || '');
+  // a redraw keeps keyboard focus that was inside the section: on the same control in the new
+  // boards (by id, a radio by name and value, else by tag and name), else on the section's heading
+  const focusKey = (e) => (e.id ? '#' + e.id : e.getAttribute('name') ? `${e.getAttribute('name')}=${e.value}`
+    : e.getAttribute('aria-label') || e.textContent);
+  function put(s, ...nodes) {
+    const box = $(s), a = document.activeElement;
+    const inside = !!a && a !== box && box.contains(a);
+    const like = (k) => [...box.querySelectorAll(a.tagName)].filter((e) => focusKey(e) === k);
+    const k = inside ? focusKey(a) : null, n = inside ? like(k).indexOf(a) : 0;  // the nth of same-named controls
+    box.replaceChildren(...nodes.filter(Boolean), outputBoard(s) || '');
+    if (!inside) return;
+    const found = like(k);
+    (found[n] || found[0] || $('s-' + s).querySelector('h1') || $('s-' + s)).focus({ preventScroll: true });
+  }
 
   function renderStatus(d) {
     const rows = d.rows.map((r) => {
@@ -659,7 +672,8 @@
       grow();
       ta.addEventListener('input', () => { chatS.draft = ta.value; grow(); });
       const go = h('button', { class: 'btn lit chat-send', type: 'button', id: 'chat-send', text: 'Send' });
-      go.addEventListener('click', () => (chatS.busy ? chatS.busy.ctrl.abort() : send(ta, go, log)));
+      // a Stop within 400 ms of sending is a double click on Send, not a Stop (Esc still stops)
+      go.addEventListener('click', () => (!chatS.busy ? send(ta, go, log) : Date.now() - chatS.busy.t0 > 400 ? chatS.busy.ctrl.abort() : null));
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!chatS.busy) send(ta, go, log); }
       });
@@ -697,7 +711,7 @@
     const text = ta.value.trim();
     if (!text) { toast('Type a message first.'); return; }
     const ctrl = new AbortController();
-    chatS.busy = { ctrl };
+    chatS.busy = { ctrl, t0: Date.now() };
     const empty = log.querySelector('.chat-empty');
     if (empty) log.replaceChildren();  // the examples go once a chat starts
     chatS.msgs.push({ role: 'user', text });
@@ -818,7 +832,7 @@
     };
     const skill = board('Claude Desktop skill', {},
       row('cortex-skill.zip', d.skill_zip_found ? d.skill_zip : null, 'Skills cannot be installed by file. In Claude Desktop, open Settings → Capabilities → Skills and upload this zip; then /cortex works in Chat.',
-        [d.skill_zip_found ? btn('Open folder', () => post('/api/open', { what: 'skill_zip' })) : ext(d.skill_url, 'Download cortex-skill.zip')]));
+        [d.skill_zip_found ? btn('Open folder', () => post('/api/open', { what: 'skill_zip' }), null, { 'aria-label': 'Open folder: Claude Desktop skill' }) : ext(d.skill_url, 'Download cortex-skill.zip')]));
     put('connect', board('AI apps', { note: `${found} found · ${on} connected`, btn: ['Apply…', apply] }, ...rows,
       h('div', { class: 'foot', text: d.vault ? 'Apply shows the exact files first. Backups are named <file>.cortex-<date>.bak, next to each file.' : 'Set up a vault first (Setup); each entry points at it.' })), skill);
   }
@@ -873,7 +887,8 @@
       h('option', { value: '', text: 'Same as the model above' }),
       choices.map((c) => h('option', { value: c.model, text: c.model, selected: c.model === d.background_model })));
     if (d.background_model && !choices.some((c) => c.model === d.background_model)) bgSel.append(h('option', { value: d.background_model, text: `${d.background_model} (not found now)`, selected: true }));
-    const bgSave = btn('Save', () => post('/api/llm/settings', { background_model: bgSel.value }, () => { toast.ok('Saved.'); load('llm'); }));
+    const bgSave = btn('Save', () => post('/api/llm/settings', { background_model: bgSel.value }, () => { toast.ok('Saved.'); load('llm'); }),
+      null, { 'aria-label': 'Save: Model for background work' });
     const enabled = h('input', { type: 'checkbox', id: 'llm-on', checked: d.enabled });
     enabled.addEventListener('change', () => post('/api/llm/settings', { enabled: enabled.checked }, () => { toast.ok(enabled.checked ? 'Local model on.' : 'Local model off.'); load('llm'); }));
     const model = board('Model', { note: d.model ? `chosen: ${d.model}` : 'none chosen' },
@@ -921,8 +936,11 @@
     if (!hist || !hist.available || !hist.sources.length) return [];
     const at = hist.imported ? new Date(hist.imported) : null, ok = at && !isNaN(at);
     const hours = h('input', { type: 'number', id: 'b-auto', min: 0, max: 168, step: 1, value: String(s.auto_import_hours ?? 6) });
-    hours.addEventListener('change', () => post('/api/browse/auto', { hours: Number(hours.value) },
-      () => (Number(hours.value) ? savedMark(hours) : toast.ok('Saved: automatic import is off.'))));
+    hours.addEventListener('change', () => {
+      const v = hours.value.trim() === '' ? NaN : Number(hours.value);  // empty is not 0: it never turns import off
+      if (!(v >= 0 && v <= 168)) { toast('Enter hours from 0 to 168; 0 turns it off.'); return null; }
+      return post('/api/browse/auto', { hours: v }, () => (v ? savedMark(hours) : toast.ok('Saved: automatic import is off.')));
+    });
     return [
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Last import' }),
         h('span', { class: 'val', text: ok ? daysAgo(at, true) : 'never', title: ok ? at.toLocaleString() : null }))),
@@ -1081,7 +1099,7 @@
       const usePath = () => {
         if (!path.value.trim()) { toast('Paste the path first.'); return; }
         Object.assign(guide, { upload: null, path: path.value });
-        check();
+        return check();  // busy until the check is posted: a second click is ignored
       };
       return [steps, err, drop,
         h('div', { class: 'field' }, h('label', { for: 'imp-path', text: 'Or paste its full path (a file or a folder)' }),
@@ -1153,7 +1171,7 @@
         h('td', { text: r.provider }), h('td', { text: r.model }),
         ['items', 'chars', 'skipped'].map((k) => h('td', { class: 'n', text: String(r[k] ?? 0) })))))))
       : note('No cloud runs yet.');
-    return [board('Cloud model', { btn: ['Save', save], note: c.cloud_processing ? 'on' : 'off' },
+    return [board('Cloud model', { btn: ['Save', save, { 'aria-label': 'Save: Cloud model' }], note: c.cloud_processing ? 'on' : 'off' },
       h('div', { class: 'field' }, h('label', { class: 'check' }, on, h('span', { text: 'Let a cloud model sort and summarise' })),
         h('p', { class: 'help', text: 'Off (the default). On: when Cortex processes browsing, pages of categories set to Cloud AI apps can read (with that switch on) go to this cloud model for short descriptions. Local AI only pages never leave this computer and never fall back to the cloud. A request that looks like it holds a key or token is not sent, and each run sends at most 500 requests unless cloudllm.max_items in the config says otherwise.' })),
       h('div', { class: 'field' }, h('label', { for: 'c-provider', text: 'Provider' }), prov),
@@ -1188,7 +1206,7 @@
         audience: Object.fromEntries(cats.map((x) => [x.c, x.sel.value])),
         deny: $('b-deny').value, allow: $('b-allow').value, private: $('b-private').value,
       }, () => { toast.ok('Saved.'); load('browse'); });
-      parts.push(board('Privacy', { btn: ['Save', save] },
+      parts.push(board('Privacy', { btn: ['Save', save, { 'aria-label': 'Save: Privacy' }] },
         h('div', { class: 'field' }, h('label', { class: 'check' }, vis, h('span', { text: 'Cloud AI apps can read' })),
           h('p', { class: 'help', text: 'Off (the default): browsing goes only to private pages that Obsidian and local models read; no cloud AI app (Claude, Gemini, ChatGPT, Cursor…) sees it. On: Cortex also writes pages that cloud AI apps read through Cortex: your topics and time, interest lines in your journal, and the sites you visit with their page titles, the searches that led to them and the searches made on them. That covers all your browsing except the categories below set to Local AI only (or Don\'t save), which never reach a cloud AI app.' })),
         h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Sensitive categories' }),
@@ -1208,8 +1226,8 @@
         : d.receiver === 'busy' ? 'port 8799 is used by another program'
           : d.receiver === 'old' ? RECEIVER_OLD : 'stopped',
         'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
-        [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
-          : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }))]),
+        [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => { toast.ok('Receiver stopped.'); load('browse'); }), null, { 'aria-label': 'Stop: Receiver' })
+          : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }), null, { 'aria-label': 'Start: Receiver' })]),
       d.login.supported
         ? row('Start at login', d.login.exists ? 'on' : 'off', 'Adds or removes a login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
           [btn(d.login.exists ? 'Remove' : 'Add', () => job('/api/browse/login', { on: !d.login.exists }))])
@@ -1226,7 +1244,7 @@
         h('ol', { class: 'how' }, extPage(),
           h('li', { text: 'Turn on Developer mode.' }),
           h('li', {}, 'Click Load unpacked and choose this folder: ', h('code', { text: d.extension }), ' ',
-            btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn')),
+            btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn', { 'aria-label': 'Open folder: Extension' })),
           h('li', { text: 'Open the Cortex capture popup, enter port 8799, paste the key and press Save and test. Its top line then says Receiver connected, and its Process now button does the same as the one below.' }))));
     const past = board('Past history', { note: d.history && d.history.imported ? `last import ${d.history.imported}` : 'never imported' },
       ...autoImportRows(d.history, s, d.login), ...historyRows(d.history, 'browse'));
@@ -1246,7 +1264,7 @@
     }
     put('vault', board('Vault', {},
       row('Folder', d.path, 'Your notes live here as Markdown files.', [btn('Open vault in Obsidian', () => post('/api/open', { what: 'vault' }, noObsidian)),
-        btn('Open folder', () => post('/api/open', { what: 'folder' }))]),
+        btn('Open folder', () => post('/api/open', { what: 'folder' }), null, { 'aria-label': 'Open folder: Vault' })]),
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
         h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
       row('Dashboard', d.dashboard ? `built ${d.dashboard}` : 'not built', 'An offline page of your notes and the 3D brain.',
@@ -1261,7 +1279,7 @@
     const priv = h('input', { type: 'checkbox', id: 'g-private', checked: g.private_browsing, disabled: !g.enabled });
     on.addEventListener('change', () => { priv.disabled = !on.checked; });
     const save = () => post('/api/vault/git', { enabled: on.checked, private_browsing: priv.checked }, () => { toast.ok('Saved.'); load('vault'); });
-    return board('History', { btn: ['Save', save] },
+    return board('History', { btn: ['Save', save, { 'aria-label': 'Save: History' }] },
       h('div', { class: 'field' }, h('label', { class: 'check' }, on, h('span', { text: 'Keep the vault’s history in git (lets you undo sessions; uses more disk as the vault grows)' })),
         h('p', { class: 'help', text: 'On (the default): each session is saved as a git commit you can undo. Off: no new history is kept and undo is off; history already there is left as it is.' })),
       h('div', { class: 'field' }, h('label', { class: 'check' }, priv, h('span', { text: 'Include private browsing pages in git history' })),
@@ -1286,8 +1304,8 @@
         done ? summary || 'Done' : skipped.has(id) ? 'Skipped' : cur ? dm('NEXT', 2, 'Next') : 'Later'),
       collapsed ? btn(done ? 'Edit' : 'Open', () => { opened.add(id); return id === 'connect' ? skip(id, false) : load('setup'); }, 'band-btn',
         { 'aria-label': `${done ? 'Edit' : 'Open'}: ${title}` })
-        : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); return skip(id, true); }, 'band-btn')
-          : done || skipped.has(id) ? btn('Hide', () => { opened.delete(id); load('setup'); }, 'band-btn') : null);
+        : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); return skip(id, true); }, 'band-btn', { 'aria-label': `Skip: ${title}` })
+          : done || skipped.has(id) ? btn('Hide', () => { opened.delete(id); load('setup'); }, 'band-btn', { 'aria-label': `Hide: ${title}` }) : null);
     return h('div', { class: 'board step' + (collapsed ? ' collapsed' : '') + (cur ? ' current' : '') }, band, ...body);
   }
   function renderSetup(d) {
@@ -1322,9 +1340,9 @@
         [btn('Index my notes', () => job('/api/setup/index', {}), 'btn', { disabled: !(e.done && d.vault.done) })])], first);
 
     const inst = rn.install;
-    const start = (id) => btn('Start', () => job('/api/setup/start', { runner: id }), 'btn lit');
+    const start = (id, name) => btn('Start', () => job('/api/setup/start', { runner: id }), 'btn lit', { 'aria-label': `Start: ${name}` });
     const oll = row('Ollama', RSTATE[rn.ollama.state], 'Runs AI models on this computer. Free.',
-      rn.ollama.state === 'stopped' ? [start('ollama')] : rn.ollama.found ? null
+      rn.ollama.state === 'stopped' ? [start('ollama', 'Ollama')] : rn.ollama.found ? null
         : [inst.run ? btn(`Install Ollama (${inst.size}, via ${inst.source})`, () => job('/api/setup/install', {}), 'btn lit') : ext(inst.page, 'Get Ollama')]);
     oll.querySelector('.line1').append(h('span', { class: 'rec', text: 'RECOMMENDED' }));
     const runnerRows = [
@@ -1332,7 +1350,7 @@
       !rn.ollama.found ? h('div', { class: 'pad' }, h('span', { class: 'sub', text: inst.run ? 'The button runs:' : 'Run this yourself:' }),
         h('pre', { text: inst.run ? inst.run.join(' ') : inst.show || inst.page })) : null,
       row('LM Studio', RSTATE[rn.lmstudio.state], 'An app with its own model library; Cortex uses its lms command.',
-        rn.lmstudio.state === 'stopped' ? [start('lmstudio')] : rn.lmstudio.found ? null : [ext(rn.lmstudio.page, 'I’ll use LM Studio')]),
+        rn.lmstudio.state === 'stopped' ? [start('lmstudio', 'LM Studio')] : rn.lmstudio.found ? null : [ext(rn.lmstudio.page, 'I’ll use LM Studio')]),
       h('p', { class: 'pad ink-3 small', text: 'Optional: skip this to run Cortex on rules and the search model only. A model is a download of several GB.' })];
 
     const runners = [['ollama', 'Ollama', rn.ollama.found || rn.ollama.serving], ['lmstudio', 'LM Studio', rn.lmstudio.found]];
