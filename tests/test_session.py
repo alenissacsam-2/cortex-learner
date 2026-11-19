@@ -320,6 +320,35 @@ def test_commit_refused_mid_revert(root):
     assert git(root, "rev-parse", "HEAD") == head
 
 
+def test_commit_runs_git_add_and_commit_outside_the_vault_lock(root, monkeypatch):
+    """B12: other writers wait only for the status snapshot, never for git add/commit."""
+    real, held = sm_mod._commit_paths, []
+
+    def spy(top, paths, message):
+        held.append((root / ".cortex" / "lock").exists())
+        Vault(root).write_text(root / "inbox.md", "written while git runs\n")  # no wait
+        return real(top, paths, message)
+
+    monkeypatch.setattr(sm_mod, "_commit_paths", spy)
+    (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
+    sha = sm_mod._commit(Vault(root), "cortex: test")
+    assert held == [False]
+    assert sha == git(root, "rev-parse", "HEAD").strip()
+    assert git(root, "show", "--name-only", "--format=", sha).split() == ["clean.md"]
+    assert git(root, "status", "--porcelain").strip() == "M inbox.md"  # not in the snapshot
+
+
+def test_commit_fails_cleanly_when_another_git_holds_the_index(root, caplog):
+    (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
+    (root / ".git/index.lock").write_text("", encoding="utf-8")  # a commit running elsewhere
+    head = git(root, "rev-parse", "HEAD")
+    assert sm_mod._commit(Vault(root), "cortex: test") is None
+    assert "index.lock" in caplog.text and git(root, "rev-parse", "HEAD") == head
+    assert not (root / ".cortex" / "lock").exists()
+    (root / ".git/index.lock").unlink()
+    assert sm_mod._commit(Vault(root), "cortex: test")  # the next commit takes it
+
+
 def test_budget_flags_only(mgr):
     s = mgr.start()
     for _ in range(41):
