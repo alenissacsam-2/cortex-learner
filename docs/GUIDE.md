@@ -88,6 +88,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | Command | What it does |
 |---|---|
 | `cortex today` | Prints today's plan |
+| `cortex app` | The Cortex app in your browser (stops after 30 minutes idle); `--window` opens it in its own window with a tray icon, as the **Cortex** shortcut does on Windows |
 | `cortex brief` | Your brief, teaching contract and Today |
 | `cortex dashboard` | Opens the offline dashboard |
 | `cortex recall "query"` | Searches your vault by meaning and keywords |
@@ -354,6 +355,7 @@ Before the app or the extension sends the token or any visit to port 8799, they 
 - **What changed and how to undo it:** `cortex claims --unasked` lists what chats saved about you, each with its undo; `cortex undo <session>` reverts one chat.
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
+- **The Cortex app on Windows:** its own window and an amber tray icon. Closing the window keeps Cortex in the tray; click the icon to bring it back, right-click it for **Start with Windows** and **Quit**. It notifies you once a day when reviews are due, 3 days and 1 day before an exam, and when a long task finishes or fails, never naming a private page. These are `app: {notify: {reviews, exams, jobs}}` in `~/.cortex/config.yaml` (all on); the window's size and place are kept in `~/.cortex/desktop.json`.
 
 ### Vault history in git: your choice
 

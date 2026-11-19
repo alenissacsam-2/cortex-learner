@@ -2139,14 +2139,14 @@ def test_start_at_login_on_windows_is_a_run_value(monkeypatch, fakes, tmp_path,
     assert want in status.login_shown(root) and "HKCU" in status.login_shown(root)
     job = type("Job", (), {"say": lambda self, s: None})()
     actions.login(job, root, True)
-    assert _no_real_run_key == {"v": want} and status.login_task()["exists"] is True
+    assert _no_real_run_key == {status.LOGIN_TASK: want} and status.login_task()["exists"] is True
     assert fakes == [["schtasks", "/Delete", "/F", "/TN", status.LOGIN_TASK]]
     actions.login(job, root, False)
     assert _no_real_run_key == {} and status.login_task()["exists"] is False
     # migration: an old task (schtasks /Delete succeeds) becomes the Run value
     monkeypatch.setattr(targets, "_run", lambda a, timeout=300: (fakes.append(a), (True, ""))[1])
     actions.migrate_login(root)
-    assert _no_real_run_key == {"v": want}
+    assert _no_real_run_key == {status.LOGIN_TASK: want}
     fakes.clear()
     actions.migrate_login(root)  # a Run value already there: nothing runs
     assert fakes == []
@@ -2411,8 +2411,9 @@ def test_extension_and_skill_paths(app):
 
 
 def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
-    """A11: ~/.cortex/app.json names the running app; a stale file is ignored."""
-    from cortex.app import launch
+    """A11: ~/.cortex/app.json names the running app; a stale file is ignored. The browser app
+    has no window to show, so a second launch opens its page in the browser."""
+    from cortex.app import desktop, launch
     lines: list[str] = []
     t = threading.Thread(target=server.run, args=(vault,),
                          kwargs={"open_browser": False, "echo": lines.append}, daemon=True)
@@ -2425,7 +2426,8 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
     assert server.running_url() == url
     opened = []
     monkeypatch.setattr(launch.webbrowser, "open", opened.append)
-    monkeypatch.setattr(server, "run", lambda *a, **k: pytest.fail("started a second app"))
+    monkeypatch.setattr(desktop, "run", lambda *a, **k: pytest.fail("started a second app"))
+    assert server.show_window(url) is False
     launch.main()
     assert opened == [url]
     port, token = int(url.split(":")[2].split("/")[0]), url.split("?t=")[1]
@@ -2443,10 +2445,10 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
 
 
 def test_the_launcher_log_never_holds_the_key(monkeypatch, capsys):
-    from cortex.app import launch
+    from cortex.app import desktop, launch
     seen = {}
     monkeypatch.setattr(server, "running_url", lambda: None)
-    monkeypatch.setattr(server, "run", lambda root, echo: (
+    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo: (
         echo("Cortex app: http://127.0.0.1:8790/?t=Abc-_123"), seen.setdefault("ok", 1)))
     launch.main()
     out = capsys.readouterr().out
@@ -2456,7 +2458,7 @@ def test_the_launcher_log_never_holds_the_key(monkeypatch, capsys):
 def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
     import sys
 
-    from cortex.app import launch
+    from cortex.app import desktop, launch
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     said = []
@@ -2464,7 +2466,7 @@ def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
 
     def broken(*a, **k):
         raise ImportError("half-done upgrade")
-    monkeypatch.setattr(server, "run", broken)
+    monkeypatch.setattr(desktop, "run", broken)
     with pytest.raises(SystemExit):
         launch.main()
     log = Path.home() / ".cortex" / "logs" / "app.log"

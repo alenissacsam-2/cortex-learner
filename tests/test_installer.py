@@ -371,23 +371,24 @@ def test_the_wheel_ships_the_extension_and_the_receiver(tmp_path):
 
 
 def test_launcher_logs_without_a_console(monkeypatch):
-    from cortex.app import launch, server
+    from cortex.app import desktop, launch, server
 
     seen = {}
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
-    monkeypatch.setattr(sys, "argv", [str(Path("C:/inst/bin/cortex-app.exe"))])
+    monkeypatch.setattr(sys, "argv", [str(Path("C:/inst/bin/cortex-app.exe")), "--hidden"])
     monkeypatch.setenv("PATH", "orig")
     monkeypatch.setenv("CORTEX_VAULT", "V")
+    monkeypatch.setattr(server, "running_url", lambda: None)
 
-    def fake_run(root, echo):
-        seen["root"] = root
+    def fake_run(root, hidden, echo):
+        seen.update(root=root, hidden=hidden)
         echo("Cortex app: http://127.0.0.1:1/")
 
-    monkeypatch.setattr(server, "run", fake_run)
+    monkeypatch.setattr(desktop, "run", fake_run)
     launch.main()
     log = sys.stdout
     log.close()
-    assert seen["root"] == Path("V")
+    assert seen == {"root": Path("V"), "hidden": True}
     assert (Path.home() / ".cortex" / "logs" / "app.log").read_text().startswith("Cortex app:")
     assert os.environ["PATH"].startswith(str(Path("C:/inst/bin").resolve()) + os.pathsep)

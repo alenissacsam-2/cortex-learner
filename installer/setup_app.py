@@ -385,18 +385,21 @@ def _force(func, path, _exc):  # uv's Python ships read-only files
 
 
 LOGIN_NAME = "Cortex browse receiver"  # the Run value (and the older scheduled task) the app adds
+AUTOSTART_NAME = "Cortex"  # the desktop app's Start with Windows (cortex.app.desktop.AUTOSTART)
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def drop_login() -> None:
-    """Remove Start at login: the app's HKCU Run value and the scheduled task older versions
-    made (it would fail at every login once the files are gone)."""
+    """Remove Start at login and Start with Windows: the app's HKCU Run values and the
+    scheduled task older versions made (they would fail at every login once the files are
+    gone)."""
     import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-            winreg.DeleteValue(k, LOGIN_NAME)
-    except FileNotFoundError:
-        pass
+    for name in (LOGIN_NAME, AUTOSTART_NAME):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, name)
+        except FileNotFoundError:
+            pass
     subprocess.run(["schtasks", "/Delete", "/F", "/TN", LOGIN_NAME], capture_output=True,
                    stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
