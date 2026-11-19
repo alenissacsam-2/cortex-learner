@@ -57,7 +57,7 @@ These measures lower the risk; they do not remove it. Review changes to your `me
 - A pre-push hook refuses `git push`. **Do not publish your vault**, for example to a public GitHub repository: it holds your profile, private pages and voice samples.
 - The vault's `.cortex/` folder holds working files: the search vectors, a log of Claude's recent Cortex searches (the last 5,000), `index-snapshot.json`, a copy of the parsed text of your pages that makes start-up faster, and `dashboard.html`, the dashboard: a copy of your vault's non-private pages (up to 20 KB of text per page), rebuilt each time you open it with `cortex dashboard`. If you import browsing it also holds `browse/vectors-private.npz` (search vectors of your **private** browsing pages, for local models only), `browse/sites.json` (the local or cloud model's sorting and summaries of each site), `browse/site-days.json` (visit counts per day and site, kept after the browser forgets them), `browse/verdicts.json` (the local model's one-word judgement of each page title and search term, stored under a hash of the text, never the text), `browse/inbox-archive/` (the browser extension's visits after the filter, kept so a rebuild does not lose them; no page text for private visits; older than both your browsers' history and 90 days is removed) and `cloud-log.jsonl` (one counts-only line per cloud processing run). They stay on your computer and are left out of the vault's git history; `cortex backup` includes them. You can delete them at any time; Cortex rebuilds what it needs, except the extension's archived visits, which only the extension had.
 - Keep the vault out of OneDrive, Dropbox, Google Drive and iCloud folders. Sync can break Cortex's file lock and copies private pages to the cloud. `cortex doctor` warns about this.
-- Export: `cortex backup` writes a zip of the whole vault, including its history.
+- Export: `cortex backup` writes a zip of the whole vault, including its history, `browse/private/` and the browse stores in `.cortex/browse/` listed above (`site-days.json`, `sites.json`, `verdicts.json`, `state.json`, `inbox-archive/`, `vectors-private.npz`), which hold browsing your browsers have already forgotten. It leaves out the browser extension's pairing token, the extension visits not yet imported (`.cortex/browse/inbox-*.jsonl`), your local chat history (`.cortex/browse/chat/`), lock files, older backups and `dashboard.html`. **A backup zip holds your private browsing: keep it as private as the vault itself.**
 - Delete everything: delete the vault folder and `~/.cortex`, then remove Cortex from Claude (see [INSTALL.md](INSTALL.md), section 11).
 
 ## Browsing
@@ -91,7 +91,7 @@ Cortex can turn your browser history into pages. It is off until you run an impo
 **Two things to know:**
 
 - The browser extension keeps a queue of visits on disk, in the browser's own extension storage, until the receiver takes them. A queued visit older than 24 hours is dropped.
-- `cortex backup` includes `browse/private/`. Keep backup zips as private as the vault itself.
+- `cortex backup` includes `browse/private/` and the browse stores in `.cortex/browse/` (visit counts, site summaries, verdicts, the extension's archived visits, the private search vectors); it leaves out the pairing token, not-yet-imported extension visits and chat history ([Your data](#your-data)). Keep backup zips as private as the vault itself.
 
 ## Past chats
 
