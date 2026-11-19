@@ -592,7 +592,9 @@ def history_row(root: Path | None, b: dict, now: datetime | None = None) -> dict
     login = b.get("login") or {}
     row["login_hint"] = bool(login.get("supported") and not login.get("exists"))
     if (now or datetime.now(UTC)) - t > timedelta(hours=2 * hours):
+        from cortex import browse_serve  # the automatic import's sources: never an unticked one
+        from cortex.vault import Vault
         return {**row, "state": "warn",
                 "detail": "Last import {ago}: newer visits are not in Cortex yet.",
-                "import": [k for k in state.get("sources") or {} if isinstance(k, str)]}
+                "import": [s.key for s in browse_serve.auto_sources(Vault(root))]}
     return {**row, "state": "ok", "detail": f"New visits come in every {hours:g} hours."}

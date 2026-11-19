@@ -2257,8 +2257,9 @@ def _browse_sources(browser: str | None, profile: str | None) -> list:
                          f"--browser must be one of {', '.join(sources.BROWSERS)}.")
     from cortex.browse.privacy import load_settings
 
-    # an explicit --browser wins; otherwise `browse.browsers` in config (default: every one)
-    found = sources.discover() if browser else sources.chosen(load_settings())
+    # an explicit --browser or --profile wins (even an unticked profile); otherwise
+    # `browse.browsers` and `browse.skip_profiles` in config
+    found = sources.discover() if browser or profile else sources.chosen(load_settings())
     return sources.pick(found, browser, profile)
 
 

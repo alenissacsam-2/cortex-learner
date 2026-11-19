@@ -674,12 +674,36 @@ def test_an_untick_at_import_keeps_the_profile_out_of_automatic_imports(app, vau
     assert [(s["key"], s["skip"]) for s in got["history"]["sources"]] == \
         [("chrome/Default", True), ("comet/Default", False)]
     assert [s.key for s in browse_serve.auto_sources(Vault(vault))] == ["comet/Default"]
+    call(app, "POST", "/api/browse/import", {"sources": ["comet/Default"], "from": "browse"})
+    wait_job(app)  # Status's button sends no skip: the saved unticks stay
+    assert status.config()["browse"]["skip_profiles"] == ["chrome/Default"]
     call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default", "comet/Default"],
                                              "skip": []})
     wait_job(app)
     assert status.config()["browse"]["skip_profiles"] == []
     assert [s.key for s in browse_serve.auto_sources(Vault(vault))] == \
         ["chrome/Default", "comet/Default"]
+
+
+def test_process_now_reads_only_the_automatic_imports_profiles(vault, home, monkeypatch):
+    """The app's Process now does what the popup's button does: only the profiles imported
+    before, never one unticked or never ticked."""
+    from cortex import browse_serve
+    from cortex.browse import build, sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source(b, "Default", home / b) for b in ("chrome", "comet", "edge")])
+    cfg = home / ".cortex" / "config.yaml"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("browse:\n  skip_profiles: [comet/Default]\n", encoding="utf-8")
+    state = vault / build.STATE
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"sources": {"chrome/Default": {}, "comet/Default": {}}}),
+                     encoding="utf-8")
+    got = []
+    monkeypatch.setattr(browse_serve, "run_import", lambda v, srcs=None: got.append(
+        [s.key for s in srcs]) or {})
+    actions.browse_process(server.Job("p", "browse", False), vault)
+    assert got == [["chrome/Default"]]
 
 
 def _vault(root):
@@ -1862,7 +1886,7 @@ def test_status_has_an_ai_apps_row(app):
     assert r["state"] == "off" and r["action"]["go"] == "connect"
 
 
-def _history(vault, last=None, hours=6, login=False, keys=("chrome:Default",)):
+def _history(vault, last=None, hours=6, login=False, keys=("chrome/Default",)):
     """status.history_row with a browse state imported at `last` (None: never imported)."""
     f = vault / ".cortex" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -1873,9 +1897,16 @@ def _history(vault, last=None, hours=6, login=False, keys=("chrome:Default",)):
     return status.history_row(vault, b, now=datetime(2026, 11, 19, 12, tzinfo=UTC))
 
 
-def test_status_browsing_history_row(vault):
+def _found(monkeypatch, home, *keys):
+    from cortex.browse import sources
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: [
+        sources.Source(*key.split("/"), home / key) for key in keys])
+
+
+def test_status_browsing_history_row(vault, home, monkeypatch):
     """Status warns when history imports stopped (twice auto_import_hours without one), only
     after a first import; auto import off says so; the login hint shows while login is off."""
+    _found(monkeypatch, home, "chrome/Default", "comet/Default")
     never = _history(vault)
     assert never["state"] == "off" and never["value"] == "never imported"
     assert "import" not in never and "login_hint" not in never and "at" not in never
@@ -1884,7 +1915,7 @@ def test_status_browsing_history_row(vault):
     assert fresh["value"] == "last import {ago}" and "import" not in fresh
     assert fresh["login_hint"] is True and fresh["action"]["go"] == "browse"
     stale = _history(vault, "2026-11-17T09:00:00Z")
-    assert stale["state"] == "warn" and stale["import"] == ["chrome:Default"]
+    assert stale["state"] == "warn" and stale["import"] == ["chrome/Default"]
     assert stale["detail"] == "Last import {ago}: newer visits are not in Cortex yet."
     assert _history(vault, "2026-11-17T09:00:00Z", login=True)["login_hint"] is False
     off = _history(vault, "2026-11-01T00:00:00Z", hours=0)
@@ -1896,14 +1927,27 @@ def test_status_browsing_history_row(vault):
     assert _history(vault, "not a time")["value"] == "never imported"
 
 
-def test_status_history_row_through_the_app(app, vault):
+def test_status_import_button_leaves_unticked_profiles_out(vault, home, monkeypatch):
+    """Status's Import new history now posts the automatic import's sources: imported before,
+    still on this computer, never one unticked (browse.skip_profiles)."""
+    _found(monkeypatch, home, "chrome/Default", "comet/Default", "edge/Default")
+    cfg = home / ".cortex" / "config.yaml"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text("browse:\n  skip_profiles: [comet/Default]\n", encoding="utf-8")
+    keys = ("chrome/Default", "comet/Default", "gone/Default")
+    stale = _history(vault, "2026-11-17T09:00:00Z", keys=keys)
+    assert stale["state"] == "warn" and stale["import"] == ["chrome/Default"]
+
+
+def test_status_history_row_through_the_app(app, vault, home, monkeypatch):
     """The /api/status row reads the vault's browse state, and the Run key for the hint."""
+    _found(monkeypatch, home, "edge/Default")
     f = vault / ".cortex" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"last_run": "2026-01-01T00:00:00Z", "sources": {"edge:Default": {}}}),
+    f.write_text(json.dumps({"last_run": "2026-01-01T00:00:00Z", "sources": {"edge/Default": {}}}),
                  encoding="utf-8")
     r = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "history")
-    assert r["state"] == "warn" and r["import"] == ["edge:Default"] and r["login_hint"] is True
+    assert r["state"] == "warn" and r["import"] == ["edge/Default"] and r["login_hint"] is True
     status.run_set("x")
     r = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "history")
     assert r["login_hint"] is False

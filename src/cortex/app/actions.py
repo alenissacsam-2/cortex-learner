@@ -173,7 +173,8 @@ def _vault(root: Path):
 def browse_process(job, root: Path) -> dict:
     from cortex import browse_serve
     job.say("processing waiting visits and new browser history (counts only)")
-    report = browse_serve.run_import(_vault(root))
+    v = _vault(root)  # like the popup's button: only the profiles imported before
+    report = browse_serve.run_import(v, srcs=browse_serve.auto_sources(v))
     return {"ok": True, "counts": status.safe(report)}
 
 

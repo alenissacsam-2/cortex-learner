@@ -1606,6 +1606,19 @@ def test_s2_a_takeout_import_reads_only_the_chosen_browsers(vault, browsers, tmp
     assert r["sources"] == 1 and list(state["sources"]) == ["edge/Default"]
 
 
+def test_an_explicit_profile_is_read_even_when_unticked(tmp_path, monkeypatch):
+    """`cortex browse import --profile X` is the user's choice: X is found among every profile
+    on this computer, not only the chosen ones (browse.skip_profiles, browse.browsers)."""
+    from cortex import cli
+
+    found = [sources.Source("chrome", p, tmp_path / p) for p in ("Default", "Work")]
+    monkeypatch.setattr(sources, "discover", lambda *a, **k: found)
+    monkeypatch.setattr("cortex.taint.config", lambda: {"browse": {
+        "browsers": ["firefox"], "skip_profiles": ["chrome/Work"]}})
+    assert cli._browse_sources(None, None) == []
+    assert [s.key for s in cli._browse_sources(None, "work")] == ["chrome/Work"]
+
+
 @pytest.mark.parametrize("url,host", [("https://bücher.de/katalog", "xn--bcher-kva.de"),
                                       ("https://МОСКВА.рф/news", "xn--80adxhks.xn--p1ai")])
 def test_idn_hosts_are_kept_as_punycode_and_still_filtered(url, host):

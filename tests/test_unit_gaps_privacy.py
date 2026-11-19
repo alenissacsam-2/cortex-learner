@@ -161,7 +161,7 @@ def test_history_import_without_the_search_model_stops_first(root, monkeypatch):
 def test_browse_process_answer_holds_counts_only(root, monkeypatch):
     from cortex import browse_serve
 
-    monkeypatch.setattr(browse_serve, "run_import", lambda v: {
+    monkeypatch.setattr(browse_serve, "run_import", lambda v, srcs=None: {
         "kept": 3, "model": False, "days_from": "2026-10-01", "title": "TITLEMARKER",
         "url": "https://markerdomain.example/URLMARKER", "search": "SEARCHMARKER"})
     out = actions.browse_process(server.Job("p", "browse", False), root)
