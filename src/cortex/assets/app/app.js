@@ -728,7 +728,7 @@
         h('p', { class: 'help', text: 'On: Cortex may start LM Studio and load the chosen model, and the browse import asks it for short summaries of your private pages. Off: the browse import uses rules and the search model only; Chat still uses a model that is already running.' })),
       h('div', { class: 'field' }, h('label', { for: 'llm-bg', text: 'Model for background work (optional)' }),
         h('div', { class: 'inline' }, bgSel, bgSave),
-        h('p', { class: 'help', text: 'Browsing imports and site descriptions run while you are away, so a larger, slower model can do them better (for example a 9B model while Chat uses a 2B one). If it does not answer, the model above is used. Both loaded at once need more memory.' })));
+        h('p', { class: 'help', text: 'Browsing imports and site descriptions run while you are away, so a larger, slower model can do them better (for example a 9B model while Chat uses a 2B one). If it does not answer, the model above is used. Two models can sit in memory at once, so with 8 GB of graphics memory or less, leave this as the same model.' })));
     // download another Ollama model by name; the list above reloads when the job ends
     const name = h('input', { type: 'text', id: 'llm-pull', placeholder: 'qwen3.5:4b', spellcheck: 'false', autocomplete: 'off' });
     const pull = () => { const v = name.value.trim(); if (v) job('/api/llm/pull', { name: v }); else toast('Type a model name first.'); };
