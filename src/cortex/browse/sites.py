@@ -122,10 +122,10 @@ def page_id(site: str, hidden: bool) -> str:
     return pid
 
 
-def site_category(site: str, llm: dict) -> str:
-    """A sensitive category of the host wins; then the built-in table; then the local LLM's
-    (validated) label; else "other"."""
-    host = host_of(site)
+@functools.lru_cache(maxsize=1 << 16)
+def _host_category(host: str) -> str | None:
+    """`site_category` from the built-in lists alone (constants, so cached across calls: the
+    word check took ~0.4 ms a host, seconds over a heavy user's sites)."""
     sens, _ = privacy.category(host, "/", "")
     if sens:
         return sens
@@ -135,7 +135,16 @@ def site_category(site: str, llm: dict) -> str:
             return c
     if labels[-1] == "edu" or "ac" in labels[-2:-1] or "edu" in labels[-2:-1]:
         return "learning"
-    c = (llm.get(site) or {}).get("category")
+    return None
+
+
+def site_category(site: str, llm: dict) -> str:
+    """A sensitive category of the host wins; then the built-in table; then the local LLM's
+    (validated) label; else "other"."""
+    if c := _host_category(host_of(site)):
+        return c
+    e = llm.get(site)
+    c = e.get("category") if isinstance(e, dict) else None
     return c if c in LABELS else "other"
 
 
@@ -185,6 +194,48 @@ def load_days(vault: Vault) -> tuple[dict, str | None]:
         vault.remove(p)
     log.warning("browse: an unreadable %s was set aside as %s", p.name, bad)
     return {}, bad
+
+
+_LEAN: dict = {}  # DAYS path -> ((mtime_ns, size), its lean counts)
+_HOSTS: dict[tuple, str] = {}  # a URL's text up to its third "/" -> url_host; ~one per host
+
+
+def url_host(url: str) -> str:
+    """`(urlsplit(url).hostname or "").rstrip(".")`, memoized by the URL's text up to its third
+    "/" (scheme and authority: all the hostname depends on), as urlsplit took most of a heavy
+    user's answer."""
+    k = tuple(url.split("/", 3)[:3])
+    if (h := _HOSTS.get(k)) is None:
+        h = _HOSTS[k] = (urlsplit(url).hostname or "").rstrip(".")
+    return h
+
+
+def _urls(p) -> list:
+    """The URLs of a stored page map; anything malformed is skipped."""
+    return [u for u in p if isinstance(u, str)] if isinstance(p, dict | list) else []
+
+
+def lean_days(vault: Vault) -> dict:
+    """{day: {key: {"n", "w", "h"}}}: `load_days` with only the visit and browser counts and
+    the page URLs' hosts ("h", in place of the page map "p": all `_sides` reads of it), parsed
+    once per version of the file and shared, so callers must not change it. Chat's answers
+    read this: a heavy user's file took seconds to parse, its page maps most of it."""
+    p = vault.root / DAYS
+    try:
+        st = p.stat()  # before the read: a change after it misses the cache next time
+    except OSError:
+        return {}
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _LEAN.get(p)
+    if hit is None or hit[0] != stamp:
+        days = load_days(vault)[0]
+        hit = _LEAN[p] = (stamp, {
+            day: {k: {**{f: a[f] for f in ("n", "w") if f in a},
+                      **({"h": tuple({url_host(u) for u in _urls(a["p"])})}
+                         if a.get("p") else {})}
+                  for k, a in keys.items() if isinstance(a, dict)}
+            for day, keys in days.items() if isinstance(keys, dict)})
+    return hit[1]
 
 
 def load_verdicts(vault: Vault) -> dict[str, str]:
@@ -312,6 +363,7 @@ def _sides(settings: Settings, llm: dict, days: dict):
     keys: dict[str, bool | None] = {}
     hosts: dict[str, bool | None] = {}
     seen: dict[tuple[str, str], bool | None] = {}
+    deep: dict[str, bool] = {}
 
     def scat(site: str) -> str:
         if site not in scats:
@@ -337,19 +389,34 @@ def _sides(settings: Settings, llm: dict, days: dict):
                 or privacy.audience(scat(site), settings) != "cloud")
 
     def side(day: str, key: str) -> bool | None:
+        if key not in keys:
+            ok = isinstance(key, str) and key.count("|") >= 2  # else a malformed key
+            keys[key] = where(key) if ok else None
+            deep[key] = ok and _deep(settings, key)
+        if not deep[key]:
+            return keys[key]  # the same every day: no per-day entry to keep
         if (day, key) not in seen:
-            if key not in keys:
-                keys[key] = where(key)
             h = keys[key]
-            for url in ((days.get(day) or {}).get(key) or {}).get("p") or ():
+            a = (days.get(day) or {}).get(key)
+            a = a if isinstance(a, dict) else {}
+            for host in a["h"] if "h" in a else map(url_host, _urls(a.get("p"))):
                 if h is None:
                     break
-                u = host_side((urlsplit(url).hostname or "").rstrip("."))
+                u = host_side(host)
                 h = None if u is None else h or u
             seen[(day, key)] = h
         return seen[(day, key)]
 
     return side, scat
+
+
+def _deep(settings: Settings, key: str) -> bool:
+    """Whether `_sides` reads the page URLs' hosts of site key `key`. A page URL's host is its
+    site's host or a subdomain of it (`record`), so it can only decide differently from the
+    site when a listed domain is a strict subdomain of the site; else they are left unread."""
+    host = host_of(_split(key)[0])
+    return any(d.endswith("." + host) for d in (*settings.deny, *settings.allow,
+                                                *settings.private))
 
 
 def _shown(settings: Settings, verdicts: dict[str, str]):

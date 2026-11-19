@@ -642,6 +642,42 @@ def test_reply_answers_a_site_question_without_the_model(vault, stream):
                                                          if e["t"] == "tok")
 
 
+@pytest.mark.parametrize("bad", [{"n": "abc"}, {"n": [1]}, {"n": 2, "w": {"comet": "x"}},
+                                 {"n": 2, "p": [1, 2]}, {"n": 2, "p": 5}, "junk"])
+def test_a_malformed_entry_is_skipped_not_the_answer(vault, home, bad):
+    (home / ".cortex").mkdir(exist_ok=True)
+    (home / ".cortex" / "config.yaml").write_text(  # a listed subdomain: page URLs are read
+        "browse:\n  private_domains: [docs.bad.example]\n", encoding="utf-8")
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 3, "w": {"comet": 3}},
+                                      "bad.example||0": bad, "nopipe": {"n": 1}, "x||": {}}},
+               llm={"github.com": {"v": "a string"}, "bad.example": "a string"})
+    got = (date(2026, 11, 17), date(2026, 11, 17), "")
+    for q in ("which sites did I visit?", "which sites did I visit in Comet?"):
+        assert "- **github.com** · programming · 3 visits" in chat.site_list(vault, q, got, ALL_ON)
+    day = date(2026, 11, 17)
+    assert "**github.com**" in chat.digest(vault, day, day, ALL_ON, TODAY)
+
+
+def test_reply_sends_the_step_before_counting(vault, monkeypatch):
+    _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 3}}})
+    seen, real = [], chat.site_list
+
+    def site_list(*a):
+        seen.extend(e["t"] for e in events)
+        return real(*a)
+    monkeypatch.setattr(chat, "site_list", site_list)
+    events = []
+    chat.reply(vault, None, "which sites did I visit yesterday?", None, events.append,
+               threading.Event(), chat.get_settings(), today=TODAY)
+    assert seen == ["start", "step"] and events[-1]["t"] == "done"
+    stop = threading.Event()
+    monkeypatch.setattr(chat, "site_list", lambda *a: stop.set() or real(*a))
+    events = []
+    chat.reply(vault, None, "which sites did I visit yesterday?", None, events.append, stop,
+               chat.get_settings(), today=TODAY)
+    assert "tok" not in [e["t"] for e in events] and events[-1]["stopped"] is True
+
+
 def test_a_looping_answer_is_cut_to_its_lines_once():
     line = "- YouTube (Private): watched videos on many topics"
     text = "\n".join(["Intro", line, "- Miruro.tv: anime", line, line])

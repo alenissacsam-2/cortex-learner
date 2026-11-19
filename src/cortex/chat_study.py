@@ -18,6 +18,7 @@ from cortex.vault import Vault, is_private
 
 _MD = re.compile(r"[*_`\[\]<>#|]")  # Chat renders **bold**, `code` and [n]: titles stay text
 SHOWN = 15
+_STATES: dict = {}  # vault root -> (the fold's inputs, its states): callers never change them
 
 _LEAD = r"(?:(?:so|ok|okay|hey|hi|cortex|please|and|then|now|alright)\s+)*"
 _TAIL = r"(?:\s+(?:please|then|now|right now|today|for today|so far|overall|again))*"
@@ -146,8 +147,24 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
     """The answer for study question kind `k` (see `kind`) as of local day `today`."""
     day = today.isoformat()
     catalog = Catalog.load(vault)
-    events = list(EventLog(vault).iter_events())
-    states, mistakes = planner.current_states(vault, day, catalog, events)
+    log = EventLog(vault)
+    stamps = []  # before the read: a change after it misses the memo next time
+    for path in sorted(log._dir().glob("*/*/*.jsonl")):  # iter_events' files
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        stamps.append((str(path), st.st_mtime_ns, st.st_size))
+    events = list(log.iter_events())
+    pc = levels.problem_concepts(vault)
+    # planner.current_states, kept while its inputs are the same: the fold of a heavy user's
+    # events took over a second of every answer
+    high = planner.exam_concepts(vault, catalog, day)
+    key = (day, tuple(stamps), repr(sorted(pc.items())), tuple(sorted(high)))
+    hit = _STATES.get(vault.root)
+    if hit is None or hit[0] != key:
+        hit = _STATES[vault.root] = (key, levels.fold(events, day, pc, high))
+    states, mistakes = hit[1]
     hide = planner.hidden(vault, catalog)
 
     def name(cid: str) -> str:
@@ -222,7 +239,6 @@ def answer(vault: Vault, k: str, got, today: date) -> str:
         lo, hi = got[0].isoformat(), got[1].isoformat()
         when = f"on {_day(got[0])}" if lo == hi else f"from {_day(got[0])} to {_day(got[1])}"
         did: dict[str, Counter] = {}
-        pc = levels.problem_concepts(vault)
         for it in levels._items(events, pc):  # void, regrade and remap applied, as the fold
             c, d = it.concept, str(it.ev.get("day") or "")
             if c is None or c in hide or not lo <= d <= hi:
