@@ -286,6 +286,7 @@
   const jobFailed = (j) => { const r = j.result || {}; return !!j.error || (r.ok === false && !r.cancelled && !r.need); };
   function finish(j) {
     if (jobFailed(j)) toast.error(j.error || `${j.name}: failed.`);
+    else if (j.name === 'Start at login') toast.ok('The receiver now starts at login.');  // server.login's job name
     if (guide && guide.wait && j.section === 'setup') {  // a guided import's own job: shown in its panel
       const w = guide.wait;
       guide.wait = null;
@@ -385,12 +386,20 @@
   const put = (s, ...nodes) => $(s).replaceChildren(...nodes.filter(Boolean), outputBoard(s) || '');
 
   function renderStatus(d) {
-    const rows = d.rows.map((r) => h('div', { class: 'brow srow' }, stateCell(r.state),
-      h('div', { class: 't' },
-        h('div', { class: 'line1' }, h('span', { class: 'ttl', text: r.label }), h('span', { class: 'val', text: r.value, title: r.value })),
-        h('span', { class: 'sub', text: r.detail })),
-      h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
-        r.action ? btn(r.action.label, () => show(r.action.go, true)) : null)));
+    const rows = d.rows.map((r) => {
+      // at: a time the row names where "{ago}" stands, in words, the exact time in a title
+      const fill = (t) => (r.at ? String(t).replace('{ago}', daysAgo(r.at, true)) : t);
+      const title = r.at ? new Date(r.at).toLocaleString() : r.value;
+      return h('div', { class: 'brow srow' }, stateCell(r.state),
+        h('div', { class: 't' },
+          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: r.label }), h('span', { class: 'val', text: fill(r.value), title })),
+          h('span', { class: 'sub', text: fill(r.detail) }),
+          r.login_hint ? h('span', { class: 'sub', text: LOGIN_HINT }) : null),
+        h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
+          r.import && r.import.length ? btn('Import new history now', () => job('/api/browse/import', { sources: r.import, from: 'browse' }), 'btn lit') : null,
+          r.login_hint ? loginBtn() : null,
+          r.action ? btn(r.action.label, () => show(r.action.go, true)) : null));
+    });
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
     put('status', board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
       ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
@@ -459,11 +468,14 @@
     }
     return nodes;
   }
-  function daysAgo(ts) {
+  // hours: under a day in hours, then "n days ago" at any age (the caller titles the exact time)
+  function daysAgo(ts, hours) {
     const d = new Date(ts);
     if (isNaN(d)) return '';
+    const hr = Math.floor((Date.now() - d) / 36e5);
+    if (hours && hr < 24) return hr < 1 ? 'less than an hour ago' : `${hr} hour${hr === 1 ? '' : 's'} ago`;
     const n = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
-    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 ? `${n} days ago` : d.toISOString().slice(0, 10);
+    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 || hours ? `${n} days ago` : d.toISOString().slice(0, 10);
   }
   function sourceRow(sources, searched) {
     if ((!sources || !sources.length) && searched && searched.length)  // the model cited nothing
@@ -872,7 +884,10 @@
     return job('/api/browse/import', { sources: keys, from });
   }
   /* The Browsing section's last import and browse.auto_import_hours (0 = off) */
-  function autoImportRows(hist, s) {
+  // shown while automatic import is on and the receiver does not start at login (Status, Browsing)
+  const LOGIN_HINT = 'New history comes in only while Cortex runs. Start the receiver at login to keep it going in the background.';
+  const loginBtn = () => btn('Start at login', () => job('/api/browse/login', { on: true }));
+  function autoImportRows(hist, s, login) {
     if (!hist || !hist.available || !hist.sources.length) return [];
     const at = hist.imported ? new Date(hist.imported) : null, ok = at && !isNaN(at);
     const hours = h('input', { type: 'number', id: 'b-auto', min: 0, max: 168, step: 1, value: String(s.auto_import_hours ?? 6) });
@@ -880,11 +895,13 @@
       () => (Number(hours.value) ? savedMark(hours) : toast.ok('Saved: automatic import is off.'))));
     return [
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Last import' }),
-        h('span', { class: 'val', text: ok ? daysAgo(at) : 'never', title: ok ? at.toLocaleString() : null }))),
+        h('span', { class: 'val', text: ok ? daysAgo(at, true) : 'never', title: ok ? at.toLocaleString() : null }))),
         h('div', { class: 'acts' }, btn('Import new history now', () => importTicked(hist, 'browse')))),
       h('div', { class: 'field' }, h('label', { for: 'b-auto', text: 'Import new history automatically' }),
         h('div', { class: 'inline' }, h('span', { text: 'every' }), hours, h('span', { text: 'hours while Cortex runs (0 = off)' })),
-        h('p', { class: 'help', text: 'Browsers keep about 90 days of history; days not imported by then are gone. Cortex imports new visits while the app or the receiver runs; turn on Start at login under Browsing to keep it going without the app.' }))];
+        h('p', { class: 'help', text: 'Browsers keep about 90 days of history; days not imported by then are gone.' })),
+      s.auto_import_hours && login && login.supported && !login.exists
+        ? h('div', { class: 'brow' }, h('div', { class: 't' }, h('span', { class: 'sub', text: LOGIN_HINT })), h('div', { class: 'acts' }, loginBtn())) : null].filter(Boolean);
   }
   function historyRows(hist, from) {
     if (!hist || !hist.available) return [note('Not available in this version yet.')];
@@ -1181,7 +1198,7 @@
             btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn')),
           h('li', { text: 'Open the Cortex capture popup, enter port 8799, paste the key and press Save and test. Its top line then says Receiver connected, and its Process now button does the same as the one below.' }))));
     const past = board('Past history', { note: d.history && d.history.imported ? `last import ${d.history.imported}` : 'never imported' },
-      ...autoImportRows(d.history, s), ...historyRows(d.history, 'browse'));
+      ...autoImportRows(d.history, s, d.login), ...historyRows(d.history, 'browse'));
     const acts = board('Actions', { note: `${d.queued} waiting · processed ${d.last_processed || 'never'}` },
       row('Process now', null, 'Turns waiting visits and new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
       row('Self-test', null, 'Runs the whole import on made-up history in a temp folder; your vault and browsers are not touched.', [btn('Run self-test', () => job('/api/browse/selftest', {}))]),

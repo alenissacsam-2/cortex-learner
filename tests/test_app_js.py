@@ -796,11 +796,21 @@ def _sweep_routes(root, monkeypatch):
     return routes
 
 
+def _stale_import(root, last="2026-01-01T00:00:00Z"):
+    f = root / ".cortex" / "browse" / "state.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"last_run": last, "sources": {"chrome:Default": {}}}),
+                 encoding="utf-8")
+
+
 CHAT_ID = "01KA0000000000000000000000"
 # what each control sends when the app says yes (a confirm dialog's OK included); every
 # control not named here is a local action (a section, a guide, a filled field) and sends nothing
 SENDS = {
-    "status": {"Check for updates": [["/api/update/check", {}]]},
+    "status": {"Check for updates": [["/api/update/check", {}]],
+               "Import new history now": [["/api/browse/import", {"sources": ["chrome:Default"],
+                                                                 "from": "browse"}]],
+               "Start at login": [["/api/browse/login", {"on": True}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
                            ["/api/connect/apply", {"want": {}}]],
                 "Open folder": [["/api/open", {"what": "skill_zip"}]]},
@@ -865,6 +875,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
+    _stale_import(root_committed)  # Status: the stale-import warning's two buttons
     data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [], "skip": [],
             "sections": ["status", "connect", "llm", "browse", "vault", "chat", "setup"]}
     out = _run(node, tmp_path, "sweep", SWEEP, data)
@@ -909,3 +920,76 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     assert out["jobFail"] == {"toast": ["toast on error", "alert", "disk full"],
                               "line": "jobline bad"}
     assert out["closed"] == ["toast error", True]
+
+
+HIST = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const go = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };
+const hist = () => [...$('status').querySelectorAll('.brow')].find((r) => r.querySelector('.ttl').textContent === 'Browsing history');
+const LOGIN_HINT = 'New history comes in only while Cortex runs. Start the receiver at login to keep it going in the background.';
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    await go('status');
+    const r = hist();
+    out.status = { value: r.querySelector('.val').textContent, title: r.querySelector('.val').getAttribute('title'),
+      subs: r.querySelectorAll('.sub').map((x) => x.textContent), buttons: r.querySelectorAll('button').map((b) => b.textContent) };
+    DATA.routes['/api/job'] = { job: { name: 'Start at login', section: 'browse', running: false, seconds: 1, error: null, result: { ok: true } } };
+    hist().querySelectorAll('button').find((b) => b.textContent === 'Start at login').fire('click');
+    await tick();
+    out.toast = [$('toast').className, $('toast-msg').textContent];
+    hist().querySelectorAll('button').find((b) => b.textContent === 'Import new history now').fire('click');
+    await tick();
+    await go('browse');
+    const b = $('browse');
+    out.browse = { hint: b.textContent.includes(LOGIN_HINT), last: b.querySelectorAll('.val').map((x) => x.textContent) };
+    b.querySelectorAll('button').find((x) => x.textContent === 'Start at login').fire('click');
+    await tick();
+    out.posts = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
+    // login on: the line and its button are gone from both
+    DATA.routes['/api/browse'].login.exists = true;
+    for (const x of DATA.routes['/api/status'].rows) if (x.id === 'history') x.login_hint = false;
+    await go('browse');
+    out.browseOn = [b.textContent.includes(LOGIN_HINT), b.querySelectorAll('button').some((x) => x.textContent === 'Start at login')];
+    await go('status');
+    out.statusOn = [hist().textContent.includes(LOGIN_HINT), hist().querySelectorAll('button').map((x) => x.textContent)];
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, monkeypatch):
+    """A stale import: Status says when in words ("days ago", the exact time in a title) with
+    Import new history now; while the receiver does not start at login, Status and Browsing
+    say new history comes in only while Cortex runs, and Start at login confirms in a toast.
+    With login on, that line and its button are gone."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    _stale_import(root_committed)
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/browse"]["history"] = {
+        "available": True, "imported": "2026-01-01T00:00:00Z", "scanned": False,
+        "sources": [{"key": "chrome:Default", "browser": "chrome", "profile": "Default"}]}
+    out = _run(node, tmp_path, "hist", HIST, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    st = out["status"]
+    assert re.fullmatch(r"last import \d+ days ago", st["value"]), st
+    assert st["title"] and "{ago}" not in st["title"]
+    assert re.fullmatch(r"Last import \d+ days ago: newer visits are not in Cortex yet\.",
+                        st["subs"][0]), st
+    assert st["subs"][1].startswith("New history comes in only while Cortex runs.")
+    assert st["buttons"] == ["Import new history now", "Start at login", "Open"]
+    assert out["toast"] == ["toast on ok", "The receiver now starts at login."]
+    assert any(re.fullmatch(r"\d+ days ago", v) for v in out["browse"]["last"]), out["browse"]
+    assert out["browse"]["hint"] is True
+    assert out["posts"] == [["/api/browse/login", {"on": True}],
+                            ["/api/browse/import", {"sources": ["chrome:Default"],
+                                                    "from": "browse"}],
+                            ["/api/browse/login", {"on": True}]]
+    assert out["browseOn"] == [False, False]
+    assert out["statusOn"] == [False, ["Import new history now", "Open"]]

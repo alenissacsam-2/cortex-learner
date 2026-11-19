@@ -183,7 +183,7 @@ def test_status_shapes(app, vault):
     assert js["first_run"] is False and js["vault"] == str(vault.resolve())
     ids = [r["id"] for r in js["rows"]]
     assert ids == ["vault", "embed", "apps", "llm", "receiver", "extension", "processing",
-                   "dashboard"]
+                   "history", "dashboard"]
     for r in js["rows"]:
         assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
     v = js["rows"][0]
@@ -1824,6 +1824,53 @@ def test_status_has_an_ai_apps_row(app):
     _, js, _, _ = call(app, "GET", "/api/status")
     r = next(r for r in js["rows"] if r["id"] == "apps")
     assert r["state"] == "off" and r["action"]["go"] == "connect"
+
+
+def _history(vault, last=None, hours=6, login=False, keys=("chrome:Default",)):
+    """status.history_row with a browse state imported at `last` (None: never imported)."""
+    f = vault / ".cortex" / "browse" / "state.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"sources": dict.fromkeys(keys, {}),
+                             **({"last_run": last} if last else {})}), encoding="utf-8")
+    b = {"available": True, "settings": {"auto_import_hours": hours},
+         "login": {"supported": True, "exists": login}}
+    return status.history_row(vault, b, now=datetime(2026, 11, 19, 12, tzinfo=UTC))
+
+
+def test_status_browsing_history_row(vault):
+    """Status warns when history imports stopped (twice auto_import_hours without one), only
+    after a first import; auto import off says so; the login hint shows while login is off."""
+    never = _history(vault)
+    assert never["state"] == "off" and never["value"] == "never imported"
+    assert "import" not in never and "login_hint" not in never and "at" not in never
+    fresh = _history(vault, "2026-11-19T03:00:00Z")  # 9 h ago, under 2 x 6 h
+    assert fresh["state"] == "ok" and fresh["at"] == "2026-11-19T03:00:00Z"
+    assert fresh["value"] == "last import {ago}" and "import" not in fresh
+    assert fresh["login_hint"] is True and fresh["action"]["go"] == "browse"
+    stale = _history(vault, "2026-11-17T09:00:00Z")
+    assert stale["state"] == "warn" and stale["import"] == ["chrome:Default"]
+    assert stale["detail"] == "Last import {ago}: newer visits are not in Cortex yet."
+    assert _history(vault, "2026-11-17T09:00:00Z", login=True)["login_hint"] is False
+    off = _history(vault, "2026-11-01T00:00:00Z", hours=0)
+    assert off["state"] == "off" and "Automatic import is off" in off["detail"]
+    assert off["action"] == {"go": "browse", "label": "Open"} and "import" not in off
+    assert "login_hint" not in off
+    # no vault, or a broken state: never imported, no error
+    assert status.history_row(None, {"available": True})["value"] == "never imported"
+    assert _history(vault, "not a time")["value"] == "never imported"
+
+
+def test_status_history_row_through_the_app(app, vault):
+    """The /api/status row reads the vault's browse state, and the Run key for the hint."""
+    f = vault / ".cortex" / "browse" / "state.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"last_run": "2026-01-01T00:00:00Z", "sources": {"edge:Default": {}}}),
+                 encoding="utf-8")
+    r = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "history")
+    assert r["state"] == "warn" and r["import"] == ["edge:Default"] and r["login_hint"] is True
+    status.run_set("x")
+    r = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "history")
+    assert r["login_hint"] is False
 
 
 def test_google_activity_html_says_how_many_rows_were_skipped(app, monkeypatch):
