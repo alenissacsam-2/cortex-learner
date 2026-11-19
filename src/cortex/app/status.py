@@ -25,6 +25,7 @@ from cortex.vault import VaultError
 log = logging.getLogger(__name__)
 RECEIVER_PORT = 8799
 PORT_BUSY = f"port {RECEIVER_PORT} is used by another program"
+RECEIVER_OLD = "an older Cortex receiver is running: restart it (or restart the computer)"
 LOGIN_TASK = "Cortex browse receiver"
 LOGIN_ID = "cortex-browse-receiver"  # LaunchAgent label, unit and .desktop name
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
@@ -192,9 +193,11 @@ def _receiver_get(path: str, token: str | None = None) -> tuple[int, dict]:
 
 
 def receiver_probe(root: Path | None) -> tuple[str, dict]:
-    """Is this vault's receiver on 127.0.0.1:8799? ("running"|"stopped"|"busy", its counts).
-    "running" only once the listener proves it holds the token (HMAC of a fresh nonce, asked
-    without the token); only then does the token go to it. "busy": another program answers."""
+    """Is this vault's receiver on 127.0.0.1:8799? ("running"|"stopped"|"busy"|"old", its
+    counts). "running" only once the listener proves it holds the token (HMAC of a fresh nonce,
+    asked without the token); only then does the token go to it. "busy": another program
+    answers. "old": an older Cortex receiver (its /v1/hello asks for the token: a 401 with its
+    own JSON refusal), which a restart replaces; it never gets the token either."""
     token = None
     if root is not None:
         try:
@@ -208,6 +211,8 @@ def receiver_probe(root: Path | None) -> tuple[str, dict]:
         return "busy", {}
     except OSError:
         return "stopped", {}
+    if code == 401 and hello.keys() == {"ok", "error"} and hello["ok"] is False:
+        return "old", {}
     proof = hello.get("proof") if code == 200 else None
     want = hmac.new(token.encode(), nonce.encode(), "sha256").hexdigest() if token else ""
     if not (want and isinstance(proof, str) and proof.isascii()
@@ -531,7 +536,8 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
     b = browse(root if v["ok"] else None, in_app)
     out.append({"id": "receiver", "label": "Browse receiver",
                 "state": "ok" if b["receiver"] == "running" else "off",
-                "value": PORT_BUSY if b["receiver"] == "busy" else b["receiver"],
+                "value": {"busy": PORT_BUSY, "old": RECEIVER_OLD}.get(b["receiver"],
+                                                                      b["receiver"]),
                 "detail": "Takes visits from the browser extension, on this computer only.",
                 "action": _go("browse", "Open")})
     out.append({"id": "extension", "label": "Extension", "state": "ok" if b["paired"] else "off",

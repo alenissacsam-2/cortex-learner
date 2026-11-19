@@ -922,11 +922,13 @@
       return post('/api/browse/setup', {}, (r) => {
         pairToken = r.token;
         toast(r.receiver === 'busy' ? 'Paired, but the receiver could not start: port 8799 is used by another program. Close it, then press Start under Browsing.'
+          : r.receiver === 'old' ? `Paired, but ${RECEIVER_OLD}.`
           : r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
         load(current);
       });
     }, 'btn lit');
   }
+  const RECEIVER_OLD = 'an older Cortex receiver is running: restart it (or restart the computer)';  // status.RECEIVER_OLD
   // the browsers extension/README.md names; Setup and Browsing say the same
   const EXT_BROWSERS = 'Comet, Chrome, Edge or Brave';
   const extPage = () => h('li', {}, 'Open the extensions page: ', h('code', { text: 'chrome://extensions' }), ' (Chrome, Comet), ',
@@ -1155,7 +1157,8 @@
     }
     const recv = board('Receiver', {},
       row('Receiver', d.receiver === 'running' ? (d.in_app ? 'running in this app' : 'running')
-        : d.receiver === 'busy' ? 'port 8799 is used by another program' : 'stopped',
+        : d.receiver === 'busy' ? 'port 8799 is used by another program'
+          : d.receiver === 'old' ? RECEIVER_OLD : 'stopped',
         'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
         [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => load('browse')))
           : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }))]),

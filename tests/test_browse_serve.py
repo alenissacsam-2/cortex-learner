@@ -550,9 +550,10 @@ def test_second_server_on_same_port_refused(vault):
 # ---- identity proof: the token goes only to a listener that holds it ----------------------
 
 
-@pytest.fixture(params=["404", "wrong proof"])
+@pytest.fixture(params=["404", "wrong proof", "old receiver"])
 def squatter(request):
-    """Another program on the receiver's port: it records every request it gets."""
+    """Another program on the receiver's port (or an older Cortex receiver, whose /v1/hello
+    asks for the token): it records every request it gets."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     got: list[str] = []
 
@@ -564,9 +565,10 @@ def squatter(request):
             n = int(self.headers.get("Content-Length") or 0)
             got.append(f"{self.requestline}\n{self.headers}\n"
                        + self.rfile.read(n).decode("utf-8", "replace"))
-            body = json.dumps({"proof": "0" * 64} if request.param == "wrong proof"
-                              else {"ok": False}).encode()
-            self.send_response(404 if request.param == "404" else 200)
+            body = json.dumps({"wrong proof": {"proof": "0" * 64},
+                               "old receiver": {"ok": False, "error": "token"}}.get(
+                                   request.param, {"ok": False})).encode()
+            self.send_response({"404": 404, "old receiver": 401}.get(request.param, 200))
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -576,7 +578,7 @@ def squatter(request):
 
     s = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=lambda: s.serve_forever(0.05), daemon=True).start()
-    s.got = got
+    s.got, s.param = got, request.param
     yield s
     s.shutdown()
     s.server_close()
@@ -608,7 +610,8 @@ def test_app_probe_never_sends_the_token_to_another_program(squatter, vault, mon
     from cortex.app import status
     token = bs.pair(vault)
     monkeypatch.setattr(status, "RECEIVER_PORT", squatter.server_address[1])
-    assert status.receiver_probe(vault) == ("busy", {})
+    old = squatter.param == "old receiver"  # told apart: "restart it", not "another program"
+    assert status.receiver_probe(vault) == ("old" if old else "busy", {})
     assert squatter.got and not any(token in g for g in squatter.got)
     assert not any("authorization" in g.lower() for g in squatter.got)
 
@@ -642,7 +645,8 @@ console.log(JSON.stringify(out));
 """, encoding="utf-8")
     r = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout) == [True, False, None]
+    assert json.loads(r.stdout) == [True, "old" if squatter.param == "old receiver" else False,
+                                    None]
     assert squatter.got and not any(srv.token in g for g in squatter.got)
 
 

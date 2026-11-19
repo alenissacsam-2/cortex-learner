@@ -7,7 +7,8 @@ const DEFAULTS = { paused: false, deny: [], port: 8799, token: "", queue: [],
 async function ping(port, token) {
   const who = await proveReceiver(port, token); // the token goes only to the real receiver
   if (who === null) return [false, "Receiver not running: start it with cortex browse serve"];
-  if (!who) return [false, `Port ${port} answers, but not as your Cortex receiver (another program, or an old key)`];
+  if (who === "old") return [false, "An older Cortex receiver is running: restart it (or restart the computer)"];
+  if (who !== true) return [false, `Port ${port} answers, but not as your Cortex receiver (another program, or an old key)`];
   try {
     const r = await fetch(`http://127.0.0.1:${port}/v1/ping`, {
       headers: { Authorization: `Bearer ${token}` }, cache: "no-store", credentials: "omit",

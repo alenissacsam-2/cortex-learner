@@ -170,8 +170,9 @@ export function dayKey(ms) {
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 // Asks GET /v1/hello?n=<fresh nonce> WITHOUT the token and checks the answer is
-// HMAC-SHA256(token, nonce). true: the Cortex receiver; false: another program answers on the
-// port (or a receiver from an older Cortex); null: nothing answers.
+// HMAC-SHA256(token, nonce). true: the Cortex receiver; "old": a receiver from an older Cortex
+// (its /v1/hello asks for the token: a 401 with its own JSON refusal); false: another program
+// answers on the port; null: nothing answers. Only true may be given the token.
 export async function proveReceiver(port, token) {
   const nonce = hex(crypto.getRandomValues(new Uint8Array(32)));
   let r;
@@ -183,6 +184,11 @@ export async function proveReceiver(port, token) {
     return null;
   }
   try {
+    if (r.status === 401) {
+      const b = await r.json();
+      const keys = b && typeof b === "object" ? Object.keys(b).sort().join() : "";
+      return keys === "error,ok" && b.ok === false ? "old" : false;
+    }
     const { proof } = r.ok ? await r.json() : {};
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey("raw", enc.encode(token),
