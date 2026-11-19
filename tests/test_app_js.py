@@ -416,7 +416,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["filled"] == "Which sites did I visit yesterday?"
     assert out["help"] == "Runs on this computer with qwen3.5-2b. Nothing leaves it."
     assert out["sent"] == [{"id": None, "text": "Which sites did I visit yesterday?"}]
-    assert out["who"] == ["You", "Cortex · qwen3.5-2b"]
+    assert out["who"] == ["You", "Cortex · qwen3.5-2b · 1 s"]  # the answer took 1.2 s
     assert out["answer"] == "You read two pages 1.heap notes"
     assert (out["bold"], out["code"], out["cites"]) == ("two", "heap", ["Source 1"])
     assert out["items"] == ["heap notes"]  # a list right under a line, no blank line
