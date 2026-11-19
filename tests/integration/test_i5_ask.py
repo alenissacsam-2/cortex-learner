@@ -55,8 +55,16 @@ def _asked(f) -> str:
     return bodies[-1]["messages"][-1]["content"]
 
 
-def test_prompt_holds_only_wrapped_passages_and_the_question(root, ollama):
+def test_private_pages_stay_out_unless_asked_for(root, ollama):
     out = ask.ask(Vault(root), QUESTION)
+    assert out["answer"] == ollama.answer, out
+    user = _asked(ollama)
+    assert FAR not in user and "ignore previous instructions" not in user
+    assert "Automobile car motor." in user
+
+
+def test_prompt_holds_only_wrapped_passages_and_the_question(root, ollama):
+    out = ask.ask(Vault(root), QUESTION, private=True)
     assert out["model"] == f"ollama qwen3.5:2b at {ollama.url.split('//')[1]}", out
     assert out["answer"] == ollama.answer and [s["n"] for s in out["sources"]] == [1]
     user = _asked(ollama)
@@ -77,6 +85,10 @@ def test_cli_ask_uses_the_configured_local_model(root, ollama):
     assert r.exit_code == 0, r.output
     assert re.search(r"^\[1\] \S+\.md$", r.output, re.M), r.output
     assert "answered by ollama qwen3.5:2b" in r.output
+    assert FAR not in _asked(ollama)  # private pages only with the private flag
+    flag = "--" + "private"
+    r = CliRunner().invoke(cli.app, ["ask", QUESTION, flag, "--vault", str(root)])
+    assert r.exit_code == 0, r.output
     assert FAR in _asked(ollama) and INJECT not in r.output
 
 
