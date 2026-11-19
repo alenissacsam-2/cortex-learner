@@ -252,60 +252,16 @@ def load_cache(vault: Vault) -> dict:
 
 # ---- recording ----------------------------------------------------------------------------
 
-UNKNOWN = "?"  # the "w" id of counts stored with no per-source counts
-
-
-def _larger(old, new):
-    """`new` with every count raised to at least `old`'s (dicts by key, lists by place); text
-    from `new` when it has some."""
-    if isinstance(old, dict) and isinstance(new, dict):
-        return {**old, **{k: _larger(old[k], v) if k in old else v for k, v in new.items()}}
-    if isinstance(old, list) and isinstance(new, list) and len(old) == len(new):
-        return [_larger(a, b) for a, b in zip(old, new, strict=True)]
-    if type(old) is int and type(new) is int:
-        return max(old, new)
-    return new or old
-
-
-def _merge(old: dict, new: dict, keep: set[str]) -> dict | None:
-    """One site key's rebuilt record of a day that keeps the stored counts of the sources in
-    `keep` (not read whole this run): their "w" counts at the larger of stored and fresh, "n"
-    raised by as much, every other count at the larger of the two (those are not split by
-    source: keep rather than lose). A record stored with no "w" is UNKNOWN for whatever the
-    fresh one does not explain (kept at 0 too, so a later run still knows). None when it holds
-    nothing of `keep`."""
-    w_new = new.get("w") if isinstance(new.get("w"), dict) else {}
-    n_old = old.get("n") if type(old.get("n")) is int else 0
-    w_old = old.get("w") if isinstance(old.get("w"), dict) else {
-        UNKNOWN: max(n_old - (new.get("n") or 0), 0)}
-    w = {k: c for k, c in w_old.items()
-         if k in keep and type(c) is int and (c > 0 or k == UNKNOWN)}
-    if not w:
-        return None
-    w = {**w_new, **{k: max(c, w_new.get(k, 0)) for k, c in w.items()}}
-    out = _larger(old, new)
-    out["w"] = w
-    out["n"] = (new.get("n") or 0) + min(sum(w.values()) - sum(w_new.values()), n_old)
-    if type(old.get("a")) is int and type(new.get("a")) is int:
-        out["a"] = min(old["a"], new["a"])
-    return out
-
-
 def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start: str,
-           held: set[str] | None, days: dict | None = None,
-           keep: dict[str, set[str]] | None = None) -> dict:
+           held: set[str] | None, days: dict | None = None) -> dict:
     """Replace the counts of every day from `start` on that a source still holds (`held`;
     None: every day) with those of `items`; a day no source holds (forgotten by the browser,
-    or from Takeout only) keeps its counts. `keep` {day: ids}: on those days the stored counts
-    of these sources ("w" ids, UNKNOWN included), not read whole this run, stay (`_merge`).
-    Drop any key of a category now in skip_categories, and save. `days`: the counts already
-    loaded (`load_days`). Returns the per-day counts."""
+    or from Takeout only) keeps its counts. Drop any key of a category now in
+    skip_categories, and save. `days`: the counts already loaded (`load_days`). Returns the
+    per-day counts."""
     days = load_days(vault)[0] if days is None else days
-    old: dict[str, dict] = {}
     for d in list(days):
         if not isinstance(days[d], dict) or (d >= start and (held is None or d in held)):
-            if isinstance(days[d], dict) and (keep or {}).get(d):
-                old[d] = days[d]
             del days[d]
     last: tuple | None = None  # the last search: (time, term, key)
     sessions: dict[str, list[list[str]]] = defaultdict(list)
@@ -356,13 +312,6 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
                 for b in keys:
                     if _split(b)[0] != _split(a)[0]:
                         co[b] = co.get(b, 0) + 1
-    for d, recs in old.items():
-        fresh = days.setdefault(d, {})
-        for key, a in recs.items():
-            if isinstance(a, dict) and (got := _merge(a, fresh.get(key) or {}, keep[d])):
-                fresh[key] = got
-        if not fresh:
-            del days[d]
     skip = set(settings.skip_categories)
     for d in days.values():
         for key in [k for k in d if _split(k)[1] in skip]:
