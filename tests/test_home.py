@@ -175,7 +175,7 @@ def test_a_grade_shows_in_today_and_puts_its_subject_first(root):
     assert [(i["id"], i["title"], i["detail"]) for i in quiz] == [
         ("two-pointers", "Two pointers", "1 of 1 right")]
     assert quiz[0]["subject"]["id"] == "domain:dsa" and quiz[0]["ts"].endswith("Z")
-    assert set(quiz[0]) == {"ts", "day", "kind", "subject", "title", "detail", "id"}
+    assert set(quiz[0]) == {"ts", "day", "timed", "kind", "subject", "title", "detail", "id"}
     assert d["sections"]["next_up"][0]["subject"]["id"] == "domain:dsa"
     assert all(len(g["items"]) <= home.NEXT_ITEMS for g in d["sections"]["next_up"])
     week = d["sections"]["feed"]["week"]

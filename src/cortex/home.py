@@ -374,8 +374,8 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
     evs = live(parts["events"])
     items: list[dict] = []
 
-    def add(ts, d, kind, i, title, detail="", access="note", aud=None):
-        items.append({"ts": ts, "day": d, "kind": kind, "subject": look.subject(i),
+    def add(ts, d, kind, i, title, detail="", access="note", aud=None, timed=True):
+        items.append({"ts": ts, "day": d, "timed": timed, "kind": kind, "subject": look.subject(i),
                       "title": plain(title, 200), "detail": plain(detail, 300), "id": i,
                       "_aud": aud or look.audience(i), "_access": access})
 
@@ -472,7 +472,7 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
         if start <= d <= day:
             src = topics.page_source(n.body).lower()
             add(_ts(d, None), d, "chat" if src in dashboard.CHATS else "added", i,
-                look.title(i), n.kind, "chat" if src in dashboard.CHATS else "note")
+                look.title(i), n.kind, "chat" if src in dashboard.CHATS else "note", timed=False)
     items.sort(key=lambda i: i["ts"], reverse=True)
     count: dict[tuple, int] = {}
     out = []

@@ -1300,7 +1300,7 @@
       const s = i.subject ? i.subject.id : '';
       if (s !== subj) { subj = s; out.push(el('h3', 'feed-subj', i.subject ? i.subject.title : 'Other')); }
       const r = brow({ id: i.id, title: i.title, sub: i.detail,
-        left: el('span', 'ftime', feedRange === 'today' ? hhmm(i.ts) : `${fmtDay(i.day)} ${hhmm(i.ts)}`) });
+        left: el('span', 'ftime', [feedRange === 'today' ? '' : fmtDay(i.day), i.timed === false ? '' : hhmm(i.ts)].filter(Boolean).join(' ')) });
       if (feedSeen && !feedSeen.has(feedKey(i))) r.classList.add('fresh');  // new since the last render
       out.push(r);
     }
