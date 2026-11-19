@@ -1204,6 +1204,26 @@ def test_extension_setup_pairs_then_starts_the_receiver(app, vault, monkeypatch,
     assert app.receiver.srv is not None
     if body["opened"]:
         assert fakes[-1][0] == "open" and fakes[-1][1].endswith("/extension")
+    assert body["receiver"] == "running"
+
+
+def test_extension_setup_with_another_program_on_the_port(app, monkeypatch, fakes):
+    """Something that cannot prove it holds the key is not the receiver: setup says the port
+    is busy and starts nothing (that program never gets the key; see test_browse_serve)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    other = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)  # answers 501
+    threading.Thread(target=lambda: other.serve_forever(0.05), daemon=True).start()
+    monkeypatch.setattr(status, "RECEIVER_PORT", other.server_address[1])
+    try:
+        code, body, _, _ = call(app, "POST", "/api/browse/setup", {})
+        assert code == 200 and body["receiver"] == "busy" and app.receiver.srv is None
+        _, b, _, _ = call(app, "GET", "/api/browse")
+        assert b["receiver"] == "busy"
+        row = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "receiver")
+        assert row["state"] == "off" and "another program" in row["value"]
+    finally:
+        other.shutdown()
+        other.server_close()
 
 
 # ---- chat, the audience control, cloud settings, setup order --------------------------------

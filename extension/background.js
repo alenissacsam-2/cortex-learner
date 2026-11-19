@@ -6,8 +6,8 @@
 // the receiver processes it. It never logs URLs or titles. Unpaired, or after the receiver
 // refused the token, it times, reads and queues nothing; a queued visit older than 24 h is
 // dropped unsent.
-import { awaySince, bankTitle, batchBody, dayKey, denyReason, scrub, sessionEndDue }
-  from "./lib.js";
+import { awaySince, bankTitle, batchBody, dayKey, denyReason, proveReceiver, scrub,
+  sessionEndDue } from "./lib.js";
 
 const READ_AFTER_MS = 20000;
 const QUEUE_CAP = 2000;
@@ -179,6 +179,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ---- flushing to the receiver ----
 
+// The token and visits go only to a listener that proved it holds the token: checked once per
+// worker start and again after any failure, so a program squatting on the port gets nothing.
+let proven = "";
+async function trusted(s) {
+  const key = `${s.port}:${s.token}`;
+  if (proven !== key) proven = (await proveReceiver(s.port, s.token)) ? key : "";
+  return proven === key;
+}
+
 function takeBatch(queue) {
   const enc = new TextEncoder();
   let n = 0;
@@ -196,7 +205,7 @@ function takeBatch(queue) {
 // The private list stays with the receiver, which clears a private record's text itself. A refused token stops all capture until the popup saves a new one.
 async function syncLists() {
   const s = await settings();
-  if (!s.token) return;
+  if (!s.token || !(await trusted(s))) return;
   try {
     const r = await fetch(`http://127.0.0.1:${Number(s.port)}/v1/ping`, {
       cache: "no-store", credentials: "omit", redirect: "error",
@@ -210,7 +219,7 @@ async function syncLists() {
     const list = (v) => (Array.isArray(v) ? v.filter((d) => typeof d === "string") : []);
     await chrome.storage.local.set({ serverDeny: list(b.deny_domains) });
     await chrome.storage.local.remove("serverPrivate"); // stored by older versions
-  } catch { /* receiver down: keep the last lists */ }
+  } catch { proven = ""; /* receiver down: keep the last lists */ }
 }
 
 // Send the queue. With `end` (or a session end still owed from a failed try) the last batch,
@@ -230,6 +239,7 @@ async function flush(end = false) {
   let status = "ok";
   let ended = false;
   try {
+    if (!(await trusted(s))) throw new Error("not the receiver");
     do {
       const n = takeBatch(queue);
       const last = n === queue.length;
@@ -250,6 +260,7 @@ async function flush(end = false) {
     await chrome.storage.local.set({ queue, sent, backoff: 0, nextTry: 0, status,
       ...(ended ? { endOwed: false, pendingEnd: false } : {}) });
   } catch {
+    proven = "";
     const backoff = Math.min(Math.max(1, st.backoff * 2), MAX_BACKOFF_MIN); // minutes
     await chrome.storage.local.set({ queue, sent, backoff, status: "down",
       nextTry: Date.now() + backoff * 60000 });

@@ -42,6 +42,9 @@ KINDS = {"page", "video", "search"}
 IDLE_PROCESS_S = 20 * 60  # no batch for this long after records were stored: process them
 DEBOUNCE_S = 10  # a session end waits this long, so several in a row make one run
 DEEPEN_IDLE_S = 30 * 60  # no batch for this long: the local LLM's deepen pass, once
+# GET /v1/hello?n=<nonce> needs no token and answers HMAC-SHA256(token, nonce) in hex, so the
+# app and the extension can tell this receiver from another program on the port.
+_HELLO = re.compile(r"/v1/hello\?n=([0-9a-f]{32,128})")
 _EXT_ORIGIN = re.compile(r"(chrome-extension|moz-extension)://[A-Za-z0-9-]{1,64}")
 
 # ---- privacy filter (spec section 2): cortex.browse's filter, shared with the importer ----
@@ -400,7 +403,7 @@ def _handler(v: Vault, port_ref: list[int], proc: Processor):
             self.end_headers()
             self.wfile.write(data)
 
-        def _gate(self) -> bool:
+        def _gate(self, need_token: bool = True) -> bool:
             """Host, Origin and token checks; sends the refusal and returns False."""
             hosts = {f"127.0.0.1:{port_ref[0]}", f"localhost:{port_ref[0]}"}
             if self.headers.get("Host") not in hosts:  # DNS rebinding
@@ -410,6 +413,8 @@ def _handler(v: Vault, port_ref: list[int], proc: Processor):
             if origin is not None and not _EXT_ORIGIN.fullmatch(origin):
                 self._send(403, {"ok": False, "error": "origin"})
                 return False
+            if not need_token:
+                return True
             token, auth = _token(v), self.headers.get("Authorization", "")
             given = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
             if not token or not hmac.compare_digest(given.encode(), token.encode()):
@@ -422,6 +427,17 @@ def _handler(v: Vault, port_ref: list[int], proc: Processor):
             self._send(204 if origin and _EXT_ORIGIN.fullmatch(origin) else 403)
 
         def do_GET(self):
+            hello = _HELLO.fullmatch(self.path)
+            if hello:  # identity proof: callers send their token only to a listener that has it
+                if not self._gate(need_token=False):
+                    return
+                token = _token(v)
+                if not token:
+                    self._send(503, {"ok": False, "error": "not paired"})
+                else:
+                    self._send(200, {"proof": hmac.new(token.encode(), hello[1].encode(),
+                                                       "sha256").hexdigest()})
+                return
             if not self._gate():
                 return
             if self.path == "/v1/ping":  # the deny list, so the extension skips it too

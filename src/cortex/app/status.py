@@ -6,12 +6,14 @@ states, dates and the owner's own settings (`safe` filters the receiver's answer
 from __future__ import annotations
 
 import contextlib
+import hmac
 import http.client
 import json
 import logging
 import os
 import plistlib
 import re
+import secrets
 import shlex
 import sys
 from dataclasses import replace
@@ -22,6 +24,7 @@ from cortex.vault import VaultError
 
 log = logging.getLogger(__name__)
 RECEIVER_PORT = 8799
+PORT_BUSY = f"port {RECEIVER_PORT} is used by another program"
 LOGIN_TASK = "Cortex browse receiver"
 LOGIN_ID = "cortex-browse-receiver"  # LaunchAgent label, unit and .desktop name
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
@@ -170,30 +173,50 @@ def _browse_dir(root: Path) -> Path:
     return root / ".cortex" / "browse"
 
 
-def receiver_probe(root: Path | None) -> tuple[str, dict]:
-    """Is a receiver answering on 127.0.0.1:8799? ("running"|"stopped", its counts)."""
-    token = None
-    if root is not None:
-        try:
-            token = (_browse_dir(root) / "token").read_text(encoding="utf-8").strip()
-        except OSError:
-            pass
+def _receiver_get(path: str, token: str | None = None) -> tuple[int, dict]:
     conn = http.client.HTTPConnection("127.0.0.1", RECEIVER_PORT, timeout=0.6)
     try:
-        conn.request("GET", "/v1/status", headers={
+        conn.request("GET", path, headers={
             "Host": f"127.0.0.1:{RECEIVER_PORT}",
             **({"Authorization": f"Bearer {token}"} if token else {})})
         r = conn.getresponse()
         body = r.read(65536)
-    except OSError:
-        return "stopped", {}
     finally:
         conn.close()
     try:
-        data = json.loads(body) if r.status == 200 else {}
+        data = json.loads(body)
     except ValueError:
         data = {}
-    return "running", safe(data)
+    return r.status, data if isinstance(data, dict) else {}
+
+
+def receiver_probe(root: Path | None) -> tuple[str, dict]:
+    """Is this vault's receiver on 127.0.0.1:8799? ("running"|"stopped"|"busy", its counts).
+    "running" only once the listener proves it holds the token (HMAC of a fresh nonce, asked
+    without the token); only then does the token go to it. "busy": another program answers."""
+    token = None
+    if root is not None:
+        try:
+            token = (_browse_dir(root) / "token").read_text(encoding="utf-8").strip() or None
+        except OSError:
+            pass
+    nonce = secrets.token_hex(32)
+    try:
+        code, hello = _receiver_get(f"/v1/hello?n={nonce}")
+    except http.client.HTTPException:  # an answer, but not HTTP the receiver would send
+        return "busy", {}
+    except OSError:
+        return "stopped", {}
+    proof = hello.get("proof") if code == 200 else None
+    want = hmac.new(token.encode(), nonce.encode(), "sha256").hexdigest() if token else ""
+    if not (want and isinstance(proof, str) and proof.isascii()
+            and hmac.compare_digest(proof, want)):
+        return "busy", {}
+    try:
+        code, data = _receiver_get("/v1/status", token)
+    except (OSError, http.client.HTTPException):
+        return "running", {}
+    return "running", safe(data) if code == 200 else {}
 
 
 def browse_settings() -> dict:
@@ -504,7 +527,8 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "action": _go("llm", "Open")})
     b = browse(root if v["ok"] else None, in_app)
     out.append({"id": "receiver", "label": "Browse receiver",
-                "state": "ok" if b["receiver"] == "running" else "off", "value": b["receiver"],
+                "state": "ok" if b["receiver"] == "running" else "off",
+                "value": PORT_BUSY if b["receiver"] == "busy" else b["receiver"],
                 "detail": "Takes visits from the browser extension, on this computer only.",
                 "action": _go("browse", "Open")})
     out.append({"id": "extension", "label": "Extension", "state": "ok" if b["paired"] else "off",

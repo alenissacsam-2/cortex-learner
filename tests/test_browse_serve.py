@@ -545,3 +545,102 @@ def test_second_server_on_same_port_refused(vault):
             bs.make_server(vault, s.server_address[1]).server_close()
     finally:
         s.server_close()
+
+
+# ---- identity proof: the token goes only to a listener that holds it ----------------------
+
+
+@pytest.fixture(params=["404", "wrong proof"])
+def squatter(request):
+    """Another program on the receiver's port: it records every request it gets."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    got: list[str] = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            got.append(f"{self.requestline}\n{self.headers}\n"
+                       + self.rfile.read(n).decode("utf-8", "replace"))
+            body = json.dumps({"proof": "0" * 64} if request.param == "wrong proof"
+                              else {"ok": False}).encode()
+            self.send_response(404 if request.param == "404" else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_POST = do_GET
+
+    s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=lambda: s.serve_forever(0.05), daemon=True).start()
+    s.got = got
+    yield s
+    s.shutdown()
+    s.server_close()
+
+
+def _closed_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_hello_proves_the_token_without_asking_for_it(srv, vault):
+    import hmac
+    nonce = "ab" * 32
+    code, _, body = call(srv, "GET", f"/v1/hello?n={nonce}", token=False)
+    want = hmac.new(srv.token.encode(), nonce.encode(), "sha256").hexdigest()
+    assert code == 200 and json.loads(body) == {"proof": want}
+    assert srv.token.encode() not in body
+    assert call(srv, "GET", "/v1/hello?n=short", token=False)[0] == 401  # not a nonce
+    assert call(srv, "GET", f"/v1/hello?n={nonce}", token=False,
+                headers={"Host": "evil.example"})[0] == 403
+    assert call(srv, "GET", f"/v1/hello?n={nonce}", token=False,
+                headers={"Origin": "https://e.com"})[0] == 403
+    (vault / ".cortex" / "browse" / "token").unlink()
+    assert call(srv, "GET", f"/v1/hello?n={nonce}", token=False)[0] == 503
+
+
+def test_app_probe_never_sends_the_token_to_another_program(squatter, vault, monkeypatch):
+    from cortex.app import status
+    token = bs.pair(vault)
+    monkeypatch.setattr(status, "RECEIVER_PORT", squatter.server_address[1])
+    assert status.receiver_probe(vault) == ("busy", {})
+    assert squatter.got and not any(token in g for g in squatter.got)
+    assert not any("authorization" in g.lower() for g in squatter.got)
+
+
+def test_app_probe_trusts_the_real_receiver(srv, vault, monkeypatch):
+    from cortex.app import status
+    call(srv, "POST", "/v1/batch", [rec()])
+    monkeypatch.setattr(status, "RECEIVER_PORT", srv.server_address[1])
+    state, live = status.receiver_probe(vault)
+    assert state == "running" and live["queued_records"] == 1
+    monkeypatch.setattr(status, "RECEIVER_PORT", _closed_port())
+    assert status.receiver_probe(vault) == ("stopped", {})
+
+
+def test_extension_proves_the_receiver_before_sending_the_token(srv, squatter, tmp_path):
+    """extension/lib.js proveReceiver under node (WebCrypto HMAC, the same as Python's):
+    true for the real receiver, false for another program (which never sees the token),
+    null when nothing listens."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    lib = (Path(__file__).parents[1] / "extension" / "lib.js").as_uri()
+    ports = [srv.server_address[1], squatter.server_address[1], _closed_port()]
+    script = tmp_path / "prove.mjs"
+    script.write_text(f"""
+import {{ proveReceiver }} from "{lib}";
+const token = {json.dumps(srv.token)};
+const out = [];
+for (const p of {json.dumps(ports)}) out.push(await proveReceiver(p, token));
+console.log(JSON.stringify(out));
+""", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [True, False, None]
+    assert squatter.got and not any(srv.token in g for g in squatter.got)
