@@ -25,7 +25,9 @@ from pathlib import Path
 
 from cortex.app import server, status
 
-AUTOSTART = "Cortex"  # the HKCU Run value: `"<cortex-app.exe>" --hidden`
+AUTOSTART = "Cortex"  # the HKCU Run value: `"<Cortex.exe>" -m cortex.app.launch --hidden`
+APP_ID = "Cortex.Learner"  # the AppUserModelID, also on the shortcuts: pins and groups as Cortex
+ICON = Path(__file__).resolve().parent.parent / "assets" / "cortex.ico"  # scripts/make_icon.py
 SIZE, MIN_SIZE = (1200, 800), (640, 480)
 AMBER, GROUND = "#ffb000", "#0b0b0a"  # app.css's night --lit and --ground
 NOTIFY = ("reviews", "exams", "jobs", "updates")  # app.notify in config.yaml, all on by default
@@ -79,7 +81,11 @@ def _merge_app(fn) -> None:
 
 
 def autostart_command() -> str:
-    """`cortex-app --hidden` (beside `cortex`): Cortex starts in the tray, window hidden."""
+    """`Cortex.exe -m cortex.app.launch --hidden` (installed), else `cortex-app --hidden`
+    (beside `cortex`): Cortex starts in the tray, window hidden."""
+    from cortex.app.launch import installed_app
+    if app := installed_app():
+        return f'"{app}" -m cortex.app.launch --hidden'
     from cortex import clients
     cortex = Path(clients.cortex_command())
     exe = cortex.with_name("cortex-app" + cortex.suffix)
@@ -285,14 +291,45 @@ class Desktop:
             self.tray.update_menu()
 
 
-def _icon_image():
-    """The tray icon: an amber disc with a dark centre (Pillow, already a dependency)."""
+LETTER_C = (".###.", "#...#", "#....", "#....", "#....", "#...#", ".###.")
+SMALL = 32  # up to this size the dots are whole-pixel squares, so the C stays crisp
+
+
+def mark(size: int):
+    """The Cortex logo at `size` px (Pillow, already a dependency): a dark rounded square with
+    an amber dot-matrix C, as the CORTEX wordmark draws it. The tray, the window, the
+    shortcuts and Cortex.exe all use it (scripts/make_icon.py writes assets/cortex.ico)."""
     from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    k = 1 if size <= SMALL else 4  # round dots are drawn at 4x and scaled down
+    n = size * k
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.ellipse((2, 2, 61, 61), fill=AMBER)
-    draw.ellipse((21, 21, 42, 42), fill=GROUND)
-    return img
+    m = round(size * 0.06) * k
+    side = n - 2 * m
+    draw.rounded_rectangle((m, m, n - m - 1, n - m - 1), radius=round(side * 0.22), fill=GROUND)
+    rows, cols = len(LETTER_C), len(LETTER_C[0])
+    if k == 1:  # whole pixels
+        pitch = max(1, round(side * 0.6 / rows))
+        x0, y0 = (n - cols * pitch) // 2, (n - rows * pitch) // 2
+    else:
+        pitch = side * 0.6 / rows
+        x0, y0 = (n - cols * pitch) / 2, (n - rows * pitch) / 2
+    gap = pitch * 0.1  # round dots are 80% of the pitch
+    for r, line in enumerate(LETTER_C):
+        for c, cell in enumerate(line):
+            if cell != "#":
+                continue
+            x, y = x0 + c * pitch, y0 + r * pitch
+            if k == 1:
+                draw.rectangle((x, y, x + pitch - 1, y + pitch - 1), fill=AMBER)
+            else:
+                draw.ellipse((x + gap, y + gap, x + pitch - gap, y + pitch - gap), fill=AMBER)
+    return img if k == 1 else img.resize((size, size), Image.LANCZOS)
+
+
+def _icon_image():
+    """The tray icon: the logo at 64 px."""
+    return mark(64)
 
 
 def _tray(d: Desktop):
@@ -344,6 +381,9 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         if not hidden:  # at login: no browser tab nobody asked for
             server.run(root, port=port, echo=echo)
         return
+    if sys.platform == "win32":  # before any window: the taskbar shows and pins Cortex, not Python
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     srv, app, url = server.start(root, port=port, echo=echo, idle=False)
     d = app.desktop = Desktop(app, url)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True,
@@ -367,7 +407,7 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         ev.maximized += lambda: setattr(d, "state", "maximized")
         ev.restored += lambda: setattr(d, "state", "normal")
         threading.Thread(target=d.end, daemon=True, name="cortex-end").start()
-        webview.start()  # blocks this (main) thread until the window is destroyed
+        webview.start(icon=str(ICON))  # blocks this (main) thread until the window is destroyed
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)
         echo(f"Cortex app: the window failed ({type(e).__name__}: {e}); using the browser")
         d.win = None

@@ -12,9 +12,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "installer"))  # setup_app imports app_exe from beside it
 _spec = importlib.util.spec_from_file_location("setup_app", ROOT / "installer" / "setup_app.py")
 setup_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup_app)
+app_exe = setup_app.app_exe
+REAL_MAKE_SHORTCUTS = setup_app.make_shortcuts
 
 BIN = r"C:\Users\x\AppData\Local\Programs\Cortex\bin"
 
@@ -69,6 +72,7 @@ def test_uninstall_values_point_at_the_copied_setup(tmp_path):
     assert v["DisplayVersion"] == "0.1.0" and v["InstallLocation"] == str(tmp_path)
     exe = tmp_path / "CortexSetup.exe"
     assert v["UninstallString"] == f'"{exe}" --uninstall --dir "{tmp_path}"'
+    assert v["DisplayIcon"] == str(tmp_path / "tools" / "cortex-learner" / "app" / "Cortex.exe")
     assert setup_app.version_of(Path("cortex_learner-1.2.3-py3-none-any.whl")) == "1.2.3"
 
 
@@ -87,7 +91,9 @@ def calls(monkeypatch):
     monkeypatch.setattr(setup_app, "run", lambda args, env, say: seen.append(("run", args, env)))
     monkeypatch.setattr(setup_app, "get_user_path", lambda: r"C:\a")
     monkeypatch.setattr(setup_app, "set_user_path", lambda v: seen.append(("path", v)))
-    monkeypatch.setattr(setup_app, "make_shortcuts", lambda t, say: seen.append(("lnk", t)))
+    monkeypatch.setattr(setup_app, "make_shortcuts",
+                        lambda d, say, existing_only=False: seen.append(("lnk", existing_only)))
+    monkeypatch.setattr(app_exe, "make", lambda d, version, say: seen.append(("exe", version)))
     monkeypatch.setattr(setup_app, "register", lambda d, v: seen.append(("reg", v)))
     monkeypatch.setattr(setup_app, "unregister", lambda: seen.append(("unreg",)))
     monkeypatch.setattr(setup_app, "drop_login", lambda: seen.append(("login",)))
@@ -108,7 +114,7 @@ def test_install_runs_uv_inside_the_folder(tmp_path, payload, calls):
                                       "--reinstall-package", "cortex-learner", "--python", "3.12",
                                       str(d / "cortex_learner-0.2.0-py3-none-any.whl")]
     assert env["UV_TOOL_BIN_DIR"] == str(d / "bin")
-    assert rest == [("path", rf"C:\a;{d / 'bin'}"), ("lnk", d / "bin" / "cortex-app.exe"),
+    assert rest == [("exe", "0.2.0"), ("path", rf"C:\a;{d / 'bin'}"), ("lnk", False),
                     ("reg", "0.2.0")]
     assert sorted(p.name for p in d.iterdir()) == [
         "cortex-install.txt", "cortex_learner-0.2.0-py3-none-any.whl", "uv.exe"]
@@ -119,7 +125,7 @@ def test_install_flags_skip_path_shortcuts_registry(tmp_path, payload, calls):
     opts = setup_app.parse_args(["--dir", str(d), "--no-path", "--no-shortcuts",
                                  "--no-registry"])
     setup_app.install(d, opts, lambda s: None, src=payload)
-    assert [c[0] for c in calls] == ["run"]
+    assert [c[0] for c in calls] == ["run", "exe"]
 
 
 def test_install_refuses_a_folder_with_other_files(tmp_path, payload, calls):
@@ -256,8 +262,8 @@ def test_install_pins_dependencies_and_survives_a_shortcut_failure(tmp_path, pay
     warning, and Apps & Features still gets its entry."""
     (payload / "constraints.txt").write_text("numpy==2.0.0\n")
 
-    def blocked(target, say):
-        raise setup_app.SetupError("powershell.exe stopped with exit code 1.")
+    def blocked(d, say, existing_only=False):
+        raise OSError("a managed PC blocks the shortcut object")
     monkeypatch.setattr(setup_app, "make_shortcuts", blocked)
     d = tmp_path / "Cortex"
     said = []
@@ -266,7 +272,8 @@ def test_install_pins_dependencies_and_survives_a_shortcut_failure(tmp_path, pay
     assert args[args.index("-c") + 1] == str(d / "constraints.txt")
     assert (d / "constraints.txt").read_text() == "numpy==2.0.0\n"
     assert any(s.startswith("warning: no Start menu shortcut") for s in said)
-    assert [c[0] for c in calls] == ["run", "path", "reg"] and said[-1] == "Cortex is installed."
+    assert [c[0] for c in calls] == ["run", "exe", "path", "reg"]
+    assert said[-1] == "Cortex is installed."
     env = calls[0][2]
     assert env["UV_NATIVE_TLS"] == "1" and env["UV_COMPILE_BYTECODE"] == "1"
 
@@ -290,7 +297,8 @@ def test_parse_args_update_and_wait_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_app, "installed_dir", lambda: tmp_path / "reg")
     a = setup_app.parse_args(["--update", "--wait-pid", "4242"])
     assert a.update and a.wait_pid == 4242 and a.dir == (tmp_path / "reg").resolve()
-    assert a.no_shortcuts and a.no_path and not a.no_registry  # the version in Apps & Features
+    # the version in Apps & Features; the shortcuts still there are rewritten (make_shortcuts)
+    assert a.no_path and not a.no_shortcuts and not a.no_registry
     a = setup_app.parse_args(["--update", "--dir", str(tmp_path / "x")])
     assert a.dir == (tmp_path / "x").resolve() and a.wait_pid is None
     assert setup_app.parse_args([]).wait_pid is None
@@ -336,7 +344,8 @@ def test_update_needs_an_install_and_keeps_shortcuts_and_path(tmp_path, payload,
     (d / setup_app.MARKER).write_text("x")
     said = []
     setup_app.install(d, opts, said.append, src=payload)
-    assert [c[0] for c in calls] == ["run", "reg"]
+    # the shortcuts still there are rewritten for Cortex.exe (older ones ran cortex-app.exe)
+    assert [c[0] for c in calls] == ["run", "exe", "lnk", "reg"] and calls[2] == ("lnk", True)
     assert said[-1] == ("Cortex is updated. AI apps connected to Cortex reconnect when you "
                         "restart them.")
 
@@ -392,3 +401,142 @@ def test_launcher_logs_without_a_console(monkeypatch):
     assert seen == {"root": Path("V"), "hidden": True}
     assert (Path.home() / ".cortex" / "logs" / "app.log").read_text().startswith("Cortex app:")
     assert os.environ["PATH"].startswith(str(Path("C:/inst/bin").resolve()) + os.pathsep)
+
+
+def test_launcher_puts_the_install_bin_on_path(tmp_path, monkeypatch):
+    """Cortex.exe runs from the tool venv's folder: PATH gets the install's bin
+    (`cortex.exe`)."""
+    from cortex import update
+    from cortex.app import desktop, launch, server
+
+    d = tmp_path / "Cortex"
+    exe = app_exe.path(d)
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    (d / update.MARKER).write_text("x")
+    monkeypatch.setattr(sys, "prefix", str(app_exe.venv(d)))
+    monkeypatch.setattr(sys, "executable", str(exe).upper())  # Windows names: any case
+    monkeypatch.setattr(sys, "argv", [str(ROOT / "src" / "cortex" / "app" / "launch.py")])
+    monkeypatch.setenv("PATH", "orig")
+    monkeypatch.setattr(server, "running_url", lambda: None)
+    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo: None)
+    launch.main()
+    assert os.environ["PATH"] == str((d / "bin").resolve()) + os.pathsep + "orig"
+
+
+def test_launcher_hands_over_to_cortex_exe(tmp_path, monkeypatch):
+    """An older shortcut or Start with Windows value runs bin\\cortex-app.exe: it starts the
+    venv's Cortex.exe with the same arguments, so the window belongs to Cortex.exe."""
+    from cortex.app import desktop, launch
+
+    venv = tmp_path / "cortex-learner"
+    (venv / "Scripts").mkdir(parents=True)
+    (venv / "app").mkdir()
+    (venv / "app" / "Cortex.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "executable", str(venv / "Scripts" / "pythonw.exe"))
+    monkeypatch.setattr(sys, "argv", ["cortex-app.exe", "--hidden"])
+    started = []
+    monkeypatch.setattr(launch.subprocess, "Popen", lambda args, **kw: started.append(args))
+    monkeypatch.setattr(desktop, "run", lambda *a, **k: pytest.fail("ran in the wrong process"))
+    launch.main()
+    assert started == [[str(venv / "app" / "Cortex.exe"), "-m", "cortex.app.launch", "--hidden"]]
+
+
+# ---- Cortex.exe (installer/app_exe.py) -------------------------------------------------------
+
+ICO = ROOT / "src" / "cortex" / "assets" / "cortex.ico"
+windows = pytest.mark.skipif(sys.platform != "win32", reason="Windows executables")
+
+
+def test_icon_resources_split_the_ico():
+    images, group = app_exe.icon_resources(ICO.read_bytes())
+    assert len(images) == 7 and all(img.startswith(b"\x89PNG") for img in images)
+    assert group[:6] == b"\0\0\1\0\7\0" and len(group) == 6 + 14 * 7
+    w, h, _, _, planes, bits, size, rid = app_exe.struct.unpack_from("<BBBBHHIH", group, 6)
+    assert (w, h, planes, bits, size, rid) == (16, 16, 1, 32, len(images[0]), 1)
+    with pytest.raises(OSError):
+        app_exe.icon_resources(b"MZ not an icon")
+
+
+def test_version_resource_names_cortex():
+    v = app_exe.version_resource("0.2.13")
+    assert app_exe.struct.unpack_from("<HHH", v) == (len(v), 52, 0)  # VS_FIXEDFILEINFO
+    assert app_exe.struct.unpack_from("<4I", v, 40) == (0xFEEF04BD, 0x00010000, 2, 13 << 16)
+    text = v.decode("utf-16-le", errors="replace")
+    for key, value in (("FileDescription", "Cortex"), ("ProductName", "Cortex"),
+                       ("FileVersion", "0.2.13"), ("OriginalFilename", "Cortex.exe")):
+        assert f"{key}\0" in text and f"{value}\0" in text
+
+
+def _fake_tool(d: Path) -> Path:
+    """The uv tool venv of an install, made from this test's own base Python."""
+    v = app_exe.venv(d)
+    (v / "Scripts").mkdir(parents=True)
+    (v / "Scripts" / "cortex.exe").write_bytes(b"uv's console script")  # never overwritten
+    (v / "pyvenv.cfg").write_text(f"home = {Path(sys.base_prefix)}\nversion_info = 3.12\n")
+    assets = app_exe.ico(d).parent
+    assets.mkdir(parents=True)
+    shutil.copy2(ICO, assets / "cortex.ico")
+    return v
+
+
+@windows
+def test_make_copies_and_stamps_a_cortex_exe_that_runs_in_the_venv(tmp_path):
+    d = tmp_path / "Cortex"
+    v = _fake_tool(d)
+    said = []
+    exe = app_exe.make(d, "0.2.13", said.append)
+    assert exe == v / "app" / "Cortex.exe" and not any("warning" in s for s in said)
+    assert (v / "Scripts" / "cortex.exe").read_bytes() == b"uv's console script"
+    assert (exe.parent / f"python{sys.version_info[0]}{sys.version_info[1]}.dll").is_file()
+    assert app_exe.read_resource(exe, app_exe.RT_VERSION, 1) == app_exe.version_resource("0.2.13")
+    assert app_exe.read_resource(exe, app_exe.RT_GROUP_ICON, 1) == \
+        app_exe.icon_resources(ICO.read_bytes())[1]
+    assert b"longPathAware" in app_exe.read_resource(exe, app_exe.RT_MANIFEST, 1)
+    assert app_exe.read_resource(exe, app_exe.RT_ICON, 8) is None  # pythonw's other icons gone
+    out = subprocess.run([str(exe), "-c", "import sys; print(sys.prefix)"], capture_output=True,
+                         text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert Path(out.stdout.strip()) == v  # the venv, from ..\pyvenv.cfg
+
+
+@windows
+def test_a_failed_stamp_keeps_a_working_exe(tmp_path):
+    d = tmp_path / "Cortex"
+    _fake_tool(d)
+    app_exe.ico(d).write_bytes(b"broken")
+    said = []
+    exe = app_exe.make(d, "0.2.13", said.append)
+    assert exe.is_file() and any("keeps Python's icon" in s for s in said)
+
+
+@windows
+def test_shortcut_carries_the_app_id_and_icon(tmp_path):
+    lnk, target = tmp_path / "Cortex.lnk", tmp_path / "Cortex.exe"
+    target.write_bytes(b"MZ")
+    app_exe.shortcut(lnk, target, "-m cortex.app.launch", target)
+    ps = ("$l = (New-Object -ComObject WScript.Shell).CreateShortcut($env:L); "
+          "$l.TargetPath; $l.Arguments; $l.IconLocation; "
+          "(New-Object -ComObject Shell.Application).NameSpace($env:D).ParseName('Cortex.lnk')"
+          ".ExtendedProperty('System.AppUserModel.ID')")
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+                         env={**os.environ, "L": str(lnk), "D": str(tmp_path)})
+    assert out.stdout.splitlines() == [str(target), "-m cortex.app.launch", f"{target},0",
+                                       app_exe.APP_ID]
+
+
+def test_make_shortcuts_on_update_rewrites_only_those_still_there(tmp_path, monkeypatch):
+    menu, desk = tmp_path / "Programs" / "Cortex.lnk", tmp_path / "Desktop" / "Cortex.lnk"
+    menu.parent.mkdir()
+    menu.write_bytes(b"old")
+    monkeypatch.setattr(setup_app, "shortcut_paths", lambda: [menu, desk])
+    made = []
+    monkeypatch.setattr(app_exe, "shortcut", lambda lnk, exe, args, icon: made.append(
+        (lnk, exe, args, icon)))
+    d = tmp_path / "Cortex"
+    REAL_MAKE_SHORTCUTS(d, lambda s: None, existing_only=True)
+    exe = app_exe.path(d)
+    assert made == [(menu, exe, "-m cortex.app.launch", exe)]
+    REAL_MAKE_SHORTCUTS(d, lambda s: None)
+    assert [m[0] for m in made] == [menu, menu, desk]
