@@ -71,7 +71,6 @@ def vault(root: Path | None) -> dict:
     return {"path": str(root), "ok": ok, "exists": root.is_dir(),
             "notes": notes(root) if ok else 0,
             "last_index": indexed(root),
-            "dashboard": when(root / ".cortex" / "dashboard.html"),
             "backups": len(list((root / ".cortex" / "backups").glob("*.zip"))) if ok else 0,
             "last_backup": max((when(p) or "" for p in (root / ".cortex" / "backups")
                                 .glob("*.zip")), default=None) if ok else None}
@@ -545,11 +544,6 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "detail": f"{b['queued']} visits waiting to be processed.",
                 "action": _go("browse", "Open")})
     out.append(history_row(root if v["ok"] else None, b))
-    out.append({"id": "dashboard", "label": "Dashboard",
-                "state": "ok" if v.get("dashboard") else "off",
-                "value": f"built {v['dashboard']}" if v.get("dashboard") else "not built",
-                "detail": "Your notes as a page you can browse, offline.",
-                "action": _go("vault", "Open")})
     return out
 
 

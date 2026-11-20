@@ -282,20 +282,35 @@ def test_build_data_500_concepts_is_fast(tmp_path):
     assert len(d["graph"]["nodes"]) == 1 + 5 + 50 + 500
 
 
-def test_cli_dashboard_no_open(root, monkeypatch):
+def test_cli_dashboard_no_open_writes_index_only_and_retires_the_old_page(root, monkeypatch):
+    """`cortex dashboard` no longer writes .cortex/dashboard.html: an old one moves to
+    .cortex/backups/ once (never deleted), and index.md is still made on demand."""
     monkeypatch.delenv("CORTEX_VAULT", raising=False)
-    r = CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(root)])
-    assert r.exit_code == 0, r.output
-    path = root / ".cortex" / "dashboard.html"
-    assert path.is_file() and blob(path.read_text(encoding="utf-8"))["graph"]["nodes"]
-    assert "## Concepts" in (root / "index.md").read_text(encoding="utf-8")  # on demand too
+    old = root / ".cortex" / "dashboard.html"
+    old.parent.mkdir(exist_ok=True)
+    old.write_text("<html>old page</html>", encoding="utf-8")
+    for _ in range(2):
+        r = CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(root)])
+        assert r.exit_code == 0, r.output
+    assert not old.exists()
+    kept = list((root / ".cortex" / "backups").glob("dashboard-*.html"))
+    assert len(kept) == 1 and kept[0].read_text(encoding="utf-8") == "<html>old page</html>"
+    assert "## Concepts" in (root / "index.md").read_text(encoding="utf-8")
+
+
+def test_snapshot_is_self_contained_and_never_written_to_the_vault(root):
+    before = {p for p in root.rglob("*") if p.is_file()}
+    page = dashboard.snapshot(Vault(root), now=NOW)
+    assert "default-src 'none'" in page and blob(page)["graph"]["nodes"]
+    after = {p for p in root.rglob("*") if p.is_file()}
+    assert not {p for p in after - before if p.suffix == ".html"}
 
 
 def test_close_writes_neither_dashboard_nor_index(root, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("a whole-vault view was built at close")
 
-    monkeypatch.setattr(dashboard, "write_dashboard", boom)
+    monkeypatch.setattr(dashboard, "build", boom)
     monkeypatch.setattr(dashboard, "write_index", boom)
     mgr = SessionManager(Vault(root), clock=lambda: NOW)
     mgr.start()
@@ -674,7 +689,7 @@ def test_snapshot_parses_build_the_same_dashboard(root):
     idx = Index(v, Catalog.load(v))
     idx.refresh()
     idx.save_snapshot()
-    dashboard.write_dashboard(v, now=NOW)  # the brain keeps its first layout; compare after it
+    dashboard.build(v, now=NOW)  # the brain keeps its first layout; compare after it
     for p in [p for p in vault_mod._PARSED if p.is_relative_to(root)]:
         del vault_mod._PARSED[p]  # a fresh process: nothing parsed yet
     want = dashboard.build_data(v, now=NOW)

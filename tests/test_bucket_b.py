@@ -2,7 +2,6 @@
 
 import webbrowser
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -133,12 +132,22 @@ def test_text_caps_2000():
             _check_fields(f)
 
 
-def test_dashboard_uses_webbrowser(root, monkeypatch):
-    opened = []
+def test_dashboard_opens_the_app(root, monkeypatch):
+    """`cortex dashboard` opens the running app's home (its window, else the browser), or
+    starts the app as `cortex app` does."""
+    from cortex.app import server
+    opened, shown, ran = [], [], []
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
-    r = runner.invoke(app, ["dashboard", "--vault", str(root)])  # CLI-only since the merge
+    monkeypatch.setattr(server, "running_url", lambda: "http://127.0.0.1:1/?t=k")
+    monkeypatch.setattr(server, "show_window", lambda url: shown.append(url) or False)
+    monkeypatch.setattr(server, "run", lambda root, echo: ran.append(root))
+    r = runner.invoke(app, ["dashboard", "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    assert opened == [Path(r.stdout.strip()).as_uri()]  # stderr carries the progress line
+    assert shown == opened == ["http://127.0.0.1:1/?t=k"] and ran == []
+    monkeypatch.setattr(server, "running_url", lambda: None)
+    assert runner.invoke(app, ["dashboard", "--vault", str(root)]).exit_code == 0
+    assert ran == [Vault(root).root] and len(opened) == 1
+    assert not (root / ".cortex" / "dashboard.html").exists()
 
 
 def test_init_appends_workspace_ignore_once(root):

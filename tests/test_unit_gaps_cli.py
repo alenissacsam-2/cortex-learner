@@ -125,10 +125,14 @@ def test_exclude_add_list_remove_round_trip(vault, tmp_path):
 
 
 def test_dashboard_index_and_html_leave_private_pages_out(vault):
+    from datetime import UTC, datetime
+
+    from cortex import dashboard
+    from cortex.vault import Vault
     assert CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(vault)]
                               ).exit_code == 0
     index = (vault / "index.md").read_text(encoding="utf-8")
-    html = (vault / ".cortex" / "dashboard.html").read_text(encoding="utf-8")
+    html = dashboard.snapshot(Vault(vault), now=datetime.now(UTC))  # Export snapshot
     assert "[[two-pointers]]" in index  # the public pages are there
     for text in (index, html):
         assert PRIV not in text and "private-thoughts" not in text

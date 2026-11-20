@@ -1227,19 +1227,29 @@ def today(minutes: Annotated[int | None, typer.Option(
 
 @app.command()
 @_errors
-def dashboard(no_open: Annotated[bool, typer.Option("--no-open", help="Write it only.")] = False,
+def dashboard(no_open: Annotated[bool, typer.Option(
+                  "--no-open", help="Rewrite index.md only; do not open the app.")] = False,
               relayout: Annotated[bool, typer.Option(
                   "--relayout", help="Lay the brain out again from scratch.")] = False,
               vault: VaultOpt = None) -> None:
-    """Write .cortex/dashboard.html and index.md, and open the dashboard in the browser."""
+    """Rewrite index.md and open the dashboard: the Cortex app's live home, starting the app
+    as `cortex app` does when it is not running. Export snapshot (the app's Vault page) saves
+    an offline copy."""
     v, now = _vault(vault), datetime.now(UTC)
-    pages = sum(len(v.note_paths(k)) for k in Vault.KIND_DIRS if k != "browse")
-    typer.echo(f"Building the dashboard ({pages:,} pages)…", err=True)  # a big vault takes a while
-    path = dashboard_mod.write_dashboard(v, now=now, relayout=relayout)
-    dashboard_mod.write_index(v, now=now)
-    typer.echo(str(path))
-    if not no_open:
-        webbrowser.open(path.as_uri())
+    if (old := dashboard_mod.retire_old(v)) is not None:
+        typer.echo(f"Cortex no longer writes .cortex/dashboard.html; moved it to {old}", err=True)
+    if relayout:
+        typer.echo("Laying the brain out again…", err=True)  # a big vault takes a while
+        dashboard_mod.build(v, now=now, relayout=True)
+    typer.echo(str(dashboard_mod.write_index(v, now=now)))
+    if no_open:
+        return
+    from cortex.app import server
+    if url := server.running_url():  # the open app, not a second one
+        if not server.show_window(url):  # the browser app has no window
+            webbrowser.open(url)
+        return
+    server.run(v.root, echo=typer.echo)
 
 
 @app.command()
@@ -1582,10 +1592,6 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
                 raise VaultError("invalid_argument", f"unresolved: {', '.join(left)}")
             replay(dry_run=False, vault=v)  # stamp props and Today.md as session close does
             today(vault=v)
-            try:
-                dashboard_mod.write_dashboard(v, now=datetime.now(UTC))
-            except Exception as e:  # a view, as in session close; never fails the undo
-                typer.echo(f"WARN: dashboard regeneration failed: {e}", err=True)
             for args in (("add", "-A"), ("commit", "-q", "-m", f"cortex: undo {session_id}")):
                 r = _git(v.root, *args)
                 if r.returncode:

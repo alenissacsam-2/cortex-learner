@@ -412,7 +412,9 @@ def demo_page(tmp_path, monkeypatch) -> Path:
     _init(root)
     monkeypatch.setattr(taint, "config", lambda: {})
     demo.main([str(root)])
-    return dashboard.write_dashboard(Vault(root), now=datetime.now(UTC))
+    page = tmp_path / "snapshot.html"
+    page.write_text(dashboard.snapshot(Vault(root), now=datetime.now(UTC)), encoding="utf-8")
+    return page
 
 
 FAILED = "Copy failed. Select the text and copy it."
@@ -496,7 +498,8 @@ def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
     root = tmp_path / "empty"
     root.mkdir()
     (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
-    page = dashboard.write_dashboard(Vault(root), now=NOW)
+    page = tmp_path / "snapshot.html"
+    page.write_text(dashboard.snapshot(Vault(root), now=NOW), encoding="utf-8")
     out = _run(tmp_path, page, sweep=True, texts=True)
     assert out["errors"] == []
     for scope, cs in out["scopes"].items():

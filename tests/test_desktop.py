@@ -231,6 +231,31 @@ def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypa
     assert d.win.calls == ["show", "restore"]
 
 
+def test_minimise_and_hide_to_the_tray_relock_the_private_switch(gui, vault, monkeypatch):
+    """The Private switch relocks when the window is minimised or hidden to the tray."""
+    apps, seen, real = [], {}, server.start
+
+    def start_server(*a, **k):
+        srv, app, url = real(*a, **k)
+        apps.append(app)
+        return srv, app, url
+
+    def start(wv):
+        w = wv.windows[0]
+        w.events.shown.set()
+        for event in ("minimized", "closing"):  # closing: the X hides it to the tray
+            apps[0].private_until = time.monotonic() + 600  # unlocked
+            getattr(w.events, event).set()
+            seen[event] = apps[0].private_unlocked
+        FakeIcon.made[-1].item("Quit").action()
+        assert w.destroyed.wait(10)
+    monkeypatch.setattr(server, "start", start_server)
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    gui(start)
+    desktop.run(vault, echo=lambda s: None)
+    assert seen == {"minimized": False, "closing": False}
+
+
 def test_no_pywebview_or_no_webview2_falls_back_to_the_browser(gui, vault, monkeypatch):
     runs = []
     monkeypatch.setattr(server, "run", lambda root, port, echo: runs.append(root))
@@ -309,9 +334,10 @@ def test_the_app_api_for_autostart_notify_and_window(served, win32, _no_real_run
     assert _no_real_run_key == {desktop.AUTOSTART: win32}
     assert call(app, "POST", "/api/app/autostart", {"enabled": "yes"})[0] == 400
     assert call(app, "GET", "/api/app/notify")[1] == {"reviews": True, "exams": True,
-                                                       "jobs": True}
+                                                       "jobs": True, "updates": True}
     assert call(app, "POST", "/api/app/notify", {"jobs": False})[1]["jobs"] is False
-    assert desktop.notify_settings() == {"reviews": True, "exams": True, "jobs": False}
+    assert desktop.notify_settings() == {"reviews": True, "exams": True, "jobs": False,
+                                         "updates": True}
     for bad in ({}, {"bogus": True}, {"jobs": "no"}):
         assert call(app, "POST", "/api/app/notify", bad)[0] == 400
     assert call(app, "POST", "/api/window/show", {})[1] == {"shown": False}  # browser app

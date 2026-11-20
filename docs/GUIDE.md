@@ -48,7 +48,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 | `/cortex capture` | Saves a source you paste or link (article, PDF, video) and the ideas worth keeping |
 | `/cortex project <name>` | Works on one project page: status, decisions, next steps |
 | `/cortex reflect` | The weekly review: confirm or drop the about-me lines waiting for you, emerging idea clusters, old fleeting notes, 3 spot-checks of how a chat graded you |
-| `/cortex map` | Opens the offline dashboard (Today, readiness, the graph) |
+| `/cortex map` | Opens the Cortex app's home (Today, readiness, the graph) |
 
 ### Past chats
 | Command | What it does |
@@ -90,7 +90,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex today` | Prints today's plan |
 | `cortex app` | The Cortex app in your browser (stops after 30 minutes idle); `--window` opens it in its own window with a tray icon, as the **Cortex** shortcut does on Windows |
 | `cortex brief` | Your brief, teaching contract and Today |
-| `cortex dashboard` | Opens the offline dashboard |
+| `cortex dashboard` | Opens the Cortex app's home, starting the app if needed, and rewrites `index.md` |
 | `cortex recall "query"` | Searches your vault by meaning and keywords |
 | `cortex ask "question"` | Answers from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex claims --summary` | How well Cortex knows you, per page (and which lines you clicked vs a chat relayed) |
@@ -172,7 +172,15 @@ Gemini's export has no conversation ids, so prompts become one chat until 30 min
 
 ## 5. The 3D brain
 
-`cortex dashboard` opens the brain as a 3D picture of your vault.
+The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D picture of your vault, with Today and your other lists beside it. It updates as you work. Cortex no longer writes a `dashboard.html` file into your vault; an old one is moved to `.cortex/backups/` once.
+
+**Private items stay hidden until you unlock them**
+- Private notes and the browsing kept on this computer only are left out of the home page: not shown and not counted.
+- The lock button at the top adds them to Today and This week. Windows asks for Windows Hello (your PIN, face or fingerprint) first. Without Windows Hello set up, it tells you how to set it up; Cortex has no password of its own.
+- They hide again when you press the lock again, minimise the window or close it to the tray, after 10 minutes, and when Cortex restarts. In a browser tab it works the same, except for minimising.
+- Unlocking changes only this page: Claude, other AI apps and the terminal commands never get private items through it.
+
+**Export snapshot** (in the app: Vault → Snapshot) saves the home as one web page that opens without Cortex: your non-private pages and the 3D brain, with no network access. In the app window you choose where to save it; in a browser it goes to your downloads.
 
 **What you see**
 - Each topic has its own colour.
@@ -359,7 +367,8 @@ Before the app or the extension sends the token or any visit to port 8799, they 
 - **What changed and how to undo it:** `cortex claims --unasked` lists what chats saved about you, each with its undo; `cortex undo <session>` reverts one chat.
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
-- **The Cortex app on Windows:** its own window and an amber tray icon. Closing the window keeps Cortex in the tray; click the icon to bring it back, right-click it for **Start with Windows** and **Quit**. It notifies you once a day when reviews are due, 3 days and 1 day before an exam, and when a long task finishes or fails, never naming a private page. These are `app: {notify: {reviews, exams, jobs}}` in `~/.cortex/config.yaml` (all on); the window's size and place are kept in `~/.cortex/desktop.json`.
+- **The Cortex app on Windows:** its own window and an amber tray icon. Closing the window keeps Cortex in the tray; click the icon to bring it back, right-click it for **Start with Windows** and **Quit**. It notifies you once a day when reviews are due, 3 days and 1 day before an exam, when a long task finishes or fails, never naming a private page, and once when a new version is ready. These are `app: {notify: {reviews, exams, jobs, updates}}` in `~/.cortex/config.yaml` (all on); the window's size and place are kept in `~/.cortex/desktop.json`.
+- **Updates:** the app checks for a new version when it starts and every 6 hours. An installed Cortex downloads and checks it in the background; one run from source just notes it. Either way a **Restart to update** button appears at the top of the home page and on Status → Updates. Nothing is installed until you click it.
 
 ### Vault history in git: your choice
 
