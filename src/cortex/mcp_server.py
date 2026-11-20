@@ -358,6 +358,19 @@ def _find_out(hits: list[dict]) -> dict:
                      for h in hits], "text": _wrap("find", "\n".join(lines)) if hits else ""}
 
 
+def _update_of(u: dict | None, out: dict) -> dict:
+    """Plan 5b: a cortex_patch result whose new me/ line may update a live one (`review.
+    collision`) names it in `possible_update_of` and leads `next` with the question to ask."""
+    if u:
+        ref = f"me/{u['page']}"
+        out["possible_update_of"] = {"id": u["id"], "page": ref, "text": _wrap(ref, u["text"])}
+        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). Ask the "
+                       "user whether it replaces that line: if yes, retire it (or revise it to "
+                       "the new wording) with cortex_patch rather than keeping both; if both "
+                       "hold, leave them. " + out["next"])
+    return out
+
+
 def _wrap_fields(id: str, fields: dict) -> str:
     """cortex_read's frontmatter values (note text) as one `<untrusted_note>` block."""
     return _wrap(id, "\n".join(
@@ -2247,6 +2260,9 @@ class Cortex:
             return self._claim_op(nid, op, target, text, user_confirmed, until, said == "yes")
         changed = True
         day = local_day(self._now())
+        # plan 5b: a line that may update a live one; the write goes ahead and the agent asks
+        update = (review.collision(self.vault, nid, text, day)
+                  if op == "append_to_section" and kind == "me" and text.strip() else None)
         # while harvesting, old chats are stale evidence: every claim page waits for a yes
         if (op == "append_to_section" and kind == "me" and not user_confirmed
                 and (nid in CONFIRM_PAGES or (harvesting and claim_page))):
@@ -2273,16 +2289,18 @@ class Cortex:
             hint = self.sessions.note("patched", change={
                 "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target})
             if contract:
-                return {"changed": False, "queued": True,
-                        "summary": "proposed for me teaching-contract; waiting for your Approve "
-                                   "in the Cortex app",
-                        "next": "Tell the user the rule is waiting for their Approve in the "
-                                "Cortex app (Review); it does not apply until then, and "
-                                "repeating the patch does not apply it." + hint}
-            return {"changed": False, "queued": True,
-                    "summary": f"proposed for {kind} {nid}; awaits the user's OK",
-                    "next": "Saved to inbox.md as unconfirmed. Ask the user; if they agree, "
-                            "repeat the patch with user_confirmed=true." + hint}
+                return _update_of(update, {
+                    "changed": False, "queued": True,
+                    "summary": "proposed for me teaching-contract; waiting for your Approve in "
+                               "the Cortex app",
+                    "next": "Tell the user the rule is waiting for their Approve in the Cortex "
+                            "app (Review); it does not apply until then, and repeating the "
+                            "patch does not apply it." + hint})
+            return _update_of(update, {
+                "changed": False, "queued": True,
+                "summary": f"proposed for {kind} {nid}; awaits the user's OK",
+                "next": "Saved to inbox.md as unconfirmed. Ask the user; if they agree, repeat "
+                        "the patch with user_confirmed=true." + hint})
         if op == "append_to_section" and kind == "me" and nid in CONFIRM_PAGES:
             text = f"{text.rstrip()} (confirmed {day})"
             if nid == "portrait":
@@ -2323,12 +2341,14 @@ class Cortex:
         change = {"tool": "patch", "id": nid, "kind": kind, "op": op, "target": target}
         if claim:
             change.update(claim=claim, **self._tier(user_confirmed, said == "yes"))
+            if update and isinstance(claim, str):  # the pair the app's Review shows
+                change["update_of"] = {"page": update["page"], "claim": update["id"]}
         if self.app_clicks:
             change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
-        return {"changed": changed, **({"claim": claim} if claim else {}),
-                "summary": f"{op} {target!r} on {kind} {nid}",
-                "next": self._next(MORE_NEXT) + hint}
+        return _update_of(update, {"changed": changed, **({"claim": claim} if claim else {}),
+                                   "summary": f"{op} {target!r} on {kind} {nid}",
+                                   "next": self._next(MORE_NEXT) + hint})
 
     def _tier(self, confirmed: bool, clicked: bool = False) -> dict[str, str]:
         """v5 F3: the server-computed authorship tier of a claim this session writes; with a yes,
@@ -2350,19 +2370,32 @@ class Cortex:
                 return  # it was never proposed
             self.vault.write_text(self.vault.root / "inbox.md", inbox)
 
-    def _dismiss(self, page: str, section: str, text: str) -> dict[str, Any]:
+    def _dismiss(self, page: str, section: str, text: str, waiting: bool = True
+                 ) -> dict[str, Any]:
         """Plan 5a, the app's Dismiss on a page with no `## Not me` (the contract, the
         portrait): the waiting line leaves inbox.md and a `dismiss` change (its text's hash,
-        never the text) keeps it from being proposed again (`review.dismissed`)."""
+        never the text) keeps it from being proposed again (`review.dismissed`). Not `waiting`
+        (plan 5b, a repeated correction, page `corrections`): only the change."""
         if not self.app_clicks:
             raise invalid("Dismiss is the Cortex app's own action.")
-        with self.vault.lock():
-            inbox, _ = claims.unpropose(self._raw("inbox.md"), f"{section}: {text}")
-            self.vault.write_text(self.vault.root / "inbox.md", inbox)
+        if waiting:
+            with self.vault.lock():
+                inbox, _ = claims.unpropose(self._raw("inbox.md"), f"{section}: {text}")
+                self.vault.write_text(self.vault.root / "inbox.md", inbox)
         self.sessions.note("patched", change={
             "tool": "dismiss", "id": page, "kind": "me", "op": "dismiss", "target": section,
             "hash": review.text_hash(text), "confirm": "clicked"})
         return {"changed": True, "summary": f"dismissed a proposed line for me {page}"}
+
+    def _keep_both(self, page: str, pair: str) -> dict[str, Any]:
+        """Plan 5b, the app's Keep both on a conflict pair (`review.pair_key`): a `keep_both`
+        change, so the Review stops showing the pair; neither line changes."""
+        if not self.app_clicks:
+            raise invalid("Keep both is the Cortex app's own action.")
+        self.sessions.note("patched", change={
+            "tool": "keep_both", "id": page, "kind": "me", "op": "keep_both", "pair": pair,
+            "confirm": "clicked"})
+        return {"changed": True, "summary": "kept both lines"}
 
     def _claim_op(self, nid: str, op: str, target: str, text: str,
                   confirmed: bool, until: str | None = None,

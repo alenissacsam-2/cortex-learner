@@ -4,8 +4,16 @@
   teaching-contract rules), each with Approve and Dismiss;
 - expired: live claim lines past their own `(until …)` day (Retire);
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
-  at most STALE_PER_MONTH a month, oldest first.
-Contradictions and repeated corrections come in a later task, as a fourth list in `view`.
+  at most STALE_PER_MONTH a month, oldest first;
+- conflicts (plan 5b): pairs of live lines that likely clash (Keep both, Keep left, Keep
+  right): every `possible_update_of` pair cortex_patch recorded and not yet resolved, and any
+  two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`);
+- rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
+  me/core line (cortex.corrections; Approve or Dismiss).
+
+Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
+(never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
+stop words and negation words left out.
 
 The app's handlers (app/server.py) write through `mcp_server.Cortex` with `app_clicks` set,
 so every write is cortex_patch's or cortex_log's own code path."""
@@ -15,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import re
+import sys
 
 from cortex import claims
 from cortex.reflect import _PROPOSED, UNCONFIRMED, UNCONFIRMED_DAYS
@@ -28,6 +37,118 @@ STALE_PER_MONTH = 3
 PAGES = (*claims.PAGES, "portrait", "teaching-contract")
 SHOWN = 300  # characters of a line shown
 _CONFIRMED = re.compile(r"\(confirmed (\d{4}-\d\d-\d\d)\)")
+COS = 0.72  # cosine (warm embedder) from which two lines say about the same thing
+JACCARD = 0.6  # the same for word overlap, when the embedder is not loaded
+SHOWN_PAIRS = 5  # conflict pairs shown at a time
+_WORD = re.compile(r"[a-z0-9']+")
+_STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
+                  "this that so as by from you your".split())
+# a line "says no" with one of these or any word ending n't: never/always, don't/do, avoid/prefer
+_NEG = frozenset("no not never none nothing nor neither without avoid avoids avoiding stop "
+                 "hate hates dislike dislikes dont cannot".split())
+_VECS: dict = {}  # normalised line -> unit vector, from the embedder in _VECS_OF[0]
+_VECS_OF: list = [None]
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(claims.norm(text).replace("’", "'"))
+
+
+def negated(text: str) -> bool:
+    """Does the line say no (a `_NEG` word, or a word ending n't)?"""
+    return any(w in _NEG or w.endswith("n't") for w in _words(text))
+
+
+def _stem(w: str) -> str:
+    """shortcut: a crude suffix strip (using, uses, used, use -> us); a real stemmer if pairs
+    are missed."""
+    if len(w) > 4:
+        w = re.sub(r"(?:ing|ed|es|s)$", "", w)
+    return w.rstrip("e") if len(w) > 2 else w
+
+
+def _bag(text: str) -> frozenset:
+    return frozenset(_stem(w) for w in _words(text)
+                     if w not in _STOP and w not in _NEG and not w.endswith("n't"))
+
+
+def _warm(texts: list[str]) -> list | None:
+    """Unit vectors of `texts` from the bge embedder, only if this process has it loaded
+    already: never imports cortex.semantic or loads a model. None when not warm or it fails."""
+    sem = sys.modules.get("cortex.semantic")
+    embed = getattr(sem, "_embedder", None)
+    if embed is None:
+        return None
+    try:
+        if _VECS_OF[0] is not embed or len(_VECS) > 20000:
+            _VECS.clear()
+            _VECS_OF[0] = embed
+        if new := [t for t in dict.fromkeys(texts) if t not in _VECS]:
+            _VECS.update(zip(new, sem._embed(embed, new), strict=True))
+        return [_VECS[t] for t in texts]
+    except Exception:  # a model error must never cost the write or the view: words serve
+        return None
+
+
+def scorer(texts: list[str]):
+    """(score(i, j), cut) over `texts`: cosine and COS with a warm embedder, else the Jaccard
+    of `_bag`s and JACCARD. A pair scoring at least `cut` says about the same thing."""
+    vecs = _warm([claims.norm(t) for t in texts])
+    if vecs is not None:
+        return (lambda i, j: float(vecs[i] @ vecs[j])), COS
+    bags = [_bag(t) for t in texts]
+    return (lambda i, j: len(bags[i] & bags[j]) / (len(bags[i] | bags[j]) or 1)), JACCARD
+
+
+def collision(vault, page: str, text: str, today: str) -> dict | None:
+    """The live line of a non-private claim page (on a tie, `page`'s own) that `text`, a line
+    about to be appended to me/<page>, most likely updates: {page, id, text (raw note text)},
+    or None under the cut (`scorer`)."""
+    hidden = _private(vault)
+    live = [r for r in claims.rows(vault) if claims.is_live(r, today) and r["page"] not in hidden]
+    if not live or not claims.norm(text):
+        return None
+    score, cut = scorer([text, *(r["text"] for r in live)])
+    k = max(range(len(live)), key=lambda k: (score(0, k + 1), live[k]["page"] == page))
+    if score(0, k + 1) < cut:
+        return None
+    return {"page": live[k]["page"], "id": live[k]["id"], "text": live[k]["text"]}
+
+
+def pair_key(a: dict, b: dict) -> str:
+    """A conflict pair's key: both `page/id`, sorted, so either order is the same pair."""
+    return "|".join(sorted((f"{a['page']}/{a['id']}", f"{b['page']}/{b['id']}")))
+
+
+def conflicts(rows: list[dict], events: list[dict]) -> list[dict]:
+    """Up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that likely clash, as
+    {key, why, left, right} with raw rows: recorded `possible_update_of` pairs first (why
+    `update`, left the old line), then pairs at least as similar as the cut with exactly one
+    `negated` line (why `opposite`). A pair the user kept both of (a `keep_both` change) is
+    left out; Keep left or right retires the other line, so the pair is gone."""
+    voided, kept, out = _voided(events), set(), {}
+    by = {(r["page"], r["id"]): r for r in rows}
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if not isinstance(c, dict) or e.get("id") in voided:
+            continue
+        if c.get("tool") == "keep_both" and isinstance(c.get("pair"), str):
+            kept.add(c["pair"])
+        u = c.get("update_of")
+        if isinstance(u, dict) and isinstance(c.get("claim"), str):
+            old, new = by.get((u.get("page"), u.get("claim"))), by.get((c.get("id"), c["claim"]))
+            if old and new and old is not new:
+                out.setdefault(pair_key(old, new), {"why": "update", "left": old, "right": new})
+    score, cut = scorer([r["text"] for r in rows])
+    no = [negated(r["text"]) for r in rows]
+    for i in range(len(rows)):
+        if len(out) >= SHOWN_PAIRS + len(kept):  # enough to fill the list after `kept`
+            break
+        for j in range(i + 1, len(rows)):
+            if no[i] != no[j] and score(i, j) >= cut:
+                out.setdefault(pair_key(rows[i], rows[j]),
+                               {"why": "opposite", "left": rows[i], "right": rows[j]})
+    return [{"key": k, **v} for k, v in out.items() if k not in kept][:SHOWN_PAIRS]
 
 
 def text_hash(text: str) -> str:
@@ -140,6 +261,12 @@ def stale(rows: list[dict], events: list[dict], today: str) -> list[dict]:
     return out[:max(0, STALE_PER_MONTH - answered)]
 
 
+def live_rows(vault, events, today: str) -> list[dict]:
+    """The tiered live claim rows the Review works on: none private, none past its until."""
+    hidden = _private(vault)
+    return [r for r in claims.tiers(vault, events, today=today) if r["page"] not in hidden]
+
+
 def view(vault, events, today: str) -> dict:
     """The Review view and its badge `count`: every text is shown text (`_shown`)."""
     events = list(events)
@@ -150,5 +277,16 @@ def view(vault, events, today: str) -> dict:
     waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"])}
                for p in pending(vault, today)]
     old = stale(rows, events, today)
-    return {"pending": waiting, "expired": expired, "stale": old,
-            "count": len(waiting) + len(expired) + len(old)}
+
+    def side(r: dict) -> dict:
+        return {"page": r["page"], "id": r["id"], "text": _shown(r["text"])}
+
+    current = [r for r in rows if not claims.expired(r["text"], today)]  # = live_rows
+    pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
+              "right": side(c["right"])} for c in conflicts(current, events)]
+    from cortex import corrections  # reads the imported chats: only the app's Review asks
+    rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"]}
+             for x in corrections.proposals(vault, events, current)]
+    return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
+            "rules": rules,
+            "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)}

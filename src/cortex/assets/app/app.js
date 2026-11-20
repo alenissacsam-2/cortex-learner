@@ -1294,9 +1294,8 @@
         h('p', { class: 'help', text: 'Off (the default): private browsing pages stay out of git. On: they are saved in the history with everything else, so undo covers them and deleting one later leaves a copy in old commits.' })));
   }
 
-  /* Review (plan 5a): what waits for the user's own click. One quiet count in the nav, no
-     popups. Every text is the server's shown text, set with textContent. Contradictions and
-     repeated corrections come later, as a fourth board here. */
+  /* Review (plans 5a, 5b): what waits for the user's own click. One quiet count in the nav, no
+     popups. Every text is the server's shown text, set with textContent. */
   function badge(n) {
     const k = Number(n) > 0 ? Number(n) : 0, b = $('review-badge'), o = $('review-option');
     b.textContent = k ? String(k) : '';
@@ -1305,7 +1304,7 @@
     if (o) o.textContent = k ? `Review (${k})` : 'Review';
   }
   const PAGE = { 'teaching-contract': 'Teaching rule', preferences: 'Preferences', personality: 'Personality',
-    goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait' };
+    goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait', core: 'Core' };
   function renderReview(d) {
     badge(d.count);
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
@@ -1325,7 +1324,18 @@
         row(x.text, where(x), `Last confirmed ${x.since}`, [
           btn('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', { 'aria-label': `Still true: ${x.text}` }),
           btn('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, { 'aria-label': `Retire: ${x.text}` })])),
-      'Nothing to check this month.')));
+      'Nothing to check this month.')),
+      board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) =>
+        row(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [
+          btn('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, { 'aria-label': `Keep both: ${c.left.text} and ${c.right.text}` }),
+          btn('Keep left', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, { 'aria-label': `Keep only: ${c.left.text}` }),
+          btn('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, { 'aria-label': `Keep only: ${c.right.text}` })])),
+      'No lines seem to conflict.')),
+      board('Corrections you repeat', { note: String((d.rules || []).length) }, ...list((d.rules || []).map((x) =>
+        row(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [
+          btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
+          btn('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.text}` })])),
+      'No repeated corrections found.')));
   }
 
   /* Setup */

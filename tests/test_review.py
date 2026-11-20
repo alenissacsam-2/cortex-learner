@@ -218,7 +218,7 @@ const out = { errors };
     out.boards = $('review').querySelectorAll('h2').map((x) => x.textContent);
     out.rows = $('review').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
       r.querySelectorAll('button').map((b) => b.textContent)]);
-    DATA.routes['/api/review/approve'] = { ...DATA.routes['/api/review'], pending: [], count: 1 };
+    DATA.routes['/api/review/approve'] = { ...DATA.routes['/api/review'], pending: [], count: 3 };
     $('review').querySelectorAll('button').find((b) => b.textContent === 'Approve').fire('click');
     await tick();
     out.posted = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
@@ -239,15 +239,22 @@ def test_the_badge_and_the_review_page(tmp_path):
     view = {"pending": [{"key": "k1", "page": "teaching-contract", "section": "Rules",
                          "text": "<b>Quiz me</b>", "since": "2026-11-20"}],
             "expired": [], "stale": [{"page": "profile", "id": "c-aaaaa", "text": "Studies CS",
-                                      "since": "2025-01-01"}], "count": 2}
+                                      "since": "2025-01-01"}],
+            "conflicts": [{"key": "p1", "why": "opposite",
+                           "left": {"page": "preferences", "id": "c-bbbbb", "text": "Never tabs"},
+                           "right": {"page": "core", "id": "c-ccccc", "text": "<i>Tabs</i>"}}],
+            "rules": [{"key": "r1", "text": "<u>Stop using emojis</u>", "chats": 3}], "count": 4}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
         "routes": {"/api/review": view, "/api/status": status}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["badge"] == ["2", False, "Review (2)"]
-    assert out["boards"] == ["Waiting for your approval", "Past their end date", "Still true?"]
+    assert out["badge"] == ["4", False, "Review (4)"]
+    assert out["boards"] == ["Waiting for your approval", "Past their end date", "Still true?",
+                             "Lines that may conflict", "Corrections you repeat"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
-                           ["Studies CS", ["Still true", "Retire"]]]
+                           ["Studies CS", ["Still true", "Retire"]],
+                           ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
+                           ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]]]
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
-    assert out["after"] == ["1", False, 1]
+    assert out["after"] == ["3", False, 3]
