@@ -1240,8 +1240,9 @@ class Cortex:
             "Answer with this in mind; cite at most 2 pages as [[id]], only if they fit. "
             + (f"If the message is substantive, record cortex_log(kind='touch', "
                f"payload={{'ids': {touch}}}) once. " if touch else "Nothing to touch. ")
-            + "Record other durable things at once; ask yes/no before writing a preference "
-              "or personality line, then cortex_patch it with user_confirmed=true." + offer)
+            + "Record everything durable at once, unasked; about them: their own words -> "
+              "cortex_patch with user_confirmed=true, your inference without it (waits for "
+              "Approve in the app)." + offer)
             + (CHAT_NEXT.format(chat=chat) if chat else "")}
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
@@ -1817,7 +1818,8 @@ class Cortex:
         else:
             line = self._log_problem(p, key)
         if kind in ("self_report", "taught") and cid is None:
-            line += " (added to inbox.md)"
+            line += (" (added to inbox.md; not a concept yet: cortex_add(kind='concept', "
+                     "title=…, parent=…) it, then log it again)")
         hint = self.sessions.note("logged", cid, log_kind=kind)
         return {"recorded": 1, **extra, "display_line": line,
                 "next": self._next(MORE_NEXT) + hint}

@@ -12,8 +12,8 @@ Read and update the learner's model **only through the `cortex_*` tools**.
 - **Call `cortex_prime(prompt=<their message>)` before answering in every chat**, old ones you continue too (if none is in it yet); if a hook primed it, pass `related_only=true`.
 - **Every chat is logged in Cortex** (say so if asked): if prime returned `chat`, start each later turn with `cortex_log(kind="chat_turn", payload={chat, user, gist})`, unasked (user: their message verbatim; gist: your last answer in a line).
 - **Save everything as it happens, unasked; the user does nothing.** Never wait for "save"; after each save, one line: "Saved to Cortex: …".
-  - Topic: `cortex_log(kind="touch", payload={ids})` with prime's `touch`; new to Cortex: `cortex_add(kind="concept")`.
-  - You explained a concept: `cortex_log(kind="taught", payload={concept, summary})`, once per concept per chat.
+  - Topic: `cortex_log(kind="touch", payload={ids})` with prime's `touch`.
+  - You explained a concept: if new, `cortex_add(kind="concept", title=…, parent=…)` first; then `cortex_log(kind="taught", payload={concept, summary})`, once per chat.
   - You asked, they answered: `cortex_ask` before, `cortex_grade` after (`modes/grading.md`).
   - Source → `resource`; lasting idea → `note`; a choice they may revisit → `decision`; a life fact → `cortex_patch` me/…; a real talk ends → `journal` line.
   - About them: their own words → `cortex_patch` with `user_confirmed=true`, quoting them; your inference → without it (waits for Approve in the app). Don't stop to ask.
