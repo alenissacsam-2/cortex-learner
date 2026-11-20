@@ -215,6 +215,25 @@ def test_private_notes_and_concepts_stay_out_unless_unlocked(root):
     assert unlocked["v"] == public["v"] and hc.get()["feed"] == public["feed"]
 
 
+def test_auto_imported_chats_show_on_their_import_day_private_ones_unlocked(root):
+    old = "2026-03-02"  # chats from months ago, imported today
+    for pid, title, extra in (("old-chat", "An old chat", {}),  # as chat_import writes them
+                              ("secret-chat", "A private chat", {"private": True})):
+        _note(root, "resources", pid, {"title": title, "kind": "resource", "date": old, **extra})
+    log = EventLog(Vault(root))
+    for pid in ("old-chat", "secret-chat", "old-chat"):  # a changed transcript: saved again
+        log.append(session="import", kind="log", source="imported", now=NOW,
+                   fields={"payload": {"kind": "chat_saved", "source": "claude-code",
+                                       "chat_id": pid, "title": pid, "pages": [pid],
+                                       "auto": True, "hash": "h"}})
+    hc = _cache(root)
+    today = hc.get()["feed"]["today"]
+    assert [(i["id"], i["kind"]) for i in today if i["id"] == "old-chat"] == [("old-chat", "chat")]
+    assert "secret-chat" not in json.dumps(hc.get()) and "A private chat" not in json.dumps(
+        hc.get()["feed"])
+    assert "secret-chat" in {i["id"] for i in hc.get(private=True)["feed"]["today"]}
+
+
 # ---- the routes ----
 
 
@@ -445,18 +464,21 @@ def test_the_stem_draws_each_site_below_the_lobes_with_a_few_links(brain_vault):
     assert sorted(ids[stem["first"]:]) == [f"site:s{k:02d}.example" for k in range(12)]
     old, new = _xyz(plain_brain), _xyz(brain)
     assert all(new[i] == xyz for i, xyz in old.items())  # the lobes' layout never moves
-    assert brain["lobes"] == plain_brain["lobes"] and brain["mesh"] == plain_brain["mesh"]
-    (a, b, rad) = brainmap.STEM
+    assert brain["lobes"] == plain_brain["lobes"]
+    assert brain["mesh"][:-1] == plain_brain["mesh"] and brain["mesh"][-1]["name"] == "stem"
+    shell_y = np.frombuffer(base64.b64decode(plain_brain["mesh"][0]["pos"]), "<f4")[1::3].min()
+    tube = np.frombuffer(base64.b64decode(brain["mesh"][-1]["pos"]), "<f4").reshape(-1, 3)
+    (a, b), rad = brainmap.STEM_COL, brainmap.STEM_R
 
-    def off_axis(p):  # distance from the stem capsule's axis, and the share along it
+    def off_axis(p):  # distance from the column's axis, and the share along it
         a_, ab = np.array(a), np.array(b) - np.array(a)
         s = float(np.clip(np.dot(np.array(p) - a_, ab) / ab.dot(ab), 0, 1))
         return float(np.linalg.norm(np.array(p) - a_ - s * ab)), s
-    for k in range(12):  # in the stem, below where it leaves the lobes
-        d, s = off_axis(new[f"site:s{k:02d}.example"])
-        assert d <= rad and s >= brainmap.STEM_SPAN[0] - 0.01
-    assert all(off_axis(p)[0] > brainmap.STEM_R or off_axis(p)[1] < brainmap.STEM_SPAN[0]
-               for p in old.values())  # and no page is there
+    for k in range(12):  # in a column below the shell, inside the tube drawn round it
+        p = new[f"site:s{k:02d}.example"]
+        assert off_axis(p)[0] <= rad + 1e-6 and p[1] < shell_y - 0.05
+        assert tube[:, 1].min() < p[1] and abs(p[2] - a[2]) < tube[:, 2].max() - a[2]
+    assert all(p[1] > shell_y for p in old.values())  # and no page is there
     # ordered by first seen along the stem: the oldest site nearest the lobes
     by_first = [s[0] for s in sorted(stem["sites"], key=lambda s: (s[3], s[0]))]
     ys = [new[f"site:{s}"][1] for s in by_first]

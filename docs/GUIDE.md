@@ -119,7 +119,7 @@ Every import ends with a report line, for example `Obsidian: read 10, imported 6
 
 ### Past AI chats saved automatically
 
-While the app runs, every 5 minutes (the first time a minute after it starts) it saves each new or changed past AI chat as a chat page in `resources/`: your Claude Code chats (in a terminal or the desktop app's Code tab), your Cowork tasks, your Chat-tab chats and the chats you imported. No AI model is involved. An ordinary chat keeps only your own messages, with secrets removed and the length capped. A coding session (one where files were edited or commands run) becomes a short summary: the project, the dates, what you asked (first lines), the files touched and the commit messages. It never includes code, diffs or command output. Newest chats go first, and the Status line shows the progress and time left. A chat you are still in waits until it has been quiet for 2 minutes, and a chat that grows later updates its page in place. Pages you edited or deleted, chats you saved yourself and chats an earlier import already saved are left alone. Chats in a category you set to skip are never saved, a category you keep on this computer makes the page private, and sessions in a folder you excluded are skipped. You get one notification per run that saved something. Turn it off with **Save new AI chats to your notes automatically** on the Status page. `cortex import-chats --auto` runs one pass by hand.
+While the app runs, every 5 minutes (the first time a minute after it starts) it saves each new or changed past AI chat as a chat page in `resources/`: your Claude Code chats (in a terminal or the desktop app's Code tab), your Cowork tasks, your Chat-tab chats and the chats you imported. No AI model is involved. An ordinary chat keeps only your own messages, with secrets removed and the length capped. A coding session (one where files were edited or commands run) becomes a short summary: the project, the dates, what you asked (first lines), the files touched and the commit messages. It never includes code, diffs or command output. Newest chats go first, and the Status line shows the progress and time left. A chat you are still in waits until it has been quiet for 2 minutes, and a chat that grows later updates its page in place. Pages you edited or deleted, chats you saved yourself and chats an earlier import already saved are left alone. Chats in a category you set to skip are never saved, a category you keep on this computer makes the page private, and sessions in a folder you excluded are skipped. You get one notification per run that saved something, and the saved chats show in the home page's live feed on the day they were saved (private ones only while the lock is open). Turn it off with **Save new AI chats to your notes automatically** on the Status page. `cortex import-chats --auto` runs one pass by hand.
 
 **Chat-tab chats.** The desktop Chat tab keeps no file Cortex can read, so Cortex logs each chat while it happens: `cortex_prime` records your first message, and the chat records each later message of yours, with a one-line gist of its previous answer, without asking. The log sits in `~/.cortex/claude-chat/claude-live/` with secrets removed and becomes a chat page of your messages, like any other chat, once the chat has been quiet for 2 minutes. Ask a chat whether it saves your chats and it should say every chat is logged in Cortex. To check the connection, run `cortex doctor`: for Claude Desktop and Claude Code it shows whether Cortex is set up, whether Claude Code has the prime hook, and when each one last called Cortex. A model can forget a turn; the first message of each chat is always logged.
 
@@ -191,11 +191,12 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - A faint outline shows the shape of a brain.
 
 **The brain stem: your websites** (the app's home only)
-- Once your browsing is in Cortex, the stem below the brain holds one dot per website, the oldest you found at the top.
+- Once your browsing is in Cortex, the stem below the brain holds one dot per website, the oldest you found at the top. It is a column inside a faint tube, and the overview shows the brain and the stem together. Your 5 most visited sites are named.
 - A dot's size is your visits, its brightness your last visit (it dims with time but never goes out) and its colour the site's category.
 - Faint fibres join a site to its topic and to up to three similar sites.
 - Click a site to see the days you visited it, what you searched there, the searches that led you there and the pages you read. This comes from Cortex's browsing store on this computer, never from a vault page.
-- To stay quick, the stem shows your 1,500 most visited sites plus up to 1,000 more from the last 30 days. The legend says how many others stay in the store.
+- To stay quick, the stem shows your 1,500 most visited sites plus up to 1,000 more from the last 30 days. The legend says how many others stay in the store and which colour is which category.
+- On the Brain tab, the outline's **Browsing** group lists your 20 most visited sites; click one, or press Enter on it, to open its panel.
 - Private sites appear only while the lock is open, as a hollow ring, and leave again when it locks. The 2D map and Export snapshot have no stem.
 
 **Moving around**
@@ -212,8 +213,10 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - **Spin:** off by default. While on, it pauses when you move the mouse and resumes after 3 seconds.
 - **Alive:** neurons fire now and then. It sleeps after 2 minutes idle.
 - **Today:** replays the pages you saved today.
+- **Stem:** flies to the websites in the brain stem; press it again for the whole brain. It shows only once your browsing is in Cortex.
 - **Unsorted chats:** shows chats with no topic as a faint ring under the brain.
 - **Look:** opens the Look panel.
+- **Legend** (bottom left): what the colours, sizes and fibres mean. It is open on your first visit and folded after that; click it to open or fold it, and the page remembers your choice.
 
 **The Look panel**
 - It has 12 presets. "Cortex (default)" is first.
@@ -378,7 +381,7 @@ Before the app or the extension sends the token or any visit to port 8799, they 
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
 - **The Cortex app on Windows:** its own window and an amber tray icon. Closing the window keeps Cortex in the tray; click the icon to bring it back, right-click it for **Start with Windows** and **Quit**. It notifies you once a day when reviews are due, 3 days and 1 day before an exam, when a long task finishes or fails, never naming a private page, and once when a new version is ready. These are `app: {notify: {reviews, exams, jobs, updates}}` in `~/.cortex/config.yaml` (all on); the window's size and place are kept in `~/.cortex/desktop.json`.
-- **Updates:** the app checks for a new version when it starts and every 6 hours. An installed Cortex downloads and checks it in the background; one run from source just notes it. Either way a **Restart to update** button appears at the top of the home page and on Status → Updates. Nothing is installed until you click it.
+- **Updates:** the app checks for a new version when it starts and every 6 hours. An installed Cortex downloads and checks it in the background; one run from source just notes it. Either way a **Restart to update** button appears at the top of the home page and on Status → Updates (in a narrow window it is an icon; hover it for the version). Nothing is installed until you click it. A downloaded installer is kept, so after a restart the button is back without downloading it again.
 
 ### Vault history in git: your choice
 

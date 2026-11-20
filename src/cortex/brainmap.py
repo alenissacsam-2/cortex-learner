@@ -1168,8 +1168,10 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
 
 # ---- the brain stem: the owner's websites (the app's live home only) ----------------------
 
-STEM_SPAN, STEM_R = (0.2, 1.0), 0.05  # the share of the stem capsule's axis the sites fill
-# (its part below the lobes) and their farthest distance from the axis
+STEM_COL, STEM_R = ((0.0, -0.92, -0.36), (0.0, -1.66, -0.36)), 0.05  # the sites' column below
+# the shell (top: first seen, bottom: newest) and their farthest distance from its axis
+STEM_TUBE = ((0.0, -0.70, -0.36), (0.0, -1.74, -0.36), 0.085, 0.06)  # the faint tube drawn
+# round them: from inside the stem capsule down past the column's end; top and bottom radii
 STEM_LINKS, HUB_SITES = 3, 10  # fibres per site at most; sites tied to one topic hub page at most
 _CATS = (*lists.SITE_CATEGORIES, *lists.CATEGORIES)
 
@@ -1203,25 +1205,54 @@ def stem_order(rows: list[dict], placed: dict) -> None:
 
 
 def stem_xyz(sites: list[str], share: list[float]) -> np.ndarray:
-    """Each site's point in the brain stem: along the axis by its share, round it at a
-    seeded angle and radius (even over the cross-section), pulled toward the axis where the
-    surface's folds come in."""
-    a, b, _ = (np.array(STEM[0]), np.array(STEM[1]), STEM[2])
+    """Each site's point in the stem's column (STEM_COL) below the shell: down the axis by
+    its share, round it at a seeded angle and radius (even over the cross-section)."""
+    a, b = np.array(STEM_COL[0]), np.array(STEM_COL[1])
     ax = _unit(b - a)
     e1 = _unit(np.cross(ax, (1.0, 0.0, 0.0)))
     e2 = np.cross(ax, e1)
     u = np.array([_u(f"stem:{s}", 3) for s in sites]).reshape(-1, 3)
-    lo, hi = STEM_SPAN
-    s = lo + (hi - lo) * np.clip(np.asarray(share, float) + (u[:, 2] - 0.5) * 0.01, 0, 1)
+    s = np.clip(np.asarray(share, float) + (u[:, 2] - 0.5) * 0.01, 0, 1)
     axis = a + s[:, None] * (b - a)
     ang, rad = 2 * np.pi * u[:, 1], STEM_R * np.sqrt(u[:, 0])
-    p = axis + rad[:, None] * (np.cos(ang)[:, None] * e1 + np.sin(ang)[:, None] * e2)
-    for _ in range(4):
-        out = _field(p) > -MARGIN / 2 if len(p) else np.zeros(0, bool)
-        if not out.any():
-            break
-        p[out] = axis[out] + 0.6 * (p[out] - axis[out])
-    return p
+    return axis + rad[:, None] * (np.cos(ang)[:, None] * e1 + np.sin(ang)[:, None] * e2)
+
+
+@lru_cache(maxsize=1)
+def stem_tube() -> dict:
+    """The mesh body (`build`'s mesh format, named "stem", no lobe) of the tube round the
+    stem's column: a tapered cylinder (STEM_TUBE) with a rounded bottom and an open top
+    inside the stem capsule."""
+    a, b, r0, r1 = np.array(STEM_TUBE[0]), np.array(STEM_TUBE[1]), *STEM_TUBE[2:]
+    around, length = 24, float(np.linalg.norm(b - a))
+    prof = [(t * length, r0 + (r1 - r0) * t) for t in np.linspace(0, 1, 14)]  # (depth, radius)
+    prof += [(length + r1 * math.sin(q), r1 * math.cos(q)) for q in np.linspace(0.3, 1.35, 5)]
+    ax = _unit(b - a)
+    e1 = _unit(np.cross(ax, (1.0, 0.0, 0.0)))
+    e2 = np.cross(ax, e1)
+    ang = 2 * np.pi * np.arange(around) / around
+    rim = np.cos(ang)[:, None] * e1 + np.sin(ang)[:, None] * e2  # unit, round the axis
+    pos, nrm = [], []
+    for k, (d, r) in enumerate(prof):
+        d0, ra = prof[max(k - 1, 0)]
+        d1, rb = prof[min(k + 1, len(prof) - 1)]
+        tn = np.array([d1 - d0, ra - rb])  # the profile's outward normal: (out, along)
+        tn /= np.linalg.norm(tn)
+        pos.append(a + ax * d + rim * r)
+        nrm.append(rim * tn[0] + ax * tn[1])
+    pos.append((a + ax * (length + r1))[None])
+    nrm.append(ax[None])
+    idx = []
+    for k in range(len(prof) - 1):
+        for j in range(around):
+            p, q = k * around + j, k * around + (j + 1) % around
+            idx += [p, q + around, q, p, p + around, q + around]
+    pole, base = len(prof) * around, (len(prof) - 1) * around
+    for j in range(around):
+        idx += [base + j, pole, base + (j + 1) % around]
+    vp = np.concatenate(pos)
+    return {"name": "stem", "pos": _b64(vp, "<f4"), "nrm": _b64(np.concatenate(nrm), "<f4"),
+            "idx": _b64(np.array(idx), "<u4"), "lobe": _b64(np.full(len(vp), 65535), "<u2")}
 
 
 def _stem_links(sites: list[dict], hub_at: dict[str, int], first: int) -> list[tuple[int, int]]:
@@ -1268,6 +1299,7 @@ def with_stem(brain: dict, sites: list[dict], placed: dict, total: int) -> dict:
     (`site:<site>`) after the pages, outside every lobe (lobe 65535), weighted by visits; their
     fibres (`_stem_links`, as similar-meaning fibres); and `stem` {first, total, shown, sites:
     [[site, category, visits, first day, last day, private]], colors: {category: hex}}.
+    The mesh gains the faint tube round them (`stem_tube`).
     `sites`: site_rows records in node order, each with `first_day`, `last_day` and
     `private`; `placed` holds their axis shares (`stem_order`). The blob's other parts are
     shared, not copied."""
@@ -1307,7 +1339,7 @@ def with_stem(brain: dict, sites: list[dict], placed: dict, total: int) -> dict:
               "k": _b64(np.concatenate([np.frombuffer(base64.b64decode(fb["k"]), "u1"),
                                         np.ones(len(links))]), "u1")}
     return {**brain, "nodes": nodes, "near": {"ids": _b64(near, "<u4" if n >= 65535 else "<u2")},
-            "fibres": fibres, "stem": {
+            "fibres": fibres, "mesh": [*brain["mesh"], stem_tube()], "stem": {
                 "first": n0, "total": total, "shown": m,
                 "sites": [[r["site"], r["category"] or "other", r["visits"], r["first_day"],
                            r["last_day"], int(r["private"])] for r in sites],
