@@ -39,9 +39,12 @@ def _append(vault: Vault, row: dict) -> None:
 
 
 def log_recall(vault: Vault, tool: str, query: str, ids: list[str]) -> str:
-    """Append a recall row; returns its id for `log_open`."""
+    """Append a recall row; returns its id for `log_open`. Secrets in the query are redacted
+    (vault.write_text skips its secret scan under .cortex/)."""
+    from cortex.chats import redact
+
     rid = str(ULID())
-    _append(vault, {"rid": rid, "tool": tool, "query": query, "ids": ids})
+    _append(vault, {"rid": rid, "tool": tool, "query": redact(query), "ids": ids})
     return rid
 
 

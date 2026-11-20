@@ -446,3 +446,60 @@ def test_recall_cli_explain_writes_no_recall_log(root, monkeypatch):
     assert "cos 1.000  kw 0.000" in out.output and "chunk@0" in out.output
     assert "missed:" in out.output and "pasta: below limit" in out.output
     assert recall_log.rows(Vault(root)) == []
+
+
+def test_a_page_whose_status_no_longer_holds_ranks_below_the_current_one(root):
+    note(root, "decisions/a-old.md", "title: Car plan\nstatus: superseded\n", CARS.format(
+        t="Car plan", tl="", z=""))
+    note(root, "decisions/b-new.md", "title: Car plan\nstatus: accepted\n", CARS.format(
+        t="Car plan", tl="", z=""))
+    note(root, "projects/c-done.md", "title: Car plan\nstatus: shipped\n", CARS.format(
+        t="Car plan", tl="", z=""))
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    sc = {h["id"]: h["score"] for h in semantic.recall(idx, "vehicle", FakeEmbed(), hops=0)}
+    # equal text: by id the old one would sort first; a shipped project is still true history
+    assert sc["b-new"] == sc["c-done"] == pytest.approx(sc["a-old"] / semantic.STALE_WEIGHT)
+    assert semantic._factors(idx, "a-old", False, None) == {"status": semantic.STALE_WEIGHT}
+
+
+def test_a_recent_journal_or_chat_page_edges_out_an_old_one(root, monkeypatch):
+    monkeypatch.setattr(semantic, "_today", lambda: "2026-11-20")
+    for day in ("2025-01-10", "2026-11-10"):
+        note(root, f"journal/{day}.md", f"title: Journal {day}\n", CARS.format(
+            t=f"Journal {day}", tl="", z=""))
+    for name, day in (("gem-a", "2025-01-10"), ("gem-b", "2026-11-10")):
+        tl = TIMELINE.replace("2026-05-05", day)
+        note(root, f"resources/{name}.md", "title: Gem cars\n", CARS.format(
+            t="Gem cars", tl=tl, z=""))
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    got = ids(semantic.recall(idx, "vehicle", FakeEmbed(), hops=0, limit=20))
+    assert got.index("2026-11-10") < got.index("2025-01-10")
+    assert got.index("gem-b") < got.index("gem-a")
+    f = semantic._factors(idx, "gem-b", False, None)
+    assert f["chat"] == semantic.CHAT_WEIGHT
+    assert f["recency"] == pytest.approx(1 + 0.12 * np.exp(-10 / 180))
+    assert semantic._factors(idx, "2025-01-10", False, None)["recency"] < 1.02
+    # an undated page, and a dated page of another kind, are unchanged
+    assert semantic._weight(idx, "engines", False, None) == 1.0
+    note(root, "notes/dated.md", "title: Dated\ndate: 2026-11-19\n", "# Dated\n\ncar")
+    idx = Index(v, Catalog.load(v))
+    assert semantic._factors(idx, "dated", False, None) == {}
+
+
+def test_explain_shows_the_weight_factors(root, monkeypatch):
+    monkeypatch.setattr(semantic, "_today", lambda: "2026-05-05")
+    note(root, "resources/gem-cars.md", "title: Gem cars\n",
+         CARS.format(t="Gem cars", tl=TIMELINE, z=""))
+    note(root, "decisions/old-cars.md", "title: Old cars\nstatus: retired\n",
+         CARS.format(t="Old cars", tl="", z=""))
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    ex = {}
+    hits = semantic.recall(idx, "vehicle", FakeEmbed(), hops=0, explain=ex)
+    parts = {p["id"]: p for p in semantic.explained(idx, ex, hits)[0]}
+    assert parts["gem-cars"]["factors"] == {"chat": 0.6, "recency": 1.12}
+    assert parts["gem-cars"]["weight"] == pytest.approx(0.6 * 1.12)
+    assert parts["old-cars"]["factors"] == {"status": 0.5}
+    assert parts["engines"]["factors"] == {} and parts["engines"]["weight"] == 1.0

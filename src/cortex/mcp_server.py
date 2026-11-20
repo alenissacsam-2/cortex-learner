@@ -1091,6 +1091,8 @@ class Cortex:
         if out["kind"] in ("resource", "note") and EXTERNAL_SOURCE.match(
                 str(out["fields"].get("source") or "")):
             self.sessions.expose()
+        elif out["kind"] == "browse":  # a browse page holds third-party titles and search terms
+            self.sessions.expose()
         elif out["kind"] == "resource":  # an imported chat page holds another assistant's text
             from cortex import semantic
 

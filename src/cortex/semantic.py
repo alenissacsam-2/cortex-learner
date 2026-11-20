@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -32,13 +33,15 @@ import sys
 import threading
 import time
 from contextlib import closing, contextmanager
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
 
 from cortex import vecstore
+from cortex.events import local_day
 from cortex.index import STOPWORDS, Index, _one_line
-from cortex.topics import page_source
+from cortex.topics import page_date, page_source
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +72,11 @@ QUERY_PREFIX = "Represent this sentence for searching relevant passages: "  # bg
 DECAY = 0.5  # score factor per graph hop
 MAX_LIMIT = 20
 CHAT_WEIGHT = 0.6  # imported chat transcripts are long and noisy: the user's own pages win ties
+# a page whose status says it no longer holds, so an old decision never outranks its successor
+STALE_WEIGHT = 0.5
+STALE = {("decision", "superseded"), ("decision", "retired"), ("project", "archived"),
+         ("loop", "dropped")}
+RECENT_BOOST, RECENT_DAYS = 0.12, 180  # a dated journal or chat page: up to +12%, fading
 BATCH = 64
 PROGRESS_S = 5.0  # a long embedding pass says how far it got
 # vault root -> (the store's stamp as last seen, cache, stacked rows or None)
@@ -269,13 +277,41 @@ def is_chat(n: dict) -> bool:
     return n["kind"] == "resource" and bool(page_source(n["body"]))
 
 
-def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None) -> float:
-    """A page's score factor after the floors: its `quiet` weight (harvest.quiet; 0 hides a
-    folded copy even with `chats`), else CHAT_WEIGHT for a chat page; `chats` lifts all but 0."""
+def _today() -> str:
+    """The local day recency counts from (tests patch it)."""
+    return local_day(datetime.now(UTC))
+
+
+def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None) -> dict:
+    """A page's score factors other than 1 after the floors: `quiet`, its harvest.quiet weight
+    (0 hides a folded copy even with `chats`), else `chat`, CHAT_WEIGHT for a chat page (`chats`
+    lifts both but 0); `status`, STALE_WEIGHT for a STALE status; `recency`, up to
+    1 + RECENT_BOOST for a journal or chat page dated in the last months."""
     q = (quiet or {}).get(id)
-    if q == 0 or (q is not None and not chats):
-        return q
-    return 1.0 if chats or not is_chat(index._notes[id]) else CHAT_WEIGHT
+    if q == 0:
+        return {"quiet": 0.0}
+    n = index._notes[id]
+    chat = is_chat(n)
+    f = {}
+    if q is not None:
+        if not chats:
+            f["quiet"] = q
+    elif chat and not chats:
+        f["chat"] = CHAT_WEIGHT
+    if (n["kind"], str(n["fields"].get("status"))) in STALE:  # str: a YAML list is unhashable
+        f["status"] = STALE_WEIGHT
+    if (chat or n["kind"] == "journal") and (d := page_date(id, n["fields"], n["body"])):
+        try:
+            age = max(0, (date.fromisoformat(_today()) - date.fromisoformat(d)).days)
+            f["recency"] = 1 + RECENT_BOOST * math.exp(-age / RECENT_DAYS)
+        except ValueError:  # a malformed day (2026-13-45) gets no boost
+            pass
+    return f
+
+
+def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None) -> float:
+    """The product of the page's `_factors`; 0 drops it."""
+    return math.prod(_factors(index, id, chats, quiet).values(), start=1.0)
 
 
 def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = False,
@@ -690,7 +726,8 @@ def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,
     `at` is the start of the page's best chunk in its filled body (absent for chunk 0).
     Imported chat pages (`is_chat`) score x CHAT_WEIGHT after the floors, unless `chats`;
     `quiet` ({id: weight}, harvest.quiet) overrides that weight, and weight 0 drops the page,
-    from the graph neighbours too, even with `chats`.
+    from the graph neighbours too, even with `chats`. A STALE page scores x STALE_WEIGHT and a
+    recent journal or chat page up to x(1 + RECENT_BOOST) (`_factors`).
     With `rerank_with` (a `load_reranker` scorer) the top RERANK_POOL are reordered by it.
     `explain` (a dict) is filled with the score parts for `explained`."""
     limit = max(1, min(MAX_LIMIT, int(limit)))
@@ -794,7 +831,8 @@ def explained(index: Index, explain: dict, hits: list[dict],
               misses: int = 0) -> tuple[list[dict], list[dict]]:
     """The score parts of each hit, and of the `misses` best pages that missed the cut, from a
     `recall(explain=...)` dict: {id, cos (raw best-chunk cosine, None without the model), kw
-    (BM25 scaled to the best hit), cover (share of query terms), weight, score, rerank?, at,
+    (BM25 scaled to the best hit), cover (share of query terms), weight, factors (`_factors`,
+    whose product is the weight), score, rerank?, at,
     chunk (its text without the title line), via?, reason (misses only)}. Read-only."""
     raw_cos, kw, cover = explain["cos"], explain["kw"], explain["cover"]
     score, (w_cos, w_kw), rr = explain["score"], explain["w"], explain.get("rerank", {})
@@ -805,8 +843,10 @@ def explained(index: Index, explain: dict, hits: list[dict],
     def parts(i: str, h: dict | None = None) -> dict:
         at = explain["at"].get(i, 0)
         chunk = _chunk_text(index._notes[i], at).split("\n", 1)[-1] if raw_cos else ""
+        f = _factors(index, i, explain["chats"], explain["quiet"])
         return {"id": i, "cos": raw_cos.get(i), "kw": kw.get(i, 0.0), "cover": cover.get(i),
-                "weight": weight(i), "score": h["score"] if h else round(score.get(i, 0.0), 3),
+                "weight": weight(i), "factors": {k: round(v, 3) for k, v in f.items()},
+                "score": h["score"] if h else round(score.get(i, 0.0), 3),
                 **({"rerank": round(rr[i], 3)} if i in rr else {}), "at": at,
                 "chunk": _one_line(chunk)[:80], **({"via": h["via"]} if h and "via" in h else {})}
 

@@ -3,8 +3,10 @@ runs) imports new browser history in the background. It opens no window and no n
 
 From AUTO_FIRST_S after start, then every AUTO_EVERY_S, it checks whether the last import is older
 than `browse.auto_import_hours`; when it is, it imports the new visits of the browsers and profiles
-the user imported before (`run_import`). Once, DEEPEN_IDLE_S after start, the local model's
-deepen pass runs when one is enabled. Nothing that holds a URL or a title is ever logged.
+the user imported before (`run_import`). Once per start, from DEEPEN_IDLE_S after start, the
+local model's deepen pass runs when that model is already loaded and the PC is idle (it never
+loads one); until then it asks again every AUTO_EVERY_S. Nothing that holds a URL or a title is
+ever logged.
 
 It was also the capture extension's endpoint on 127.0.0.1:8799 until 0.3.2, which removed the
 extension. The inbox files the extension wrote still import (cortex.browse.build), but no new
@@ -23,7 +25,7 @@ from cortex.vault import Vault, VaultError
 
 log = logging.getLogger(__name__)
 
-DEEPEN_IDLE_S = 30 * 60  # the local LLM's deepen pass runs once, this long after start
+DEEPEN_IDLE_S = 30 * 60  # the local LLM's deepen pass runs once, from this long after start
 AUTO_IMPORT_HOURS = 6  # browse.auto_import_hours default; 0 turns the automatic import off
 AUTO_FIRST_S = 60  # the first automatic-import check after a start
 AUTO_EVERY_S = 10 * 60  # then this often
@@ -148,16 +150,25 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     return r
 
 
-def run_deepen(v: Vault, say=None, budget_s: float | None = None) -> dict | None:
+def run_deepen(v: Vault, say=None, budget_s: float | None = None,
+               background: bool = False) -> dict | None:
     """The local LLM's pass over the site pages (cortex.browse.sites.deepen), each page's runner
     picked by `runner_for` (visible pages may go to the cloud runner when cloud processing is
     on), then the private browse vectors while the PC is idle (background work); None when
-    neither runner is available. The cloud runner's run leaves one counts-only audit line."""
-    from cortex import cloudllm, semantic
+    neither runner is available. The cloud runner's run leaves one counts-only audit line.
+    `background` (the receiver): the local model only when it is already loaded and the PC is
+    idle (`idle_runner`); while a local model is set up but not ready, None, so it waits. The
+    manual command may start the runner and load the model (`local_runner`)."""
+    from cortex import cloudllm, localllm, semantic
     from cortex.browse import sites
 
     say = say or _say
-    local, budget = local_runner(budget_s)
+    if background:
+        local, budget = idle_runner(budget_s)
+        if local is None and localllm.enabled():
+            return None  # not loaded or not idle: a cloud-only run now would leave the hidden pages
+    else:
+        local, budget = local_runner(budget_s)
     cloud = cloudllm.find() if load_settings().cloud_processing else None
     if local is None and cloud is None:
         return None
@@ -225,7 +236,8 @@ def summary(r: dict, took: float) -> str:
 class Processor:
     """Runs `run_import` on the sources imported before (`auto_sources`) when the last import is
     older than browse.auto_import_hours (checked AUTO_FIRST_S after start, then every
-    AUTO_EVERY_S), and the local LLM's deepen pass once, DEEPEN_IDLE_S after start; `tick` is the
+    AUTO_EVERY_S), and the local LLM's deepen pass once, from DEEPEN_IDLE_S after start, when
+    the model is loaded and the PC idle (else asked again every AUTO_EVERY_S); `tick` is the
     only runner and never overlaps itself. `clock` (monotonic) and `now` (wall time, for the last
     import's age) are injectable for tests."""
 
@@ -241,7 +253,7 @@ class Processor:
 
     def tick(self) -> bool:
         """Run the import if it is due and none is running, else the local LLM's deepen pass
-        once DEEPEN_IDLE_S after start; True if either ran."""
+        once, from DEEPEN_IDLE_S after start; True if either ran."""
         with self._lock:
             now = self.clock()
             picked = None
@@ -253,8 +265,8 @@ class Processor:
             if self.processing or not (picked or deep):
                 return False
             self.processing = True
-            if deep:
-                self._deepened = True
+            if deep:  # spent only when it ran (`_deepen`); else asked again after this long
+                self._deepen_at = now + AUTO_EVERY_S
         if deep:
             return self._deepen()
         self.say(f"last import over {auto_import_hours():g} hours ago: importing new history")
@@ -280,10 +292,11 @@ class Processor:
         return True
 
     def _deepen(self) -> bool:
-        """The deepen pass; False when no local LLM is enabled and answering."""
+        """The deepen pass with the loaded model on an idle PC only (never a model load); False
+        when it could not run yet, so `tick` tries again AUTO_EVERY_S later."""
         r = None
         try:
-            r = run_deepen(self.v, say=self.say)
+            r = run_deepen(self.v, say=self.say, background=True)
             if r is not None:
                 self.say(f"deepen done: {r.get('described', 0)} sites described, "
                          f"{r.get('left', 0)} left")
@@ -294,6 +307,7 @@ class Processor:
         finally:
             with self._lock:
                 self.processing = False
+                self._deepened = r is not None  # once per start, counted only when it ran
         return r is not None
 
     def loop(self, stop: threading.Event, every: float = 1.0) -> None:

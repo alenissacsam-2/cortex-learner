@@ -82,6 +82,16 @@ def test_recall_log_rows_eval_set_and_cap(root, monkeypatch):
     assert len(lines) == 2 and recall_log.rows(v)[-1]["id"] == "lc-1"  # the oldest go first
 
 
+def test_recall_log_redacts_secrets_in_the_query(root):
+    v = Vault(root)
+    key = "sk-" + "a" * 24  # a SECRET_RES pattern, not a real key
+    recall_log.log_recall(v, "cortex_recall", f"why does {key} fail", [])
+    recall_log.log_recall(v, "cortex_recall", "two pointers", [])
+    rows = recall_log.rows(v)
+    assert rows[0]["query"] == "why does [redacted] fail" and rows[1]["query"] == "two pointers"
+    assert key not in (root / recall_log.FILE).read_text(encoding="utf-8")
+
+
 def test_recall_log_never_fails_the_tool(root, monkeypatch):
     v = Vault(root)
 

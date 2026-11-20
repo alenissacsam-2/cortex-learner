@@ -507,6 +507,18 @@ def test_reading_a_chat_page_exposes_the_session(core, vault):
     assert tiers(vault)["likes diagrams"] == "exposed"
 
 
+def test_reading_a_browse_page_exposes_the_session(core, vault):
+    p = vault / "browse/2026-11-01.md"  # a public browse day page: third-party titles
+    p.parent.mkdir(exist_ok=True)
+    p.write_text("---\ntitle: Browsing on 1 November\n---\n- example.com: a page title\n",
+                 encoding="utf-8")
+    call(core, "cortex_start", mode="history")
+    call(core, "cortex_read", id="two-pointers")
+    assert core.sessions.current.exposed is False
+    assert call(core, "cortex_read", id="2026-11-01")["kind"] == "browse"
+    assert core.sessions.current.exposed is True
+
+
 # ---- 8. quieting ----------------------------------------------------------------------
 
 QUIET = {"chat-car-3a": harvest.QUIET_WEIGHT, "chat-car-2-copy": 0.0}

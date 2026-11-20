@@ -303,15 +303,53 @@ def test_a_vector_failure_is_reported_not_raised(vault, monkeypatch):
 
 def test_the_receiver_deepens_once_30_minutes_after_start(tmp_path, monkeypatch):
     runs = []
-    monkeypatch.setattr(bs, "run_deepen", lambda v, say=None: runs.append(1) or {})
+    monkeypatch.setattr(bs, "run_deepen",
+                        lambda v, say=None, background=False: runs.append(background) or {})
     t = [0.0]
     p = bs.Processor(bs.Vault(tmp_path), clock=lambda: t[0], say=lambda s: None)
     t[0] = bs.DEEPEN_IDLE_S - 1
     assert not p.tick()
     t[0] = bs.DEEPEN_IDLE_S
-    assert p.tick() and runs == [1]
+    assert p.tick() and runs == [True]  # the background rule: loaded model, idle PC
     t[0] += bs.DEEPEN_IDLE_S * 3
-    assert not p.tick() and runs == [1]  # once per start
+    assert not p.tick() and runs == [True]  # once per start
+
+
+def test_the_receiver_deepen_waits_for_a_loaded_model_and_retries(tmp_path, monkeypatch):
+    ready, runs = [False], []
+    monkeypatch.setattr(bs, "run_deepen", lambda v, say=None, background=False: runs.append(
+        1) or ({} if ready[0] else None))
+    t = [0.0]
+    p = bs.Processor(bs.Vault(tmp_path), clock=lambda: t[0], say=lambda s: None)
+    t[0] = bs.DEEPEN_IDLE_S
+    assert not p.tick() and runs == [1]  # not ready: the once-per-start run is not spent
+    t[0] += 1
+    assert not p.tick() and runs == [1]  # not asked every tick
+    t[0] += bs.AUTO_EVERY_S
+    ready[0] = True
+    assert p.tick() and runs == [1, 1]
+    t[0] += bs.AUTO_EVERY_S * 3
+    assert not p.tick() and runs == [1, 1]  # ran: once per start
+
+
+def test_background_deepen_never_loads_a_model(vault, monkeypatch):
+    from cortex.browse import titles
+
+    def no_load(*a, **k):
+        raise AssertionError("the background deepen must not start a runner or load a model")
+
+    monkeypatch.setattr(localllm, "find", no_load)
+    monkeypatch.setattr(localllm, "ensure_lmstudio", no_load)
+    monkeypatch.setattr(localllm, "enabled", lambda *a, **k: True)
+    monkeypatch.setattr(titles, "idle", lambda *a: False)
+    monkeypatch.setattr(localllm, "find_loaded", lambda *a, **k: FakeLLM())
+    assert bs.run_deepen(Vault(vault), background=True) is None  # the owner is at the PC
+    monkeypatch.setattr(titles, "idle", lambda *a: True)
+    monkeypatch.setattr(localllm, "find_loaded", lambda *a, **k: None)
+    assert bs.run_deepen(Vault(vault), background=True) is None  # not loaded
+    monkeypatch.setattr(localllm, "find_loaded", lambda *a, **k: FakeLLM())
+    monkeypatch.setattr(sites, "update_vectors", lambda *a, **k: None)
+    assert bs.run_deepen(Vault(vault), say=lambda s: None, background=True) is not None
 
 
 def test_privacy_apply_follows_hidden_and_skip():

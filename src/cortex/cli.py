@@ -1985,7 +1985,8 @@ def _parts(p: dict) -> str:
     if p["cover"] is not None:
         out.append(f"cover {p['cover']:.2f}")
     if p["weight"] != 1.0:
-        out.append(f"weight {p['weight']:g}")
+        out.append(f"weight {p['weight']:.3g} ("
+                   + " ".join(f"{k} {v:g}" for k, v in p["factors"].items()) + ")")
     if "rerank" in p:
         out.append(f"rerank {p['rerank']:.3f}")
     if p["chunk"]:

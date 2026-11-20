@@ -154,7 +154,7 @@ def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, mon
         sources.Source("comet", "Default", vault / "b")])
     monkeypatch.setattr(bs, "run_import", lambda v, progress=None, srcs=None: runs.append(
         [s.key for s in srcs]) or {})
-    monkeypatch.setattr(bs, "run_deepen", lambda v, say=None: None)  # no local model
+    monkeypatch.setattr(bs, "run_deepen", lambda v, say=None, background=False: None)  # no model
     now = datetime(2026, 11, 19, 12, tzinfo=UTC)
     t = [0.0]
     p = bs.Processor(bs.Vault(vault), clock=lambda: t[0], say=lines.append, now=lambda: now)
