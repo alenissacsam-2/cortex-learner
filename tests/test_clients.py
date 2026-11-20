@@ -22,8 +22,15 @@ def test_windows_probes_all_three_layouts(home):
         d.mkdir(parents=True)
     (profile / CFG).write_text("{}")
     (home / "LOCALAPPDATA" / "Claude-Data" / "empty").mkdir()  # no config: not a profile
-    assert clients.claude_desktop_config_paths("win32") == [classic / CFG, profile / CFG,
+    # the Store app's profiles come first, so a first setup writes where that app reads
+    assert clients.claude_desktop_config_paths("win32") == [profile / CFG, classic / CFG,
                                                             store / CFG]
+    fresh = home / "LOCALAPPDATA" / "Claude-Data" / "claude_abc123"  # a profile, no config yet
+    fresh.mkdir()
+    paths = clients.claude_desktop_config_paths("win32")
+    assert paths == [fresh / CFG, profile / CFG, classic / CFG, store / CFG]
+    (profile / CFG).unlink()
+    assert clients.setup_targets(clients.claude_desktop_config_paths("win32")) == [fresh / CFG]
 
 
 def test_macos_and_linux(home, monkeypatch):
