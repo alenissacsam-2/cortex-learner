@@ -358,11 +358,13 @@ class App:
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def warm_status(self) -> None:
-        """Status read once in the background at start: the first read waits ~4 s on the LLM
-        probes (LM Studio's `lms`, refused loopback connects) and first imports; the page's
-        first read then answers from `status.kept`, which still refreshes after KEEP_S."""
-        self.warming = threading.Thread(target=self.status, daemon=True,
-                                        name="cortex-app-warm-status")
+        """Status and Setup read once in the background at start: a first read waits ~3-4 s
+        on the LLM probes (LM Studio's `lms`, refused loopback connects) and first imports;
+        Status, Setup and Local model then answer from `status.kept` (refreshed after KEEP_S)."""
+        def warm():
+            self.status()
+            self.setup()  # Settings opens on Setup until it is done: its probes too
+        self.warming = threading.Thread(target=warm, daemon=True, name="cortex-app-warm-status")
         self.warming.start()
 
     def connect(self) -> dict:
@@ -375,17 +377,21 @@ class App:
         """The Local model page: both runners' chat models (embedding models left out by the
         chat's own name rule) and the model sized to this computer."""
         from cortex import localllm
-        d, hw = status.llm(), wizard.hardware()
+        if self.warming not in (None, threading.current_thread()):
+            self.warming.join()  # the warm-up is asking the same probes: wait, not ask twice
+        d, hw = status.llm(quick=True), wizard.hardware()  # kept like Status's (~3 s fresh)
 
         def chats(names):
             return [n for n in names if not localllm._NOT_CHAT.search(n)]
         return {**d, "ollama": None if d["ollama"] is None else chats(d["ollama"]),
                 "ollama_state": wizard._ollama_state(d["ollama"]),  # the words Setup uses
-                "models": [m for m in status.lms_models() if chats([m["key"]])],
+                "models": [m for m in status.kept(("lms_models", None), status.lms_models)
+                           if chats([m["key"]])],
                 "hardware": hw, "recommend": wizard.model(wizard.recommend(hw["gb"], hw["kind"]))}
 
     def browse(self) -> dict:
-        b = status.browse(self.root if self.entry() else None, self.receiver.status())
+        # the receiver probe kept like Status's: a refused connect waits ~0.6 s on Windows
+        b = status.browse(self.root if self.entry() else None, self.receiver.status(), quick=True)
         return {**b, "extension": str(extension_dir()),
                 "history": status.history(self.root if self.entry() else None, self.scanned),
                 "cloud": status.cloud(self.root if self.entry() else None)}
@@ -450,6 +456,12 @@ class App:
             return False
         return True if self.private_unlocked else None
 
+    def warm_home(self) -> None:
+        try:
+            self._home().get(False)
+        except Exception as e:  # noqa: BLE001  (the page's own read reports a real problem)
+            print(f"cortex app: the home warm-up failed ({type(e).__name__})", file=sys.stderr)
+
     def home(self, query: dict) -> dict:
         """The live home (cortex.home): the dashboard's data plus feed, next_up and exams.
         Builds and keeps the brain layout (`.cortex/brain-layout.json`, a view cache). A page
@@ -499,6 +511,8 @@ class App:
 
     def setup(self) -> dict:
         from cortex import chats, cli, importers
+        if self.warming not in (None, threading.current_thread()):
+            self.warming.join()  # the warm-up is asking the same probes: wait, not ask twice
         token = self.root / ".cortex" / "browse" / "token" if self.entry() else None
         return {**wizard.state(self.root, self.scanned),
                 "connect": [{k: t[k] for k in ("id", "label", "detected", "connected")}
@@ -1597,6 +1611,8 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
     threading.Thread(target=updates, daemon=True, name="cortex-app-updates").start()
     if WARM_STATUS:
         app.warm_status()
+        if app.entry() is not None:  # the first page: its brain built before the window asks
+            threading.Thread(target=app.warm_home, daemon=True, name="cortex-app-warm-home").start()
     return srv, app, url
 
 

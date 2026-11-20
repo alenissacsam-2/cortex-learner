@@ -222,14 +222,16 @@ def _have(m: dict, ollama: list[str] | None, lms: list[dict]) -> dict:
 def state(root: Path | None, scanned: dict | None = None) -> dict:
     v = status.vault(root)
     e = status.embedding(root if v["ok"] else None)
-    ollama, lms_exe = status.ollama_models(), status.lms_path()
-    lms = status.lms_models() if lms_exe else []
+    q = status.llm(quick=True)  # the slow probes (~2.7 s), kept and shared with Status's
+    ollama, lms_exe = q["ollama"], q["lms"]
+    lms = status.kept(("lms_models", None), status.lms_models) if lms_exe else []
     hw = hardware()
     models = [{**m, "have": _have(m, ollama, lms)} for m in MODELS]
     cfg = status.config().get("localllm")
     cfg = cfg if isinstance(cfg, dict) else {}
     from cortex import cli
-    o_state, l_state = _ollama_state(ollama), _lms_state(lms_exe)
+    o_state = _ollama_state(ollama)
+    l_state = "not_installed" if lms_exe is None else "running" if q["server_port"] else "stopped"
     return {
         # moved: the config names a folder that is gone; Setup asks instead of recreating it
         "vault": {"done": v["ok"], "path": v["path"], "default": str(cli._default_vault()),

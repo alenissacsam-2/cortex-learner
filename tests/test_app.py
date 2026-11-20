@@ -314,6 +314,30 @@ def test_status_is_warmed_at_start_and_the_first_read_waits_for_it(app, monkeypa
     status.forget()
 
 
+def test_setup_keeps_its_slow_probes_and_the_warm_up_asks_them(app, monkeypatch):
+    """Settings opens on Setup until it is done: its runner probes (~2.7 s on Windows), also
+    the Local model page's, are asked by the warm-up at start and kept, so neither page's
+    first read waits on them; any action asks again."""
+    monkeypatch.setattr(status, "kept", REAL_KEPT)
+    status.forget()
+    asked = []
+    monkeypatch.setattr(status, "ollama_models", lambda: (asked.append(1), time.sleep(0.4), [])[2])
+    monkeypatch.setattr(status, "receiver_probe", lambda root: ("stopped", {}))
+    monkeypatch.setattr(app.receiver, "status", lambda: None)
+    app.warm_status()
+    app.warming.join()
+    n = len(asked)
+    assert n >= 1
+    for path in ("/api/setup", "/api/llm"):  # Setup and the Local model page
+        t = time.perf_counter()
+        assert call(app, "GET", path)[0] == 200
+        assert time.perf_counter() - t < 0.3 and len(asked) == n, path  # kept from the warm-up
+    call(app, "POST", "/api/whats_new/seen", {})  # any action
+    call(app, "GET", "/api/setup")
+    assert len(asked) == n + 1
+    status.forget()
+
+
 def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
     """T8: a runner that is not running stays silent; a bug is logged and still reads as
     "not available"."""
