@@ -160,6 +160,11 @@ setTimeout(() => {
     out.stem = await ev(`__L.stem(${J(cfg.stem)})`);
     await sleep(2500);
     await shot(cfg.stem.shots[1]);
+    // a first visit in a 1024x768 window: the legend starts folded so it leaves the stem clear
+    await ev("localStorage.removeItem('cortex.legend')");
+    await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false });
+    await load();
+    out.stem.smallLegend = await ev("__T.go('brain').then(() => [document.getElementById('legend-toggle').getAttribute('aria-expanded'), document.getElementById('legend').hidden, localStorage.getItem('cortex.legend')])");
   }
   if (cfg.live) {  // the page as loaded: move the camera, let the test add a note, watch
     cur = 'live';
@@ -646,9 +651,9 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     """The live home's brain with a synthetic browsing store: websites in the stem, a chosen
     site's panel from /api/home/site with an HTML-looking title and search shown as text (no
     element made from them), and the private site absent while locked. Then the Explore view: the
-    Legend opens on the first visit and remembers a click, the Stem button flies there and back,
-    and the outline's Browsing group opens a site's panel from the keyboard. Screenshots of the
-    stem are kept in the run folder."""
+    Legend opens on the first visit (folded at 1024x768) and remembers a click, the Stem button
+    flies there and back, and the outline's Browsing group opens a site's panel from the
+    keyboard. Screenshots of the stem are kept in the run folder."""
     from test_app import _free_port, _serve
     from test_home import _ago, _sites, _stem_sites
 
@@ -699,6 +704,7 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     assert lg["first"] == ["true", False, "closed"] and lg["dots"] >= 1, lg
     assert lg["closed"] == ["false", True, "closed"], lg
     assert lg["reopened"] == ["true", False, "open"], lg
+    assert s["smallLegend"] == ["false", True, "closed"], s["smallLegend"]
     assert s["stemBtn"] == [True, "true", True, True, "false", False], s["stemBtn"]
     o = s["outline"]
     assert o["region"] and o["closed"] == "false" and o["opened"] == "true", o

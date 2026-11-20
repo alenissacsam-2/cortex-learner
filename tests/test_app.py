@@ -297,6 +297,23 @@ def test_status_keeps_its_slow_probes_and_asks_again_after_an_action(app, monkey
     status.forget()
 
 
+def test_status_is_warmed_at_start_and_the_first_read_waits_for_it(app, monkeypatch):
+    """`warm_status` (run by `start`) asks the slow probes once in the background; a read made
+    meanwhile waits for that answer instead of asking again, and later reads are kept."""
+    monkeypatch.setattr(status, "kept", REAL_KEPT)
+    status.forget()
+    asked = []
+    monkeypatch.setattr(status, "ollama_models", lambda: (asked.append(1), time.sleep(0.5), [])[2])
+    monkeypatch.setattr(status, "receiver_probe", lambda root: ("stopped", {}))
+    monkeypatch.setattr(app.receiver, "status", lambda: None)
+    app.warm_status()
+    assert call(app, "GET", "/api/status")[0] == 200 and asked == [1]  # asked once, not twice
+    t = time.perf_counter()
+    call(app, "GET", "/api/status")
+    assert time.perf_counter() - t < 0.3 and asked == [1]
+    status.forget()
+
+
 def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
     """T8: a runner that is not running stays silent; a bug is logged and still reads as
     "not available"."""

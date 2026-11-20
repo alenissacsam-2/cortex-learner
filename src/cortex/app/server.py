@@ -35,6 +35,7 @@ IDLE_S = 30 * 60
 PRIVATE_S = 10 * 60  # the Private switch relocks by itself after 10 minutes
 UPDATE_FIRST_S, UPDATE_EVERY_S = 60, 6 * 3600  # the quiet update check: a minute in, then 6 h
 WATCH_S = 5  # seconds between idle checks
+WARM_STATUS = True  # `start` asks Status's slow probes at once (tests turn it off: conftest)
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
@@ -284,6 +285,7 @@ class App:
         self.private_until = 0.0  # the Private switch: ?private=1 applies until this monotonic
         self.update_ready: dict | None = None  # a newer release, prepared by the quiet check
         self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
+        self.warming: threading.Thread | None = None  # `warm_status`'s thread
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
@@ -341,6 +343,8 @@ class App:
     def status(self, q: dict | None = None) -> dict:
         """The Status board; its slow probes are `status.kept` (`?fresh=1`: asked again)."""
         from cortex import chat_import
+        if self.warming not in (None, threading.current_thread()):
+            self.warming.join()  # its probes are already under way: wait for them, not ask twice
         if (q or {}).get("fresh") == ["1"]:
             status.forget()
         v = status.vault(self.root)
@@ -352,6 +356,14 @@ class App:
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
+
+    def warm_status(self) -> None:
+        """Status read once in the background at start: the first read waits ~4 s on the LLM
+        probes (LM Studio's `lms`, refused loopback connects) and first imports; the page's
+        first read then answers from `status.kept`, which still refreshes after KEEP_S."""
+        self.warming = threading.Thread(target=self.status, daemon=True,
+                                        name="cortex-app-warm-status")
+        self.warming.start()
 
     def connect(self) -> dict:
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,
@@ -1583,6 +1595,8 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
     threading.Thread(target=auto, daemon=True, name="cortex-app-auto-import").start()
     threading.Thread(target=chats, daemon=True, name="cortex-app-chat-import").start()
     threading.Thread(target=updates, daemon=True, name="cortex-app-updates").start()
+    if WARM_STATUS:
+        app.warm_status()
     return srv, app, url
 
 
