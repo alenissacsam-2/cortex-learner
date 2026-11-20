@@ -203,6 +203,19 @@ class ClaudeDesktop(JsonTarget):
         from cortex import clients
         return bool(clients.claude_desktop_config_paths())
 
+    def other_copy(self) -> list[Path]:
+        """Config files whose `cortex` entry runs another cortex executable than the installed
+        Cortex (e.g. a `uv tool` copy); Apply on Connect rewrites them."""
+        from cortex import clients
+        out = []
+        for p in self.all_paths():
+            try:
+                if clients.other_copy(_servers(load_json(p), self.key, p).get(NAME)):
+                    out.append(p)
+            except (OSError, ValueError):
+                pass
+        return out
+
 
 class Gemini(JsonTarget):
     """Gemini CLI: `~/.gemini/settings.json` plus a short block in `~/.gemini/GEMINI.md`

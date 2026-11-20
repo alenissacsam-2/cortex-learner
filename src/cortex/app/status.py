@@ -504,6 +504,14 @@ def rows(root: Path | None) -> list[dict]:
                 "detail": "They read and record through Cortex." if on else
                 "Without one, nothing reads or records anything.",
                 "action": _go("connect", "Open" if on else "Connect")})
+    if stale := targets.ClaudeDesktop().other_copy():  # uncached: Apply fixes it at once
+        out[-1].update(state="warn", value="Claude Desktop runs a different Cortex copy",
+                       detail=f"{'; '.join(map(str, stale))} starts another cortex than the "
+                              "installed app, so its updates do not reach Claude Desktop. "
+                              "Apply under Connect points it at the installed one (backup "
+                              "beside the file); then quit Claude Desktop from the tray and "
+                              "open it again.",
+                       action=_go("connect", "Fix"))
     out.append(llm_row())
     b = browse(root if v["ok"] else None)
     out.append(history_row(root if v["ok"] else None, b))

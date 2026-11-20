@@ -561,7 +561,7 @@ def setup(
                              "`cortex sample remove` clears it.")
     model = not no_model and ask("Download the search model now? About 150 MB, once, from "
                                  "huggingface.co; without it recall uses keywords only.")
-    entry = clients.server_entry(clients.cortex_command(), root)
+    entry = clients.server_entry(clients.mcp_command(), root)
     configs = [] if no_desktop else clients.setup_targets(clients.claude_desktop_config_paths())
 
     if dry_run:
@@ -2284,7 +2284,7 @@ def _print_mcp_config(vault: Path | None) -> None:
     """The mcpServers JSON snippet for clients `setup` does not write (Cursor, Gemini CLI)."""
     from cortex import clients
 
-    entry = clients.server_entry(clients.cortex_command(), _vault(vault).root.resolve())
+    entry = clients.server_entry(clients.mcp_command(), _vault(vault).root.resolve())
     typer.echo(json.dumps({"mcpServers": {"cortex": entry}}, indent=2))
 
 

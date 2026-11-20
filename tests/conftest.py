@@ -45,6 +45,8 @@ def _no_real_installs(tmp_path_factory, monkeypatch):
 
     monkeypatch.setenv("ProgramFiles", str(tmp_path_factory.mktemp("programfiles")))
     monkeypatch.setattr(session, "_registry_path", lambda: "")
+    from cortex import clients
+    monkeypatch.setattr(clients, "_registry_install", lambda: None)  # never the real install
     real = shutil.which
     monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if cmd == "lms"
                         else real(cmd, *a, **k))
