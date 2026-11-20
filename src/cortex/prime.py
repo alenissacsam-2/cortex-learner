@@ -1,12 +1,15 @@
-"""The light part of cortex_prime: Profile, claim legend, Preferences and the teaching-contract
-core, built from a Vault and the event log alone. It never imports the `mcp` SDK, numpy or
-`cortex.semantic` and never builds the Index, so the `cortex prime-hook` process stays fast on
-a large vault; the MCP server adds the Related block on top (mcp_server.Cortex.cortex_prime).
+"""The light part of cortex_prime: the pinned Core, Profile, claim legend, Preferences and the
+teaching-contract core, built from a Vault and the event log alone. It never imports the `mcp`
+SDK, numpy or `cortex.semantic` and never builds the Index, so the `cortex prime-hook` process
+stays fast on a large vault; the MCP server adds the Related block on top
+(mcp_server.Cortex.cortex_prime). Preferences rank by meaning only with an embedder that
+process already loaded.
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime
 
 from cortex import claims
@@ -21,6 +24,9 @@ CONTEXT_MAX = 2400  # characters, about 600 tokens
 PRIME_MAX, PRIME_PROMPT = 2000, 2000
 PRIME_CAPS = {"profile": 250, "preferences": 800, "contract": 400, "related": 450,
               "mistakes": 250}
+# me/core.md: the user's pinned lines, first in every prime, whole lines within this many chars
+CORE_MAX, CORE_HEAD = 500, "Core"
+VEC_CACHE = 5000  # line vectors kept for a long-running server; past it the cache starts over
 # PHASE3 H3: served claim labels and ranking
 LEGEND = "(ask) = check with the user before relying on it."
 ASK_WEIGHT = 0.3
@@ -250,6 +256,49 @@ def attempt_line(note) -> str:
     return ATTEMPT.format(id=note.id, status=note.fields["status"], concept=concept)
 
 
+def core_lines(vault: Vault, served: dict, today: str,
+               withheld: set[str] = frozenset()) -> list[str]:
+    """me/core.md's live lines the user wrote or confirmed (the ones `served` labels plain),
+    verbatim (claim id stripped) in page order, as many whole lines as fit CORE_MAX; [] with no
+    page, a withheld or private page. Agent, exposed or relayed lines are never pinned."""
+    note = None if "core" in withheld else me(vault, "core")
+    if note is None or is_private(note):
+        return []
+    out, size = [], 0
+    for (page, _, text), (label, _) in served.items():
+        line = f"- {text}"
+        if page != "core" or label or claims.expired(text, today):
+            continue
+        if size + bool(out) + len(line) <= CORE_MAX:  # a line that does not fit is dropped whole
+            size += bool(out) + len(line)
+            out.append(line)
+    return out
+
+
+_VECS: dict = {}  # line text -> unit vector, from the embedder in _VECS_OF[0]
+_VECS_OF: list = [None]
+
+
+def similarity(prompt: str, texts: list[str]) -> list[float] | None:
+    """Cosine of `prompt` to each of `texts` with the bge embedder, only if this process has it
+    loaded already (the MCP server's warm-up): it never imports cortex.semantic, so the prime
+    hook stays light, and never loads a model. None when it is not warm or fails."""
+    sem = sys.modules.get("cortex.semantic")
+    embed = getattr(sem, "_embedder", None)
+    if embed is None:
+        return None
+    try:
+        if _VECS_OF[0] is not embed or len(_VECS) > VEC_CACHE:
+            _VECS.clear()
+            _VECS_OF[0] = embed
+        if new := [t for t in dict.fromkeys(texts) if t not in _VECS]:
+            _VECS.update(zip(new, sem._embed(embed, new), strict=True))
+        q = sem._embed(embed, [sem.QUERY_PREFIX + prompt])[0]
+        return [float(_VECS[t] @ q) for t in texts]
+    except Exception:  # a model error must never cost the prime: word overlap serves
+        return None
+
+
 def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
          withheld: set[str] = frozenset()) -> tuple[list[str], list[int]]:
     """cortex_prime's blocks before Related, and the budget left: (parts, [chars left]).
@@ -259,13 +308,18 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     left = [PRIME_MAX]
     put = putter(parts, left)
     served = served_claims(vault, events)
+    if pinned := core_lines(vault, served, local_day(now), withheld):
+        put(CORE_HEAD, "\n".join(pinned), "me/core", PRIME_MAX)  # first and whole, never shrunk
+    # the core is the user's own pick of preferences, so it comes out of their cap
+    pref_cap = max(0, PRIME_CAPS["preferences"] - (PRIME_MAX - left[0]))
     summary = "" if "profile" in withheld else profile_summary(vault, local_day(now), served)
     if summary:
         put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
     words = re.findall(r"\w+", prompt.lower())
     terms = {t for t in words if len(t) > 2 and t not in STOPWORDS and t not in TASK_WORDS}
     terms |= {x for w in words for x in ABBREVIATIONS.get(w, ())}
-    rows = []  # (-prompt words matched, situational?, -served score, line, labelled); stable
+    rows = []  # [-prompt match, situational?, -served score, line, labelled, text]; stable
+    seen = {claims.norm(ln) for ln in pinned}  # a pinned line is not repeated
     for page, keep in (("preferences", lambda h: True),
                        ("personality", lambda h: h in PERSONALITY_HEADINGS["all"])):
         if page in withheld:
@@ -273,18 +327,27 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
         for head, _, items in claim_items(vault, page, keep, served, local_day(now)):
             name = head[3:].strip()
             for score, line, lab in items:  # a section name match counts (my presentation)
+                bare = line[2:].removesuffix(" (ask)")
+                if claims.norm(bare) in seen:
+                    continue
                 text = f"{name} {line}".lower()
-                rows.append((-sum(t in text for t in terms),
+                rows.append([-sum(t in text for t in terms),
                              name.lower() not in GENERAL_SECTIONS, -score,
-                             f"- [{name}] {line[2:]}", lab))
+                             f"- [{name}] {line[2:]}", lab, f"{name}: {bare}"])
+    # by meaning when this process's embedder is warm: cosine times the tier weight, a line
+    # under semantic.MIN_COS counting as no match; else by the prompt words a line shares
+    if rows and (sims := similarity(prompt, [r[5] for r in rows])) is not None:
+        floor = sys.modules["cortex.semantic"].MIN_COS
+        for r, s in zip(rows, sims, strict=True):
+            r[0] = s * r[2] / 0.5 if s >= floor else 0  # r[2] / 0.5: -1, or -ASK_WEIGHT
     rows.sort(key=lambda r: r[:3])
     # the legend only when an (ask) line can be served: the Preferences fit below has no more
     # room than this one, so it serves a prefix of these lines
     asks = {r[3] for r in rows if r[4]}
-    shown = fit([r[3] for r in rows], "me", PRIME_CAPS["preferences"], left[0])
+    shown = fit([r[3] for r in rows], "me", pref_cap, left[0])
     if asks.intersection(shown) or " (ask)" in summary:
         put("How to read the claims", LEGEND)
-    cap, before = PRIME_CAPS["preferences"], left[0]
+    cap, before = pref_cap, left[0]
     if problem := named_problem(vault, prompt):
         put(ATTEMPT_HEAD, attempt_line(problem))
         cap -= before - left[0]  # budget-neutral: the line comes out of the preferences cap

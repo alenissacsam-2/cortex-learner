@@ -13,7 +13,7 @@ Cortex acts only when a chat (or you, in the app or a terminal) asks it to. The 
 ## 1. What happens without you doing anything
 
 In every new Claude Code chat:
-- **Prime.** Your first message is matched against your vault, and the chat starts already knowing your profile, your teaching rules, the preferences that fit the message, and a few related pages.
+- **Prime.** Your first message is matched against your vault, and the chat starts already knowing your profile, your teaching rules, the preferences that fit the message, and a few related pages. Lines you put in `me/core.md` (one `- ` line each, under its `## Core` heading) are pinned: every chat gets them first and word for word, up to 500 characters in all; a line that does not fit is left out whole. Only lines you write or confirm count there, never ones an assistant added.
 - **Recording.** The chat saves durable things as they come up: a fact about you, a source you shared, an insight, a real decision, a quiz answer. It tells you briefly when it wrote something.
 - **Asking first.** Anything about who you are (a preference or personality line) is saved only after your yes. In Claude Code you'll get a small "save this line about you?" dialog.
 - **Undo.** Each chat's writes are one commit in the vault's git. `cortex undo <session>` reverts it. You can turn git off (see "Vault history in git" in section 9); undo is then off.
