@@ -16,7 +16,7 @@
   async function api(path, body) {
     const r = await fetch(path, body === undefined ? { headers: { 'X-Cortex-Token': KEY }, cache: 'no-store' } : {
       method: 'POST', headers: { 'X-Cortex-Token': KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) throw Object.assign(new Error(`The app answered ${r.status}.`), { key: r.status === 401 || r.status === 403 });
+    if (!r.ok) throw Object.assign(new Error(`The app answered ${r.status}.`), { key: r.status === 401 || r.status === 403, status: r.status });
     return r.json();
   }
   function offline(err) {  // the header chip: the app is not answering, or no longer takes this page's key
@@ -681,6 +681,54 @@
     live(`Selected ${p.title}, ${kindWord(p.kind)}${lobe ? ' in ' + lobe.title : ''}: `
       + `${plural(info.linked.length + info.hiddenLinks, 'link')}, ${info.similar.length} similar.`);
   }
+  /* ---- a website of the brain's stem: its details from the browsing store (the app's own
+     route, never a vault page); a private one only while the Private switch is on ---- */
+  const siteWords = (n) => ['Website', String(n.category || 'other').replace(/-/g, ' '), plural(n.visits, 'visit')]
+    .concat(n.private ? ['private'] : []);
+  function exploreSite(id) {
+    const n = brain && brain.node(id);
+    if (n && brain.explore(id)) inspectSite(n);
+  }
+  async function inspectSite(n) {
+    const id = n.id, gen = privGen;
+    panel(id, n.title, true);
+    const meta = el('div', 'rmeta');
+    for (const w of siteWords(n)) meta.append(el('span', null, w));
+    reader.append(meta);
+    live(`Selected ${n.title}, ${siteWords(n).join(', ')}.`);
+    let s = null;
+    try {
+      s = await api('/api/home/site?site=' + encodeURIComponent(n.site) + (PRIVATE ? '&private=1' : ''));
+    } catch (e) {
+      if (readerId === id && gen === privGen) reader.append(el('p', 'empty', e.status === 404
+        ? 'This website is not in the browsing store any more.' : 'Cortex is not answering.'));
+      return;
+    }
+    if (readerId !== id || gen !== privGen || reader.hidden) return;  // moved on, or the switch moved meanwhile
+    const days = s.days || [];
+    if (days.length) meta.append(el('span', null, `first ${fmtDay(days[0])} ${days[0].slice(0, 4)}`),
+      el('span', null, `last ${fmtDay(days[days.length - 1])} ${days[days.length - 1].slice(0, 4)}`));
+    if (s.description) reader.append(el('p', 'summary', s.description));
+    const recent = days.slice(-60).reverse().map(fmtDay).join(', ');
+    reader.append(el('h4', null, `Visit days (${days.length})`),
+      el('p', 'muted small', recent + (days.length > 60 ? `, and ${days.length - 60} earlier` : '')));
+    const counted = (rows) => rows.map(([t, c]) => { const li = el('li'); li.append(el('span', null, t), el('span', 'n', `${c}×`)); return li; });
+    reader.append(...readerSection('Searched here', counted(s.searches || [])),
+      ...readerSection('Searches that led here', counted(s.led || [])),
+      ...readerSection('Pages read', (s.titles || []).map((t) => el('li', null, t))));
+    const hubs = (s.hubs || []).filter((h) => PAGES.has(h.id));
+    if (hubs.length) {
+      const box = el('div', 'chip-list');
+      for (const h of hubs) box.append(button('chip', h.title, () => explorePage(h.id)));
+      reader.append(el('h4', null, 'Topics'), box);
+    }
+    const rel = (s.related || []).filter((x) => BRAIN_IDS.has('site:' + x));
+    if (rel.length) {
+      const box = el('div', 'chip-list');
+      for (const x of rel) box.append(button('chip', x, () => exploreSite('site:' + x)));
+      reader.append(el('h4', null, 'Related websites'), box);
+    }
+  }
   function inspectLobe(lobeId) {
     const c = LOBES.get(lobeId), k = D.clusters.findIndex((x) => x.id === lobeId);
     if (!c) return;
@@ -900,9 +948,10 @@
           if (!n || !pos) { hideTip(); return; }
           const r = brainHost.getBoundingClientRect(), c = LOBES.get(n.cluster);
           showTipAt(r.left + pos.x, r.top + pos.y, [el('b', null, n.title), el('br'),
-            el('span', 'k', kindWord(n.kind) + (n.state ? ' · ' + LABEL[n.state] : '') + (c ? ' · ' + c.title : ''))]);
+            el('span', 'k', n.kind === 'site' ? siteWords(n).join(' · ')
+              : kindWord(n.kind) + (n.state ? ' · ' + LABEL[n.state] : '') + (c ? ' · ' + c.title : ''))]);
         },
-        onSelect(n, info) { if (info) inspectPage(n.id, info); },
+        onSelect(n, info) { if (info) { if (n.kind === 'site') inspectSite(n); else inspectPage(n.id, info); } },
         onCluster(c) { if (c) { markLobe(c.id); filterLibraryLobe(c.id); } },
         onLobe(c) { if (c) inspectLobe(c.id); },
         onMode: syncMode,
@@ -1556,7 +1605,7 @@
   function applyBrainFilter() {
     const k = brainFilter.kinds, s = brainFilter.states;
     const all = k.size === KGROUPS.length && s.size === STATES.length;
-    brain.setFilter(all ? null : (n) => k.has(n.group) && (n.kind !== 'concept' || s.has(n.state)));
+    brain.setFilter(all ? null : (n) => n.kind === 'site' || (k.has(n.group) && (n.kind !== 'concept' || s.has(n.state))));
     for (const b of $('bkinds').children) b.setAttribute('aria-pressed', String(k.has(b.dataset.k)));
     for (const b of $('bstates').children) b.setAttribute('aria-pressed', String(s.has(b.dataset.s)));
   }
@@ -1590,6 +1639,12 @@
     } else if (m === 'growth') {
       lg.append(el('p', null, 'Pages appear month by month, dated by the source, not by when it was saved.'));
     } else lg.append(el('p', null, 'A halo marks a page saved or changed in the last 7 days.'));
+    const st = D.brain.stem;
+    if (st && st.shown) {
+      lg.append(el('p', null, `The stem below holds ${plural(st.shown, 'website')} from your browsing: size by visits, `
+        + 'brightness by the last visit, colour by category' + (st.sites.some((x) => x[5]) ? ', a hollow ring when private' : '') + '.'
+        + (st.total > st.shown ? ` It shows the most visited and those of the last 30 days; the other ${st.total - st.shown} stay in the browsing store.` : '')));
+    }
     lg.append(el('p', null, 'drag to turn · scroll to zoom · click a lobe name for its pages · click a point to inspect it · double-click empty space for the overview'));
     lg.append(el('p', null, 'keys: Esc back · [ ] step · Backspace previous · F frame · 0 reset · arrows turn · + − zoom · A M G modes · S spin'
       + (HAS_STYLE ? ' · L look' : '')));
@@ -3201,7 +3256,10 @@
     for (const s of rendered) if (s !== current) stale.add(s);
     rerender(current);
     if (readerId && !reader.hidden) {
-      if (!PAGES.has(readerId) && !GN.has(readerId)) closeReader();
+      if (!PAGES.has(readerId) && !GN.has(readerId) && !BRAIN_IDS.has(readerId)) {
+        closeReader();
+        reader.replaceChildren();  // a private site's details go with it after a relock
+      }
       else if (!reader.classList.contains('inspector') && (d.full || (d.pages && d.pages.upsert.some((p) => p.id === readerId))
         || (d.sections && (d.sections.graph || d.sections.details)))) openReader(readerId, true);
     }

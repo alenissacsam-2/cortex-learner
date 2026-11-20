@@ -152,6 +152,15 @@ setTimeout(() => {
   }
   if (cfg.checks) { await load(); cur = 'checks'; out.checks = await ev('__T.checks()'); }
   if (cfg.texts) { await load(); cur = 'texts'; out.texts = await ev('__T.texts()'); }
+  if (cfg.stem) {  // the brain stem: a picture of it, then a site chosen and its panel read
+    cur = 'stem';
+    const shot = async (file) => { const s = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(file, Buffer.from(s.result.data, 'base64')); };
+    await ev('__L.ready()');
+    await shot(cfg.stem.shots[0]);
+    out.stem = await ev(`__L.stem(${J(cfg.stem)})`);
+    await sleep(2500);
+    await shot(cfg.stem.shots[1]);
+  }
   if (cfg.live) {  // the page as loaded: move the camera, let the test add a note, watch
     cur = 'live';
     const before = await ev('__L.before()');
@@ -372,7 +381,27 @@ window.__L = (() => {
     await sleep(300);
     return { webgl2: !!gl, lost: gl ? gl.isContextLost() : null, connected: !!(cv && cv.isConnected) };
   }
-  return { before, after, leak };
+  async function ready() {  // Home, its brain mounted and still
+    for (let i = 0; i < 200 && !mounts.length; i++) await sleep(100);
+    await settle();
+  }
+  async function stem(c) {  // a site chosen as a click would: the inspector fills from the app's route
+    const b = mounts[mounts.length - 1], box = document.querySelector('.brain-host').firstElementChild;
+    const n = b.node(c.pick), out = { label: box.getAttribute('aria-label'), absent: c.absent.map((id) => b.node(id)),
+      node: n && { kind: n.kind, title: n.title, private: n.private } };
+    opts.onSelect(n, b.explore(c.pick));
+    const r = document.getElementById('reader');
+    for (let i = 0; i < 100 && !r.querySelector('h4'); i++) await sleep(50);
+    out.reader = { text: r.textContent, tags: [...r.querySelectorAll('*')].map((e) => e.tagName.toLowerCase()),
+      heads: [...r.querySelectorAll('h4')].map((h) => h.textContent) };
+    await __T.go('brain');
+    out.legend = document.getElementById('legend').textContent;
+    const key = sessionStorage.getItem('cortex.key');
+    out.codes = [];
+    for (const s of c.sites) out.codes.push((await fetch('/api/home/site?site=' + encodeURIComponent(s), { headers: { 'X-Cortex-Token': key } })).status);
+    return out;
+  }
+  return { before, after, leak, ready, stem };
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -387,7 +416,8 @@ def _run(tmp_path, page: Path | None, **cfg) -> dict:
     run = tmp_path / ("run-" + "-".join(sorted(cfg)))
     run.mkdir()
     (run / "driver.cjs").write_text(DRIVER, encoding="utf-8")
-    (run / "helpers.js").write_text(HELPERS + (LIVE if cfg.get("live") else ""), encoding="utf-8")
+    (run / "helpers.js").write_text(HELPERS + (LIVE if cfg.get("live") or cfg.get("stem") else ""),
+                                    encoding="utf-8")
     (run / "cfg.json").write_text(json.dumps({
         "browser": BROWSER, "profile": str(run / "profile"), "page": str(page or ""),
         "helpers": str(run / "helpers.js"), **cfg}), encoding="utf-8")
@@ -566,3 +596,58 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     assert any(title in f for f in after["fresh"])
     assert after["stale"] and after["llm"] and after["settings"]
     assert leak["connected"] and leak["lost"] is not True, leak
+
+
+def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, home,  # noqa: F811
+                                                                 monkeypatch):
+    """The live home's brain with a synthetic browsing store: websites in the stem, a chosen
+    site's panel from /api/home/site with an HTML-looking title and search shown as text (no
+    element made from them), and the private site absent while locked. Screenshots of the stem
+    are kept in the run folder."""
+    from test_app import _free_port, _serve
+    from test_home import _ago, _sites, _stem_sites
+
+    from cortex import localllm
+    from cortex.app import server, status
+
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(localllm, "_request", no_runner)
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
+    root = made[0]
+    (root / ".cortex").mkdir(exist_ok=True)
+    evil = '<img src=x onerror="window.__pwned=1">'
+    _sites(root, *_stem_sites(40),
+           {"site": "odd.example", "visits": 80, "days": _ago(30, 2), "category": "learning",
+            "titles": [f"Title {evil}"], "searches": [[f"term {evil}", 3]],
+            "hubs": [["hub-0", 5]], "related": ["s00.example"]},
+           {"site": "secret.example", "hidden": 1, "category": "adult", "visits": 99,
+            "days": _ago(1)})
+    srv, app = _serve(root)
+    run = tmp_path / "shots"
+    run.mkdir()
+    shots = [str(run / "stem-overview.png"), str(run / "stem-site.png")]
+    try:
+        out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   stem={"pick": "site:odd.example", "absent": ["site:secret.example"],
+                         "sites": ["odd.example", "secret.example"], "shots": shots})
+    finally:
+        app.receiver.stop()
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == []
+    s = out["stem"]
+    assert s["label"].endswith("with 41 websites in its stem"), s["label"]
+    assert s["absent"] == [None]  # locked: the private site is not in the brain at all
+    assert s["node"] == {"kind": "site", "title": "odd.example", "private": False}
+    rd = s["reader"]
+    assert f"Title {evil}" in rd["text"] and f"term {evil}" in rd["text"]
+    assert "img" not in rd["tags"] and "script" not in rd["tags"]
+    assert {"Searched here", "Pages read", "Topics", "Related websites"} <= set(rd["heads"])
+    assert any(h.startswith("Visit days (2)") for h in rd["heads"])
+    assert "41 websites" in s["legend"] and "secret" not in s["legend"]
+    assert s["codes"] == [200, 404]
+    assert all(Path(p).stat().st_size > 10_000 for p in shots)

@@ -188,6 +188,14 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - Big bright dots are pages with many connections.
 - A faint outline shows the shape of a brain.
 
+**The brain stem: your websites** (the app's home only)
+- Once your browsing is in Cortex, the stem below the brain holds one dot per website, the oldest you found at the top.
+- A dot's size is your visits, its brightness your last visit (it dims with time but never goes out) and its colour the site's category.
+- Faint fibres join a site to its topic and to up to three similar sites.
+- Click a site to see the days you visited it, what you searched there, the searches that led you there and the pages you read. This comes from Cortex's browsing store on this computer, never from a vault page.
+- To stay quick, the stem shows your 1,500 most visited sites plus up to 1,000 more from the last 30 days. The legend says how many others stay in the store.
+- Private sites appear only while the lock is open, as a hollow ring, and leave again when it locks. The 2D map and Export snapshot have no stem.
+
 **Moving around**
 - Drag to turn. Scroll to zoom toward the cursor.
 - Click a page to select it. It glimmers, and white trails keep running along its connections for as long as it stays selected.

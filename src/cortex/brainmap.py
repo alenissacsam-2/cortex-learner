@@ -58,6 +58,7 @@ from functools import lru_cache
 
 import numpy as np
 
+from cortex.browse import lists
 from cortex.semantic import CACHE
 from cortex.vault import VaultError
 
@@ -1163,6 +1164,155 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     if inputs is not None:  # the layout as it is now on disk: this build may have written it
         memo["inputs"], memo["out"] = (*inputs[:4], _stamp(root / LAYOUT)), out
     return out
+
+
+# ---- the brain stem: the owner's websites (the app's live home only) ----------------------
+
+STEM_SPAN, STEM_R = (0.2, 1.0), 0.05  # the share of the stem capsule's axis the sites fill
+# (its part below the lobes) and their farthest distance from the axis
+STEM_LINKS, HUB_SITES = 3, 10  # fibres per site at most; sites tied to one topic hub page at most
+_CATS = (*lists.SITE_CATEGORIES, *lists.CATEGORIES)
+
+
+@lru_cache(maxsize=64)
+def site_color(category: str | None) -> str:
+    """A site category's colour: a golden-angle hue by its place in the category lists, so
+    neighbouring categories differ; "other" and unknown ones are grey."""
+    if category not in _CATS or category == "other":
+        return _hex(0.70, 0, 0)
+    return _hex(0.74, 0.15, (_CATS.index(category) * 137.508 + 20) % 360)
+
+
+def stem_order(rows: list[dict], placed: dict) -> None:
+    """Give each site of `rows` ({site, first}) missing from `placed` its share (0-1) of the
+    stem's axis, ordered by first seen: with nothing placed, its rank among `rows`; after
+    that, interpolated between the placed sites by its first visit, so nothing placed moves
+    (a site newer than all sits at the newest end). `placed`: {site: (first, share)}."""
+    new = [r for r in rows if r["site"] not in placed]
+    if not new:
+        return
+    if not placed:
+        order = sorted(new, key=lambda r: (r["first"] or 0, r["site"]))
+        placed.update({r["site"]: (r["first"] or 0, (k + 0.5) / len(order))
+                       for k, r in enumerate(order)})
+        return
+    have = sorted(placed.values())
+    xs, ts = np.array([f for f, _ in have], float), np.array([t for _, t in have])
+    for r in new:
+        placed[r["site"]] = (r["first"] or 0, float(np.interp(r["first"] or 0, xs, ts)))
+
+
+def stem_xyz(sites: list[str], share: list[float]) -> np.ndarray:
+    """Each site's point in the brain stem: along the axis by its share, round it at a
+    seeded angle and radius (even over the cross-section), pulled toward the axis where the
+    surface's folds come in."""
+    a, b, _ = (np.array(STEM[0]), np.array(STEM[1]), STEM[2])
+    ax = _unit(b - a)
+    e1 = _unit(np.cross(ax, (1.0, 0.0, 0.0)))
+    e2 = np.cross(ax, e1)
+    u = np.array([_u(f"stem:{s}", 3) for s in sites]).reshape(-1, 3)
+    lo, hi = STEM_SPAN
+    s = lo + (hi - lo) * np.clip(np.asarray(share, float) + (u[:, 2] - 0.5) * 0.01, 0, 1)
+    axis = a + s[:, None] * (b - a)
+    ang, rad = 2 * np.pi * u[:, 1], STEM_R * np.sqrt(u[:, 0])
+    p = axis + rad[:, None] * (np.cos(ang)[:, None] * e1 + np.sin(ang)[:, None] * e2)
+    for _ in range(4):
+        out = _field(p) > -MARGIN / 2 if len(p) else np.zeros(0, bool)
+        if not out.any():
+            break
+        p[out] = axis[out] + 0.6 * (p[out] - axis[out])
+    return p
+
+
+def _stem_links(sites: list[dict], hub_at: dict[str, int], first: int) -> list[tuple[int, int]]:
+    """The stem's fibres as node pairs (sites are `first` + their index): first each site up
+    to its biggest topic hub's page (a hub takes its HUB_SITES most visited sites), then
+    between similar sites: the related ones the store keeps, then the neighbours in
+    first-seen order that share its biggest hub, then its category. Most visited sites
+    choose first; no site gets more than STEM_LINKS."""
+    n = len(sites)
+    deg, pairs, out, per_hub = [0] * n, set(), [], {}
+    order = sorted(range(n), key=lambda k: (-sites[k]["visits"], sites[k]["site"]))
+    for k in order:
+        hub = next((h for h, _ in sites[k]["hubs"] if h in hub_at), None)
+        if hub is not None and per_hub.get(hub, 0) < HUB_SITES:
+            per_hub[hub] = per_hub.get(hub, 0) + 1
+            deg[k] += 1
+            out.append((first + k, hub_at[hub]))
+    at = {r["site"]: k for k, r in enumerate(sites)}
+    cand: list[list[int]] = [[at[s] for s in r["related"] if s in at] for r in sites]
+    for key in (lambda r: r["hubs"][0][0] if r["hubs"] else None, lambda r: r["category"]):
+        groups: dict = {}
+        for k, r in enumerate(sites):  # node order is first-seen order
+            if (g := key(r)) is not None:
+                groups.setdefault(g, []).append(k)
+        for ks in groups.values():
+            for t, k in enumerate(ks):
+                cand[k] += ks[max(t - 1, 0):t] + ks[t + 1:t + 2]
+    for k in order:
+        for j in cand[k]:
+            if deg[k] >= STEM_LINKS:
+                break
+            p = (min(j, k), max(j, k))
+            if j == k or deg[j] >= STEM_LINKS or p in pairs:
+                continue
+            pairs.add(p)
+            deg[k] += 1
+            deg[j] += 1
+            out.append((first + p[0], first + p[1]))
+    return out
+
+
+def with_stem(brain: dict, sites: list[dict], placed: dict, total: int) -> dict:
+    """`brain` (a `build` blob) with the websites as a stem below the lobes: one node per site
+    (`site:<site>`) after the pages, outside every lobe (lobe 65535), weighted by visits; their
+    fibres (`_stem_links`, as similar-meaning fibres); and `stem` {first, total, shown, sites:
+    [[site, category, visits, first day, last day, private]], colors: {category: hex}}.
+    `sites`: site_rows records in node order, each with `first_day`, `last_day` and
+    `private`; `placed` holds their axis shares (`stem_order`). The blob's other parts are
+    shared, not copied."""
+    nd = brain["nodes"]
+    n0, m = len(nd["ids"]), len(sites)
+    n = n0 + m
+
+    def col(k, t, w=1):
+        return np.frombuffer(base64.b64decode(nd[k]), t).reshape(-1, w)
+
+    xyz = stem_xyz([r["site"] for r in sites], [placed[r["site"]][1] for r in sites])
+    visits = np.maximum(np.array([r["visits"] or 0 for r in sites], float), 0)
+    weight = np.log1p(visits) / max(math.log1p(visits.max(initial=0)), 1e-9)
+    nodes = {"ids": [*nd["ids"], *(f"site:{r['site']}" for r in sites)],
+             "xyz": _b64(np.concatenate([col("xyz", "<f4", 3), xyz]), "<f4"),
+             "lobe": _b64(np.concatenate([col("lobe", "<u2")[:, 0], np.full(m, 65535)]), "<u2"),
+             "depth": _b64(np.concatenate([col("depth", "<f4")[:, 0],
+                                           np.maximum(-_field(xyz), 0) if m else []]), "<f4"),
+             "embedded": _b64(np.concatenate([col("embedded", "u1")[:, 0], np.zeros(m)]), "u1"),
+             "weight": _b64(np.concatenate([col("weight", "<f4")[:, 0], weight]), "<f4")}
+    old_none, none = (0xFFFFFFFF if n0 >= 65535 else 65535), (0xFFFFFFFF if n >= 65535 else 65535)
+    near = np.frombuffer(base64.b64decode(brain["near"]["ids"]),
+                         "<u4" if n0 >= 65535 else "<u2").astype(np.int64).reshape(-1, N_NEAR)
+    near = np.where(near == old_none, none, near)
+    near = np.concatenate([near, np.full((m, N_NEAR), none, np.int64)])
+    fb = brain["fibres"]
+    links = np.array(_stem_links(sites, {i: k for k, i in enumerate(nd["ids"])}, n0),
+                     np.int64).reshape(-1, 2)
+    allp = np.concatenate([col("xyz", "<f4", 3), xyz])
+    fibres = {"a": _b64(np.concatenate([np.frombuffer(base64.b64decode(fb["a"]), "<u4"),
+                                        links[:, 0]]), "<u4"),
+              "b": _b64(np.concatenate([np.frombuffer(base64.b64decode(fb["b"]), "<u4"),
+                                        links[:, 1]]), "<u4"),
+              "c": _b64(np.concatenate([np.frombuffer(base64.b64decode(fb["c"]), "<f4"),
+                                        ((allp[links[:, 0]] + allp[links[:, 1]]) / 2).ravel()]),
+                        "<f4"),
+              "k": _b64(np.concatenate([np.frombuffer(base64.b64decode(fb["k"]), "u1"),
+                                        np.ones(len(links))]), "u1")}
+    return {**brain, "nodes": nodes, "near": {"ids": _b64(near, "<u4" if n >= 65535 else "<u2")},
+            "fibres": fibres, "stem": {
+                "first": n0, "total": total, "shown": m,
+                "sites": [[r["site"], r["category"] or "other", r["visits"], r["first_day"],
+                           r["last_day"], int(r["private"])] for r in sites],
+                "colors": {c: site_color(c) for c in sorted({r["category"] or "other"
+                                                            for r in sites})}}}
 
 
 def preservation(xyz: np.ndarray, vec: np.ndarray, has: np.ndarray, lobe: np.ndarray,

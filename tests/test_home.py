@@ -9,6 +9,7 @@ import random
 import shutil
 import statistics
 import time
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -17,7 +18,8 @@ import pytest
 from test_app import _serve, call
 from test_brainmap import made  # noqa: F401  (a fixture: topic hubs, pages and vectors)
 
-from cortex import dashboard, home
+from cortex import brainmap, dashboard, home
+from cortex.browse import store
 from cortex.events import EventLog, local_day
 from cortex.home import HomeCache
 from cortex.index import SNAPSHOT, SNAPSHOT_SCHEMA
@@ -388,3 +390,221 @@ def test_the_home_stays_quick_on_5k_notes(tmp_path, capsys):
     # 15 ms on Windows by itself, so this guards against a regression rather than the target
     assert version_ms < 50
     assert max(adds) < 500
+
+
+# ---- the brain stem: the browsing store's websites ----
+
+
+def _ts(day: str) -> int:
+    return int(datetime.fromisoformat(day).replace(hour=12, tzinfo=UTC).timestamp())
+
+
+def _ago(*days: int) -> list[str]:
+    return sorted((NOW.date() - timedelta(days=d)).isoformat() for d in days)
+
+
+def _sites(root: Path, *rows: dict) -> None:
+    """Site rows written into a synthetic browsing store, as `store.put_pages` saves them."""
+    with closing(store.connect(Vault(root))) as con, con:
+        con.executemany("INSERT OR REPLACE INTO site_pages VALUES "
+                        f"({', '.join('?' * 14)})", [(
+                            r["site"], r.get("hidden", 0), r.get("category", "programming"),
+                            r["visits"], r.get("secs", 60), _ts(r["days"][0]),
+                            _ts(r["days"][-1]), json.dumps(r["days"]),
+                            json.dumps(r.get("titles", [f"A page on {r['site']}"])),
+                            json.dumps(r.get("searches", [])), json.dumps(r.get("led", [])),
+                            json.dumps(r.get("hubs", [])), json.dumps(r.get("related", [])),
+                            r.get("description", "")) for r in rows])
+
+
+def _stem_sites(n: int = 12) -> list[dict]:
+    cats = ("programming", "learning", "news", "video")
+    return [{"site": f"s{k:02d}.example", "visits": max(1, 50 - 3 * k), "days": _ago(90 - k, 5 + k),
+             "category": cats[k % 4], "hubs": [[f"hub-{k % 3}", 4]] if k < 9 else [],
+             "related": [f"s{(k + 1) % n:02d}.example"] if k % 2 == 0 else []}
+            for k in range(n)]
+
+
+def _fibres(brain: dict) -> list[tuple[str, str]]:
+    f, ids = brain["fibres"], brain["nodes"]["ids"]
+    a = np.frombuffer(base64.b64decode(f["a"]), "<u4")
+    b = np.frombuffer(base64.b64decode(f["b"]), "<u4")
+    return [(ids[i], ids[j]) for i, j in zip(a.tolist(), b.tolist(), strict=True)]
+
+
+def test_the_stem_draws_each_site_below_the_lobes_with_a_few_links(brain_vault):
+    r = brain_vault
+    hc = _cache(r)
+    plain_brain = hc.get()["brain"]
+    assert "stem" not in plain_brain  # no store: the brain as it was
+    _sites(r, *_stem_sites())
+    brain = hc.get()["brain"]
+    stem, ids = brain["stem"], brain["nodes"]["ids"]
+    assert stem["first"] == len(plain_brain["nodes"]["ids"]) and stem["total"] == 12
+    assert ids[:stem["first"]] == plain_brain["nodes"]["ids"]
+    assert sorted(ids[stem["first"]:]) == [f"site:s{k:02d}.example" for k in range(12)]
+    old, new = _xyz(plain_brain), _xyz(brain)
+    assert all(new[i] == xyz for i, xyz in old.items())  # the lobes' layout never moves
+    assert brain["lobes"] == plain_brain["lobes"] and brain["mesh"] == plain_brain["mesh"]
+    (a, b, rad) = brainmap.STEM
+
+    def off_axis(p):  # distance from the stem capsule's axis, and the share along it
+        a_, ab = np.array(a), np.array(b) - np.array(a)
+        s = float(np.clip(np.dot(np.array(p) - a_, ab) / ab.dot(ab), 0, 1))
+        return float(np.linalg.norm(np.array(p) - a_ - s * ab)), s
+    for k in range(12):  # in the stem, below where it leaves the lobes
+        d, s = off_axis(new[f"site:s{k:02d}.example"])
+        assert d <= rad and s >= brainmap.STEM_SPAN[0] - 0.01
+    assert all(off_axis(p)[0] > brainmap.STEM_R or off_axis(p)[1] < brainmap.STEM_SPAN[0]
+               for p in old.values())  # and no page is there
+    # ordered by first seen along the stem: the oldest site nearest the lobes
+    by_first = [s[0] for s in sorted(stem["sites"], key=lambda s: (s[3], s[0]))]
+    ys = [new[f"site:{s}"][1] for s in by_first]
+    assert ys[0] > ys[-1]
+    w = dict(zip(ids, np.frombuffer(base64.b64decode(brain["nodes"]["weight"]), "<f4").tolist(),
+                 strict=True))
+    assert w["site:s00.example"] > w["site:s11.example"] > 0  # size: visits
+    assert set(stem["colors"]) == {"programming", "learning", "news", "video"}
+    links = [p for p in _fibres(brain) if p[0].startswith("site:") or p[1].startswith("site:")]
+    deg: dict[str, int] = {}
+    for a, b in links:
+        for x in (a, b):
+            if x.startswith("site:"):
+                deg[x] = deg.get(x, 0) + 1
+    assert deg and max(deg.values()) <= 3
+    pairs = {frozenset(p) for p in links}
+    assert frozenset({"site:s00.example", "hub-0"}) in pairs  # a site to its topic hub
+    assert frozenset({"site:s00.example", "site:s01.example"}) in pairs  # related sites
+    assert len(_fibres(plain_brain)) == len(_fibres(brain)) - len(links)
+    assert hc.get()["brain"] is brain  # nothing new: the same blob
+
+
+def test_private_sites_stay_out_unless_unlocked(brain_vault):
+    r = brain_vault
+    _sites(r, *_stem_sites(),
+           {"site": "secret.example", "hidden": 1, "category": "adult", "visits": 99,
+            "days": _ago(3, 1), "titles": ["Secret title"], "related": ["s00.example"],
+            "hubs": [["hub-0", 9]]},
+           {"site": "s00.example", "hidden": 1, "category": "adult", "visits": 7,
+            "days": _ago(2), "titles": ["Hidden side title"], "searches": [["hidden term", 2]]})
+    hc = _cache(r)
+    locked = hc.get()
+    text = json.dumps(locked)
+    assert "secret" not in text.lower() and "Hidden side" not in text and "adult" not in text
+    stem = locked["brain"]["stem"]
+    assert stem["total"] == stem["shown"] == 12 and not any(s[5] for s in stem["sites"])
+    assert hc.site("secret.example") is None
+    open_ = hc.site("s00.example")
+    assert open_["private"] is False and open_["visits"] == 50
+    assert "Hidden side title" not in json.dumps(open_) and "hidden term" not in json.dumps(open_)
+    assert open_["hubs"] == [{"id": "hub-0", "title": "Hub 0", "visits": 4}]
+    unlocked = hc.get(private=True)
+    stem2, ids2 = unlocked["brain"]["stem"], unlocked["brain"]["nodes"]["ids"]
+    assert "site:secret.example" in ids2 and stem2["total"] == 13
+    flags = {s[0]: s[5] for s in stem2["sites"]}
+    assert flags["secret.example"] == 1 and flags["s00.example"] == 0
+    old, new = _xyz(locked["brain"]), _xyz(unlocked["brain"])
+    assert all(new[i] == xyz for i, xyz in old.items())  # a private site moves no public one
+    got = hc.site("secret.example", private=True)
+    assert got["private"] is True and got["titles"] == ["Secret title"]
+    both = hc.site("s00.example", private=True)
+    assert both["visits"] == 57 and "Hidden side title" in both["titles"]
+    assert "secret" not in json.dumps(hc.get()).lower()  # relocked: gone again
+    snap = dashboard.snapshot(Vault(r), now=NOW)  # Export snapshot: no stem at all
+    assert "secret.example" not in snap and "s00.example" not in snap
+
+
+def test_a_new_site_arrives_in_a_delta_and_nothing_moves(brain_vault):
+    r = brain_vault
+    _sites(r, *_stem_sites())
+    hc = _cache(r)
+    before = hc.get()
+    v0 = hc.version()
+    _sites(r, {"site": "fresh.example", "visits": 2, "days": _ago(0), "category": "news",
+               "hubs": [["hub-1", 2]]})
+    assert hc.version() != v0  # the store's stamp is part of the home's version
+    d = hc.delta(before["v"])
+    assert d["full"] is False and d["brain"]["added"] == ["site:fresh.example"]
+    assert d["brain"]["removed"] == [] and "pages" not in d
+    old, new = _xyz(before["brain"]), _xyz(d["brain"]["blob"])
+    assert all(new[i] == xyz for i, xyz in old.items())
+    assert new["site:fresh.example"][1] < -0.3
+    _sites(r, {**_stem_sites()[3], "visits": 60, "days": _ago(90 - 3, 8, 0)})  # one more visit
+    d2 = hc.delta(d["v"])
+    assert d2["brain"]["added"] == [] and "site:s03.example" in d2["brain"]["changed"]
+    assert all(_xyz(d2["brain"]["blob"])[i] == xyz for i, xyz in new.items())
+
+
+@pytest.mark.slow
+def test_the_home_stays_quick_with_5k_sites_in_the_stem(tmp_path, capsys):
+    root = tmp_path / "big"
+    _big(root)
+    rng = random.Random(1)
+    cats = ("programming", "learning", "news", "video", "shopping", "social", "other")
+    rows = [{"site": f"site{k:04d}.example", "visits": max(1, int(2000 / (k + 1))),
+             "days": _ago(*{rng.randrange(400) for _ in range(rng.randint(1, 20))}),
+             "category": rng.choice(cats), "titles": WORDS[:5],
+             "hubs": [[f"hub-{rng.randrange(40)}", 3]] if rng.random() < 0.5 else [],
+             "related": [f"site{rng.randrange(5000):04d}.example" for _ in range(3)]}
+            for k in range(5000)]
+    _sites(root, *rows)
+    hc = _cache(root)
+    first = hc.get()
+    stem = first["brain"]["stem"]
+    assert stem["total"] == 5000 and 1500 <= stem["shown"] < 5000
+    blob_kb = len(json.dumps(first["brain"])) / 1024
+    times = []
+    for _ in range(21):
+        t = time.perf_counter()
+        hc.version()
+        times.append(time.perf_counter() - t)
+    version_ms = statistics.median(times) * 1000
+    took, v = [], first["v"]
+    for k in range(3):  # one more visit to a site, twice, then a new site
+        new = ({**rows[100 + k], "visits": rows[100 + k]["visits"] + 1,
+                "days": sorted({*rows[100 + k]["days"], _ago(0)[0]})} if k < 2 else
+               {"site": "brand-new.example", "visits": 1, "days": _ago(0)})
+        _sites(root, new)
+        t = time.perf_counter()
+        d = hc.delta(v)
+        took.append((time.perf_counter() - t) * 1000)
+        assert "pages" not in d and (d["brain"]["removed"] == [] or k == 2)
+        v = d["v"]
+    # the new site is the newest of the recent ones past the top: the oldest of those goes
+    assert d["brain"]["added"] == ["site:brand-new.example"]
+    assert len(d["brain"]["removed"]) == (stem["shown"] == 2500)
+    with capsys.disabled():
+        print(f"\nhome with {stem['shown']} of {stem['total']} sites on {len(first['pages'])} "
+              f"pages: brain blob {blob_kb:.0f} KB, version {version_ms:.1f} ms (median of 21), "
+              f"delta after one new visit {took[0]:.0f} ms, then {took[1]:.0f} ms, after a new "
+              f"site {took[2]:.0f} ms")
+    assert version_ms < 50
+    assert max(took) < 500
+
+
+def test_the_site_route_needs_the_key_and_hides_private_sites_while_locked(brain_vault,
+                                                                             monkeypatch):
+    from cortex.app import hello
+    r = brain_vault
+    _sites(r, *_stem_sites(3), {"site": "secret.example", "hidden": 1, "category": "adult",
+                                "visits": 9, "days": _ago(1)})
+    srv, app = _serve(r)
+    try:
+        assert call(app, "GET", "/api/home/site?site=s00.example", token=False)[0] == 401
+        code, js, _, _ = call(app, "GET", "/api/home/site?site=s00.example")
+        assert code == 200 and js["site"] == "s00.example" and js["private"] is False
+        for path in ("/api/home/site?site=secret.example",
+                     "/api/home/site?site=secret.example&private=1",
+                     "/api/home/site?site=nowhere.example", "/api/home/site"):
+            assert call(app, "GET", path)[:2] == (404, {"error": "not found"}), path
+        monkeypatch.setattr(hello, "verify", lambda: (True, None))
+        call(app, "POST", "/api/home/unlock", {})
+        code, js, _, _ = call(app, "GET", "/api/home/site?site=secret.example&private=1")
+        assert code == 200 and js["private"] is True
+        assert call(app, "GET", "/api/home/site?site=secret.example")[0] == 404  # not asked
+        call(app, "POST", "/api/home/lock", {})
+        assert call(app, "GET", "/api/home/site?site=secret.example&private=1")[0] == 404
+    finally:
+        app.receiver.stop()
+        srv.shutdown()
+        srv.server_close()
