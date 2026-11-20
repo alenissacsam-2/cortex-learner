@@ -2,7 +2,7 @@
 
 Cortex is a second brain and study planner that lives on your own computer and that Claude and other AI apps can read and write through MCP.
 
-![The Cortex dashboard: today's plan, coming tests and the 3D brain of a sample vault](docs/images/dashboard-home.png)
+![The Cortex home on a sample vault: Next up, the live 3D brain with its stem of websites, the live feed, exams and deadlines, and quick chat](docs/images/dashboard-home.png)
 
 *Every screenshot in this README shows the bundled sample learner, Sam, plus made-up demo data. None of it is a real person's.*
 
@@ -85,7 +85,7 @@ The readiness forecast for a test stays hidden until Cortex has 30 checked revie
 
 The **Brain** tab draws your vault as a brain: each topic is a lobe with its own colour, bright fibres are your own links, faint fibres join pages with similar meaning, and a halo marks pages saved in the last 7 days. Below the brain, the stem holds your browsing: one dot per site, sized by visits, glowing by how recently you went there and coloured by category; the **Stem** button flies to it, and clicking a site shows its days and searches. Drag to turn, scroll to zoom, click a page to see its connections. A 2D map and a list are one click away. It uses WebGL2 and falls back to a flat canvas.
 
-![The 3D brain: lobes labelled Programming, Unfiled, About you and others, with filters on the left](docs/images/dashboard-brain.png)
+![The 3D brain: lobes labelled Programming, Unfiled, About you and others, the stem of browsed websites below them, and filters with an outline on the left](docs/images/dashboard-brain.png)
 
 ### Study planning
 
