@@ -407,17 +407,12 @@ def test_people_hub_lists_only_public_people(root):
         encoding="utf-8")
 
 
-def test_is_not_me_and_claim_flags():
+def test_is_not_me():
     from cortex import claims
 
     page = "# Profile\n\n## Not me\n- I love  Java\n\n## Facts\n- I like Python\n"
     assert claims.is_not_me("profile", page, "i love java")
     assert not claims.is_not_me("profile", page, "I like Python")
-    evs = [{"id": "1", "kind": "log", "payload": {"kind": "claim_flag", "fair": True}},
-           {"id": "2", "kind": "log", "payload": {"kind": "claim_flag", "fair": "yes"}},
-           {"id": "3", "kind": "log", "payload": {"kind": "claim_flag", "fair": True}},
-           {"id": "4", "kind": "void", "ref": "3"}]
-    assert claims.claim_flags(evs) == {"fair": 1, "unfair": 1}
 
 
 @pytest.mark.parametrize("ok", ["professor", "people/asha", "a-b-1", "people/a.b-c"])

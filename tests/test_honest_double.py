@@ -1,12 +1,14 @@
-"""v5 PHASE2.md G1: the Honest Double check on cortex_recall and claim_flag feedback."""
+"""v5 PHASE2.md G1: the Honest Double check on cortex_recall."""
 
 import re
 
 import numpy as np
 import pytest
-from conftest import events, run
+from conftest import run
 
 from cortex import semantic
+from cortex.events import EventLog
+from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -71,34 +73,18 @@ def test_a_shipped_project_counts_as_applied(root):
     run(root, body)
 
 
-def test_claim_flags_feed_the_inbox_and_dismiss(root):
-    async def body(call):
-        flag = {"concept": "arrays-basics", "sentence": "Arrays are easy for me.", "fair": False}
-        out = await call("cortex_log", {"kind": "claim_flag", "payload": flag})
-        assert "error" not in out and "not be flagged again" in out["next"]
-        check = await call("cortex_recall", {"query": "arrays  are EASY for me.", "check": True})
-        assert verdicts(check) == {"arrays-basics": "dismissed"}  # normalised sentence matches
+def test_an_old_claim_flag_no_longer_dismisses(root):
+    """claim_flag was removed on 20 Nov 2026: an old vault's unfair flag is ignored."""
+    EventLog(Vault(root)).append(session="cli", kind="log", source="tutor", fields={
+        "payload": {"kind": "claim_flag", "flagged": "arrays-basics",
+                    "sentence": "Arrays are easy for me.", "fair": False}})
 
-        fair = {"concept": "two-pointers", "sentence": "I master [[two-pointers]] fully.",
-                "fair": True}
-        out = await call("cortex_log", {"kind": "claim_flag", "payload": fair})
-        assert "To prove" in out["next"]
-        for bad in ({**fair, "fair": "yes"}, {**fair, "sentence": ""},
-                    {**fair, "sentence": "x" * 4001}, {"sentence": "x", "fair": True}):
-            assert (await call("cortex_log", {"kind": "claim_flag", "payload": bad}))["error"]
-        assert (await call("cortex_reflect"))["claim_check"] == {"fair": 1, "unfair": 1}
-        # a flag is never evidence: arrays-basics is still not started
-        assert verdicts(await call("cortex_recall", {
-            "query": "I like arrays.", "check": True})) == {"arrays-basics": "unverified"}
+    async def body(call):
+        check = await call("cortex_recall", {"query": "Arrays are easy for me.", "check": True})
+        assert verdicts(check) == {"arrays-basics": "unverified"}
+        assert "claim_check" not in await call("cortex_reflect")
 
     run(root, body)
-    inbox = (root / "inbox.md").read_text(encoding="utf-8")
-    day = [e for e in events(root) if e["kind"] == "log"][-1]["day"]
-    assert f'## To prove\n- Prove [[two-pointers]]: claimed "I master two-pointers fully." ' \
-           f"(claim check {day})" in inbox
-    flags = [e["payload"] for e in events(root)
-             if e.get("payload", {}).get("kind") == "claim_flag"]
-    assert all("concept" not in p and p["flagged"] for p in flags)
 
 
 def test_check_limits(root):

@@ -60,7 +60,6 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 ### About you
 | Command | What it does |
 |---|---|
-| `/cortex probe` | "Predict me": the chat guesses your answer to a question about you before you reply, next to what a typical student would say. Over time this shows how well Cortex knows you, per area. |
 | `/cortex help` | Greets you and lists every mode and command. `/cortex help study` or `/cortex help terminal` shows one section. |
 
 ---
@@ -331,7 +330,7 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 
 **Later, when you have time:**
 
-8. `/cortex harvest` (10 minutes a night) and `/cortex probe`.
+8. `/cortex harvest` (10 minutes a night).
 9. `cortex export context` when you start a fresh ChatGPT or Gemini chat.
 
 ---
@@ -362,8 +361,6 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 | **Need** | A fact about you a chat wished it had; Cortex asks you later, one at a time |
 | **Loop** | An open item: a commitment, question or idea |
 | **Resurfacing** | Old ideas and decisions brought back at growing intervals |
-| **Letters** | Your own advice to a future tired you, shown when the moment matches |
-| **Probe** | "Predict me" questions that measure how well Cortex knows you |
 
 ---
 

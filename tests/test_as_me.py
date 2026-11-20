@@ -3,15 +3,13 @@
 import pytest
 from conftest import events, run
 
-from cortex import delegation
+from cortex import share
 from cortex.cli import ME_PAGES
 from cortex.events import EventLog
 from cortex.mcp_server import AS_ME_NEXT
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
-
-DELEGATION = "# Delegation\n\n## Alone\n\n## Ask first\n- Meetings\n\n## Never\n- Money\n"
 
 
 def _patch(id, target, text, ok=True):
@@ -24,7 +22,6 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         (root / f"me/{page}.md").write_text(ME_PAGES[f"me/{page}.md"], encoding="utf-8")
     goals = root / "me/goals.md"
     goals.write_text(goals.read_text("utf-8").replace("---\n", "---\nshare: work\n", 1), "utf-8")
-    (root / "me/delegation.md").write_text(DELEGATION, encoding="utf-8")
     prefs = root / "me/preferences.md"
     prefs.write_text("---\nshare: work\n---\n# Preferences\n\n## Communication\n",
                      encoding="utf-8")
@@ -68,12 +65,10 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         assert ex[0]["text"].startswith('<untrusted_note id="voice">')
         assert out["person"]["id"] == "people/dr-lee" and out["person"]["relation"] == "professor"
         assert out["person"]["text"].startswith('<untrusted_note id="people/dr-lee">')
-        b = out["boundaries"]
-        assert "- Money" in b["never"] and "- Meetings" in b["ask"] and b["alone"] == ""
+        assert not {"boundaries", "fidelity"} & set(out)
         u = out["unknowns"]
         assert any("How do you sign" in x for x in u) and any("Finish the thesis" in x for x in u)
         assert not any(x.startswith("no voice") for x in u)
-        assert out["fidelity"]["voice"] == {"n": 0, "kept": None, "status": "unmeasured"}
         assert out["next"] == AS_ME_NEXT
 
         other = await call("cortex_as_me", {"task": "Cover letter", "audience": "recruiter"})
@@ -96,10 +91,10 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
             assert (await call("cortex_as_me", bad))["error"] == "invalid_argument"
         assert (await call("cortex_as_me", {"task": "x", "audience": "people/nobody"}))[
             "error"] == "unknown_id"
-        delegation.set_kill(Vault(root), True)
+        share.set_kill(Vault(root), True)
         assert (await call("cortex_as_me", {"task": "x", "audience": "friend"}))[
             "error"] == "killed"
-        delegation.set_kill(Vault(root), False)
+        share.set_kill(Vault(root), False)
 
     run(root, body)
     acc = [e["payload"] for e in events(root) if e.get("payload", {}).get("kind") == "access"]
@@ -114,7 +109,6 @@ def test_as_me_without_confirmed_lines(root):
         out = await call("cortex_as_me", {"task": "Thank a friend", "audience": "friend"})
         assert out["self"]["lines"] == [] and out["self"]["withheld"] >= 1
         assert out["voice"] == {"card": [], "exemplars": []}
-        assert out["boundaries"] == {"alone": "", "ask": "", "never": ""}
         assert {"no voice samples for friend", "no voice card for friend"} <= set(
             out["unknowns"])
 

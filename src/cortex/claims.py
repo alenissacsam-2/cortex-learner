@@ -11,9 +11,8 @@ import datetime as dt
 import hashlib
 import re
 
-from cortex import probes
 from cortex.reflect import UNCONFIRMED
-from cortex.vault import invalid
+from cortex.vault import VaultError, invalid
 
 PAGES = ("personality", "preferences", "goals", "profile", "voice")  # voice: PHASE4 V2
 RESERVED = {"past": "past", "not me": "not_me"}  # lowercased heading -> claim status
@@ -47,15 +46,14 @@ def strip_id(line: str) -> str:
     return ID_TAIL.sub("", line)
 
 
-def make_id(page: str, text: str, day: str, taken=(), prefix: str = "c") -> str:
-    """`c-` + 5 base32 chars of sha256("me/<page>\\n<norm text>\\n<day>"); the next 5 on a clash.
-    Letters (G4) use the same recipe with prefix `l`."""
+def make_id(page: str, text: str, day: str, taken=()) -> str:
+    """`c-` + 5 base32 chars of sha256("me/<page>\\n<norm text>\\n<day>"); the next 5 on a clash."""
     salt = ""
     for n in range(1000):  # identical lines on one page: salt the hash once the 10 slots clash
         digest = hashlib.sha256(f"me/{page}\n{norm(text)}\n{day}{salt}".encode()).digest()
         h = base64.b32encode(digest).decode().lower().rstrip("=")
         for i in range(0, len(h) - 4, 5):
-            if (cid := f"{prefix}-{h[i:i + 5]}") not in taken:
+            if (cid := f"c-{h[i:i + 5]}") not in taken:
                 return cid
         salt = f"\n{n + 1}"
     raise invalid("No free claim id; reword the line.")
@@ -189,6 +187,22 @@ def is_live(r: dict, today: str | None = None) -> bool:
     return r["status"] == "live" and not (today and expired(r["text"], today))
 
 
+def resolve(vault, item, today: str | None = None) -> str:
+    """A claim id (`c-…`, `^` optional) or a live claim line's text as served (an `(ask)` or an
+    old `(said)` label allowed) -> that live claim's id, by id or by `norm` equality; else
+    `invalid_argument`."""
+    if isinstance(item, str) and item.strip():
+        item = item.strip().removesuffix("(said)").removesuffix("(ask)")  # serving labels
+        live = [r for r in rows(vault) if is_live(r, today)]
+        cid = item.strip().lstrip("^")
+        found = {r["id"] for r in live if r["id"] == cid} or {
+            r["id"] for r in live if norm(r["text"]) == norm(item)}
+        if len(found) == 1:
+            return found.pop()
+    raise VaultError("invalid_argument", "A claim must be one live claim's ^c-… id or its line "
+                     "text as served; read the me/* page first.")
+
+
 def late_relay(r: dict) -> bool:
     """A confirmed row whose yes the model relayed on or after RELAYED_FROM: not act-grade."""
     return (r["tier"] == "confirmed" and r["confirm"] in (None, "relayed")
@@ -292,11 +306,3 @@ def saved(vault, events, today: str, days: int = SAVED_DAYS) -> dict:
     changes.sort(key=lambda r: not r["exposed"])  # stable: exposed rows first
     return {"claims": rows, "changes": changes}
 
-
-def claim_flags(events) -> dict:
-    """PHASE2.md G1: {fair, unfair} counts of the live `claim_flag` log events."""
-    out = {"fair": 0, "unfair": 0}
-    for e in probes._live(events):
-        if e["payload"].get("kind") == "claim_flag":
-            out["fair" if e["payload"].get("fair") is True else "unfair"] += 1
-    return out

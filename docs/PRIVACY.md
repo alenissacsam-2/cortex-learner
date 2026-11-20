@@ -36,8 +36,8 @@ Cortex limits what it hands over:
 
 - Pages marked `private: true` are left out of search, recall and context. People pages (`people/`) are private unless you mark one `private: false`. Apart from the people-page exception below, only your local model reads private pages, in the app's Chat and `cortex ask` (see below).
 - **One exception: people pages.** When Claude asks for a people page by its exact id (`cortex_read`), Cortex returns it even if it is private, with a note asking the model to use it for the current task only. That note is a request, not a lock: the page's text goes to the AI app you are chatting with. If a person's page holds something no cloud AI should read, keep it out of the vault.
-- Share tiers decide which of your `me/` pages may be shown for a given audience when Claude writes as you (`cortex_as_me`). Lines from other pages are held back by Cortex itself; the model only learns how many. A read-only (`reader`) or `delegate` Cortex serves only `me/` pages marked `share: work` or `public`, in every tool, never reads past chats (`cortex_chats`) or people pages, and writes nothing when it starts.
-- The kill switch (`cortex kill`, undo with `cortex kill --off`) stops writing as you and drafting at once.
+- Share tiers decide which of your `me/` pages may be shown for a given audience when Claude writes as you (`cortex_as_me`). Lines from other pages are held back by Cortex itself; the model only learns how many. A read-only (`reader`) Cortex serves only `me/` pages marked `share: work` or `public`, in every tool, never reads past chats (`cortex_chats`) or people pages, and writes nothing when it starts.
+- The kill switch (`cortex kill`, undo with `cortex kill --off`) stops writing as you (`cortex_as_me`) and the read-only role at once.
 - `cortex export context` writes a short snapshot (profile, contract rules, current goals, confirmed preferences) only when you run it. Whatever you paste from it into another assistant goes to that assistant's company.
 
 ## Prompt injection

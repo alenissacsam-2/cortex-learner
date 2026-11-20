@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from cortex import bets, claims, probes, surprisal
+from cortex import claims
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import local_day
@@ -21,10 +21,9 @@ CONTEXT_MAX = 2400  # characters, about 600 tokens
 PRIME_MAX, PRIME_PROMPT = 2000, 2000
 PRIME_CAPS = {"profile": 250, "preferences": 800, "contract": 400, "related": 450,
               "mistakes": 250}
-# PHASE3 H3: served claim labels, ranking and the average-pull line
+# PHASE3 H3: served claim labels and ranking
 LEGEND = "(ask) = check with the user before relying on it."
-PULL_LINE = "In {area}, my guesses drift to the typical student; ask instead."
-PULL_MIN, PULL_MISSES, ASK_WEIGHT = 0.6, 5, 0.3
+ASK_WEIGHT = 0.3
 # phase4-wiki §7.2: the me/personality.md sections cortex_context serves, by scope
 PERSONALITY_HEADINGS = {"all": ("communication", "how i think"),
                         "communication": ("communication",), "learning": ("how i think",)}
@@ -155,23 +154,16 @@ def contract_core(text: str) -> list[str]:
     return out
 
 
-def served_claims(vault: Vault, events: list[dict], now: datetime) -> tuple[dict, list[str]]:
-    """PHASE3 H3: {(page, section, text): (label, score)} for each live claim, and the probe
-    areas whose guesses drift to the typical student. The user's own lines (typed, legacy,
-    confirmed) are served plain whatever their bet state; (ask) for recheck or contested, agent
-    or exposed, or a yes the model relayed from claims.RELAYED_FROM."""
-    cards, bits = bets.fold(events, local_day(now), now), surprisal.bits(events)
+def served_claims(vault: Vault, events: list[dict]) -> dict:
+    """PHASE3 H3: {(page, section, text): (label, score)} for each live claim, by tier alone.
+    The user's own lines (typed, legacy, confirmed) are served plain; (ask) for agent or
+    exposed, or a yes the model relayed from claims.RELAYED_FROM, ranked below plain lines."""
     out = {}
     for r in claims.tiers(vault, events):
-        b = cards.get(r["id"]) or bets.Bet()
-        label = " (ask)" if (b.state in ("recheck", "contested") or claims.late_relay(r)
-                             or r["tier"] in ("agent", "exposed")) else ""
-        score = bits.get(r["id"], 1.0) * (0.5 if b.R is None else b.R)
-        out[r["page"], r["section"], r["text"]] = (label, score * (
-            ASK_WEIGHT if label == " (ask)" else 1))
-    pull = [a for a, row in probes.summary(events)["areas"].items()
-            if row.get("pull", 0) > PULL_MIN and row.get("misses", 0) >= PULL_MISSES]
-    return out, pull
+        ask = claims.late_relay(r) or r["tier"] in ("agent", "exposed")
+        out[r["page"], r["section"], r["text"]] = (" (ask)" if ask else "",
+                                                   0.5 * (ASK_WEIGHT if ask else 1))
+    return out
 
 
 def claim_items(vault: Vault, page: str, keep, served: dict, today: str) -> list[tuple]:
@@ -266,7 +258,7 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     parts: list[str] = []
     left = [PRIME_MAX]
     put = putter(parts, left)
-    served, pull = served_claims(vault, events, now)
+    served = served_claims(vault, events)
     summary = "" if "profile" in withheld else profile_summary(vault, local_day(now), served)
     if summary:
         put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
@@ -290,10 +282,8 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     # room than this one, so it serves a prefix of these lines
     asks = {r[3] for r in rows if r[4]}
     shown = fit([r[3] for r in rows], "me", PRIME_CAPS["preferences"], left[0])
-    note = ([LEGEND] if asks.intersection(shown) or " (ask)" in summary else []) + [
-        PULL_LINE.format(area=a) for a in pull]
-    if note:
-        put("How to read the claims", "\n".join(note))
+    if asks.intersection(shown) or " (ask)" in summary:
+        put("How to read the claims", LEGEND)
     cap, before = PRIME_CAPS["preferences"], left[0]
     if problem := named_problem(vault, prompt):
         put(ATTEMPT_HEAD, attempt_line(problem))

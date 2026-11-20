@@ -1,6 +1,6 @@
 """`cortex taint`: the plugin's PostToolUse hook records that Claude read outside text with a
 tool that is not Cortex (web, browser, mail, other MCP servers). The MCP server treats a fresh
-marker as exposure (session.SessionManager._check_taint), so delegation and claim tiers see it.
+marker as exposure (session.SessionManager._check_taint), so claim tiers see it.
 
 This module is also the `cortex` console entry: `cortex taint` runs here without importing
 cortex.cli (typer and every core module), since the hook fires on each matched tool call.

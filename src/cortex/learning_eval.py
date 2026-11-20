@@ -21,7 +21,7 @@ MIN_PAIRS = 30  # fewer pairs than this in a row: noise
 EPS = 1e-6
 SPLITS = ("mode", "grader", "source", "item_type", "confidence", "first", "prior")
 SPOT_SHOWN = 3  # model-graded answers a reflect pack offers to keep or flip
-# confidence mirror: half of bets.MIN_PAIRS per band, since it is asked of each of 4 bands
+# confidence mirror: 10 answers per band (each of the 4 bands is asked)
 MIN_BAND = 10
 CONFIDENCE_LABELS = {1: "1 (guessing)", 2: "2", 3: "3", 4: "4 (certain)"}
 

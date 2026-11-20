@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from cortex import claims, delegation
+from cortex import claims, share
 from cortex.app import targets
 from cortex.clients import claude_desktop_config_paths
 from cortex.contract import MAX_CHARS as CONTRACT_MAX_CHARS
@@ -230,8 +230,8 @@ def check_local_model() -> tuple[str, str, str, str]:
 
 def check_kill(root: Path) -> tuple[str, str, str, str]:
     """v5 PHASE4 V5: show the kill switch state (a state, not a fault)."""
-    on = delegation.killed(Vault(root))
-    return "PASS", "Kill switch", ("on: act-as-me, drafts and the delegate and reader roles "
+    on = share.killed(Vault(root))
+    return "PASS", "Kill switch", ("on: act-as-me and the reader role "
                                    "are refused (`cortex kill --off`)" if on else "off"), ""
 
 
@@ -244,7 +244,7 @@ def check_exclude() -> tuple[str, str, str, str]:
 
 
 def check_me_pages(root: Path) -> tuple[str, str, str, str]:
-    """Pages added by later versions (e.g. me/voice.md, me/delegation.md) on an older vault."""
+    """Pages added by later versions (e.g. me/voice.md) on an older vault."""
     from cortex.cli import ME_PAGES  # cli imports doctor at module level
 
     missing = [rel for rel in ME_PAGES if not (Path(root) / rel).exists()]

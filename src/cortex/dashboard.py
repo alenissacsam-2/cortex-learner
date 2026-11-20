@@ -30,7 +30,6 @@ from cortex import (
     loops,
     needs,
     planner,
-    probes,
     reflect,
     topics,
 )
@@ -264,9 +263,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                for p in (vault.root / "me" / f"{c}.md" for c in claims.PAGES)]
     known = _once(memo, "know", (gen, day, notes["me"], claimed),
                   lambda: know.report(parsed, events, day))
-    known = known | {"needs": open_needs, "pages": [
-        pg | {"contested": [plain(t, 200) for t in pg["contested"]]} if "contested" in pg
-        else pg for pg in known["pages"]]}
+    known = known | {"needs": open_needs}
     profile = next((n for n in notes["me"] if n.id == "profile" and not is_private(n)), None)
     m = _NAME_RE.search(profile.body) if profile else None
     name = plain(m.group(1).strip(string.punctuation)) if m else ""
@@ -305,8 +302,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                       for r in loops.resurface(parsed, day, limit=5, events=events,
                                                created_of=created)],
         "needs": open_needs,
-        "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0],
-                "probes": _once(memo, "probes", gen, lambda: probes.summary(events))},
+        "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0]},
         "help": _help(),
     }
 

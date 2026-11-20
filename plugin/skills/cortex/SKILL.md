@@ -37,7 +37,6 @@ The mode is the first word after `/cortex`; the rest is the topic. Default `home
 | `save` | Save this chat: read `modes/save-history.md` first. |
 | `history` | Save past chats: read `modes/save-history.md` first. |
 | `harvest` | Distil imported chats: `cortex_start(mode="history")`, then `modes/harvest.md`. |
-| `probe` | Twin vs stranger: read `modes/probe.md` first. |
 | `sweep` | Up to 10 cold mixed questions: read `modes/sweep.md` first. Offer it; never start it unasked. |
 | `mock` | Mock interview or story bank: read `modes/mock.md` first. |
 
@@ -83,7 +82,6 @@ To patch or add pages, record an assessment, edit `me/…`, save personality or 
 
 ## 5. End
 When they are done, call `cortex_end(summary)` (≤ 600 characters) and **show its `display` card exactly.** Left alone, it closes after 2 hours.
-Letters for a tired you: read `modes/letters.md` first.
 
 ## Honesty rules
 - Never record an answer you did not see or invent ids.

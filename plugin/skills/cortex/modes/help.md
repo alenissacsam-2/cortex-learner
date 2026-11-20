@@ -40,7 +40,6 @@ No session: do not call `cortex_start`. `/cortex help <word>` (for example `help
 ## About you
 | Command | What it does |
 |---|---|
-| `/cortex probe` | "Predict me": guesses your answer before you reply, to measure how well Cortex knows you |
 | "save this about me" | Saves a preference or personality line, after your yes |
 | `/cortex help` | This list |
 
@@ -56,7 +55,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `log assessment\|result\|solved\|taught` | Records results by hand |
 | `reflect` | The weekly review pack |
 | `claims` (`--summary`, `--unasked`) | Lines about you: all, how well Cortex knows you per page, or saved without asking |
-| `needs` / `probes` | Facts a chat wished it had / how well Cortex predicts you |
+| `needs` | Facts a chat wished it had |
 | `chats` / `import-chats` | Past chats / import a claude.ai export |
 | `digest` | Review chats imported since the last digest; each topic you confirm is a touch, never a grade |
 | `harvest status` | Harvest progress and undo commands |

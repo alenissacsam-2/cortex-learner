@@ -1,10 +1,11 @@
-"""v5 PHASE4 V5: server roles, the kill switch and the access log."""
+"""v5 PHASE4 V5: server roles (owner, reader; delegate was removed on 20 Nov 2026), the kill
+switch and the access log."""
 
 import pytest
 from conftest import events, git, run
 from typer.testing import CliRunner
 
-from cortex import delegation, doctor, people
+from cortex import doctor, people, share
 from cortex.cli import app
 from cortex.mcp_server import Cortex, build_server
 from cortex.vault import Vault, VaultError
@@ -43,35 +44,10 @@ def test_reader_reads_but_never_writes(root):
     assert not (root / "events").exists() or not list((root / "events").rglob("*.jsonl"))
 
 
-def test_delegate_limits(root):
-    people.add(Vault(root), "Asha", {"relation": "friend"})
-
-    async def body(call):
-        assert "hits" in await call("cortex_find", {"query": "pointers"})
-        assert (await call("cortex_log", {"kind": "need", "payload": NEED}))["recorded"] == 1
-        for name, args in (
-                ("cortex_chats", {}),
-                ("cortex_read", {"id": "people/asha"}),
-                ("cortex_patch", {"id": "me/profile", "op": "append_to_section",
-                                  "target": "Background", "text": "- x"}),
-                ("cortex_patch", {"id": "people/asha", "op": "append_to_section",
-                                  "target": "Who they are to me", "text": "- x"}),
-                ("cortex_add", {"kind": "person", "title": "Bo",
-                                "fields": {"relation": "friend"}}),
-                ("cortex_log", {"kind": "voice_sample", "payload": {"text": "hi"}}),
-                ("cortex_log", {"kind": "journal", "payload": {"text": "hi"}})):
-            out = await call(name, args)
-            assert out["error"] == "role_refused" and "delegate" in out["next"], name
-
-    run(root, body, "delegate")
-    core = Cortex(Vault(root), "delegate")
-    assert core._gate("cortex_as_me", {}) is None
-    assert core._gate("cortex_log", {"kind": "draft"}) is None
-
-
 def test_bad_role(root):
-    with pytest.raises(VaultError):
-        Cortex(Vault(root), "admin")
+    for role in ("admin", "delegate"):  # delegate: removed on 20 Nov 2026
+        with pytest.raises(VaultError):
+            Cortex(Vault(root), role)
     r = CliRunner().invoke(app, ["mcp", "--role", "admin", "--vault", str(root)])
     assert r.exit_code == 1 and "--role" in r.output
 
@@ -81,10 +57,9 @@ def test_kill_switch(root):
     cli = CliRunner()
     assert doctor.check_kill(root)[1:3] == ("Kill switch", "off")
     assert cli.invoke(app, ["kill", "--vault", str(root)]).exit_code == 0
-    assert delegation.killed(v) and doctor.check_kill(root)[2].startswith("on")
+    assert share.killed(v) and doctor.check_kill(root)[2].startswith("on")
     owner = Cortex(v)
     assert owner._gate("cortex_as_me", {})["error"] == "killed"
-    assert owner._gate("cortex_log", {"kind": "draft"})["error"] == "killed"
     assert owner._gate("cortex_log", {"kind": "need"}) is None
 
     async def study(call):
@@ -96,10 +71,9 @@ def test_kill_switch(root):
         assert out["error"] == "killed" and "kill --off" in out["next"]
 
     run(root, study, "owner")
-    run(root, off, "delegate")
     run(root, off, "reader")
     assert cli.invoke(app, ["kill", "--off", "--vault", str(root)]).exit_code == 0
-    assert not delegation.killed(v) and Cortex(v, "reader")._gate("cortex_find", {}) is None
+    assert not share.killed(v) and Cortex(v, "reader")._gate("cortex_find", {}) is None
 
 
 def test_access_log(root):
@@ -110,21 +84,13 @@ def test_access_log(root):
     core._access("as_me", task="Email <b>Dr Rao</b> about [the](http://x.y) deadline",
                  audience="professor")
 
-    def fake_draft(**kw):
-        return {"recorded": 1, "id": "01DRAFT", "next": "x"}
-
-    args = {"kind": "draft", "payload": {"text": "Hi Asha, see you at 5", "audience": "friend"}}
-    core._call("cortex_log", fake_draft, dict(args))
-    core._call("cortex_log", fake_draft, dict(args))  # the same draft id: one access row
-    rows = delegation.access_rows(events(root))
-    assert [(r["access"], r["audience"]) for r in rows] == [("as_me", "professor"),
-                                                           ("draft", "friend")]
+    rows = share.access_rows(events(root))
+    assert [(r["access"], r["audience"]) for r in rows] == [("as_me", "professor")]
     assert "<b>" not in rows[0]["task"] and "http" not in rows[0]["task"]
     r = CliRunner().invoke(app, ["access", "--vault", str(root), "--days", "1"])
     assert r.exit_code == 0, r.output
     assert "as_me" in r.output and "professor" in r.output
-    assert "Hi Asha" not in r.output and rows[1]["task"] == ""  # draft text stays in voice/
-    assert delegation.access_rows(events(root), "2999-01-01") == []
+    assert share.access_rows(events(root), "2999-01-01") == []
 
 
 # Round 2 (outside review §6 items 6, 7): a non-owner server serves only me/ pages shared with
@@ -147,7 +113,7 @@ def share_vault(root):
     git(root, "commit", "-q", "-m", "share tiers")
 
 
-@pytest.mark.parametrize("role", ["delegate", "reader"])
+@pytest.mark.parametrize("role", ["reader"])
 def test_non_owner_serves_only_me_pages_shared_with_work(root, role):
     share_vault(root)
 
@@ -172,7 +138,7 @@ def test_non_owner_serves_only_me_pages_shared_with_work(root, role):
     run(root, body, role)
 
 
-@pytest.mark.parametrize("role", ["delegate", "reader"])
+@pytest.mark.parametrize("role", ["reader"])
 def test_non_owner_lint_hides_expired_claims_of_withheld_pages(root, role):
     share_vault(root)
     (root / "me/personality.md").write_text('---\nid: "personality"\nshare: close\n---\n'
@@ -215,7 +181,7 @@ def test_owner_sees_every_me_page(root):
     run(root, body, "owner")
 
 
-@pytest.mark.parametrize("role", ["delegate", "reader"])
+@pytest.mark.parametrize("role", ["reader"])
 def test_non_owner_start_up_writes_nothing(root, role):
     # a concept added in Obsidian: an owner start-up adopts it into catalog.yaml
     (root / "concepts/new-thing.md").write_text(

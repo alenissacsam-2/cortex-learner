@@ -430,9 +430,9 @@ def test_loops_needs_and_you_hold_no_private_text(root):
     assert "pick-db" in {r["id"] for r in d["resurface"]}
     assert [n["question"] for n in d["needs"]] == ["Morning or night?"]
     you = d["you"]
-    assert set(you) == {"know", "unconfirmed", "probes"}
+    assert set(you) == {"know", "unconfirmed"}
     assert {"page": "personality", "private": True} in you["know"]["pages"]
-    assert you["know"]["needs"] == d["needs"] and you["probes"]["overall"] == {"n": 0}
+    assert you["know"]["needs"] == d["needs"]
     text = json.dumps(d)
     assert "Secret" not in text and "<i>" not in text and "<b>" not in text
 

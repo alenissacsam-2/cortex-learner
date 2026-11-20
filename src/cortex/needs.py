@@ -1,6 +1,6 @@
-"""Needs and tell-me taps (v5 PHASE2.md G2): personal facts that real work lacked, logged as
-`need` events and asked back one at a time as a sealed tap (forecast with `need`, then settle).
-Pure folds over events; voided events do not count."""
+"""Needs (v5 PHASE2.md G2): personal facts that real work lacked, logged as `need` events and
+asked back one at a time on the /cortex home card; `need_skip` snoozes, closes or (with
+`answered`) answers one. Pure folds over events; voided events do not count."""
 
 from __future__ import annotations
 
@@ -8,13 +8,21 @@ import datetime as dt
 import re
 from collections.abc import Iterable
 
-from cortex import claims, probes
+from cortex import claims
+from cortex.events import live as _live_events
 
+AREAS = ("values", "decisions", "preferences", "habits", "opinions", "work", "learning",
+         "social", "taste", "other")
 CAP = 3  # needs per session
 SNOOZE_DAYS = 7
 HALF_LIFE = 14  # days: a need's score halves every 14 days since it was last logged
 JACCARD = 0.6
 Q_MAX, OPTION_MAX, TASK_MAX = 200, 60, 120
+
+
+def _live(events: Iterable[dict]) -> list[dict]:
+    return [e for e in _live_events(events) if e.get("kind") == "log"
+            and isinstance(e.get("payload"), dict)]
 
 
 def _tokens(text: str) -> set[str]:
@@ -25,8 +33,7 @@ def fold(events: Iterable[dict], today: str) -> tuple[dict[str, dict], dict[str,
     """(root needs by id, any need event id -> its root id). A root is {id, question, area,
     options, task, count, last, status: open|snoozed|skipped|answered}; duplicates add to
     `count` and `last` (a duplicate of a voided root becomes a root itself)."""
-    evs = list(events)
-    live = probes._live(evs)
+    live = _live(events)
     rows: dict[str, dict] = {}
     alias: dict[str, str] = {}
     for e in live:
@@ -42,9 +49,12 @@ def fold(events: Iterable[dict], today: str) -> tuple[dict[str, dict], dict[str,
         r["count"] += 1
         r["last"] = max(r["last"], str(e.get("day", "")))
         alias[e["id"]] = r["id"]
-    forecasts, settles = probes.state(evs)
-    for fid in settles:
-        if (root := alias.get((forecasts.get(fid) or {}).get("payload", {}).get("need"))):
+    # an old vault's tell-me taps (kinds since removed): a settled forecast with `need`
+    tapped = {e["id"]: e["payload"].get("need") for e in live
+              if e["payload"].get("kind") == "forecast"}
+    for e in live:
+        p = e["payload"]
+        if p.get("kind") == "settle" and (root := alias.get(tapped.get(p.get("forecast")))):
             rows[root]["status"] = "answered"
     snooze_cut = (dt.date.fromisoformat(today) - dt.timedelta(days=SNOOZE_DAYS)).isoformat()
     for e in live:
@@ -52,7 +62,9 @@ def fold(events: Iterable[dict], today: str) -> tuple[dict[str, dict], dict[str,
         r = rows.get(alias.get(p.get("need"))) if p.get("kind") == "need_skip" else None
         if r is None or r["status"] in ("answered", "skipped"):
             continue
-        if p.get("forever") is True:
+        if p.get("answered") is True:
+            r["status"] = "answered"
+        elif p.get("forever") is True:
             r["status"] = "skipped"
         elif str(e.get("day", "")) > snooze_cut:
             r["status"] = "snoozed"
