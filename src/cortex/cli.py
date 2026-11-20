@@ -759,6 +759,21 @@ def relink_cmd(dry_run: Annotated[bool, typer.Option(
     typer.echo("dry run: nothing written" if dry_run else "written")
 
 
+@app.command("rollups")
+@_errors
+def rollups_cmd(since: Annotated[str | None, typer.Option(
+        help="Only periods ending in or after this month (YYYY-MM).")] = None,
+        vault: VaultOpt = None) -> None:
+    """Write the week, month and year rollup pages (rollups/): counts and top items per source,
+    built by code, no model. Only pages whose text changed are written."""
+    from cortex import rollups
+
+    out = rollups.run(_vault(vault), since)
+    typer.echo("rollups: nothing changed" if out is None else
+               f"rollups: {out['written']} written, {out['kept']} unchanged, "
+               f"{out['removed']} removed")
+
+
 @app.command("reflect")
 @_errors
 def reflect_cmd(vault: VaultOpt = None) -> None:

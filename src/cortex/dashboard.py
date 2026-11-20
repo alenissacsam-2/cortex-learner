@@ -59,6 +59,7 @@ GROUP_TITLES = {"journal": "Journal", "you": "About you", "sessions": "Study ses
                 "browsing": "Browsing"}
 GROUPS = {"journal": "journal", "me": "you", "session": "sessions",  # page kind -> group lobe
           "browse": "browsing",  # private browse pages are never read
+          "rollup": "journal",  # generated week, month and year pages: time, like the journal
           **dict.fromkeys(("assessment", "application", "track"), "placements")}
 NO_HUB = {"project": "projects", "decision": "projects", "loop": "projects", "person": "people"}
 MEDIA = {"youtube", "notebooklm"}

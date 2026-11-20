@@ -319,6 +319,7 @@ class Vault:
         "note": "notes", "project": "projects", "decision": "decisions",
         "journal": "journal", "loop": "loops", "person": "people",
         "browse": "browse",  # browse-brain.md §3: generated day pages; browse/private/ is not read
+        "rollup": "rollups",  # cortex.rollups: generated week, month and year pages
     }
 
     def __init__(self, root: Path):

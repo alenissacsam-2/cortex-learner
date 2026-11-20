@@ -101,6 +101,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex undo <session>` | Reverts one chat's changes |
 | `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
+| `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |
 | `cortex backup` | Zips the whole vault, private browsing and its stored visit history included (not chat history; see [PRIVACY.md](PRIVACY.md#your-data)). Keep the zip as private as the vault |
 | `cortex exclude add <folder>` | Turns Cortex off in a folder (e.g. a work repo) |
@@ -370,6 +371,7 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 - **What changed and how to undo it:** `cortex claims --unasked` lists what chats saved about you, each with its undo; `cortex undo <session>` reverts one chat.
 - **Your behaviour patterns:** notes tagged `patterns` (the dashboard's You tab lists them).
 - **Your decisions and open loops:** the pages in `decisions/` and `loops/`, and the dashboard's Ideas tab.
+- **Your weeks, months and years:** the pages in `rollups/` (`rollup-2026-w47`, `rollup-2026-11`, `rollup-2026`). Each one counts what Cortex holds for its days and lists the top items: notes and saved AI chats (linked), journal lines, study per topic, and the most visited sites. Code writes them, with no AI model, so Chat can answer "what did I do in March?" from one page. Private notes, private topics and private or local-only browsing go only on a separate `…-private` page, which only Chat's local model reads under its Private switch. A page is rewritten only when what it counts changes.
 - **The Cortex app on Windows:** its own window and an amber tray icon. Closing the window keeps Cortex in the tray; click the icon to bring it back, right-click it for **Start with Windows** and **Quit**. It notifies you once a day when reviews are due, 3 days and 1 day before an exam, when a long task finishes or fails, never naming a private page, and once when a new version is ready. These are `app: {notify: {reviews, exams, jobs, updates}}` in `~/.cortex/config.yaml` (all on); the window's size and place are kept in `~/.cortex/desktop.json`.
 - **Updates:** the app checks for a new version when it starts and every 6 hours. An installed Cortex downloads and checks it in the background; one run from source just notes it. Either way a **Restart to update** button appears at the top of the home page and on Status → Updates (in a narrow window it is an icon; hover it for the version). Nothing is installed until you click it. A downloaded installer is kept, so after a restart the button is back without downloading it again.
 

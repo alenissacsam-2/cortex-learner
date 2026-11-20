@@ -29,8 +29,9 @@ KIND_CAP = {"unlinked_mention": 10}
 LONG_NOTE_WORDS = 350
 STALE_PROJECT_DAYS = 30
 FLEETING_DAYS = 7
-NOT_ORPHANS = ("me", "session", "browse")  # profile pages and generated session notes have no
-# links; browse pages hold browser titles, not the user's text to link (no mention findings)
+# profile pages and generated session notes have no links; browse pages hold browser titles and
+# rollup pages generated counts, not the user's text to link (no mention findings)
+NOT_ORPHANS = ("me", "session", "browse", "rollup")
 _ANY_LINK_RE = re.compile(r"\[\[[^\]]*\]\]")
 _FLEETING_RE = re.compile(r"^- \[ \] (.+?) \(fleeting, (\d{4}-\d\d-\d\d)\)\s*$")
 _BARE_LINK_RE = re.compile(r"^[-*+]\s*\[\[[^\]]*\]\]\s*$")  # a ## Links bullet with no reason

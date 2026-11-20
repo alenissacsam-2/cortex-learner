@@ -54,7 +54,7 @@ KEEP = 5  # homes kept per Private setting, for deltas
 STEM_TOP, STEM_RECENT, STEM_DAYS = 1500, 1000, 30
 SITE_LIST = 50  # searches of each kind a site's details carry
 _JOURNAL = re.compile(r"^- (\d\d:\d\d|—) (.+)$")  # as vault.append_journal writes them
-_NOT_ADDED = {"journal", "browse", "session"}  # their own items say more than "added"
+_NOT_ADDED = {"journal", "browse", "session", "rollup"}  # their own items say more than "added"
 
 
 # ---- the version stamp ---------------------------------------------------------------------
