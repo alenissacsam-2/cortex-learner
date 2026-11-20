@@ -73,7 +73,11 @@ def fake_webview(start, renderer="edgechromium"):
         wv.windows.append(w)
         return w
     wv.create_window = create_window
-    wv.start = lambda: start(wv)
+
+    def start_gui(**kw):
+        wv.start_kw = kw
+        return start(wv)
+    wv.start = start_gui
     return wv
 
 
@@ -183,6 +187,7 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     lines = []
     desktop.run(vault, echo=lines.append)
     assert seen["url"] and seen["kw"]["url"] == seen["url"] and seen["kw"]["title"] == "Cortex"
+    assert sys.modules["webview"].start_kw == {"icon": str(desktop.ICON)}  # the window's icon
     assert seen["kw"]["hidden"] is False and seen["kw"]["width"] == desktop.SIZE[0]
     assert seen["alive"] is True
     assert seen["calls"] == ["hide", "show"]
@@ -463,3 +468,34 @@ def test_desktop_json_is_written_whole(home):
         "window": {"width": 1}, "notified": {"a": "2026-11-19"}}
     assert [p.name for p in desktop.state_file().parent.iterdir()
             if p.name.endswith(".tmp")] == []
+
+
+def test_the_mark_is_crisp_when_small_and_the_ico_is_drawn_from_it():
+    """The logo: a dark rounded square with an amber dot-matrix C. Up to 32 px each lit cell is
+    whole pixels of exactly AMBER on GROUND; the committed cortex.ico is `mark` at every size
+    (scripts/make_icon.py), and the tray icon is the same mark."""
+    from PIL import Image
+
+    amber, ground = (255, 176, 0, 255), (11, 11, 10, 255)
+    lit = sum(line.count("#") for line in desktop.LETTER_C)
+    for size, pitch in ((16, 1), (24, 2), (32, 2)):
+        img = desktop.mark(size)
+        colours = dict((c, n) for n, c in img.getcolors(size * size))
+        assert set(colours) <= {amber, ground, (0, 0, 0, 0)} and img.getpixel((0, 0))[3] == 0
+        assert colours[amber] == lit * pitch ** 2
+    big = desktop.mark(256)
+    assert big.size == (256, 256) and big.getpixel((0, 0))[3] == 0
+    assert big.getpixel((128, 128)) == ground  # the C's open middle
+    ico = Image.open(desktop.ICON)
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        got = ico.ico.getimage((size, size)).convert("RGBA")
+        assert got.tobytes() == desktop.mark(size).tobytes(), size
+    assert desktop._icon_image().tobytes() == desktop.mark(64).tobytes()
+
+
+def test_start_with_windows_runs_cortex_exe_when_installed(win32, tmp_path, monkeypatch):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "Cortex.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))  # the tool venv
+    want = f'"{tmp_path / "app" / "Cortex.exe"}" -m cortex.app.launch --hidden'
+    assert desktop.autostart_command() == want

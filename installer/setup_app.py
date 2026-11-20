@@ -24,6 +24,8 @@ import time
 import traceback
 from pathlib import Path
 
+import app_exe  # beside this file; PyInstaller bundles it
+
 EXE = "CortexSetup.exe"
 MARKER = "cortex-install.txt"  # uninstall deletes only a folder that holds this file
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Cortex"
@@ -79,8 +81,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="First wait (up to 60 s) for this process to exit.")
     a = p.parse_args(argv)
     a.dir = (a.dir or (installed_dir() if a.update else default_dir())).expanduser().resolve()
-    if a.update:  # the shortcuts and the PATH entry already point at the same files
-        a.no_shortcuts = a.no_path = True
+    if a.update:  # the PATH entry already points at the same files; shortcuts: make_shortcuts
+        a.no_path = True
     return a
 
 
@@ -128,7 +130,7 @@ def drop_path(current: str, entry: str) -> str:
 def uninstall_values(d: Path, version: str) -> dict:
     exe = d / EXE
     return {"DisplayName": "Cortex", "DisplayVersion": version, "Publisher": "Cortex",
-            "InstallLocation": str(d), "DisplayIcon": str(d / "bin" / "cortex-app.exe"),
+            "InstallLocation": str(d), "DisplayIcon": str(app_exe.path(d)),
             "UninstallString": f'"{exe}" --uninstall --dir "{d}"',
             "QuietUninstallString": f'"{exe}" --uninstall --quiet --dir "{d}"'}
 
@@ -184,16 +186,15 @@ def shortcut_paths() -> list[Path]:
     return out
 
 
-SHORTCUT_PS = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:CORTEX_LNK); "
-               "$s.TargetPath = $env:CORTEX_TARGET; $s.WorkingDirectory = $env:USERPROFILE; "
-               "$s.Description = 'Open the Cortex app'; $s.Save()")
-
-
-def make_shortcuts(target: Path, say) -> None:
+def make_shortcuts(d: Path, say, existing_only: bool = False) -> None:
+    """The shortcuts run Cortex.exe; `existing_only` (an update) rewrites only those still
+    there, so older ones that ran cortex-app.exe pin as Cortex too."""
+    exe = app_exe.path(d)
     for lnk in shortcut_paths():
+        if existing_only and not lnk.is_file():
+            continue
         lnk.parent.mkdir(parents=True, exist_ok=True)
-        run(["powershell", "-NoProfile", "-NonInteractive", "-Command", SHORTCUT_PS],
-            {**os.environ, "CORTEX_LNK": str(lnk), "CORTEX_TARGET": str(target)}, say)
+        app_exe.shortcut(lnk, exe, subprocess.list2cmdline(app_exe.ENTRY), exe)
         say(f"shortcut: {lnk}")
 
 
@@ -360,6 +361,10 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
                          "block the download, so another Wi-Fi can help. If Cortex is open, "
                          "close it (Quit on its page) and run setup again.") from None
     shutil.rmtree(d / "cache", ignore_errors=True)
+    try:
+        app_exe.make(d, version_of(wheel), say)
+    except OSError as e:
+        raise SetupError(f"Could not make {app_exe.NAME} ({e}).") from None
     me = Path(sys.executable).resolve()
     if getattr(sys, "frozen", False) and me != (d / EXE).resolve():
         shutil.copy2(me, d / EXE)  # Apps & Features runs this copy to uninstall
@@ -367,9 +372,9 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
         set_user_path(merge_path(get_user_path(), str(d / "bin")))
         say(f"added to your PATH: {d / 'bin'} (new terminals know `cortex`)")
     if not opts.no_shortcuts:
-        try:  # a managed PC can block PowerShell's shortcut object: Cortex is installed anyway
-            make_shortcuts(d / "bin" / "cortex-app.exe", say)
-        except (SetupError, OSError) as e:
+        try:  # a managed PC can block the shortcut object: Cortex is installed anyway
+            make_shortcuts(d, say, existing_only=opts.update)
+        except OSError as e:
             say(f"warning: no Start menu shortcut ({e}). Open Cortex with "
                 f"{d / 'bin' / 'cortex-app.exe'}.")
     if not opts.no_registry:
@@ -476,7 +481,7 @@ def child_env() -> dict:
 
 
 def start_app(d: Path) -> None:
-    subprocess.Popen([str(d / "bin" / "cortex-app.exe")], env=child_env(),
+    subprocess.Popen([str(app_exe.path(d)), *app_exe.ENTRY], env=child_env(),
                      creationflags=DETACHED)
 
 
