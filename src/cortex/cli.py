@@ -295,6 +295,11 @@ ME_PAGES = {
         "My monthly portrait",
         intro="\nOne `## YYYY-MM` section per month, drafted by the assistant and approved by "
               "me.\n"),
+    "me/core.md": _page(  # prime.core_lines: pinned, first in every prime
+        "Always about me", "Core", *CLAIM_TAIL,
+        intro="\nPinned: every chat starts with these lines, word for word, ahead of "
+              "everything else (500 characters in all; a line that does not fit is left out "
+              "whole). Only lines you write or confirm count.\n"),
     "me/voice.md": _page(  # PHASE4 V2: served only by cortex_as_me
         "How I write", "Everyone", *CLAIM_TAIL,
         intro="\nStyle rules per audience: one `## <audience>` section each (professor, friend, "
