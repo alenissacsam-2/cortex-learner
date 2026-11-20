@@ -287,7 +287,7 @@ def _free_id(vault: Vault, base: str, taken: set[str]) -> str:
     import already has it."""
     nid, n = base, 2
     while nid in taken or any((vault.root / d / f"{nid}.md").exists()
-                              for d in vault.KIND_DIRS.values()):
+                              for k in vault.KIND_DIRS for d in vault.dirs(k)):
         nid = f"{base[:78].rstrip('-.')}-{n}"
         n += 1
     taken.add(nid)

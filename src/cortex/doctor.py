@@ -16,7 +16,7 @@ from cortex.clients import claude_desktop_config_paths
 from cortex.contract import MAX_CHARS as CONTRACT_MAX_CHARS
 from cortex.events import EventLog
 from cortex.session import _git, git_choice, git_exe
-from cortex.vault import PRIVATE_BROWSE_DIR, Vault
+from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault
 
 
 def check_python() -> tuple[str, str, str, str]:
@@ -121,6 +121,22 @@ def check_private_browse_git(root: Path) -> tuple[str, str, str, str]:
     if n:
         return _history_warn(name, n)
     return "PASS", name, "browse/private/ is ignored and in no commit", ""
+
+
+def check_chat_archive_git(root: Path) -> tuple[str, str, str, str]:
+    """v9 C5: imported chat pages sit in archive/chats/, which the vault's .gitignore keeps out
+    of git."""
+    name = "Chat archive out of git"
+    root = Path(root)
+    if not (root / ".git").exists():
+        return "PASS", name, "no repo (see Vault git)", ""
+    if _git(root, "check-ignore", "-q", CHAT_ARCHIVE + "/x.md").returncode:
+        return ("WARN", name, f"{CHAT_ARCHIVE}/ is not in the vault's .gitignore",
+                f"Run `cortex init {root}` or `cortex chats archive`; either adds the line.")
+    if _git(root, "ls-files", "--", CHAT_ARCHIVE).stdout.strip():
+        return ("WARN", name, f"{CHAT_ARCHIVE}/ is still tracked by git",
+                f"Run `git rm -r --cached {CHAT_ARCHIVE}` in the vault and commit.")
+    return "PASS", name, f"{CHAT_ARCHIVE}/ is ignored", ""
 
 
 def _history_warn(name: str, n: int) -> tuple[str, str, str, str]:
@@ -257,8 +273,8 @@ def check_me_pages(root: Path) -> tuple[str, str, str, str]:
 def check_id_clashes(root: Path) -> tuple[str, str, str, str]:
     name = "Note ids unique across kinds"
     seen: dict[str, list[str]] = {}
-    for kind, folder in Vault.KIND_DIRS.items():
-        for path in sorted((Path(root) / folder).glob("*.md")):
+    for kind in Vault.KIND_DIRS:
+        for path in sorted(p for d in Vault.dirs(kind) for p in (Path(root) / d).glob("*.md")):
             seen.setdefault(path.stem, []).append(kind)
     clashes = [f"{id} ({', '.join(kinds)})" for id, kinds in seen.items() if len(kinds) > 1]
     if clashes:

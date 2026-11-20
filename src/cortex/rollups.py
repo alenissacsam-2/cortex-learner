@@ -237,7 +237,8 @@ def _listing(vault: Vault, inputs: bool) -> list:
     db = os.path.join(r, *store.PATH.split("/"))
     return [FORMAT, sorted(home._events(r)), home._stat(os.path.join(r, CATALOG)),
             home._stat(db), home._stat(db + "-wal"), home._stat(str(taint._config_path())),
-            *(sorted(home._md(os.path.join(r, Vault.KIND_DIRS[k]))) for k in _INPUT_KINDS)]
+            *(sorted(x for d in Vault.dirs(k) for x in home._md(os.path.join(r, *d.split("/"))))
+              for k in _INPUT_KINDS)]
 
 
 def _stamp(inputs: list, pages: list) -> str:

@@ -565,11 +565,14 @@ def _snapshot_parses(vault: Vault):
         files = files["files"] if files.get("schema") == index.SNAPSHOT_SCHEMA else {}
     except (OSError, ValueError, AttributeError, KeyError):
         files = {}
-    for e in files.values() if isinstance(files, dict) else ():
+    for rel, e in files.items() if isinstance(files, dict) else ():
         if not (isinstance(e, list) and len(e) == 6 and isinstance(e[4], dict)
                 and isinstance(e[5], str) and e[2] in Vault.KIND_DIRS and e[2] != "browse"):
             continue
-        path = vault.root / Vault.KIND_DIRS[e[2]] / f"{e[3]}.md"
+        # the key is "<folder name>/<id>.md" (Index._rel): "chats/<id>.md" in archive/chats/
+        d = next((d for d in Vault.dirs(e[2]) if d.rsplit("/", 1)[-1] == rel.split("/")[0]),
+                 Vault.KIND_DIRS[e[2]])
+        path = vault.root / d / f"{e[3]}.md"
         if path not in vault_mod._PARSED:
             added[path] = vault_mod._PARSED[path] = ((e[0], e[1]), e[4], e[5])
     try:

@@ -18,7 +18,7 @@ from mcp.types import Implementation
 
 from cortex import chat_import, chats, doctor, harvest, mcp_server
 from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from cortex.vault import CHAT_ARCHIVE, Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -139,7 +139,7 @@ def test_the_live_log_becomes_a_chat_page_once_and_grows_in_place(root_committed
     p = next(e["payload"] for e in events(root) if e.get("payload", {}).get("kind") == "chat_saved")
     assert (p["source"], p["chat_id"], p["auto"]) == (chats.LIVE, f"{chats.LIVE}/{got['chat']}",
                                                       True)
-    body_text = (root / "resources" / f"{p['pages'][0]}.md").read_text("utf-8")
+    body_text = (root / CHAT_ARCHIVE / f"{p['pages'][0]}.md").read_text("utf-8")
     assert "Source: Claude · " in body_text and chat_import.MINE in body_text
     assert "A 3-week plan." not in body_text and KEY not in body_text  # my turns only, redacted
     assert harvest.user_turns(body_text.split("---\n", 2)[2]) == [
@@ -151,7 +151,7 @@ def test_the_live_log_becomes_a_chat_page_once_and_grows_in_place(root_committed
 
     serve(root, more)
     assert chat_import.run(vault, now=time.time() + 600) == {"updated": 1}
-    assert "**Me:** And knapsack?" in (root / "resources" / f"{p['pages'][0]}.md").read_text(
+    assert "**Me:** And knapsack?" in (root / CHAT_ARCHIVE / f"{p['pages'][0]}.md").read_text(
         "utf-8")
     listed = chats.list_chats(set(), limit=5)
     assert [(c["id"], c["source"]) for c in listed] == [(p["chat_id"], chats.LIVE)]

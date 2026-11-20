@@ -362,8 +362,8 @@ def run(vault: Vault, dry_run: bool = True) -> dict:
     texts = {p.relative_to(root).as_posix(): p.read_bytes().decode("utf-8", "replace")
              for p in md}
     names = _Names(root, files)
-    kind_dirs = set(vault.KIND_DIRS.values())
-    notes = [p for p in md if p.parent.parent == root and p.parent.name in kind_dirs
+    kind_dirs = {d for k in vault.KIND_DIRS for d in vault.dirs(k)}
+    notes = [p for p in md if p.parent.relative_to(root).as_posix() in kind_dirs
              and ID_RE.fullmatch(p.stem)]
     note_ids = {p.stem for p in notes}  # ids are unique across kinds (Vault.create_note)
 

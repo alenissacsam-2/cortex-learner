@@ -310,8 +310,15 @@ def history_import(job, root: Path, keys: set[str], takeout: list | None = None)
 def chat_import(job, root: Path) -> dict:
     """One `chat_import.run` pass, committed. `quiet` (no notification) when nothing was saved
     or failed; a failed chat makes the job fail (`ok: false`). Counts only."""
+    from cortex import chat_archive
     from cortex import chat_import as ci
+    from cortex.vault import VaultError
     v = _vault(root)
+    try:  # C5: once, chat pages already in resources/ move to the git-ignored archive
+        if (moved := chat_archive.auto(v)) and moved["ids"]:
+            job.say(f"{len(moved['ids'])} chat pages moved out of git, to archive/chats/")
+    except VaultError as e:  # busy (another import) or a file open elsewhere: next pass
+        print(f"cortex app: chat archive not moved yet ({e.code})")
     try:
         counts = ci.run(v, progress=lambda k, n, s: job.say(ci.eta(k, n, s)),
                         cancelled=job.cancelled.is_set)

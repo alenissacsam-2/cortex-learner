@@ -26,7 +26,14 @@ from cortex._proc import NO_WINDOW
 from cortex.catalog import Catalog
 from cortex.events import MODES, SESSION_RE, EventLog, local_day, parse_ts
 from cortex.taint import MARKER as TAINT_MARKER
-from cortex.vault import Vault, VaultError, _pid_alive, is_private, secret_pattern
+from cortex.vault import (
+    CHAT_ARCHIVE,
+    Vault,
+    VaultError,
+    _pid_alive,
+    is_private,
+    secret_pattern,
+)
 
 log = logging.getLogger(__name__)
 
@@ -488,8 +495,10 @@ def _commit(vault: Vault, message: str, mine=None, *, before: str | None = None,
         # C3: a private browse page still in the index (staged, or tracked before the ignore
         # line) is never committed; `untrack_private` takes it out of the index. With
         # `git.private_browsing` on, the owner chose to commit it like any other page.
+        # C5: nor is a page in the chat archive, even with its .gitignore line missing
         changed = [c for c in _status_paths(status.stdout)
-                   if keep_private or not c.startswith(pre + PRIVATE_IGNORE)]
+                   if (keep_private or not c.startswith(pre + PRIVATE_IGNORE))
+                   and not c.startswith(pre + CHAT_ARCHIVE + "/")]
         if status.returncode or not changed:
             return None
         if busy := git_busy(vault.root):
