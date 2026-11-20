@@ -52,7 +52,6 @@ CASES = [
     (["lint", "--vault", "{V}"], {0}),
     (["relink", "--dry-run", "--vault", "{V}"], {0}),
     (["reflect", "--vault", "{V}"], {0}),
-    (["probes", "--vault", "{V}"], {0}),
     (["needs", "--vault", "{V}"], {0}),
     (["chats", "--vault", "{V}"], {0}),
     (["claims", "--vault", "{V}"], {0}),
@@ -178,24 +177,3 @@ def test_changed_lines_never_names_a_person_and_caps():
     evil = render.changed_lines([{"kind": "note", "id": "x", "tool": "patch", "op": "set_field",
                                   "target": "<img src=x>[a](http://evil.example)"}])[0]
     assert "<" not in evil and "evil.example" not in evil
-
-
-def test_letter_card_line_escapes_untrusted_text():
-    from cortex import letters
-
-    line = letters.card_line({"written": "2026-11-03",
-                              "text": "Keep going ![x](http://t.example/p.png) <b>now</b>"})
-    assert line.startswith("A note from you (written 3 Nov):")
-    assert "t.example" not in line and "<b>" not in line and "Keep going" in line
-
-
-def test_p0s_takes_the_latest_live_baseline():
-    from cortex import surprisal
-
-    def ev(i, claim, p0):
-        return {"id": i, "kind": "log", "payload": {"kind": "baseline", "claim": claim, "p0": p0}}
-
-    evs = [ev("a", "c1", 0.5), ev("b", "c1", 0.8), ev("c", "c2", 0.25),
-           {"id": "v", "kind": "void", "ref": "c"}]
-    assert surprisal.p0s(evs) == {"c1": 0.8}
-    assert surprisal.bits(evs) == {"c1": pytest.approx(0.3219, abs=1e-3)}

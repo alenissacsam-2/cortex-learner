@@ -324,13 +324,11 @@ async def _grade_twice(call, args, got):
 
 
 def test_a_retry_after_a_restart_writes_nothing_twice(root):
-    """B11: journal, letter, voice, patch and add deduped `key` only in memory, so a retry
+    """B11: journal, voice, patch and add deduped `key` only in memory, so a retry
     after a server restart wrote again."""
     (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
     calls = [
         ("cortex_log", {"kind": "journal", "payload": {"text": "Did BFS today"}, "key": "j1"}),
-        ("cortex_log", {"kind": "letter", "payload": {"text": "Keep going.", "when": "late"},
-                        "key": "l1"}),
         ("cortex_log", {"kind": "voice_sample", "payload": {
             "text": "Hey, quick one: can we move the call?", "audience": "professor",
             "act": "request", "channel": "email"},
@@ -352,11 +350,10 @@ def test_a_retry_after_a_restart_writes_nothing_twice(root):
     outs.clear()
     run(root, body)
     assert all("error" not in o for o in outs), outs
-    assert outs[1]["id"] == first[1]["id"] and outs[2]["id"] == first[2]["id"]
-    assert outs[4]["id"] == first[4]["id"] == "graph-search"
+    assert outs[1]["id"] == first[1]["id"]
+    assert outs[3]["id"] == first[3]["id"] == "graph-search"
     journal = "".join(p.read_text("utf-8") for p in (root / "journal").rglob("*.md"))
     assert journal.count("Did BFS today") == 1
-    assert (root / "me" / "letters.md").read_text("utf-8").count("Keep going.") == 1
     assert (root / "me" / "preferences.md").read_text("utf-8").count("- Tabs") == 1
     assert not (root / "notes" / "graph-search-2.md").exists()
     voice_text = "".join(p.read_text("utf-8") for p in (root / "voice").rglob("*")

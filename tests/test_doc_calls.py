@@ -134,7 +134,7 @@ def test_doc_calls_match_schemas(tools):
 def test_lint_catches_the_dogfood_mistakes(tools):
     srcs = [("a", 'cortex_add(kind="note", title="T", summary="s", note_type="fleeting")'),
             ("b", "then cortex_patch(page, reject, target=<the line>)."),
-            ("c", "cortex_log(kind='claim_flag', fair=true) and cortex_start(mode=\"mocks\")"),
+            ("c", "cortex_log(kind='need', fair=true) and cortex_start(mode=\"mocks\")"),
             ("d", "cortex_lint() and cortex_find (prose) and cortex_grade(...)"),
             ("e", 'cortex_read("my-topic-map"), cortex_chats(action="read", id, part?)')]
     bad, seen = lint(tools, srcs)

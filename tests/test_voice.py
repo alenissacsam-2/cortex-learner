@@ -1,5 +1,5 @@
-"""v5 PHASE4.md V1 and V2: voice samples, drafts, sent, the keep fold, the zone, the CLI and the
-me/voice.md claim and confirm page."""
+"""v5 PHASE4.md V1 and V2: voice samples, the zone, the CLI and the me/voice.md claim and
+confirm page. (Drafts, sent and the keep fold were removed on 20 Nov 2026.)"""
 
 import json
 
@@ -7,7 +7,7 @@ import pytest
 from conftest import events, run
 from typer.testing import CliRunner
 
-from cortex import claims, delegation, voice
+from cortex import claims, voice
 from cortex.cli import ME_PAGES, app
 from cortex.vault import Vault
 
@@ -17,7 +17,7 @@ SAMPLE = {"text": "Dear Prof. Lee,\nCould we meet on Friday?\nRegards, Sam",
           "audience": "professor", "act": "request", "channel": "email", "lang": "en"}
 
 
-def test_voice_log_kinds_keep_fold_and_zone(root):
+def test_voice_sample_and_zone(root):
     seen = {}
 
     async def body(call):
@@ -34,32 +34,13 @@ def test_voice_log_kinds_keep_fold_and_zone(root):
         leak = {**SAMPLE, "text": "my key is sk-ant-api03-" + "a" * 40}
         assert (await call("cortex_log", {"kind": "voice_sample",
                                           "payload": leak}))["error"] == "secret_detected"
-        d = await call("cortex_log", {"kind": "draft", "payload": {
-            "text": "Dear Professor Lee, could we meet Friday? Regards, Sam",
-            "audience": "professor", "act": "request", "channel": "email"}})
-        seen["draft"] = d["id"]
-        sent = await call("cortex_log", {"kind": "sent", "payload": {
-            "draft": d["id"], "text": "Dear Prof. Lee, could we meet on Friday? Regards, Sam"}})
-        assert sent["display_line"].startswith("Sent text saved")
-        assert (await call("cortex_log", {"kind": "sent", "payload": {
-            "draft": "nope", "text": "x"}}))["error"] == "invalid_argument"
         assert (await call("cortex_find", {"query": "Friday"}))["hits"] == []
-
-        delegation.set_kill(Vault(root), True)  # V5: no drafting while the switch is on
-        killed = await call("cortex_log", {"kind": "draft", "payload": {
-            "text": "x", "audience": "friend", "act": "reply", "channel": "chat"}})
-        assert killed["error"] == "killed"
-        delegation.set_kill(Vault(root), False)
 
     run(root, body)
     v = Vault(root)
-    samples, drafts = voice.rows(v, voice.SAMPLES), voice.rows(v, voice.DRAFTS)
-    assert [s["id"] for s in samples][0] == seen["sample"] and samples[0]["day"] != "1999-01-01"
-    assert samples[0]["lang"] == "en" and samples[1]["from_draft"] == seen["draft"]
-    assert samples[1]["audience"] == "professor" and samples[1]["act"] == "request"
-    assert [d["id"] for d in drafts] == [seen["draft"]]
-    k = voice.keep(v)["professor"]
-    assert k["drafts"] == 1 and k["sent"] == 1 and 0.8 < k["kept"] < 1
+    samples = voice.rows(v, voice.SAMPLES)
+    assert [s["id"] for s in samples] == [seen["sample"]] and samples[0]["day"] != "1999-01-01"
+    assert samples[0]["lang"] == "en"
     assert not any(e.get("payload", {}).get("text") for e in events(root))  # voice/ only
     # the zone: voice/ is no kind folder, so the index (find, recall, vectors) never sees it
     from cortex.mcp_server import Cortex
@@ -96,11 +77,11 @@ def test_voice_cli_import_and_counts(root, tmp_path):
                                  "--act", "nope", "--channel", "email", *args])
     assert r.exit_code == 1 and "act must be" in r.output
     assert len(voice.rows(Vault(root), voice.SAMPLES)) == 2  # all or none
-    (root / voice.DRAFTS).write_text(json.dumps({"id": "d1", "audience": "professor",
-                                                 "text": "x"}) + "\n", encoding="utf-8")
-    r = CliRunner().invoke(app, ["voice", *args])
+    (root / "voice/drafts.jsonl").write_text(json.dumps({"id": "d1", "audience": "professor",
+                                                       "text": "x"}) + "\n", encoding="utf-8")
+    r = CliRunner().invoke(app, ["voice", *args])  # an old vault's drafts file is ignored
     assert r.exit_code == 0 and "professor" in r.output and "email" in r.output
-    assert "drafts   1  sent   0  kept -" in r.output
+    assert "drafts" not in r.output and "kept" not in r.output
 
 
 def test_voice_page_is_a_claim_and_confirm_page(root):

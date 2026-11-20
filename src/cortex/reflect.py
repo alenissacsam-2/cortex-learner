@@ -6,7 +6,7 @@ import datetime as dt
 import re
 from collections import Counter
 
-from cortex import learning_eval, planner, probes
+from cortex import learning_eval, planner
 from cortex.events import EventLog, local_day
 from cortex.index import EDGE_KEYS, _edge_targets
 from cortex.lint import old_fleeting
@@ -139,7 +139,7 @@ def emerging(vault: Vault, now: dt.datetime) -> list[dict]:
 
 def reflect(vault: Vault, catalog, now: dt.datetime) -> dict:
     """`now` is aware (the server clock); file times and inbox dates are local."""
-    from cortex import bets, circling, claims, letters, needs, surprisal  # these import this module
+    from cortex import claims, needs  # these import this module
 
     local = now.astimezone().replace(tzinfo=None)
     rows, dropped = unconfirmed(vault, local_day(now))
@@ -156,15 +156,8 @@ def reflect(vault: Vault, catalog, now: dt.datetime) -> dict:
                              for t, d in old_fleeting(vault, local)],
             "week": planner.week_summary(vault, catalog, now=now),
             "portrait": portrait(vault, catalog, now),
-            "probes": probes.summary(events),
             "needs": needs.counts(events, local_day(now)),
-            "claim_check": claims.claim_flags(events),
-            "surprisal": surprisal.pack(vault, events, local_day(now)),
-            "bets": bets.pack(vault, events, local_day(now)),
-            "letters": letters.effect(events),
             "spot_check": [{**r, "question": plain(r["question"], 300),
                             "answer": plain(r["answer"], 300)}
                            for r in learning_eval.spot_checks(
-                               events, hide=planner.hidden(vault, catalog))],
-            "circling": {"items": circling.items(vault, catalog, events, local_day(now)),
-                         "stats": circling.stats(events)}}
+                               events, hide=planner.hidden(vault, catalog))]}

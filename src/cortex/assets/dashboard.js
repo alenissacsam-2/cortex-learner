@@ -2146,11 +2146,6 @@
     }
     if (!know.pages.length) box.append(el('p', 'empty', 'No pages about you yet. Tell any Claude chat about yourself.'));
     kb.body.append(box);
-    const pr = (D.you.probes || {}).overall || { n: 0 };
-    const pf = el('div', 'foot');
-    if (pr.n) pf.textContent = `Predicted you right ${Math.round(pr.twin * pr.n)} of ${pr.n}.`;
-    else pf.append('No probes yet. Paste /cortex probe into Claude to see how well Cortex predicts you. ', copyBtn('/cortex probe'));
-    kb.root.append(pf);
     grid.append(wait.root, kb.root);
     host.append(grid);
 

@@ -32,7 +32,7 @@ from cortex.session import _git
 from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
 from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
-EPILOG = ("About you: claims [--unasked|--summary], needs, probes, voice, export context · "
+EPILOG = ("About you: claims [--unasked|--summary], needs, voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
           "Import: import [--dry-run|--private], import-chats, digest · "
           "Chats: chats, harvest status · "
@@ -291,9 +291,6 @@ ME_PAGES = {
         "How I tick", "Values", "How I think", "How I decide", "Strengths", "Growth edges",
         "Communication", "Energy and routines", *CLAIM_TAIL,
         intro="\nOne line per entry: `- <trait> — seen: <evidence> (confirmed YYYY-MM-DD)`.\n"),
-    "me/delegation.md": _page(  # PHASE4 V5: boundaries for acting as me
-        "What Cortex may do as me", "Alone", "Ask first", "Never",
-        intro="\nOne line per action. Chat may add lines only with my OK.\n"),
     "me/portrait.md": _page(
         "My monthly portrait",
         intro="\nOne `## YYYY-MM` section per month, drafted by the assistant and approved by "
@@ -788,27 +785,6 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
                f"{w['correct']}/{w['grades']} correct, {len(w['changed'])} concepts changed")
 
 
-@app.command("probes")
-@_errors
-def probes_cmd(vault: VaultOpt = None) -> None:
-    """Show probe results: twin vs stranger hit rates and the uplift, per area and overall."""
-    from cortex import probes
-
-    out = probes.summary(EventLog(_vault(vault)).iter_events())
-    typer.echo(f"{'area':<12} {'n':>3} {'twin':>6} {'paired':>6} {'stranger':>8} {'uplift':>7}")
-    for area, r in [*out["areas"].items(), ("overall", out["overall"])]:
-        if r["n"]:
-            pair = (f"{r['stranger']:>8.0%} {r['uplift']:>+7.0%}" if r["paired"]
-                    else f"{'-':>8} {'-':>7}")
-            typer.echo(f"{area:<12} {r['n']:>3} {r['twin']:>6.0%} {r['paired']:>6} {pair}")
-    if not out["overall"]["n"]:
-        typer.echo("No settled probes yet. Run /cortex probe.")
-    if out["taps"]:
-        typer.echo(f"{out['taps']} of them are tell-me taps")
-    if out["open"]:
-        typer.echo(f"{out['open']} forecasts not settled yet")
-
-
 @app.command("needs")
 @_errors
 def needs_cmd(vault: VaultOpt = None) -> None:
@@ -1010,10 +986,9 @@ def claims_cmd(tier: Annotated[str | None, typer.Option(
         = False,
         days: Annotated[int, typer.Option(help="With --unasked: days of me/ changes.")] = 14,
         vault: VaultOpt = None) -> None:
-    """List live claims on the me/ claim pages with their id, authorship tier, bet state, R and
-    hits (discriminating/plain/misses); the calibration once 20 forecasts are settled.
+    """List live claims on the me/ claim pages with their id and authorship tier.
     --unasked and --summary print the other two views instead."""
-    from cortex import bets, claims
+    from cortex import claims
 
     if sum((tier is not None, unasked, summary)) > 1:
         raise VaultError("invalid_argument", "Use one of --tier, --unasked and --summary.")
@@ -1027,21 +1002,12 @@ def claims_cmd(tier: Annotated[str | None, typer.Option(
     v = _vault(vault)
     log = EventLog(v)
     events = list(log.iter_events())
-    cards = bets.fold(events, local_day(datetime.now(UTC)))
     sample = {n.id for n in v.iter_notes("me") if n.fields.get("sample") is True}
     for r in claims.tiers(v, events, log):
         if tier in (None, r["tier"]):
-            b = cards.get(r["id"], bets.Bet())
-            typer.echo(f"^{r['id']}  {r['tier']:<9}  {bets.GLYPH[b.state]} {b.state:<9}  R "
-                       f"{'-   ' if b.R is None else f'{b.R:.2f}'}  {b.hits}/{b.plain_hits}/"
-                       f"{b.misses}  me/{r['page']} § "
+            typer.echo(f"^{r['id']}  {r['tier']:<9}  me/{r['page']} § "
                        f"{render.esc(r['section'], 40)}  {render.esc(r['text'], 80)}"
                        + ("  (sample)" if r["page"] in sample else ""))
-    cal = bets.calibration(events)
-    if cal["enough"]:
-        typer.echo(f"Calibration ({cal['n']} settled, log loss {cal['log_loss']}): " + ", ".join(
-            f"{b['lo']:.1f}-{b['hi']:.1f} said {b['p']:.2f}, hit {b['hit']:.2f} (n {b['n']})"
-            for b in cal["bins"] if b["n"]))
 
 
 @app.command("saved", hidden=True)  # now `claims --unasked`
@@ -1076,8 +1042,8 @@ def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
 @app.command("know", hidden=True)  # now `claims --summary`
 @_errors
 def know_cmd(vault: VaultOpt = None) -> None:
-    """How well Cortex knows you: per me/ page, live claims by tier and bet state, calibration
-    once enough forecasts are settled, and open needs. Read-only."""
+    """How well Cortex knows you: per me/ page, live claims by tier, and open needs.
+    Read-only."""
     from cortex import know
 
     def counts(d: dict) -> str:
@@ -1098,15 +1064,9 @@ def know_cmd(vault: VaultOpt = None) -> None:
             continue
         typer.echo(f"me/{p['page']}: {p['live']} live claims")
         typer.echo(f"  tiers: {counts(p['tiers'])}{split(p)}")
-        typer.echo(f"  states: {counts(p['states'])}")
-        typer.echo(f"  {know.calibration_line(p['calibration'])}")
-        for t in p["contested"]:
-            typer.echo(f"  contested: {render.esc(t, 100)}")
     t = out["total"]
     typer.echo(f"All claim pages: {t['live']} live claims")
     typer.echo(f"  tiers: {counts(t['tiers'])}{split(t)}")
-    typer.echo(f"  states: {counts(t['states'])}")
-    typer.echo(f"  {know.calibration_line(out['calibration'])}")
     by_area = Counter(r["area"] for r in out["needs"])
     typer.echo(f"Open needs: {len(out['needs'])}"
                + (f" ({counts(dict(by_area.most_common()))})" if by_area else ""))
@@ -1114,14 +1074,14 @@ def know_cmd(vault: VaultOpt = None) -> None:
         typer.echo(f"  {r['count']}x  {r['area']:<11}  {render.esc(r['question'], 100)}")
 
 
-voice_app = typer.Typer(help="Your own sent messages (voice samples) and drafts.")
+voice_app = typer.Typer(help="Your own sent messages (voice samples).")
 app.add_typer(voice_app, name="voice")
 
 
 @voice_app.callback(invoke_without_command=True)
 @_errors
 def voice_cmd(ctx: typer.Context, vault: VaultOpt = None) -> None:
-    """Count voice samples per audience and channel, and the keep fold of drafts vs sent."""
+    """Count voice samples per audience and channel."""
 
     from cortex import voice
 
@@ -1134,10 +1094,6 @@ def voice_cmd(ctx: typer.Context, vault: VaultOpt = None) -> None:
         typer.echo(f"{render.esc(a, 60):<30} {render.esc(c, 10):<7} {n:>4}")
     if not counts:
         typer.echo("No voice samples yet; add your sent messages with `cortex voice import`.")
-    for a, r in sorted(voice.keep(v).items()):
-        kept = "-" if r["kept"] is None else f"{r['kept']:.0%}"
-        typer.echo(f"kept  {render.esc(a, 60):<30} drafts {r['drafts']:>3}  sent {r['sent']:>3}  "
-                   f"kept {kept}")
 
 
 @voice_app.command("import")
@@ -1631,7 +1587,7 @@ def session_close(vault: VaultOpt = None) -> None:
 @app.command()
 @_errors
 def mcp(vault: VaultOpt = None,
-        role: Annotated[str, typer.Option(help="owner (default), delegate or reader; fixed "
+        role: Annotated[str, typer.Option(help="owner (default) or reader; fixed "
                                           "for this server's life.")] = "owner",
         private: Annotated[bool, typer.Option(
             "--private", help="Also serve cortex_browse_search over every browse page, private "
@@ -1675,12 +1631,12 @@ def forget(id: str, vault: VaultOpt = None) -> None:
 @_errors
 def kill(off: Annotated[bool, typer.Option("--off", help="Turn the switch off.")] = False,
          vault: VaultOpt = None) -> None:
-    """Kill switch: stop act-as-me and drafts, and every delegate and reader server."""
-    from cortex import delegation
+    """Kill switch: stop act-as-me and every reader server."""
+    from cortex import share
 
-    delegation.set_kill(_vault(vault), not off)
-    typer.echo("kill switch off" if off else "kill switch on: act-as-me, drafts and the "
-               "delegate and reader roles are refused (`cortex kill --off` to undo)")
+    share.set_kill(_vault(vault), not off)
+    typer.echo("kill switch off" if off else "kill switch on: act-as-me and the reader role "
+               "are refused (`cortex kill --off` to undo)")
 
 
 exclude_app = typer.Typer(no_args_is_help=True, help="Folders where Claude Code sessions get "
@@ -1727,11 +1683,11 @@ def exclude_list() -> None:
 @_errors
 def access_cmd(days: Annotated[int, typer.Option(help="How many days back to list.")] = 30,
                vault: VaultOpt = None) -> None:
-    """List act-as-me reads and drafts from the access log, oldest first."""
-    from cortex import delegation
+    """List act-as-me reads (and an old vault's drafts) from the access log, oldest first."""
+    from cortex import share
 
     since = (datetime.now() - timedelta(days=days)).date().isoformat()
-    rows = delegation.access_rows(EventLog(_vault(vault)).iter_events(), since)
+    rows = share.access_rows(EventLog(_vault(vault)).iter_events(), since)
     for r in rows:
         ts = parse_ts(r["ts"])
         typer.echo(f"{r['day']}  {ts.astimezone():%H:%M}  {r['client'] or '-'}  {r['access']}  "

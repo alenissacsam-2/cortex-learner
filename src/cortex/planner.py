@@ -29,7 +29,7 @@ WINDOW = 14  # days: the exam clock and the fail / felt-weak boost
 WARMUP_GAP, WARMUP_MAX, NEW_MAX = 2, 5, 2
 STEPS_SHOWN = 3  # next undone steps per plan, in the learner's order; then a "more" item
 NO_PLAN_MODES = ("home", "log", "about", "week", "capture", "reflect", "project", "save", "history",
-                 "probe", "mock")
+                 "mock")
 SWEEP_CAP = 10
 # minutes per plan item: ESTIMATES, not measurements (council item 7 guessed recall ~1,
 # application ~5, problem ~15). warmup is one recall question; asked and refresh are a recall

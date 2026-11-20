@@ -45,7 +45,7 @@ ALLOWED = {
     "log": _READ_ONLY | {"log", "patch", "add", "split"},
     "about": _READ_ONLY, "week": _READ_ONLY, "ambient": _ALL,
     "capture": _ALL, "reflect": _ALL, "project": _ALL, "save": _ALL, "history": _ALL,
-    "probe": _ALL, "sweep": _ALL, "mock": _ALL,
+    "sweep": _ALL, "mock": _ALL,
 }
 IDLE_CLOSE = timedelta(hours=2)
 LIVE_CLOSE = timedelta(hours=24)  # B2: a sweep closes a live server's session only this idle

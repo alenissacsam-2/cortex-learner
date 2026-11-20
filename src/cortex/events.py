@@ -27,7 +27,7 @@ KINDS = {"ask", "grade", "log", "taught", "void", "remap", "resume", "close", "o
          "change"}
 MODES = {"home", "learn", "short", "review", "log", "about", "week", "ambient", "capture",
          "reflect",
-         "project", "save", "history", "probe", "sweep", "mock"}
+         "project", "save", "history", "sweep", "mock"}
 STUDY_MODES = frozenset({"home", "learn", "short", "review", "log", "reflect",
                          "sweep"})  # not ambient
 

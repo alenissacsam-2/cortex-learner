@@ -23,7 +23,6 @@ MODE_LABEL = {
     "project": "Project",
     "save": "Save this chat",
     "history": "Chat history",
-    "probe": "Probe: twin vs stranger",
     "sweep": "Sweep",
     "mock": "Mock interview",
 }
@@ -35,7 +34,6 @@ MODE_HINT = {
     "save": "Cortex files what is worth keeping from this conversation.",
     "history": "Pick past chats to save (ones already saved are marked), or distil imported "
                "chats a bundle at a time (/cortex harvest).",
-    "probe": "20 questions: does Cortex predict you better than a stranger would?",
 }
 PLAN_LINES, COMING_UP, MISTAKES_SHOWN, MOVED_SHOWN, NEXT_SHOWN = 8, 3, 3, 6, 3
 CHANGED_SHOWN = 15

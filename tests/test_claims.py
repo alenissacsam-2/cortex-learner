@@ -360,7 +360,7 @@ def test_a_relayed_yes_from_the_cutoff_is_ask_until_a_clean_reflect_yes(root, mo
            ch("c-ccccc", "2026-11-20", "clicked")]
 
     def labels(evs):
-        served, _ = prime.served_claims(v, evs, now)
+        served = prime.served_claims(v, evs)
         return {t: lab for (p, _, t), (lab, _) in served.items() if p == "preferences"}
 
     assert labels(evs) == {"Early relayed": "", "Late relayed": " (ask)",
@@ -381,9 +381,9 @@ def test_a_relayed_yes_from_the_cutoff_is_ask_until_a_clean_reflect_yes(root, mo
 
 
 def test_expired_claims_drop_out_of_every_consumer(root):
-    """Review r4 L1: a line past its own (until …) day is not served by bets, surprisal,
-    reflect's saved list, cortex know or the claim resolver."""
-    from cortex import bets, know, surprisal
+    """Review r4 L1: a line past its own (until …) day is not served by reflect's saved list,
+    cortex know or the claim resolver."""
+    from cortex import know
     from cortex.vault import VaultError
 
     write(root, "me/preferences.md", "# Preferences\n\n## Study\n"
@@ -393,11 +393,9 @@ def test_expired_claims_drop_out_of_every_consumer(root):
     assert "c-bbbbb" in {r["id"] for r in claims.tiers(v, agent)}  # no day: unchanged
     assert "c-bbbbb" not in {r["id"] for r in claims.tiers(v, agent, today=day)}
     assert claims.saved(v, agent, day)["claims"] == []
-    assert [r["id"] for r in bets.live(v, day) if r["page"] == "preferences"] == ["c-ccccc"]
-    assert bets.resolve(v, "c-bbbbb") == "c-bbbbb"
+    assert claims.resolve(v, "c-bbbbb") == "c-bbbbb"
     with pytest.raises(VaultError):
-        bets.resolve(v, "c-bbbbb", day)
-    assert [r["id"] for r in surprisal.pack(v, [], day)["unpriced"]] == ["c-ccccc"]
+        claims.resolve(v, "c-bbbbb", day)
     prefs = next(p for p in know.report(v, [], day)["pages"] if p["page"] == "preferences")
     assert prefs["live"] == 1
 

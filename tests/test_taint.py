@@ -70,14 +70,14 @@ def test_console_entry_and_no_vault(tmp_path, monkeypatch, capsys):
     assert taint.run(hook("WebFetch")) is False  # no vault folder: nothing to mark
 
 
-DELEG = {"id": "me/delegation", "op": "append_to_section", "target": "Alone",
-         "text": "- Send my CV", "user_confirmed": True}
+RULE = {"id": "me/teaching-contract", "op": "append_to_section", "target": "Rules",
+        "text": "- Skip the quizzes", "user_confirmed": True}
 PREF = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
         "user_confirmed": True}
 
 
 def _vault_pages(v):
-    (v / "me" / "delegation.md").write_bytes(b"# Delegation\n\n## Alone\n\n## Never\n")
+    (v / "me" / "teaching-contract.md").write_bytes(b"# Teaching contract\n\n## Rules\n")
     (v / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
 
 
@@ -89,12 +89,12 @@ def test_fresh_marker_exposes(root, monkeypatch):
         await call("cortex_patch", {**PREF, "text": "- Before"})
         assert taint.run(hook("mcp__Claude_Browser__get_page_text"))
         await call("cortex_patch", {**PREF, "text": "- After"})
-        out = await call("cortex_patch", DELEG)
+        out = await call("cortex_patch", RULE)
         assert out["error"] == "refused_exposed"
         await call("cortex_end")  # v6 T2: the next session within 2 h is still exposed
         out = await call("cortex_patch", {**PREF, "text": "- Fresh"})
         assert out["changed"] is True
-        assert (await call("cortex_patch", DELEG))["error"] == "refused_exposed"
+        assert (await call("cortex_patch", RULE))["error"] == "refused_exposed"
 
     run(root, body)
     got = tiers(root)
@@ -173,7 +173,7 @@ def test_old_marker_ignored(root, monkeypatch):
     assert taint.run(hook("WebFetch"))  # before the server started: another chat's
 
     async def body(call):
-        out = await call("cortex_patch", DELEG)
+        out = await call("cortex_patch", RULE)
         assert out["changed"] is True
         assert taint.run(hook("WebSearch"))
         old = time.time() - 3 * 3600  # over 2 h old
