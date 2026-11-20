@@ -1,4 +1,18 @@
 {
+  "0.3.0": {
+    "items": [
+      "Cortex is its own app: a window and a tray icon, it starts with Windows, and closing the window keeps it running.",
+      "The first page is your live brain: what you did today and this week, Next up, exams and deadlines. New pages pop in by themselves.",
+      "Your browsing is the brain stem: one dot per site, sized by visits and glowing by how recently you went there. Click one to see its days and searches.",
+      "A Private switch behind Windows Hello shows private notes and sites; it locks again when you minimise or after 10 minutes.",
+      "Every chat is logged: past and new Claude Code, Desktop and Cowork chats import themselves every 5 minutes, and the Chat tab logs itself.",
+      "Plans have no dates: each subject is an ordered list, the one you studied last comes first, and nothing is ever behind."
+    ],
+    "do": [
+      "Restart Claude once after this update, so its Cortex tools use the new version.",
+      "Reload the browser extension (Extensions page, Reload) if you use it."
+    ]
+  },
   "0.2.3": {
     "items": [
       "The dashboard feels like the app: buttons react, keyboard focus is easy to see, and copy buttons confirm with a check.",
