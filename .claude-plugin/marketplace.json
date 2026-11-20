@@ -12,7 +12,7 @@
       "name": "cortex",
       "source": "./plugin",
       "description": "Cortex learning sessions backed by the learner's local knowledge graph",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "alenissacsam-2"
       },

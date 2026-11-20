@@ -1,4 +1,16 @@
 {
+  "0.3.1": {
+    "items": [
+      "Cortex shows as Cortex: its own Cortex.exe and logo in the title bar, taskbar, Start menu and Task Manager, and pinning it pins Cortex.",
+      "Import my past history goes on from where you paused it, and never shrinks or redoes days an earlier import already wrote.",
+      "Settings opens at once: Setup, Local model and Browsing no longer wait about 3 seconds on each visit.",
+      "A Claude Chat-tab chat and its claude.ai export are one chat page, not two.",
+      "Next up lines wrap instead of cutting off, and the brain's legend starts folded on smaller screens."
+    ],
+    "do": [
+      "If you pinned Cortex to the taskbar before, unpin it and pin it again, so the pin shows the new logo."
+    ]
+  },
   "0.3.0": {
     "items": [
       "Cortex is its own app: a window and a tray icon, it starts with Windows, and closing the window keeps it running.",

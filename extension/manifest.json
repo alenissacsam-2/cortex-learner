@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cortex capture",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Sends what you read to your own Cortex receiver on this computer (127.0.0.1) and nowhere else.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
