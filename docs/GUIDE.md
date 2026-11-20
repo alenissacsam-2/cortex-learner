@@ -20,6 +20,8 @@ In every new Claude Code chat:
 
 The Claude desktop **Chat tab** gets the same tools but no automatic prime, so the chat calls `cortex_prime` itself. That call also starts the chat's log, and the chat logs each later message of yours as it goes, so every Chat-tab chat is saved as well ("Past AI chats saved automatically" below). The desktop **Code tab** runs Claude Code, so it works as above.
 
+**Other AI apps.** Cursor, VS Code (Copilot) and Codex get your pinned core in their rules file when you connect them, and see only what their **agent profile** allows: by default your core and your coding preferences, never your profile, journal or people pages. ChatGPT and Gemini on the web have no Cortex tools, so you paste a **context pack** (General, Coding or Writing) at the start of a chat. All three are in the app's **Connect AI apps**; [INSTALL.md](INSTALL.md#other-ai-apps-rules-files-profiles-and-context-packs) has the details.
+
 ---
 
 ## 2. The `/cortex` commands
@@ -95,6 +97,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex claims --summary` | How well Cortex knows you, per page (and which lines you clicked vs a chat relayed) |
 | `cortex claims --unasked` | What chats saved about you without asking, each with its undo |
 | `cortex export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
+| `cortex pack general\|coding\|writing` | A short context pack (at most 2,500 characters: your pinned core, then that pack's preferences) to paste at the start of a ChatGPT or Gemini chat; the app's **Connect AI apps** has the same packs with a Copy button |
 | `cortex import <file>` | Imports a chat export, notes, a calendar or Google activity (below) |
 | `cortex chats` | Your past chats, newest first |
 | `cortex harvest status` | Harvest progress |

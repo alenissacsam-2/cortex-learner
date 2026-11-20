@@ -987,6 +987,12 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
             for s, cs in S.items()}
     assert sent["setup"]["Use this folder"][0][1]["path"] == str(root_committed)
     sent["setup"]["Use this folder"][0][1]["path"] = "<vault>"
+    # Agent profiles: one checkbox per profile and scope, each saving the whole set once
+    prof = {k: sent["connect"].pop(k) for k in list(sent["connect"])
+            if k.startswith("pf-")}
+    assert len(prof) == 7 * 9 and all(
+        len(v) == 1 and v[0][0] == "/api/profiles" and set(v[0][1]) == {"profiles", "unknown"}
+        for v in prof.values()), prof
     assert sent == SENDS
     for s, cs in S.items():
         for k, v in cs.items():

@@ -60,6 +60,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `digest` | Review chats imported since the last digest; each topic you confirm is a touch, never a grade |
 | `harvest status` | Harvest progress and undo commands |
 | `export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
+| `pack general\|coding\|writing` | A short context pack (≤ 2,500 characters) to paste into a web chat |
 | `undo <session>` / `void` | Revert one chat's changes / cancel one record |
 | `backup` | Zip the whole vault |
 | `doctor` / `lint` / `relink` | Health check / vault problems / fix Obsidian links |

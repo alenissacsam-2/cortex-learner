@@ -142,6 +142,20 @@ To remove the sample later (your own pages stay):
 cortex sample remove
 ```
 
+### Other AI apps: rules files, profiles and context packs
+
+**Rules files.** When **Connect AI apps** adds Cortex to Cursor, VS Code (Copilot) or Codex, it also writes a short Cortex block into a rules file that app reads: your pinned core (the `## Core` lines of `me/core.md` you wrote or approved, at most 500 characters) and one line asking the app to call `cortex_prime` first. The block sits between `<!-- cortex:start … -->` and `<!-- cortex:end -->` markers. Cortex backs the file up first, changes only the block and never the rest, and leaves a file it cannot read (not UTF-8, or markers that do not pair up) untouched with a message. Removing the app takes out only the block; a file that held nothing else is deleted (after its backup). The app checks every 5 minutes and rewrites the block when your core changes; it never adds one you removed. A private `me/core.md` gives an empty block.
+
+| App | File | Why there |
+|---|---|---|
+| Cursor | `~/.cursor/rules/cortex.mdc` (`alwaysApply: true`) | Cursor has no documented global rules file: its User Rules live in its settings, and `.cursor/rules` is per project. The file applies when your home folder is the open project; for every project, paste its text into Cursor's **Settings → Rules** |
+| VS Code (Copilot) | `prompts/cortex.instructions.md` in your VS Code user folder (`%APPDATA%\Code\User` on Windows), `applyTo: "**"` | VS Code applies user-level `*.instructions.md` files to Copilot chats in every workspace; `.github/copilot-instructions.md` is per repository |
+| Codex | `~/.codex/AGENTS.md` | Codex reads this global AGENTS.md in every project |
+
+**Agent profiles.** Under **Connect AI apps → Agent profiles** you choose what each app may read over MCP, by the name the app gives itself: `all` (everything, as before), `core` (your pinned lines), a scope per section of your preferences (`coding`, `communication`, `learning`, …; `communication` and `learning` also bring the matching personality sections) and `personal` (your profile, goals, journal, people pages and past chats). The defaults: Claude apps and LM Studio get `all`; Cursor, VS Code (Copilot) and Codex get `core` and `coding`; any other app gets `core`, `coding` and `learning`. Only the app's page changes them (they are kept in `.cortex/profiles.json` in your vault); no AI app can. A restricted app never sees the other sections, your profile, journal or people pages, and is refused past chats and writing as you. Private pages are never shared with any app.
+
+**Context packs.** For web chats with no MCP (ChatGPT, Gemini), **Connect AI apps → Context packs** shows three packs, **General**, **Coding** and **Writing**: your pinned core first, then that pack's preference and personality lines, each at most 2,500 characters, with a **Copy** button (if copying is blocked, the text is selected for Ctrl+C). Only lines you wrote or approved go in; never a private page or a line naming a private subject. `cortex pack general|coding|writing` prints the same text.
+
 ## 6. Claude Code
 
 If the setup did not install the plugin for you, type these in Claude Code:

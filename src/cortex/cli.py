@@ -805,6 +805,25 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
                f"{w['correct']}/{w['grades']} correct, {len(w['changed'])} concepts changed")
 
 
+@app.command("pack")
+@_errors
+def pack_cmd(name: Annotated[str, typer.Argument(help="general, coding or writing")],
+             vault: VaultOpt = None) -> None:
+    """Print a context pack to paste into a web chat (ChatGPT, Gemini): your pinned core, then
+    the pack's preference lines, at most 2,500 characters, never a private page."""
+    from cortex import packs
+
+    if name not in packs.PACKS:
+        typer.echo(f"error: the pack is one of {', '.join(packs.PACKS)}.", err=True)
+        raise typer.Exit(2)
+    text = packs.pack(_vault(vault), name)
+    if not text:
+        typer.echo("Nothing to pack yet: add lines to me/core.md or me/preferences.md.",
+                   err=True)
+        raise typer.Exit(1)
+    typer.echo(render.term(text))
+
+
 @app.command("needs")
 @_errors
 def needs_cmd(vault: VaultOpt = None) -> None:

@@ -599,15 +599,19 @@ def test_connect_over_the_api(app, home, vault):
         "mcpServers"]["cortex"]["args"]
     want = {"cursor": True, "windsurf": True}
     _, plan, _, _ = call(app, "POST", "/api/connect/plan", {"want": want})
-    assert [(r["id"], r["change"]) for r in plan["rows"]] == [("cursor", "add")]  # not found
+    rule = home / ".cursor" / "rules" / "cortex.mdc"
+    assert [(r["id"], r["change"], r["file"]) for r in plan["rows"]] == [  # windsurf: not found
+        ("cursor", "add", str(home / ".cursor" / "mcp.json")), ("cursor", "add", str(rule))]
     assert not (home / ".cursor" / "mcp.json").exists()
     assert call(app, "POST", "/api/connect/apply", {"want": want})[0] == 200
     job = wait_job(app)
-    assert job["error"] is None and [r["id"] for r in job["result"]["rows"]] == ["cursor"]
+    assert job["error"] is None and [r["id"] for r in job["result"]["rows"]] == ["cursor"] * 2
     assert "cortex" in json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    assert "cortex_prime" in rule.read_text(encoding="utf-8")
     call(app, "POST", "/api/connect/apply", {"want": {"cursor": False}})
     wait_job(app)
     assert json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"] == {}
+    assert not rule.exists()  # only Cortex's own rule was in it
     assert call(app, "POST", "/api/connect/plan", {"want": {"cursor": "yes"}})[0] == 400
 
 
