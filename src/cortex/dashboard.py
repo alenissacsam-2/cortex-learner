@@ -101,6 +101,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                             lambda: levels.fold(events, day, pc, exam))
     private = {n.id for ns in notes.values() for n in ns if is_private(n)}
     hidden = planner.hidden(vault, catalog, private)
+    private |= planner.hidden_mistakes(mstates, hidden)  # OQ-22: mistakes about private subjects
     entries = [e for e in catalog.entries.values() if e.id not in hidden]
     concepts = [e for e in entries if e.kind == "concept"]
     visible = {e.id for e in concepts}
