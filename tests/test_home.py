@@ -2,7 +2,6 @@
 the routes, and its speed on a synthetic 5k-note vault. Made-up vaults only."""
 
 import base64
-import io
 import json
 import os
 import random
@@ -16,14 +15,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 from test_app import _serve, call
-from test_brainmap import made  # noqa: F401  (a fixture: topic hubs, pages and vectors)
+from test_brainmap import (
+    _write_vectors,
+    made,  # noqa: F401  (a fixture: topic hubs, pages and vectors)
+)
 
 from cortex import brainmap, dashboard, home
 from cortex.browse import store
 from cortex.events import EventLog, local_day
 from cortex.home import HomeCache
 from cortex.index import SNAPSHOT, SNAPSHOT_SCHEMA
-from cortex.semantic import CACHE
 from cortex.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -360,11 +361,7 @@ def _big(root: Path, n: int = 5000) -> None:
     cents = rng_np.normal(size=(40, 384))
     vecs = cents[[hash(i) % 40 for i in ids]] + 0.5 * rng_np.normal(size=(len(ids), 384))
     vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
-    buf = io.BytesIO()
-    np.savez(buf, ids=np.array(ids, dtype=str), full=np.ones(len(ids), bool),
-             page=np.arange(len(ids), dtype=np.int32), start=np.zeros(len(ids), np.int32),
-             vecs=vecs.astype(np.float16), meta=np.array(json.dumps({"model": "fake"})))
-    (root / CACHE).write_bytes(buf.getvalue())
+    _write_vectors(root, dict(zip(ids, vecs, strict=True)))
     lines = []
     for i in range(3000):
         t = NOW - timedelta(days=60) + timedelta(minutes=29 * i)

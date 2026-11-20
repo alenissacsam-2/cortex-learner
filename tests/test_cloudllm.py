@@ -65,7 +65,7 @@ def deepen(monkeypatch, vault, settings, *, cloud=True, flip=None):  # noqa: F81
     monkeypatch.setattr(bs, "local_runner",
                         lambda budget_s=None: (local, localllm.Budget(100)))
     monkeypatch.setattr("cortex.taint.config", lambda: CONFIG if cloud else {})
-    monkeypatch.setattr("cortex.browse.sites.update_vectors", lambda v, say=None: None)
+    monkeypatch.setattr("cortex.browse.sites.update_vectors", lambda v, say=None, **kw: None)
     if flip:
         real = cloudllm.CloudRunner._post
 

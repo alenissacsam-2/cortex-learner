@@ -1,9 +1,10 @@
 """Re-filtering and forgetting stored browsing (v7 review C2).
 
 The browsers forget old history, so a rule only reaches everything Cortex stored when every
-store is filtered again: the private day pages on disk, the per-day site counts
-(`site-days.json`), the extension inbox and its archive, the local model's site cache
-(`sites.json`) and the two vector caches. `purge` takes out what a `Rule` matches:
+store is filtered again: the private day pages on disk, the per-day site counts (the
+store's site_days and their backup `site-days.json`), the extension inbox and its archive,
+the local model's site cache (`sites.json`), the two vector stores and the store's privacy
+memo. `purge` takes out what a `Rule` matches:
 `Rule.of(settings)` after a settings change (skip categories, deny and allow lists; run by
 `build.run` when the fingerprint changed) and `Rule(hosts=...)` / `Rule(cats=...)` for
 `cortex browse forget --site/--category`. Writes go through `cortex.vault`; counts only. The
@@ -109,19 +110,39 @@ def _sig(text: str) -> str:
 
 def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
           gone: dict[str, set[str]]) -> Counter:
-    """Take the rule's keys and rows out of site-days.json, and the torn copies set aside
-    (`.bad-*`: unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of every title
-    and search term that went, so the day page's lines go too, whatever matched them."""
+    """Take the rule's keys and rows out of the stored site counts, out of site-days.json (the
+    store's backup, or the counts themselves in a vault imported before it) and the torn copies
+    set aside (`.bad-*`: unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of
+    every title and search term that went, so the day page's lines go too, whatever matched."""
     c: Counter = Counter()
     days, bad = sites.load_days(vault)
-    if bad:
+    in_store = store.exists(vault)
+    backup, b = sites._json_days(vault) if in_store else ({}, None)
+    if bad or b:
         c["site_days_set_aside"] += 1
     p = vault.root / sites.DAYS
     for torn in sorted(p.parent.glob(p.name + ".bad-*")):
         c["site_days_torn"] += vault.remove(torn)
+    changed = _scrub(days, rule, llm, gone_titles, gone, c)
+    if changed and in_store:
+        sites._put_days(vault, {d: days.get(d) or {} for d in changed}, checkpoint=True)
+    elif changed:
+        sites._save(vault, sites.DAYS, days)
+    old: Counter = Counter()
+    if _scrub(backup, rule, llm, gone_titles, gone, old):
+        sites._save(vault, sites.DAYS, backup)
+        c["site_days_backup"] += old["site_keys"] + old["site_rows"]
+    return c
+
+
+def _scrub(days: dict, rule: Rule, llm: dict, gone_titles: set[str],
+           gone: dict[str, set[str]], c: Counter) -> set[str]:
+    """`_days` on one {day: {key: counts}}, in place; the days it changed."""
+    changed = set()
     for day, keys in days.items():
         if not isinstance(keys, dict):
             continue
+        n0 = c["site_keys"] + c["site_rows"]
         for key in list(keys):
             site, cat, _ = sites._split(key)
             a = keys[key]
@@ -153,6 +174,8 @@ def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
             if a["n"] <= 0:
                 del keys[key]
                 c["site_keys"] += 1
+        if c["site_keys"] + c["site_rows"] > n0:
+            changed.add(day)
     for d in list(days):
         keys = days[d]
         if not isinstance(keys, dict) or not keys:
@@ -164,9 +187,7 @@ def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
                 if isinstance(ref, dict):
                     for k in [k for k in ref if k not in keys or not ref[k]]:
                         del ref[k]
-    if c["site_keys"] or c["site_rows"]:
-        sites._save(vault, sites.DAYS, days)
-    return c
+    return changed
 
 
 def _fields(line: str) -> list[str]:
@@ -257,7 +278,7 @@ def _drop_section(lines: list[str], head: str) -> list[str]:
 
 def _pages(vault: Vault, rule: Rule, gone: dict[str, set[str]]) -> Counter:
     """Filter every private day page on disk (the visible day pages hold hub links and counts
-    only, and the visible site pages are redone from site-days.json); `gone` as `_days` made
+    only, and the visible site pages are redone from the site counts); `gone` as `_days` made
     it. A page whose day lost a title has its local-model lines redone from the headings."""
     from cortex.browse.build import PRIVATE_DIR, _page_text
 
@@ -355,20 +376,8 @@ def prune_vectors(vault: Vault) -> Counter:
     browse vectors and the main index's cache (a changed page is embedded again later)."""
     from cortex import semantic
     from cortex.browse import vectors
-    from cortex.catalog import Catalog
-    from cortex.index import Index
 
-    c: Counter = Counter({"vectors": vectors.prune(vault)})
-    old = semantic._read(vault.root)
-    if old:
-        idx = Index(vault, Catalog.load(vault))
-        pages = semantic._pages(idx)
-        keep = semantic._merge(old, {}, pages)
-        if len(keep) < len(old):
-            dim = next(iter(old.values()))[3].shape[1]
-            semantic._save(idx, pages, keep, semantic._sig(vault.root), dim)
-            c["vectors"] += len(old) - len(keep)
-    return c
+    return Counter({"vectors": vectors.prune(vault) + semantic.prune(vault)})
 
 
 PRIVATE_IGNORE = PRIVATE_BROWSE_DIR + "/"

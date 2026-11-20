@@ -58,8 +58,8 @@ from functools import lru_cache
 
 import numpy as np
 
+from cortex import semantic
 from cortex.browse import lists
-from cortex.semantic import CACHE
 from cortex.vault import VaultError
 
 log = logging.getLogger(__name__)
@@ -531,25 +531,15 @@ def _stamp(path) -> tuple[int, int] | None:
 
 def _vectors(root, ids: list[str], memo: dict | None = None
              ) -> tuple[np.ndarray, np.ndarray, bool]:
-    """Unit page vectors (each page's head chunk, else the mean of its chunks) from the
-    semantic cache, a has-vector mask, and whether the cache was readable. `memo` keeps the
-    loaded cache while its file is unchanged."""
+    """Unit page vectors (each page's head chunk) from the semantic cache, a has-vector mask,
+    and whether the cache was readable. `memo` keeps the loaded vectors while the store is
+    unchanged."""
     n = len(ids)
     try:
-        key = _stamp(root / CACHE)
+        key = semantic.stamp(root)
         hit = memo.get("vectors") if memo is not None else None
         if hit is None or hit[0] != key or key is None:
-            with np.load(root / CACHE, allow_pickle=False) as z:
-                vid, page, start, vecs = z["ids"], z["page"], z["start"], z["vecs"]
-            if not len(page) == len(start) == len(vecs) or (len(page) and page.max() >= len(vid)):
-                raise ValueError("inconsistent arrays")
-            head = np.full(len(vid), -1)
-            z0 = np.flatnonzero(start == 0)[::-1]
-            head[page[z0]] = z0  # reversed, so the first head row of a page wins
-            unit = np.zeros((len(vid), vecs.shape[1]), np.float32)  # one per cached page
-            unit[head >= 0] = vecs[head[head >= 0]]
-            for k in np.flatnonzero(head < 0):  # no head chunk: the mean of its chunks
-                unit[k] = vecs[page == k].astype(np.float32).mean(0)
+            vid, unit = semantic.heads(root)  # FileNotFoundError when there is none
             norm = np.linalg.norm(unit, axis=1)
             ok = np.isfinite(norm) & (norm > 0)
             unit[ok] /= norm[ok, None]
@@ -559,7 +549,8 @@ def _vectors(root, ids: list[str], memo: dict | None = None
                 memo["vectors"] = hit
         _, row, unit, ok = hit
         g = np.array([row.get(i, -1) for i in ids], dtype=np.int64)
-        has = (g >= 0) & ok[g]
+        has = g >= 0
+        has[has] = ok[g[has]]
         out = np.zeros((n, unit.shape[1]), np.float32)
         out[has] = unit[g[has]]
     except Exception as e:  # a disposable cache: lay the brain out by links instead
@@ -909,7 +900,7 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     if memo is not None and not relayout:
         inputs = (auto_relayout, json.dumps(clusters, sort_keys=True),
                   [(p["id"], p["cluster"], p["updated"], p["links"]) for p in pages],
-                  _stamp(root / CACHE), _stamp(root / LAYOUT))
+                  semantic.stamp(root), _stamp(root / LAYOUT))
         if memo.get("inputs") == inputs:
             return memo["out"]
     ids = [p["id"] for p in pages]

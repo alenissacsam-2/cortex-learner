@@ -4,11 +4,16 @@ The embedder is injected as `embed(texts) -> (n, d) array`, so tests use a fake 
 download the model. The real one is fastembed `BAAI/bge-small-en-v1.5` in ~/.cortex/models,
 fetched only by `cortex model download`. A page is embedded as chunks (`_chunks`: its head,
 then overlapping windows over the rest of the body) and scores by its best chunk. Vectors are a
-disposable per-vault cache in `.cortex/vectors-v3.npz` (page ids, float16 chunk rows with their
-page index and start, and a JSON manifest id -> (path, mtime_ns, size)); only pages whose file
-changed are re-embedded. A recall embeds missing heads for at most HEAD_BUDGET seconds and
+disposable per-vault cache, the SQLite store `.cortex/vectors.db` (`cortex.vecstore`: a row per
+page with its manifest (path, mtime_ns, size), chunk starts and float16 vectors; a save writes
+the changed pages only); only pages whose file changed are re-embedded. A process reads the
+store on its first query into one float32 matrix and then only the rows other processes saved
+since. The older `.cortex/vectors-v3.npz` is read into it once and kept as a backup. A recall
+embeds missing heads for at most HEAD_BUDGET seconds and
 other missing chunks for at most RECALL_BUDGET; `cortex model build` builds the rest.
-Private pages and raw/ never enter the index, so they are never embedded.
+Private pages and raw/ never enter the index, so they are never embedded. Background work (the
+browse import) runs inside `background()`: a copy of the model capped at half the cores, at
+below-normal priority; a query never waits on the cap.
 
 An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) reorders the top
 `RERANK_POOL` hits; it never changes a hit's `score` or `match`. `rerank: false` in
@@ -20,16 +25,20 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
+import sqlite3
+import sys
 import threading
 import time
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import numpy as np
 
+from cortex import vecstore
 from cortex.index import STOPWORDS, Index, _one_line
 from cortex.topics import page_source
-from cortex.vault import VaultError
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +47,8 @@ RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANK_POOL = 30
 RRF_K = 60
 NOT_SET_UP = "semantic search not set up; run `cortex model download`"
-CACHE = ".cortex/vectors-v3.npz"  # own name: older servers wrote vectors.npz (text 2)
+CACHE = ".cortex/vectors.db"  # the vector store (cortex.vecstore)
+NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once, then a backup
 BODY_CHARS = 1500
 CHUNK_CHARS, CHUNK_OVERLAP = 1000, 200  # ~250-300 tokens: well under bge-small's 512
 TEXT_VERSION = 3  # bump when _text or _chunks change, so cached vectors are rebuilt
@@ -61,7 +71,7 @@ MAX_LIMIT = 20
 CHAT_WEIGHT = 0.6  # imported chat transcripts are long and noisy: the user's own pages win ties
 BATCH = 64
 PROGRESS_S = 5.0  # a long embedding pass says how far it got
-# vault root -> (cache file (mtime_ns, size) as last seen, cache, stacked rows or None)
+# vault root -> (the store's stamp as last seen, cache, stacked rows or None)
 _MEM: dict[Path, tuple] = {}
 _embedder = None
 _EMBED_LOCK = threading.Lock()
@@ -93,10 +103,129 @@ def load_embedder(download: bool = False):
             return None
 
         def embed(texts):
-            return np.asarray(list(model.embed(list(texts))), dtype=np.float32)
+            m = (_capped() or model) if getattr(_bg, "on", False) else model
+            return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
 
         _embedder = embed
         return embed
+
+
+# ---- background embedding: half the cores, below-normal priority -----------------------------
+
+BG_THREADS = max(1, (os.cpu_count() or 2) // 2)  # a background build leaves the rest to the owner
+_bg = threading.local()
+_bg_model = None
+
+
+@contextmanager
+def background():
+    """Embedding in this thread is background work while inside: the real model's calls go to
+    a second copy capped at BG_THREADS threads, all at below-normal priority (Windows), so the
+    PC stays quick. A query in another thread keeps the full model. Nests."""
+    if getattr(_bg, "on", False):
+        yield
+        return
+    _bg.on = True
+    old = _priority(_BELOW_NORMAL)
+    try:
+        yield
+    finally:
+        _bg.on = False
+        if old is not None:
+            _priority(old)
+
+
+def _capped():
+    """The capped copy of the model (made on first use), or None when it cannot be loaded."""
+    global _bg_model
+    with _EMBED_LOCK:
+        if _bg_model is None:
+            from fastembed import TextEmbedding
+
+            before = _threads()
+            try:
+                m = TextEmbedding(MODEL, cache_dir=str(models_dir()), local_files_only=True,
+                                  threads=BG_THREADS)
+                list(m.embed(["cortex"]))  # onnxruntime has made its threads by now
+            except Exception as e:
+                log.warning("background embedding uses the full model: %s", type(e).__name__)
+                _bg_model = False
+                return None
+            # shortcut: a thread another part of the process made in this second is lowered
+            # too; harmless, as background work is all this process does then
+            _lower(_threads() - before)
+            _bg_model = m
+        return _bg_model or None
+
+
+_BELOW_NORMAL = -1  # THREAD_PRIORITY_BELOW_NORMAL
+
+
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32")  # its own instance: the argtypes below stay local
+    H = wintypes.HANDLE
+    k.GetCurrentThread.restype = k.OpenThread.restype = H
+    k.CreateToolhelp32Snapshot.restype = H
+    k.SetThreadPriority.argtypes = [H, ctypes.c_int]
+    k.GetThreadPriority.argtypes = k.CloseHandle.argtypes = [H]
+    k.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.Thread32First.argtypes = k.Thread32Next.argtypes = [H, ctypes.c_void_p]
+    return k
+
+
+def _priority(p: int) -> int | None:
+    """Set this thread's priority (Windows); the one it had, None elsewhere."""
+    if sys.platform != "win32":
+        return None
+    k = _kernel32()
+    h = k.GetCurrentThread()
+    old = k.GetThreadPriority(h)
+    k.SetThreadPriority(h, p)
+    return old
+
+
+def _threads() -> set[int]:
+    """The ids of this process's threads (Windows; empty elsewhere)."""
+    if sys.platform != "win32":
+        return set()
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):  # THREADENTRY32
+        _fields_ = [("size", wintypes.DWORD), ("usage", wintypes.DWORD),
+                    ("tid", wintypes.DWORD), ("pid", wintypes.DWORD),
+                    ("base", wintypes.LONG), ("delta", wintypes.LONG),
+                    ("flags", wintypes.DWORD)]
+
+    k = _kernel32()
+    snap = k.CreateToolhelp32Snapshot(4, 0)  # TH32CS_SNAPTHREAD
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return set()
+    out, e, pid = set(), Entry(), k.GetCurrentProcessId()
+    e.size = ctypes.sizeof(Entry)
+    try:
+        ok = k.Thread32First(snap, ctypes.byref(e))
+        while ok:
+            if e.pid == pid:
+                out.add(e.tid)
+            ok = k.Thread32Next(snap, ctypes.byref(e))
+    finally:
+        k.CloseHandle(snap)
+    return out
+
+
+def _lower(tids) -> None:
+    """Below-normal priority for these threads of this process (Windows)."""
+    if not tids:
+        return
+    k = _kernel32()
+    for t in tids:
+        if h := k.OpenThread(0x0020, False, t):  # THREAD_SET_INFORMATION
+            k.SetThreadPriority(h, _BELOW_NORMAL)
+            k.CloseHandle(h)
 
 
 def rerank_on() -> bool:
@@ -228,27 +357,24 @@ def _chunk_text(n: dict, at: int) -> str:
 
 
 def _pages(index: Index) -> dict[str, tuple]:
-    root = index.vault.root
-    return {id: (p.relative_to(root).as_posix(), *index._stats[p])
+    return {id: (index._rel(p), *index._stats[p])  # not relative_to: most of a warm query
             for p, id in index._ids.items() if id in index._notes}
 
 
 # The cache: page id -> (manifest (path, mtime_ns, size), full (every chunk built), chunk
-# starts int32 (k,), unit vectors float32 (k, dim)); chunk 0 is always the first row.
+# starts int32 (k,), unit vectors (k, dim)); chunk 0 is always the first row. In memory the
+# vectors are views of one float32 matrix (`vecstore.stack`); on disk, the rows of CACHE.
 
 
-def _sig(root: Path):
+def _want(dim: int) -> dict:
+    return {"model": MODEL, "text": TEXT_VERSION, "chunk": CHUNKING, "dim": dim}
+
+
+def _npz_read(root: Path) -> dict:
+    """The .npz cache from before the store, or {} when it is missing, unreadable or built
+    with other settings."""
     try:
-        st = (root / CACHE).stat()
-    except OSError:
-        return None
-    return st.st_mtime_ns, st.st_size
-
-
-def _read(root: Path) -> dict:
-    """The cache file, or {} when it is missing, unreadable or built with other settings."""
-    try:
-        with np.load(root / CACHE, allow_pickle=False) as z:
+        with np.load(root / NPZ, allow_pickle=False) as z:
             meta = json.loads(z["meta"].item())
             if [meta.get("model"), meta.get("text"), meta.get("chunk")] == [
                     MODEL, TEXT_VERSION, CHUNKING]:
@@ -257,51 +383,122 @@ def _read(root: Path) -> dict:
                 cut = np.searchsorted(page, np.arange(len(ids) + 1))
                 return {i: (tuple(meta["pages"][i]), bool(full[k]), start[cut[k]:cut[k + 1]],
                             vecs[cut[k]:cut[k + 1]]) for k, i in enumerate(ids)}
-            log.warning("rebuilding the vector cache: other model, text or chunk settings")
     except (OSError, ValueError, KeyError) as e:
         if not isinstance(e, FileNotFoundError):
-            log.warning("rebuilding the vector cache: %s", e)
+            log.warning("the old vector cache is unreadable: %s", e)
     return {}
 
 
-def _merge(mine: dict, disk: dict, pages: dict) -> dict:
-    """Entries of current pages only; per page the one with more chunks built (chunking is
-    deterministic, so it holds the other one's rows too)."""
-    out = {}
-    for i in pages:
-        got = [e for e in (mine.get(i), disk.get(i)) if e is not None and e[0] == pages[i]]
-        if got:
-            out[i] = max(got, key=lambda e: (e[1], len(e[2])))
-    return out
+def _npz_write(vault, cache: dict) -> None:
+    """Rewrite the .npz backup with `cache` only (a forget takes rows out of it too)."""
+    ids = list(cache)
+    rows = [cache[i] for i in ids]
+    dim = rows[0][3].shape[1] if rows else 1
+    buf = io.BytesIO()
+    np.savez(buf, ids=np.array(ids, dtype=str), full=np.array([e[1] for e in rows], dtype=bool),
+             page=np.repeat(np.arange(len(ids), dtype=np.int32), [len(e[2]) for e in rows]),
+             start=np.concatenate([e[2] for e in rows] or [np.zeros(0, np.int32)]),
+             vecs=np.concatenate([e[3] for e in rows] or [np.zeros((0, dim))]).astype(np.float16),
+             meta=np.array(json.dumps({"model": MODEL, "text": TEXT_VERSION, "chunk": CHUNKING,
+                                       "dim": dim, "pages": {i: cache[i][0] for i in ids}})))
+    with vault.lock():
+        vault._atomic_write(vault.root / NPZ, buf.getvalue())
 
 
-def _save(index: Index, pages: dict, cache: dict, sig, dim: int) -> tuple[dict, tuple | None]:
-    """Write the cache as float16 rows grouped by page; returns (cache, file signature). Under
-    the lock it first merges in what another process (`cortex model build`, a server) saved
-    since `sig`, so neither loses the other's work."""
-    vault, root = index.vault, index.vault.root
+def _connect(root: Path, dim: int, write: bool = True):
+    """The store, its settings checked (other ones empty it) and the .npz read into it once
+    (the .npz is kept as a backup, never deleted). With `write` False (a dry run) nothing is
+    made or changed: None when there is no store or it holds other settings."""
+    p = root / CACHE
+    if not write:
+        if not p.is_file():
+            return None
+        con = vecstore.connect(p, create=False)
+        if vecstore.get_meta(con, "settings") != _want(dim):
+            con.close()
+            return None
+        return con
+    con = vecstore.connect(p)
     try:
-        with vault.lock():  # the lock creates .cortex/
-            if _sig(root) != sig:
-                cache = _merge(cache, _read(root), pages)
-            ids = list(cache)
-            rows = [cache[i] for i in ids]
-            buf = io.BytesIO()
-            np.savez(buf, ids=np.array(ids, dtype=str),
-                     full=np.array([e[1] for e in rows], dtype=bool),
-                     page=np.repeat(np.arange(len(ids), dtype=np.int32),
-                                    [len(e[2]) for e in rows]),
-                     start=np.concatenate([e[2] for e in rows] or [np.zeros(0, np.int32)]),
-                     vecs=np.concatenate([e[3] for e in rows] or [np.zeros((0, dim))])
-                     .astype(np.float16),
-                     meta=np.array(json.dumps({"model": MODEL, "text": TEXT_VERSION,
-                                               "chunk": CHUNKING, "dim": dim,
-                                               "pages": {i: pages[i] for i in ids}})))
-            vault._atomic_write(root / CACHE, buf.getvalue())
-            return cache, _sig(root)
-    except (VaultError, OSError) as e:  # a disposable cache: next call rebuilds what is missing
+        vecstore.prepare(con, _want(dim))
+        if not vecstore.get_meta(con, "migrated"):  # idempotent: a rerun upserts the same rows
+            vecstore.put(con, {i: (json.dumps(list(e[0])), e[1], e[2], e[3])
+                               for i, e in _npz_read(root).items() if e[3].shape[1] == dim})
+            with vecstore.tx(con):
+                vecstore.set_meta(con, "migrated", True)
+    except BaseException:
+        con.close()
+        raise
+    return con
+
+
+def _sync(con, dim: int, st0, cache: dict) -> tuple[tuple, bool]:
+    return vecstore.sync(con, dim, st0, cache, lambda m: tuple(json.loads(m)))
+
+
+def _save(con, cache: dict, changed: set, gone) -> None:
+    """Upsert the `changed` pages and delete the `gone` ones; a disposable cache, so a failure
+    is a warning (a later call embeds what is missing)."""
+    try:
+        vecstore.delete(con, [i for i in gone if i not in cache])  # a changed page: upserted
+        vecstore.put(con, {i: (json.dumps(list(cache[i][0])), *cache[i][1:])
+                           for i in changed if i in cache})
+    except sqlite3.Error as e:
         log.warning("vector cache not saved: %s", e)
-        return cache, sig
+
+
+def _read(root: Path) -> dict:
+    """Every stored row: {id: (manifest, full, starts, float32 vectors)}; {} without a store."""
+    if not (root / CACHE).is_file():
+        return {}
+    with closing(vecstore.connect(root / CACHE, create=False)) as con:
+        dim = (vecstore.get_meta(con, "settings") or {}).get("dim")
+        return {i: (tuple(json.loads(m)), full, s, v.astype(np.float32))
+                for i, m, full, s, v in vecstore.rows(con, dim)} if dim else {}
+
+
+def stamp(root: Path) -> tuple | None:
+    """The store's change stamp, None when there is none or it is unreadable (the brain
+    map's cache key)."""
+    if not (root / CACHE).is_file():
+        return None
+    try:
+        with closing(vecstore.connect(root / CACHE, create=False)) as con:
+            return vecstore.stamp(con)
+    except sqlite3.Error:
+        return None
+
+
+def heads(root: Path) -> tuple[list[str], np.ndarray]:
+    """(ids, float32 chunk-0 vectors) of every stored page, read now (the brain map's input:
+    one row per page, not the whole matrix). FileNotFoundError without a store."""
+    if not (root / CACHE).is_file():
+        raise FileNotFoundError(root / CACHE)
+    with closing(vecstore.connect(root / CACHE, create=False)) as con:
+        dim = (vecstore.get_meta(con, "settings") or {}).get("dim")
+        return vecstore.heads(con, dim) if dim else ([], np.zeros((0, 0), np.float32))
+
+
+def prune(vault) -> int:
+    """Delete the rows of pages that went or changed, with no model needed (a forget or a
+    settings change must not leave a page's vectors behind; a changed page is embedded again
+    later); the .npz backup loses them too. Rows deleted from the store."""
+    from cortex.catalog import Catalog
+
+    root = vault.root
+    if not ((root / CACHE).is_file() or (root / NPZ).is_file()):
+        return 0
+    pages = _pages(Index(vault, Catalog.load(vault)))
+    n = 0
+    if (root / CACHE).is_file():
+        with closing(vecstore.connect(root / CACHE)) as con:
+            n = vecstore.delete(con, [i for i, m in vecstore.manifests(con).items()
+                                      if pages.get(i) != tuple(json.loads(m))])
+    old = _npz_read(root)
+    keep = {i: e for i, e in old.items() if pages.get(i) == e[0]}
+    if len(keep) < len(old):
+        _npz_write(vault, keep)
+    return n
 
 
 def _embed(embed, texts: list[str]) -> np.ndarray:
@@ -344,16 +541,41 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
     `progress(done, total)` counts the chunks built in this call. With `only` (page ids) the
     missing chunk 0 of no other page is embedded in this call (the browse import needs the hub
     members only; recall and `cortex model build` embed the rest). With `save=False` (a dry
-    run) nothing is written and the in-memory cache is left as it was."""
+    run) nothing is written and the in-memory cache is left as it was.
+
+    The store is read lazily: the whole of it on a process's first call, then only the rows
+    other processes saved since (its change stamp); a save writes the changed pages only."""
     root = index.vault.root
     pages = _pages(index)
-    sig, cache, stack = _MEM.get(root, (None, {}, None))
-    if root not in _MEM or _sig(root) != sig:  # first call, or another process saved
-        sig, cache, stack = _sig(root), _merge(cache, _read(root), pages), None
-    if any(e[3].shape[1] != dim for e in cache.values()):  # another embedder wrote it
-        cache = {}
-    kept = {i: e for i, e in cache.items() if i in pages and e[0] == pages[i]}
-    dirty, cache = len(kept) != len(cache), kept
+    st, cache, stack = _MEM.get(root, (None, {}, None))
+    cache = dict(cache)
+    con = None
+    try:
+        con = _connect(root, dim, save)
+        if con is None:  # a dry run with no usable store: nothing cached
+            st, cache, stack = None, {}, None
+        else:
+            st, moved = _sync(con, dim, st, cache)
+            stack = None if moved else stack
+    except (sqlite3.Error, OSError) as e:  # a disposable cache: embed what this call can
+        log.warning("vector cache not read: %s", e)
+        con = None
+    try:
+        return _vectors(index, embed, dim, pages, st, cache, stack, con, budget, save_every,
+                        progress, heads, only, save)
+    finally:
+        if con is not None:
+            con.close()
+
+
+def _vectors(index: Index, embed, dim: int, pages: dict, st, cache: dict, stack, con, budget,
+             save_every, progress, heads, only, save: bool):
+    root = index.vault.root
+    save = save and con is not None
+    gone = [i for i, e in cache.items() if pages.get(i) != e[0]]  # went, changed or private now
+    for i in gone:
+        del cache[i]
+    dirty, changed = bool(gone), set()
     todo = [i for i in pages if i not in cache and (only is None or i in only)]
     t0, step = time.monotonic(), (BATCH if heads is None else TAIL_BATCH)
     for s in range(0, len(todo), step):
@@ -363,6 +585,7 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
         vecs = _embed(embed, [_text(index._notes[i]) for i in batch])
         for i, v in zip(batch, vecs, strict=True):
             cache[i] = (pages[i], False, np.zeros(1, np.int32), v[None])
+        changed.update(batch)
         dirty = True
     pending = [i for i in pages if i in cache and not cache[i][1]]
     work = {}
@@ -377,30 +600,34 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
         rest = [c for c in work.pop(i, None) or _chunks(index._notes[i]) if c[0] not in built]
         if not rest:  # short page: chunk 0 is all of it
             cache[i], dirty = (meta, True, have, vecs), True
+            changed.add(i)
         while rest and (budget is None or time.monotonic() - t0 < budget):
             part, rest = rest[:step], rest[step:]
             have = np.concatenate([have, np.array([s for s, _ in part], np.int32)])
             vecs = np.concatenate([vecs, _embed(embed, [t for _, t in part])])
             cache[i], dirty, done = (meta, not rest, have, vecs), True, done + len(part)
+            changed.add(i)
             if progress:
                 progress(done, total)
             if save and save_every is not None and time.monotonic() - last >= save_every:
-                cache, sig = _save(index, pages, cache, sig, dim)
+                _save(con, cache, changed, gone)
+                changed, gone = set(), []
                 last = time.monotonic()
         if budget is not None and time.monotonic() - t0 >= budget:
             break
-    if dirty and save:
-        cache, sig = _save(index, pages, cache, sig, dim)
-    if dirty:
-        stack = None
-    if stack is None:
-        ids = list(cache)
-        rows = [cache[i] for i in ids]
-        stack = (ids, np.repeat(np.arange(len(ids), dtype=np.int32), [len(e[2]) for e in rows]),
-                 np.concatenate([e[2] for e in rows] or [np.zeros(0, np.int32)]),
-                 np.concatenate([e[3] for e in rows] or [np.zeros((0, dim), np.float32)]))
+    if save and (changed or gone):
+        _save(con, cache, changed, gone)
+    if save and dirty:  # read back what this call and any other process saved since
+        try:
+            st = _sync(con, dim, st, cache)[0]
+        except sqlite3.Error as e:
+            log.warning("vector cache not read back: %s", e)
+        for i in [i for i, e in cache.items() if pages.get(i) != e[0]]:
+            del cache[i]  # another process's newer page: in the store, not in this index yet
+    if dirty or stack is None:
+        stack = vecstore.stack(cache, dim)
     if save:
-        _MEM[root] = (sig, cache, stack)
+        _MEM[root] = (st, cache, stack)
     return stack
 
 

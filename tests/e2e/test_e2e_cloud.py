@@ -22,6 +22,7 @@ from cortex import cloudllm, localllm, semantic
 from cortex.app import status as app_status
 from cortex.browse import sites
 from cortex.cli import app
+from cortex.vault import Vault
 from e2e.fake_ollama import FakeOllama
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -115,13 +116,13 @@ def test_e4_cloud_opt_in(world, monkeypatch):
     assert "no local model" in out and not opener.reqs and not w.audit()
 
     # 2. on: only cloud-audience pages go; a title holding a secret is skipped and counted
-    days = json.loads((w.root / sites.DAYS).read_text(encoding="utf-8"))
+    days = sites.load_days(Vault(w.root))[0]
     food = [a for d in days.values() for k, a in d.items() if k.startswith("example.com|")]
     assert food
     for a in food:  # an older cache line holding a secret (the filter drops new ones)
         for row in a["p"].values():
             row[0] = f"Pasta notes {SECRET}"
-    (w.root / sites.DAYS).write_text(json.dumps(days), encoding="utf-8")
+    sites._put_days(Vault(w.root), days)
     w.config(cloud=True, local=True)
     w.cli("browse", "deepen")
     sent = opener.sent()

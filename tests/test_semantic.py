@@ -1,13 +1,13 @@
-import json
 import os
 import shutil
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import semantic
+from cortex import semantic, vecstore
 from cortex.catalog import Catalog
 from cortex.index import Index
 from cortex.mcp_server import Cortex
@@ -103,9 +103,9 @@ def test_cache_reembeds_only_changed_pages_and_drops_deleted(root, idx):
     assert len(fake.texts) == 2 and "Now about a motor car." in fake.texts[1]
     assert "gearbox" not in ids(hits)
     semantic._MEM.clear()
-    with np.load(root / semantic.CACHE) as z:
-        assert "gearbox" not in list(z["ids"]) and "hidden" not in list(z["ids"])
-        assert len(z["ids"]) == n_pages - 1
+    stored = semantic._read(root)
+    assert "gearbox" not in stored and "hidden" not in stored
+    assert len(stored) == n_pages - 1
 
 
 def test_without_the_model_it_falls_back_to_keyword_and_says_so(idx, tmp_path, monkeypatch):
@@ -162,8 +162,8 @@ def test_private_domain_hides_its_concepts_and_raw_over_mcp(root, monkeypatch):
     assert "gear-ratios" not in ids(c.cortex_recall("vehicle")["hits"])
     assert "gear-ratios" not in c.cortex_context(topic="gear ratios")["context"]
     semantic._MEM.clear()
-    with np.load(root / semantic.CACHE) as z:
-        assert "gear-ratios" not in list(z["ids"]) and "engines" in list(z["ids"])
+    stored = semantic._read(root)
+    assert "gear-ratios" not in stored and "engines" in stored
     with pytest.raises(VaultError) as e:
         c.cortex_read("raw/diary.md")
     assert e.value.code == "unknown_id"
@@ -313,10 +313,11 @@ def test_an_interrupted_build_resumes_without_redoing_saved_chunks(root, chat, m
 def test_cache_versioning_rebuilds_on_new_chunking(root, chat, monkeypatch):
     heads = {semantic._text(chat._notes[i]) for i in semantic._pages(chat)}
     semantic.vectors(chat, FakeEmbed(), 4)
-    with np.load(root / semantic.CACHE) as z:
-        meta = json.loads(z["meta"].item())
+    with closing(vecstore.connect(root / semantic.CACHE, create=False)) as con:
+        meta = vecstore.get_meta(con, "settings")
         assert meta["text"] == 3 and meta["chunk"] == semantic.CHUNKING
-        assert z["vecs"].dtype == np.float16 and z["full"].all()
+        rows = list(vecstore.rows(con, meta["dim"]))
+        assert rows and all(full and v.dtype == np.float16 for _, _, full, _, v in rows)
     semantic._MEM.clear()
     monkeypatch.setattr(semantic, "CHUNKING", [1500, 800, 100])  # other settings: rebuild
     fake = FakeEmbed()

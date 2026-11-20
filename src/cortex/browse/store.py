@@ -20,16 +20,20 @@ was); unsummarised (days made while the local model was away); verdicts (the loc
 label per text hash, C1); hub_days (public time per topic hub and day, for the weekly
 interest lines); site_pages (one row per site and side: what the site Markdown pages held,
 once `migrate` moved them out of the vault: the per-site numbers the brain and Chat read, so
-no reader ever scans the visits). Indexes: visits by day and by text hash; a first import
-into an empty store makes them after its rows (`bulk`).
+no reader ever scans the visits; `prof` holds what the CSVs and profiles need, so they are
+made from rows); site_days (`sites.record`'s counts per day and site key, with a lean copy
+for Chat; site-days.json is read in once, `migrate_days`, and kept as a backup); judged
+(`ingest`'s privacy memo). Indexes: visits by day and by text hash; a first import into an
+empty store makes them after its rows (`bulk`).
 
 Not built yet (SPEC-browse-events): the tombstone ledger (a forget deletes rows, it is not a
-remembered rule), the source manager (sources are the browsers found, "extension" and
-"takeout/..."), and legacy_rows (the counts of days only site-days.json holds stay there).
+remembered rule) and the source manager (sources are the browsers found, "extension" and
+"takeout/...").
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -40,6 +44,7 @@ import time
 import zipfile
 from collections import Counter
 from contextlib import closing, contextmanager
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -75,8 +80,12 @@ CREATE TABLE IF NOT EXISTS hub_days(day TEXT NOT NULL, hub TEXT NOT NULL, secs R
 CREATE TABLE IF NOT EXISTS site_pages(site TEXT NOT NULL, hidden INTEGER NOT NULL,
     category TEXT, visits INTEGER, secs INTEGER, first INTEGER, last INTEGER, days TEXT,
     titles TEXT, searches TEXT, led TEXT, hubs TEXT, related TEXT, description TEXT,
-    PRIMARY KEY(site, hidden));
+    prof TEXT, PRIMARY KEY(site, hidden));
 CREATE INDEX IF NOT EXISTS site_pages_last ON site_pages(last);
+CREATE TABLE IF NOT EXISTS site_days(day TEXT NOT NULL, key TEXT NOT NULL, site TEXT NOT NULL,
+    lean TEXT NOT NULL, counts TEXT NOT NULL, PRIMARY KEY(day, key));
+CREATE INDEX IF NOT EXISTS site_days_site ON site_days(site);
+CREATE TABLE IF NOT EXISTS judged(h TEXT PRIMARY KEY, kept TEXT NOT NULL);
 """
 _INDEXES = (("visits_day", "visits(day, ts)"), ("visits_tkey", "visits(tkey)"))
 _COLS = ("source", "native", "ts", "day", "url", "title", "host", "site", "category", "maybe",
@@ -111,6 +120,12 @@ def connect(vault: Vault, *, memory: bool = False) -> sqlite3.Connection:
     con.execute("PRAGMA busy_timeout=5000")
     con.execute("PRAGMA secure_delete=ON")  # a forgotten row is overwritten, not left in a page
     con.executescript(_DDL)
+    if "prof" not in {r[1] for r in con.execute("PRAGMA table_info(site_pages)")}:
+        try:  # a store made before the column
+            con.execute("ALTER TABLE site_pages ADD COLUMN prof TEXT")
+        except sqlite3.OperationalError as e:  # another process added it meanwhile
+            if "duplicate column" not in str(e):
+                raise
     indexes(con)
     return con
 
@@ -199,24 +214,92 @@ def text_of(k: Kept) -> str:
     return k.search or (k.title if k.title != k.host else "")
 
 
+_NEUTRAL = Settings()  # no deny, allow or private domains: `judge` before the user's lists
+
+
+@functools.cache
+def _lists_hash() -> str:
+    from cortex.browse import lists
+
+    blob = json.dumps({k: v for k, v in vars(lists).items() if k.isupper()}, sort_keys=True,
+                      default=lambda x: sorted(x) if isinstance(x, set | frozenset) else repr(x))
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def memo_version() -> str:
+    """What the privacy memo's verdicts depend on: the filter's version and its word lists."""
+    from cortex.browse import build
+
+    return f"{build.FILTER_VERSION}-{_lists_hash()}"
+
+
+def _memo_key(rec: tuple) -> str:
+    return hashlib.sha256("\0".join(x or "" for x in rec).encode("utf-8", "replace")
+                          ).hexdigest()[:32]
+
+
+def _settle(k: Kept | None, settings: Settings) -> Kept | None:
+    """`judge` under `settings` from `judge` under _NEUTRAL: the deny and allow lists drop by
+    host, the private list makes it private."""
+    if k is None or privacy.in_domains(k.host, settings.deny) or (
+            settings.allow and not privacy.in_domains(k.host, settings.allow)):
+        return None
+    return replace(k, private=True) if privacy.in_domains(k.host, settings.private) else k
+
+
+def _memo(con: sqlite3.Connection, keys: list[str]) -> dict[str, Kept]:
+    """The memoized neutral verdicts of `keys` (a record not memoized is absent). A memo made
+    under another `memo_version` is emptied first."""
+    v = memo_version()
+    if get_meta(con, "judged_version") != v:
+        with con:
+            con.execute("DELETE FROM judged")
+            set_meta(con, "judged_version", v)
+    out = {}
+    for chunk in _chunks(keys, 500):
+        for h, kept in con.execute(f"SELECT h, kept FROM judged WHERE h IN "
+                                   f"({', '.join('?' * len(chunk))})", chunk):
+            try:
+                d = json.loads(kept)
+                d.pop("channel", None)
+                out[h] = Kept(**d)
+            except (ValueError, TypeError):  # judged again
+                pass
+    return out
+
+
 def ingest(con: sqlite3.Connection, visits: list, settings: Settings, tz, *,
            quiet_until: float | None = None, seen: dict | None = None) -> Counter:
     """Filter `visits` (sources.Visit with `.source` and `.native`) and save the ones kept,
     CHUNK per transaction. A new or changed row marks its day dirty, except a row no newer
     than `quiet_until` (epoch seconds: a vault imported before the store existed already has
     those days' pages). `seen`: the filter's verdicts by record, kept across calls (the filter
-    is pure, so a record is judged once). Counts: "dropped" (never stored), "new" (rows new or
-    changed)."""
+    is pure, so a record is judged once). The store's memo (table judged) keeps `judge`'s
+    verdict before the user's domain lists by a hash of the record, for kept records only (a
+    record that is not stored leaves no trace), so a record read again in a later run is not
+    judged again. Counts: "dropped" (never stored), "new" (rows new or changed)."""
     c: Counter = Counter()
     seen = {} if seen is None else seen
     if len(seen) > SEEN_CAP:  # bounded however long the history: judged again after
         seen.clear()
-    rows = []
+    keys = {rec: _memo_key(rec) for rec in {(v.url, v.title, v.channel) for v in visits}
+            if rec not in seen}
+    memo = _memo(con, list(keys.values()))
+    add, stale, rows = [], [], []
     for v in visits:
         rec = (v.url, v.title, v.channel)
         if rec not in seen:
-            k = privacy.judge(v.url, v.title, settings=settings, channel=v.channel)
-            seen[rec] = (k, privacy.apply(k, settings=settings))
+            h = keys[rec]
+            k = memo.get(h) or privacy.judge(v.url, v.title, settings=_NEUTRAL,
+                                             channel=v.channel)
+            ks = _settle(k, settings)
+            a = privacy.apply(ks, settings=settings)
+            if a is None and h in memo:
+                stale.append((h,))
+            elif a is not None and h not in memo:
+                add.append((h, json.dumps({**asdict(k), "channel": v.channel or ""},
+                                          ensure_ascii=False)))
+            seen[rec] = (ks, a)
         k, a = seen[rec]
         if a is None:
             c["dropped"] += 1
@@ -236,6 +319,10 @@ def ingest(con: sqlite3.Connection, visits: list, settings: Settings, tz, *,
                     if quiet_until is None or ts > quiet_until:
                         days.add(day)
             mark(con, days)
+    if add or stale:  # after the rows: a memo row's record is stored
+        with con:
+            con.executemany("INSERT OR REPLACE INTO judged VALUES (?, ?)", add)
+            con.executemany("DELETE FROM judged WHERE h = ?", stale)
     return c
 
 
@@ -465,25 +552,38 @@ def migrated(vault: Vault) -> bool:
         return False
 
 
-def put_pages(con: sqlite3.Connection, allp: dict, llm: dict) -> None:
-    """Replace every site page row with `allp` (sites.pages: {(site, hidden): Page})."""
-    ids = {p.id: p for p in allp.values()}
+def put_pages(con: sqlite3.Connection, allp: dict, llm: dict, only: set[str] | None = None
+              ) -> None:
+    """Replace the site page rows with `allp` (sites.pages: {(site, hidden): Page}): all of
+    them, or with `only` the rows of those sites (a live read: the sites its days hold). A row
+    also keeps what the CSVs and profiles read of its page (`prof`, `pages_for_lists`)."""
+    ids = {} if only is None else {  # page id -> (site, hidden) of the rows that stay
+        sites.page_id(s, bool(h)): (s, bool(h))
+        for s, h in con.execute("SELECT site, hidden FROM site_pages") if s not in only}
+    ids.update({p.id: (p.site, p.hidden) for p in allp.values()})
     rows = []
     for p in allp.values():
         entry = (llm.get(p.site) or {}).get("h" if p.hidden else "v")
         rel: list[str] = []
         for s in (entry or {}).get("related") or []:  # the LLM's first, then visited together
             for pid in (sites.page_id(s, False), sites.page_id(s, True)):
-                if pid in ids and (p.hidden or not ids[pid].hidden) and ids[pid].site not in rel:
-                    rel.append(ids[pid].site)
+                if pid in ids and (p.hidden or not ids[pid][1]) and ids[pid][0] not in rel:
+                    rel.append(ids[pid][0])
         for pid, _ in sorted(p.co.items(), key=lambda x: (-x[1], x[0])):
             q = ids.get(pid)
-            if q and q.site != p.site and (p.hidden or not q.hidden) and q.site not in rel:
-                rel.append(q.site)
+            if q and q[0] != p.site and (p.hidden or not q[1]) and q[0] not in rel:
+                rel.append(q[0])
         hubs = Counter(p.hubs)
         for hub in (entry or {}).get("topics") or []:
             hubs.setdefault(hub, 0)
         pages = sorted(p.pages.values(), key=lambda x: (-x[1], -x[2], x[0]))
+        prof = {"hours": p.hours, "weekdays": p.weekdays, "months": p.months,
+                "msecs": p.month_secs}
+        if p.hidden:  # only the private profile lists searches, by category
+            terms = Counter()
+            for cat, t, n in p.searches:
+                terms[(cat, t)] += n
+            prof["searches"] = sorted([c, t, n] for (c, t), n in terms.items())
         rows.append((p.site, int(p.hidden), p.category, p.visits, p.secs, p.first, p.last,
                      json.dumps(sorted({d for d, _ in p.src})),
                      json.dumps([t for t, *_ in pages if t][:sites.TOP_PAGES]),
@@ -491,10 +591,82 @@ def put_pages(con: sqlite3.Connection, allp: dict, llm: dict) -> None:
                      json.dumps(sorted(p.led.items(), key=lambda x: (-x[1], x[0]))),
                      json.dumps(sorted(hubs.items(), key=lambda x: (-x[1], x[0]))),
                      json.dumps(rel[:sites.TOP_RELATED]),
-                     sites._valid_desc(entry, p) or ""))
+                     sites._valid_desc(entry, p) or "", json.dumps(prof)))
     with con:
-        con.execute("DELETE FROM site_pages")
-        con.executemany(f"INSERT INTO site_pages VALUES ({', '.join('?' * 14)})", rows)
+        if only is None:
+            con.execute("DELETE FROM site_pages")
+        else:
+            con.executemany("DELETE FROM site_pages WHERE site = ?", [(s,) for s in only])
+        con.executemany(f"INSERT INTO site_pages VALUES ({', '.join('?' * 15)})", rows)
+
+
+def unprofiled(con: sqlite3.Connection) -> bool:
+    """A site page row saved before rows kept `prof`: the next write makes every row again."""
+    return con.execute("SELECT 1 FROM site_pages WHERE prof IS NULL LIMIT 1").fetchone() is not None
+
+
+def pages_for_lists(con: sqlite3.Connection) -> list:
+    """Every site page row as a sites.Page holding what the CSVs and profiles read (no page
+    map, titles or co-visits), so they are made without the per-day counts."""
+    out = []
+    for site, hidden, cat, visits, secs, first, last, hubs, prof in con.execute(
+            "SELECT site, hidden, category, visits, secs, first, last, hubs, prof "
+            "FROM site_pages"):
+        pr = json.loads(prof or "{}")
+        out.append(sites.Page(
+            site, bool(hidden), cat, visits, secs, first, last,
+            hubs=Counter({h: n for h, n in json.loads(hubs or "[]") if n > 0}),
+            hours=Counter({int(k): n for k, n in pr.get("hours", {}).items()}),
+            weekdays=Counter({int(k): n for k, n in pr.get("weekdays", {}).items()}),
+            months=Counter(pr.get("months", {})), month_secs=Counter(pr.get("msecs", {})),
+            searches=[tuple(x) for x in pr.get("searches", [])]))
+    return out
+
+
+# ---- per-day site counts (sites.load_days) ------------------------------------------------
+
+def _replace_days(con: sqlite3.Connection, days_, rows: list) -> None:
+    con.executemany("DELETE FROM site_days WHERE day = ?", [(d,) for d in days_])
+    con.executemany("INSERT OR REPLACE INTO site_days VALUES (?, ?, ?, ?, ?)", rows)
+    set_meta(con, "days_gen", int(get_meta(con, "days_gen", 0) or 0) + 1)
+
+
+def put_days(con: sqlite3.Connection, days_, rows: list) -> None:
+    """Replace the site counts of the days `days_` with `rows` [(day, key, site, lean,
+    counts)] in one transaction, and move the "days_gen" stamp."""
+    with con:
+        _replace_days(con, days_, rows)
+
+
+def migrate_days(con: sqlite3.Connection, days_, rows: list) -> bool:
+    """`put_days` of site-days.json's counts, once per store: False when another process read
+    them in first (checked again under the write lock, so its newer rows are never undone)."""
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        if get_meta(con, "days_migrated"):
+            con.rollback()
+            return False
+        _replace_days(con, days_, rows)
+        set_meta(con, "days_migrated", True)
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    return True
+
+
+def day_rows(con: sqlite3.Connection, col: str = "counts", days_=None, sites_=None) -> list:
+    """(day, key, `col`) of the stored site counts: all, of the days `days_` or of the sites
+    `sites_`."""
+    q = f"SELECT day, key, {col} FROM site_days"  # col: "counts" or "lean", never input
+    if days_ is None and sites_ is None:
+        return con.execute(q).fetchall()
+    by, vals = ("day", days_) if days_ is not None else ("site", sites_)
+    out: list = []
+    for chunk in _chunks(sorted(vals), 500):
+        out += con.execute(f"{q} WHERE {by} IN ({', '.join('?' * len(chunk))})",
+                           chunk).fetchall()
+    return out
 
 
 _SITES_CACHE: dict = {}
@@ -732,34 +904,56 @@ def forget_rows(vault: Vault, rule, gone: dict, text_sig) -> Counter:
         for (rid, day, url, title, host, site, cat, search, channel,
              excerpt) in con.execute("SELECT rowid, day, url, title, host, site, category, "
                                      "search, channel, excerpt FROM visits"):
-            path = urlsplit(url).path
-            goes = (rule.host(host) or rule.site(site, cat or "", llm)
-                    or rule.text(host, title, search or "", channel, path=path))
-            if not goes and rule.settings is not None:  # as Rule.record judges an inbox line
-                k = privacy.filter_record(url, title, settings=rule.settings, channel=channel)
-                goes = k is None
-                if k is not None and k.private and excerpt:
-                    blank.append(rid)
+            goes, k = _goes(rule, llm, url, title, host, site, cat, search, channel)
+            if k is not None and k.private and excerpt:
+                blank.append(rid)
             if goes:
                 drop.append(rid)
                 days_.add(day)
                 for t in (title, search):
                     if t:
                         gone[day].add(text_sig(t))
+        memo = []
+        for h, kept in con.execute("SELECT h, kept FROM judged"):
+            try:
+                d = json.loads(kept)
+                url, host = d["url"], d["host"]
+                goes = _goes(rule, llm, url, d["title"], host,
+                             sites.site_of(host, urlsplit(url).path), d.get("category"),
+                             d.get("search"), d.get("channel") or "")[0]
+            except (ValueError, KeyError, TypeError):  # unreadable: it goes too
+                goes = True
+            if goes:
+                memo.append((h,))
         with con:
             con.executemany("DELETE FROM visits WHERE rowid = ?", [(r,) for r in drop])
             con.executemany("UPDATE visits SET excerpt = '' WHERE rowid = ?",
                             [(r,) for r in blank])
+            con.executemany("DELETE FROM judged WHERE h = ?", memo)
             mark(con, days_)
             sites_gone = [(s, h) for s, h, cat in con.execute(
                 "SELECT site, hidden, category FROM site_pages") if rule.site(s, cat or "", llm)]
             con.executemany("DELETE FROM site_pages WHERE site = ? AND hidden = ?", sites_gone)
             c["store_sites"] = len(sites_gone)
-        if drop or blank or sites_gone:  # the old page images leave the WAL too
+        if drop or blank or memo or sites_gone:  # the old page images leave the WAL too
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         c["store_visits"] = len(drop)
         c["store_excerpts"] = len(blank)
+        c["store_memo"] = len(memo)
     return +c
+
+
+def _goes(rule, llm: dict, url: str, title: str, host: str, site: str, cat, search,
+          channel: str) -> tuple[bool, Kept | None]:
+    """`forget_rows`' test of one stored record: (it goes, the record as the rule's settings
+    keep it when it stays)."""
+    if (rule.host(host) or rule.site(site, cat or "", llm)
+            or rule.text(host, title, search or "", channel, path=urlsplit(url).path)):
+        return True, None
+    if rule.settings is None:
+        return False, None
+    k = privacy.filter_record(url, title, settings=rule.settings, channel=channel)  # as
+    return k is None, k  # Rule.record judges an inbox line
 
 
 def by_day(con: sqlite3.Connection, days_: set[str] | None = None) -> dict[str, int]:

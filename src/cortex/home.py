@@ -6,7 +6,7 @@ between requests by one HomeCache per app server and sent to the page as deltas.
 - each kind folder's *.md: each file's name, size and mtime; under browse/ its subfolders too,
   except browse/private/ (never read) and browse/sites/<category>/ (whole-vault walks skip the
   site pages);
-- catalog.yaml, inbox.md, .cortex/brain-layout.json, .cortex/vectors-v3.npz and
+- catalog.yaml, inbox.md, .cortex/brain-layout.json, .cortex/vectors.db and its -wal, and
   .cortex/recall-log.jsonl: size and mtime;
 - the browsing store, .cortex/browse/store.db and its -wal: size and mtime (the brain's stem of
   websites; `store.version`);
@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cortex import brainmap, dashboard, planner, recall_log, topics
+from cortex import brainmap, dashboard, planner, recall_log, semantic, topics
 from cortex.access import Audience, audience_of_note, audience_of_study, may_see
 from cortex.browse import store
 from cortex.catalog import CATALOG
@@ -42,7 +42,8 @@ from cortex.vault import ID_RE, PRIVATE_BROWSE_DIR, Vault, VaultError, is_privat
 log = logging.getLogger(__name__)
 
 FILES = {"catalog": CATALOG, "inbox": "inbox.md", "layout": brainmap.LAYOUT,
-         "vectors": brainmap.CACHE, "recall": recall_log.FILE}
+         "vectors": semantic.CACHE, "vectors_wal": semantic.CACHE + "-wal",  # saves land here
+         "recall": recall_log.FILE}
 WEEK_DAYS = 7  # Today plus the six days before it
 FEED_CAP = 200  # items in each of Today and This week
 PER_GROUP = 20  # items of one kind for one subject on one day (an import adds hundreds)
@@ -323,7 +324,7 @@ class HomeCache:
             parts = self._memo["parts"]
             self._data = {**data, "next_up": _next_up(data, parts, scan["day"]),
                           "exams": [a for a in data["assessments"] if a["date"]]}
-        elif any(scan[k] != old.get(k) for k in ("vectors", "layout")):
+        elif any(scan[k] != old.get(k) for k in ("vectors", "vectors_wal", "layout")):
             self._data = {**self._data, "brain": brainmap.build(
                 served, self._data["pages"], self._data["clusters"], auto_relayout=False,
                 memo=self._memo.setdefault("brain", {}))}

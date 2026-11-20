@@ -11,7 +11,6 @@ import json
 from datetime import UTC, date, datetime, timedelta
 
 import anyio
-import numpy as np
 import pytest
 from conftest import FakeEmbed, events
 from integration.builders import fake_profile_root
@@ -150,8 +149,7 @@ def outward(root, opener: Opener, outputs: list[str]) -> dict[str, str | bytes]:
     out["snapshot"] = dashboard.snapshot(Vault(root), now=datetime.now(UTC))  # Export snapshot
     a = app_server.App(root)
     out["app status"] = json.dumps([a.status(), a.browse(), a.vault()], default=str)
-    with np.load(root / semantic.CACHE, allow_pickle=False) as z:
-        out["vectors-v3"] = " ".join(str(z[k]) for k in z.files)
+    out["vectors"] = " ".join(f"{i} {e[0]}" for i, e in semantic._read(root).items())
     out["cloud input"] = opener.sent()
     out["command output"] = "\n".join(outputs)
     return out

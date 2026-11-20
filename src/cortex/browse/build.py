@@ -785,7 +785,6 @@ PHASES = ("reading browsers", "saving new visits", "checking titles", "writing d
           "updating search index")
 RESUMMARISE = 7  # days made while the local model was away, redone per run once it is here
 RENDER_VISITS = 20000  # visits whose days' pages are made together (bounds the memory)
-SAVE_S = 30.0  # the site counts are saved (and the days written marked clean) this often
 # the background import rests this long after each chunk: it runs on a thread of the app's own
 # process, so it yields rather than lowering a process priority
 PAUSE_S = 0.05
@@ -819,8 +818,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     verdicts (C1, `vet`) on the changed days' texts, in batches, when `ask` (default: visible
     to Claude and not a dry run). 4 writing day pages: every dirty day (new or changed rows, a
     forget, a verdict; all days on a settings change, from `since` on with it), newest first,
-    RENDER_VISITS visits' days at a time; each day is clean once its pages and site counts are
-    saved (every SAVE_S), so a stop goes on there next time. Memory stays bounded by those
+    RENDER_VISITS visits' days at a time; each batch's days are clean once their pages and site
+    counts are saved, so a stop goes on there next time. Memory stays bounded by those
     chunks, however long the history. 5 updating search index: the browse index, the site
     pages (`cortex.browse.sites`, only when the counts or settings changed), the state.
     `runner` (the local LLM, laptop only) writes the public pages' one-line summary from hub
@@ -872,6 +871,11 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         cursors = _read_and_save(vault, con, srcs, settings, tz, now, reset, fresh, state,
                                  takeout, report, tell, phase, progress, pause)
         part = store.partial(con)
+        # site-days.json read into the store (once): the name a torn one was set aside as
+        bad = None if dry_run else sites.days_read_in(vault)
+        # the site counts or the model's site cache changed since the last run (a forget, a
+        # deepen): every site page is made again, not only those of the days made now
+        outside = state.get("sites_stamp") != _sites_stamp(vault)
         held = store.days(con) - part if reset or since else set()  # no scan on a live run
         if reset and not vis and not dry_run and (n := _void_signals(vault)):
             report["browse_voided"] += n
@@ -887,7 +891,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
                 store.mark(con, store.unsummarised(con, RESUMMARISE))
         todo = store.dirty(con) - part
         purged = reset
-        days = bad = None
+        touched = None
         if todo:
             got = _render(vault, con, todo, settings, embed=embed, runner=runner, budget=budget,
                           tz=tz, dry_run=dry_run, ask=ask, keep_local=keep_local,
@@ -896,8 +900,8 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             if dry_run:
                 return {**report, "days_from": _monday(min(todo)), "days": got,
                         "visible_to_claude": vis, "dry_run": True}
-            days, bad, skipped = got
-            purged |= skipped
+            touched, b, skipped = got
+            bad, purged = bad or b, purged | skipped
         elif dry_run:
             return {**report, "visible_to_claude": vis, "dry_run": True}
         phase(5, 0, 1)
@@ -907,12 +911,12 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         if not report["sources_failed"]:  # the store holds what the archive held
             report["archive_pruned"] = _prune_archive(
                 vault, (now - timedelta(days=ARCHIVE_DAYS)).date().isoformat())
-        if todo or purged or state.get("sites_stamp") != _sites_stamp(vault):
+        if todo or purged or outside:
             tell("sites: making the site pages")
-            if days is None:
-                days, bad = sites.load_days(vault)
-            # every time the counts change, so a settings change reaches the site pages
-            report.update(sites.write(vault, settings, tz, say=say, days=days, bad=bad))
+            # every time the counts change, so a settings change reaches the site pages; a
+            # live read makes again only the sites of the days it made
+            report.update(sites.write(vault, settings, tz, say=say, bad=bad,
+                                      only=None if purged or outside else touched))
         if purged:
             report["refiltered_vectors"] = forget.prune_vectors(vault)["vectors"]
         vault.write_text(vault.root / STATE, json.dumps({
@@ -931,16 +935,13 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
 
 
 def _sites_stamp(vault: Vault) -> list:
-    """The site counts and the local model's site cache as they stand (size, mtime): the
-    site pages are made again only when one changed."""
-    out = []
-    for rel in (sites.DAYS, sites.CACHE):
-        try:
-            st = (vault.root / rel).stat()
-            out += [st.st_size, st.st_mtime_ns]
-        except OSError:
-            out += [0, 0]
-    return out
+    """The site counts' change count (`sites.days_gen`) and the local model's site cache
+    (size, mtime): the site pages are made again only when one changed."""
+    try:
+        st = (vault.root / sites.CACHE).stat()
+        return [sites.days_gen(vault), st.st_size, st.st_mtime_ns]
+    except OSError:
+        return [sites.days_gen(vault), 0, 0]
 
 
 def _state_row(cursor: int | None, ran: str, stat: str | None) -> dict:
@@ -1030,7 +1031,7 @@ def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetim
     report["dropped"] += c["dropped"]
     if fills:  # the first read of a vault imported before: its oldest days are partial
         expiring = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
-        part = store.first_fill_partial(fills, set(sites._load(vault, sites.DAYS)), expiring)
+        part = store.first_fill_partial(fills, sites.stored_days(vault), expiring)
         if part:
             with con:
                 store.set_meta(con, "partial", sorted(store.partial(con) | set(part)))
@@ -1105,13 +1106,13 @@ def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, run
         tell("topics: reading the topic hubs")
     hub_ids, unit, titles = (hubs(vault, embed, save=not dry_run) if embed is not None
                              else ([], None, {}))
-    days, bad = sites.load_days(vault) if not dry_run else ({}, None)
+    bad, touched = None, set()
     report["days_from"] = _monday(min(todo))  # type: ignore[assignment]
     asks = runner if summaries else None
     tell(f"topics: placing the visits of {len(todo)} days under {len(hub_ids)} topic hubs")
     if not dry_run:
         tell(f"sites: counting the visits of {len(todo)} days by site")
-    last, saved, done, written = 0.0, time.monotonic(), 0, []
+    last, done = 0.0, 0
     for b in batches:
         items, c = store.items(con, set(b), settings)
         report.update(c)
@@ -1130,15 +1131,19 @@ def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, run
                 report["public_would"] += bool(vis and _hub_rows(its, where))
                 report["empty_would"] += not its
             continue
+        # this run's days only: the sites they held or hold now are the ones made again
+        days, was = sites.load_days(vault, only_days=set(b))
+        bad = bad or was
+        touched.update(sites._key_site(k) for keys in days.values() for k in keys)
         days = sites.record(vault, items, where, settings, tz, "", set(by_day), days,
                             save=False)
+        touched.update(sites._key_site(k) for keys in days.values() for k in keys)
         if vis:
             report["signals"] += signals(vault, items, where, titles, tz, con, set(by_day))
         for day in b:  # the newest first
             for side, what in write_day(vault, day, by_day[day], where, titles, asks, budget,
                                         tz, visible=vis).items():
                 report[f"{side}_{what}"] += 1
-            written.append(day)
             if keep_local and by_day[day]:  # its local-model lines are made once it is here
                 store.mark_unsummarised(con, [day], local_only(asks) is None
                                         or (budget is not None and not budget.ok()))
@@ -1148,16 +1153,14 @@ def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, run
                 tell(f"day pages: {done} of {len(todo)} days")
                 last = time.monotonic()
         # a day is clean once its pages and its site counts are saved: a stop goes on there
-        if b is batches[-1] or time.monotonic() - saved >= SAVE_S:
-            sites.save_days(vault, days, settings)
-            store.clean(con, written)
-            saved, written = time.monotonic(), []
+        sites.save_days(vault, days, settings)
+        store.clean(con, b)
         if pause:
             time.sleep(pause)
     if dry_run:
         return len(todo)
     report.setdefault("signals", 0)
-    return days, bad, bool(skip)
+    return touched, bad, bool(skip)
 
 
 # bump when the filter's rules change, so stored browsing is re-filtered and every day the

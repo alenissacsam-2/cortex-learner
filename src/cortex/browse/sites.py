@@ -1,7 +1,8 @@
 """One page per website and the browsing profile (docs/design/browse-brain.md §3a).
 
-`record` folds a run's filtered items into per-day, per-site counts in
-`.cortex/browse/site-days.json` (the browser forgets old history; these counts do not), keyed
+`record` folds a run's filtered items into per-day, per-site counts, rows of the browsing
+store's `site_days` table (the browser forgets old history; these counts do not; the older
+`.cortex/browse/site-days.json` is read in once and kept as a backup), keyed
 `site|category|private-domain`, so who may see a site is decided when the pages are written,
 from the settings of that moment. `write` makes, through `cortex.vault` only:
 - a visible page per site, `browse/sites/<category>/browse-<site>.md`, from the items of no
@@ -11,8 +12,9 @@ from the settings of that moment. `write` makes, through `cortex.vault` only:
   visible pages only, and their private twins from every page plus the hidden categories;
 - with `browse.visible_to_claude: false` every page is a hidden one.
 Once `cortex.browse.store.migrate` moved the site pages out of the vault, `write` saves them as
-rows in the browsing store instead (`store.site_rows` reads them) and makes only the CSVs and
-the profiles, whose site lines then carry no link.
+rows in the browsing store instead (`store.site_rows` reads them), a live read only the rows
+of the sites its days hold, and makes only the CSVs and the profiles (from the rows), whose
+site lines then carry no link.
 A visible file never holds a host, title, search term, count or link that came from a hidden
 item: led-by searches and co-visited sites are filtered by the same rule. Ids carry the
 `browse-` prefix (ids are unique across kinds). Unchanged pages are never rewritten (a content
@@ -33,6 +35,7 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import cached_property
@@ -51,7 +54,7 @@ HIDDEN = DIR + "/private"  # never read by the index, the dashboard or any chat
 CACHE = ".cortex/browse/sites.json"  # the local LLM's output and the page hashes
 # a description made with an older prompt is made again on the next deepen
 DESC_PROMPT = 2
-DAYS = ".cortex/browse/site-days.json"  # per day and site key: the counts pages are made of
+DAYS = ".cortex/browse/site-days.json"  # the counts before the store: read in once, a backup
 VERDICTS = ".cortex/browse/verdicts.json"  # C1: the local model's label per text hash
 SITES_DIR, HIDDEN_SITES_DIR = DIR + "/sites", HIDDEN + "/sites"
 INDEX_ID, HIDDEN_INDEX_ID = "browse-sites", "browse-private-sites"
@@ -71,6 +74,7 @@ _IP = re.compile(r"^[0-9.]+$|:")
 LOCK = ".cortex/browse/lock"
 BUSY = "Browsing is being processed; try again in a minute."
 WAIT_S = 60.0  # an import or deepen pass waits this long for another to finish
+VECTOR_BUDGET_S = 120.0  # a background run's private-search embedding; the next run goes on
 
 
 def busy(vault: Vault, wait: float | None = None):
@@ -178,9 +182,111 @@ def _save(vault: Vault, rel: str, data: dict) -> None:
         vault.write_text(p, text)
 
 
-def load_days(vault: Vault) -> tuple[dict, str | None]:
-    """The per-day counts, and the name an unreadable file was set aside as (R2-7): a torn
-    file is never read as empty, since it holds the days the browsers forgot."""
+def load_days(vault: Vault, only_days: set[str] | None = None,
+              only_sites: set[str] | None = None) -> tuple[dict, str | None]:
+    """The per-day counts {day: {key: counts}}: all of them, those of the days `only_days` or
+    of the sites `only_sites`; and the name a torn site-days.json was set aside as by this
+    call (R2-7, when it was read into the store)."""
+    con, bad = _days_store(vault)
+    if con is None:  # a vault imported before the store: the file as it is
+        days, bad = _json_days(vault)
+        return {d: {k: a for k, a in keys.items()
+                    if only_sites is None or _key_site(k) in only_sites}
+                for d, keys in days.items() if only_days is None or d in only_days}, bad
+    from cortex.browse import store
+
+    with closing(con):
+        rows = store.day_rows(con, "counts", only_days, only_sites)
+    out: dict = {}
+    for d, k, c in rows:
+        out.setdefault(d, {})[k] = json.loads(c)
+    return out, bad
+
+
+def days_read_in(vault: Vault) -> str | None:
+    """Make the store and read site-days.json into it, if not done yet (an import does this
+    first); the name a torn file was set aside as by this call."""
+    con, bad = _days_store(vault, create=True)
+    con.close()
+    return bad
+
+
+def stored_days(vault: Vault) -> set[str]:
+    """Every day the site counts hold."""
+    con, _ = _days_store(vault)
+    if con is None:
+        return set(_json_days(vault)[0])
+    with closing(con):
+        return {d for (d,) in con.execute("SELECT DISTINCT day FROM site_days")}
+
+
+def days_gen(vault: Vault) -> int:
+    """A count that moves whenever the stored site counts change; 0 without a store."""
+    from cortex.browse import store
+
+    con, _ = _days_store(vault)
+    if con is None:
+        return 0
+    with closing(con):
+        return int(store.get_meta(con, "days_gen", 0) or 0)
+
+
+def _days_store(vault: Vault, create: bool = False):
+    """(the browsing store, the name a torn site-days.json was set aside as): the file's
+    counts are read into the store once and the file stays as a backup, never read again.
+    (None, None) when there is no store and `create` is False."""
+    from cortex.browse import store
+
+    if not create and not store.exists(vault):
+        return None, None
+    con = store.connect(vault)
+    try:
+        bad = None
+        if not store.get_meta(con, "days_migrated"):
+            days, bad = _json_days(vault)  # before the store's write lock: a big file is slow
+            store.migrate_days(con, days, _rows(days))
+    except BaseException:
+        con.close()
+        raise
+    return con, bad
+
+
+def _key_site(key: str) -> str:
+    return key.rsplit("|", 2)[0]
+
+
+def _lean(a: dict) -> dict:
+    """What `lean_days` keeps of a key's counts: its visits, visits per browser ("w") and its
+    page URLs' hosts ("h", in place of the page map "p": all `_sides` reads of it)."""
+    return {**{f: a[f] for f in ("n", "w") if f in a},
+            **({"h": sorted({url_host(u) for u in _urls(a["p"])})} if a.get("p") else {})}
+
+
+def _rows(days: dict) -> list:
+    """The store rows (day, key, site, lean, counts) of `days`; a malformed day or entry is
+    left out (`record` drops it too)."""
+    def dump(x):
+        return json.dumps(x, ensure_ascii=False, separators=(",", ":"))
+    return [(d, k, _key_site(k), dump(_lean(a)), dump(a))
+            for d, keys in days.items() if isinstance(keys, dict)
+            for k, a in keys.items() if isinstance(k, str) and isinstance(a, dict)]
+
+
+def _put_days(vault: Vault, days: dict, checkpoint: bool = False) -> None:
+    """Replace the stored counts of every day in `days` (an empty day's go). `checkpoint`
+    (a forget): the old rows' page images leave the WAL too."""
+    from cortex.browse import store
+
+    con, _ = _days_store(vault, create=True)
+    with closing(con):
+        store.put_days(con, days, _rows(days))
+        if checkpoint:
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def _json_days(vault: Vault) -> tuple[dict, str | None]:
+    """site-days.json's counts, and the name an unreadable file was set aside as (R2-7): a
+    torn file is never read as empty, since it holds the days the browsers forgot."""
     p = vault.root / DAYS
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -200,7 +306,7 @@ def load_days(vault: Vault) -> tuple[dict, str | None]:
     return {}, bad
 
 
-_LEAN: dict = {}  # DAYS path -> ((mtime_ns, size), its lean counts)
+_LEAN: dict = {}  # vault root -> (the counts' version, their lean counts)
 _HOSTS: dict[tuple, str] = {}  # a URL's text up to its third "/" -> url_host; ~one per host
 
 
@@ -221,24 +327,33 @@ def _urls(p) -> list:
 
 def lean_days(vault: Vault) -> dict:
     """{day: {key: {"n", "w", "h"}}}: `load_days` with only the visit and browser counts and
-    the page URLs' hosts ("h", in place of the page map "p": all `_sides` reads of it), parsed
-    once per version of the file and shared, so callers must not change it. Chat's answers
-    read this: a heavy user's file took seconds to parse, its page maps most of it."""
-    p = vault.root / DAYS
-    try:
-        st = p.stat()  # before the read: a change after it misses the cache next time
-    except OSError:
-        return {}
-    stamp = (st.st_mtime_ns, st.st_size)
-    hit = _LEAN.get(p)
+    the page URLs' hosts ("h", in place of the page map "p": all `_sides` reads of it), read
+    once per version of the store (the store's own column: the page maps are never parsed)
+    and shared, so callers must not change it. Chat's answers read this."""
+    from cortex.browse import store
+
+    # the version before the read: a change after it misses the cache next time
+    if store.exists(vault):
+        stamp = store.version(vault)
+    else:  # a vault imported before the store
+        try:
+            st = (vault.root / DAYS).stat()
+        except OSError:
+            return {}
+        stamp = (st.st_mtime_ns, st.st_size)
+    hit = _LEAN.get(vault.root)
     if hit is None or hit[0] != stamp:
-        days = load_days(vault)[0]
-        hit = _LEAN[p] = (stamp, {
-            day: {k: {**{f: a[f] for f in ("n", "w") if f in a},
-                      **({"h": tuple({url_host(u) for u in _urls(a["p"])})}
-                         if a.get("p") else {})}
-                  for k, a in keys.items() if isinstance(a, dict)}
-            for day, keys in days.items() if isinstance(keys, dict)})
+        con, _ = _days_store(vault)
+        lean: dict = {}
+        if con is None:
+            for day, keys in _json_days(vault)[0].items():
+                if isinstance(keys, dict):
+                    lean[day] = {k: _lean(a) for k, a in keys.items() if isinstance(a, dict)}
+        else:
+            with closing(con):
+                for d, k, a in store.day_rows(con, "lean"):
+                    lean.setdefault(d, {})[k] = json.loads(a)
+        hit = _LEAN[vault.root] = (stamp, lean)
     return hit[1]
 
 
@@ -265,12 +380,13 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
     """Replace the counts of every day from `start` on that a source still holds (`held`;
     None: every day) with those of `items`; a day no source holds (forgotten by the browser,
     or from Takeout only) keeps its counts, and save (`save_days`; with `save` False the
-    caller does). `days`: the counts already loaded (`load_days`). Returns the per-day
-    counts."""
+    caller does). `days`: the counts already loaded (`load_days`; the days it may replace are
+    enough). Returns the per-day counts; a day replaced stays in them, empty when nothing is
+    left of it (so saving them drops its stored counts)."""
     days = load_days(vault)[0] if days is None else days
     for d in list(days):
         if not isinstance(days[d], dict) or (d >= start and (held is None or d in held)):
-            del days[d]
+            days[d] = {}
     last: tuple | None = None  # the last search: (time, term, key)
     sessions: dict[str, list[list[str]]] = defaultdict(list)
     end = None
@@ -326,12 +442,13 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
 
 
 def save_days(vault: Vault, days: dict, settings: Settings) -> None:
-    """Save the per-day counts, without any key of a category now in skip_categories."""
+    """Save the counts of every day in `days`, each replacing that day's stored ones (an empty
+    day's go), without any key of a category now in skip_categories."""
     skip = set(settings.skip_categories)
     for d in days.values():
         for key in [k for k in d if _split(k)[1] in skip]:
             del d[key]
-    _save(vault, DAYS, days)
+    _put_days(vault, days)
 
 
 # ---- the pages ----------------------------------------------------------------------------
@@ -726,29 +843,41 @@ PROGRESS_S = 5.0  # a longer write says how far it got (counts only)
 
 
 def write(vault: Vault, settings: Settings, tz=None, *, say=None, days: dict | None = None,
-          bad: str | None = None) -> dict:
+          bad: str | None = None, only: set[str] | None = None) -> dict:
     """Write every site page, the indexes, CSVs and profiles that changed, and remove the ones
     no longer made (a site that moved category or side), never a file this module did not
     make. `bad`: the name an unreadable site-days.json was set aside as this run
-    (`load_days`); then nothing is removed. Counts only."""
-    from contextlib import closing
-
+    (`load_days`); then nothing is removed. `only` (a live read: the sites of the days it
+    made again): once the site pages are store rows, only those sites' rows are made again,
+    and the CSVs and profiles are made from the rows. Counts only."""
     from cortex.browse import store
 
     say = say or (lambda s: None)
+    md = not store.migrated(vault)  # else the site pages are the store's rows
+    if only is not None and not md:
+        with closing(store.connect(vault)) as con:
+            only = None if store.unprofiled(con) else only  # rows from before `prof`: all
+    # shortcut: the Markdown site pages (a vault not migrated) are all made every time; the
+    # app migrates first, so only an old CLI-only vault pays that
+    only = None if md else only
     if days is None:
-        days, bad = load_days(vault)
+        days, b = load_days(vault, only_sites=only)
+        bad = bad or b
     cache = load_cache(vault)
     say("sites: making the site pages")
     allp = pages(vault, settings, days, cache["llm"])
-    vis = [p for p in allp.values() if not p.hidden]
     files: dict[str, str] = {}
     ids = {p.id: p for p in allp.values()}
-    md = not store.migrated(vault)  # else the site pages are the store's rows
     for p in allp.values() if md else ():
         rel, text = _page_text(p, ids, cache["llm"], tz)
         files[rel] = text
     every = list(allp.values())
+    if not md:
+        with closing(store.connect(vault)) as con:
+            if not bad:  # with the counts set aside (a torn file) the rows stay as they are
+                store.put_pages(con, allp, cache["llm"], only)
+            every = store.pages_for_lists(con)
+    vis = [p for p in every if not p.hidden]
     if vis:
         if md:
             files[f"{SITES_DIR}/{INDEX_ID}.md"] = _index_text(vis, False)
@@ -759,9 +888,6 @@ def write(vault: Vault, settings: Settings, tz=None, *, say=None, days: dict | N
             files[f"{HIDDEN_SITES_DIR}/{HIDDEN_INDEX_ID}.md"] = _index_text(every, True)
         files[HIDDEN_CSV] = _csv(every, tz, True)
         files[f"{HIDDEN}/{HIDDEN_PROFILE_ID}.md"] = _profile_text(every, True, settings, md)
-    if not md and not bad:  # with the counts set aside (a torn file) the rows stay as they are
-        with closing(store.connect(vault)) as con:
-            store.put_pages(con, allp, cache["llm"])
     old: dict = cache["hashes"]
     new: dict[str, str] = {}
     c: Counter = Counter()
@@ -956,14 +1082,21 @@ def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=Non
             **{f"purged_{k}": n for k, n in gone.items()}}
 
 
-def update_vectors(vault: Vault, say=None) -> dict | None:
+def update_vectors(vault: Vault, say=None, background: bool = False) -> dict | None:
     """The private browse vectors (cortex.browse.vectors), brought up to date; a failure is
-    reported by type, never raised (the pages are already written)."""
+    reported by type, never raised (the pages are already written). `background` (the
+    receiver's and the app's runs): only while the PC is idle, for at most VECTOR_BUDGET_S,
+    stopping when the owner is back; the next run goes on."""
     say = say or (lambda s: None)
     try:
-        from cortex.browse import vectors
+        from cortex.browse import titles, vectors
 
-        return vectors.update(vault, progress=say)
+        if not background:
+            return vectors.update(vault, progress=say)
+        if not titles.idle():
+            say("private search: left for when the PC is idle")
+            return None
+        return vectors.update(vault, progress=say, budget=VECTOR_BUDGET_S, gate=titles.idle)
     except Exception as e:
         say("private browse search not updated: "
             + (str(e) if isinstance(e, VaultError) else type(e).__name__))
