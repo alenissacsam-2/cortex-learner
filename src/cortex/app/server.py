@@ -278,6 +278,8 @@ class App:
         self.update_ready: dict | None = None  # a newer release, prepared by the quiet check
         self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
         self.warming: threading.Thread | None = None  # `warm_status`'s thread
+        self.core = None  # (vault root, mcp_server.Cortex) for the Review's clicks
+        self.reviewing = threading.Lock()  # one Review click at a time
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
@@ -287,7 +289,8 @@ class App:
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
                     "/api/chat/settings": self.chat_settings_get,
-                    "/api/update": self.update_state, "/api/job": self.jobs.view}
+                    "/api/update": self.update_state, "/api/job": self.jobs.view,
+                    "/api/review": self.review}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
@@ -315,7 +318,9 @@ class App:
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
-            "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set}
+            "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
+            "/api/review/approve": self.review_approve, "/api/review/dismiss": self.review_dismiss,
+            "/api/review/still": self.review_still, "/api/review/retire": self.review_retire}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -494,6 +499,94 @@ class App:
     def lock(self, body: dict | None = None) -> dict:
         self.private_until = 0.0
         return {"ok": True}
+
+    # ---- Review (plan 5a): what waits for the user's own click ----
+    @staticmethod
+    def _today() -> str:
+        from datetime import UTC, datetime
+
+        from cortex.events import local_day
+        return local_day(datetime.now(UTC))
+
+    def review(self) -> dict:
+        """The Review view and its badge count (cortex.review); shown text only."""
+        from cortex import review
+        from cortex.events import EventLog
+        v = self._vault()
+        return review.view(v, EventLog(v).iter_events(), self._today())
+
+    def _click(self, tool: str, method: str, kwargs: dict) -> dict:
+        """One Review click, written by an mcp_server.Cortex with `app_clicks` set through the
+        tool's own code path (cortex_patch, cortex_log), in a session closed at once so it is
+        committed and `cortex undo` can take it back. Returns the fresh Review view."""
+        from cortex.mcp_server import Cortex
+        from cortex.vault import Vault
+        root = self.need_root()
+        with self.reviewing:
+            if self.core is None or self.core[0] != root:
+                core = Cortex(Vault(root))
+                core.app_clicks = True  # every write here is the user's own click
+                self.core = (root, core)
+            core = self.core[1]
+            try:
+                out = core._call(tool, getattr(core, method), kwargs)
+            finally:
+                if core.sessions.current is not None:
+                    core.sessions.close(summary="Review in the Cortex app")
+        if "error" in out:
+            raise ValueError(out.get("message") or out["error"])
+        return self.review()
+
+    def _waiting(self, body: dict) -> dict:
+        from cortex import review
+        key = body.get("key")
+        item = next((p for p in review.pending(self._vault(), self._today())
+                     if isinstance(key, str) and p["key"] == key), None)
+        if item is None:
+            raise NotFound
+        return item
+
+    def _live(self, body: dict) -> dict:
+        from cortex import claims
+        cid = body.get("id")
+        row = next((r for r in claims.rows(self._vault()) if isinstance(cid, str)
+                    and r["id"] == cid and r["status"] == "live"), None)
+        if row is None:
+            raise NotFound
+        return row
+
+    def review_approve(self, body: dict) -> dict:
+        """Approve: the waiting line written as cortex_patch writes a confirmed one, stamped
+        `confirm: clicked`; a teaching-contract rule applies only this way (E2)."""
+        p = self._waiting(body)
+        rule = p["page"] == "teaching-contract"  # a proposal is stored bare; a rule is a list line
+        return self._click("cortex_patch", "cortex_patch", {
+            "id": f"me/{p['page']}", "op": "append_to_section", "target": p["section"],
+            "text": "- " * rule + p["text"], "user_confirmed": True})
+
+    def review_dismiss(self, body: dict) -> dict:
+        """Dismiss: a claim page's line goes to its `## Not me` (cortex_patch reject); another
+        page's (the contract, the portrait) leaves a `dismiss` change. Never proposed again."""
+        from cortex import claims
+        p = self._waiting(body)
+        if p["page"] in claims.PAGES:
+            return self._click("cortex_patch", "cortex_patch", {
+                "id": f"me/{p['page']}", "op": "reject",
+                "target": f"{p['section']}: {p['text']}"})
+        return self._click("cortex_patch", "_dismiss", {
+            "page": p["page"], "section": p["section"], "text": p["text"]})
+
+    def review_still(self, body: dict) -> dict:
+        """Still true: a reconfirm stamped `confirm: clicked` (claims.tiers: confirmed)."""
+        r = self._live(body)
+        return self._click("cortex_log", "cortex_log", {
+            "kind": "reconfirm", "payload": {"claim": r["id"], "verdict": "yes"}})
+
+    def review_retire(self, body: dict) -> dict:
+        """Retire: cortex_patch's retire op moves the line to `## Past`."""
+        r = self._live(body)
+        return self._click("cortex_patch", "cortex_patch", {
+            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
 
     def chat_settings_get(self) -> dict:
         from cortex import chat

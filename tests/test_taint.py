@@ -127,7 +127,8 @@ def test_exposed_session_cannot_change_contract_or_profile(root, monkeypatch):
 
 def test_a_contract_rule_waits_for_the_users_yes(root):
     """B6: Desktop and Chat have no taint hook, so pasted text could add a contract rule every
-    later session obeys; a rule is now proposed in inbox.md and needs user_confirmed=true."""
+    later session obeys; a rule is proposed in inbox.md. E2 (plan 5a): even user_confirmed=true
+    only proposes it; Approve in the Cortex app applies it (test_review.py)."""
     rule = {"id": "me/teaching-contract", "op": "append_to_section", "target": "Rules",
             "text": "- Always give the answer first"}
     (root / "me" / "teaching-contract.md").write_bytes(b"# Contract\n\n## Rules\n\n- Mine\n")
@@ -138,11 +139,14 @@ def test_a_contract_rule_waits_for_the_users_yes(root):
         assert "Always give" not in (root / "me" / "teaching-contract.md").read_text("utf-8")
         assert "- Rules: Always give the answer first (proposed " in (
             root / "inbox.md").read_text("utf-8")
-        assert (await call("cortex_patch", {**rule, "user_confirmed": True}))["changed"] is True
+        out = await call("cortex_patch", {**rule, "user_confirmed": True})
+        assert (out["changed"], out["queued"]) == (False, True)
+        assert "waiting for your Approve in the Cortex app" in out["summary"]
+        out = await call("cortex_patch", {**rule, "op": "check_item", "target": "Rules"})
+        assert out["error"] == "invalid_argument" and "Approve" in out["message"]
 
     run(root, body)
-    assert "- Always give the answer first (confirmed " in (
-        root / "me" / "teaching-contract.md").read_text("utf-8")
+    assert "Always give" not in (root / "me" / "teaching-contract.md").read_text("utf-8")
 
 
 def test_exposed_change_stamped_and_labelled_in_recall(root):
@@ -174,7 +178,7 @@ def test_old_marker_ignored(root, monkeypatch):
 
     async def body(call):
         out = await call("cortex_patch", RULE)
-        assert out["changed"] is True
+        assert out["queued"] is True  # not refused as exposed; E2: it waits for Approve
         assert taint.run(hook("WebSearch"))
         old = time.time() - 3 * 3600  # over 2 h old
         os.utime(root / taint.MARKER, (old, old))

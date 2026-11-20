@@ -24,7 +24,8 @@ PORTRAIT_DAYS = 30
 PORTRAIT_SAMPLE = 10
 PORTRAIT_MIN_LINES = 5  # journal lines in the window not written by a session close
 _CONFIRMED = re.compile(r"\(confirmed (\d{4}-\d{2}-\d{2})\)")
-_PROPOSED = re.compile(r"\s*\(proposed (\d{4}-\d{2}-\d{2})\)\s*$")
+# `(proposed DAY)`, since plan 5a `(proposed DAY, me/<page>)`: the page the app's Approve writes
+_PROPOSED = re.compile(r"\s*\(proposed (\d{4}-\d{2}-\d{2})(?:, me/([a-z-]+))?\)\s*$")
 UNCONFIRMED_DAYS = 60
 
 

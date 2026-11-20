@@ -34,6 +34,7 @@ from cortex import (
     planner,
     prime,
     render,
+    review,
     share,
     voice,
 )
@@ -435,6 +436,9 @@ class Cortex:
         self.vault = vault
         self.role = role
         self.excluded: str | None = None  # build_server(): an `exclude:` folder; every tool refused
+        # plan 5a: set only by the Cortex app (app/server.py), whose every write is the user's own
+        # click (Approve, Dismiss, Still true, Retire); never set from tool input
+        self.app_clicks = False
         self.sessions = session_mod.SessionManager(vault)
         self.session: session_mod.Session | None = None
         self.log = self.sessions.log
@@ -1852,7 +1856,10 @@ class Cortex:
                    and not self.session.exposed)
         self._append("log", {"payload": {"kind": "reconfirm", "claim": cid,
                                          "verdict": p["verdict"],
-                                         **({"promote": True} if promote else {})}}, key)
+                                         **({"promote": True} if promote else {}),
+                                         # plan 5a: Still true in the Cortex app
+                                         **({"confirm": "clicked"} if self.app_clicks
+                                            else {})}}, key)
         return f"Still true: {p['verdict']} (^{cid})"
 
     def _log_spot_check(self, p: dict, key: str | None) -> str:
@@ -2216,12 +2223,18 @@ class Cortex:
                 and nid in claims.PAGES and not text.lstrip().startswith(("- ", "#"))):
             text = "- " + text.strip()  # a bare line would be no claim at all
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
-        if kind == "me" and self.session.exposed and op in (
+        if kind == "me" and self.session.exposed and not self.app_clicks and op in (
                 "append_to_section", "revise", "retire") and nid in (
                 "teaching-contract", "profile"):  # B3: no me/ page takes set_field
             raise VaultError("refused_exposed", "This chat has read outside text (a source, a raw "
                              f"file or a past chat), so it cannot change me/{nid}.md.")
         claim_page = kind == "me" and nid in claims.PAGES
+        contract = kind == "me" and nid == "teaching-contract"
+        if contract and not self.app_clicks:  # E2: only Approve in the Cortex app applies a rule
+            if op != "append_to_section":
+                raise invalid("The teaching contract changes only by Approve in the Cortex app: "
+                              "propose a rule with op=append_to_section; it waits there.")
+            user_confirmed = False  # a yes relayed by the model is not the user's click
         harvesting = self.sessions.harvesting
         if harvesting:
             self._harvest_patch(kind, nid, op, target, text, claim_page, user_confirmed)
@@ -2245,15 +2258,27 @@ class Cortex:
                 return {"changed": False, "queued": False,
                         "summary": f"not proposed: me/{nid} lists it under ## Not me",
                         "next": "The user said this is not them; do not propose it again."}
+            if not claim_page and review.dismissed(self.log.iter_events(), nid, text):
+                return {"changed": False, "queued": False,
+                        "summary": f"not proposed: the user dismissed it for me/{nid} in the "
+                                   "Cortex app",
+                        "next": "The user dismissed this line; do not propose it again."}
             if harvesting and self._about_me_budget() <= 0:
                 return {"changed": False, "queued": False,
                         "summary": "not proposed: the harvest's about-me budget is used up",
                         "next": "Ask the user about the waiting lines now (a yes/no card), or "
                                 "leave them for /cortex reflect; go on without about-me lines."}
-            self._propose(f"- {target}: {text} (proposed {day})")
+            self._propose(f"- {target}: {text} (proposed {day}, me/{nid})")  # the page: Approve
             self.proposed.append(render.plain(f"{target}: {text}", 200))  # as unconfirmed()
             hint = self.sessions.note("patched", change={
                 "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target})
+            if contract:
+                return {"changed": False, "queued": True,
+                        "summary": "proposed for me teaching-contract; waiting for your Approve "
+                                   "in the Cortex app",
+                        "next": "Tell the user the rule is waiting for their Approve in the "
+                                "Cortex app (Review); it does not apply until then, and "
+                                "repeating the patch does not apply it." + hint}
             return {"changed": False, "queued": True,
                     "summary": f"proposed for {kind} {nid}; awaits the user's OK",
                     "next": "Saved to inbox.md as unconfirmed. Ask the user; if they agree, "
@@ -2264,23 +2289,20 @@ class Cortex:
                 self._portrait_section(target)
             elif nid == "voice":
                 self._voice_section(target)
-            elif claim_page:  # a proposal may have named a section the page lacks
+            elif claim_page or contract:  # a proposal may have named a section the page lacks
                 self._ensure_section(nid, target)
         claim = None
         if op == "append_to_section" and claim_page:
             with self.vault.lock():  # ids must not clash with a line written meanwhile
                 text, ids = claims.add_ids(nid, self._raw(f"me/{nid}.md"), text, day)
                 self.vault.append_to_section(kind, nid, target, text)
-                if user_confirmed:  # the confirmed line no longer waits in the inbox
-                    try:
-                        inbox, _ = claims.unpropose(self._raw("inbox.md"), text)
-                    except VaultError:
-                        pass  # it was never proposed
-                    else:
-                        self.vault.write_text(self.vault.root / "inbox.md", inbox)
+                if user_confirmed:
+                    self._unpropose(text)
             claim = (ids[0] if len(ids) == 1 else ids) or None
         elif op == "append_to_section":
             self.vault.append_to_section(kind, nid, target, text)
+            if self.app_clicks and kind == "me" and nid in CONFIRM_PAGES:
+                self._unpropose(text)  # Approve: the line no longer waits in the Review
         elif op == "set_topics":  # REVIEW-1005 §5.4: the one write path for a page's topics
             from cortex import topics
 
@@ -2301,6 +2323,8 @@ class Cortex:
         change = {"tool": "patch", "id": nid, "kind": kind, "op": op, "target": target}
         if claim:
             change.update(claim=claim, **self._tier(user_confirmed, said == "yes"))
+        if self.app_clicks:
+            change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
         return {"changed": changed, **({"claim": claim} if claim else {}),
                 "summary": f"{op} {target!r} on {kind} {nid}",
@@ -2308,11 +2332,37 @@ class Cortex:
 
     def _tier(self, confirmed: bool, clicked: bool = False) -> dict[str, str]:
         """v5 F3: the server-computed authorship tier of a claim this session writes; with a yes,
-        idea 11's `confirm`: `clicked` in Cortex's own dialog, else `relayed` by the model."""
-        out = {"tier": "exposed" if self.session.exposed else "confirmed" if confirmed else "agent"}
+        idea 11's `confirm`: `clicked` in Cortex's own dialog or the Cortex app, else `relayed`
+        by the model. An app click has no model in between, so no exposure either (plan 5a)."""
+        app = self.app_clicks
+        out = {"tier": "exposed" if self.session.exposed and not app
+               else "confirmed" if confirmed else "agent"}
         if confirmed:
-            out["confirm"] = "clicked" if clicked else "relayed"
+            out["confirm"] = "clicked" if clicked or app else "relayed"
         return out
+
+    def _unpropose(self, text: str) -> None:
+        """A confirmed line no longer waits under `## About me (unconfirmed)` in inbox.md."""
+        with self.vault.lock():  # reentrant
+            try:
+                inbox, _ = claims.unpropose(self._raw("inbox.md"), text)
+            except VaultError:
+                return  # it was never proposed
+            self.vault.write_text(self.vault.root / "inbox.md", inbox)
+
+    def _dismiss(self, page: str, section: str, text: str) -> dict[str, Any]:
+        """Plan 5a, the app's Dismiss on a page with no `## Not me` (the contract, the
+        portrait): the waiting line leaves inbox.md and a `dismiss` change (its text's hash,
+        never the text) keeps it from being proposed again (`review.dismissed`)."""
+        if not self.app_clicks:
+            raise invalid("Dismiss is the Cortex app's own action.")
+        with self.vault.lock():
+            inbox, _ = claims.unpropose(self._raw("inbox.md"), f"{section}: {text}")
+            self.vault.write_text(self.vault.root / "inbox.md", inbox)
+        self.sessions.note("patched", change={
+            "tool": "dismiss", "id": page, "kind": "me", "op": "dismiss", "target": section,
+            "hash": review.text_hash(text), "confirm": "clicked"})
+        return {"changed": True, "summary": f"dismissed a proposed line for me {page}"}
 
     def _claim_op(self, nid: str, op: str, target: str, text: str,
                   confirmed: bool, until: str | None = None,
@@ -2356,6 +2406,8 @@ class Cortex:
         change = {"tool": "patch", "id": nid, "kind": "me", "op": op, "target": target}
         if claim:
             change.update(claim=claim, **self._tier(confirmed, clicked))
+        if self.app_clicks:
+            change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change)
         return {"changed": True, **({"claim": claim} if claim else {}),
                 "summary": f"{op} {target!r} on me {nid}", "next": self._next(MORE_NEXT) + hint}
@@ -2726,10 +2778,10 @@ DESCRIPTIONS = {
     "cortex_patch": "Edit a note (any, including me/*): append under a heading, set a "
                     "whitelisted field, or tick a checklist item in a section. me/personality and "
                     "me/preferences, me/portrait, me/voice (one ## <audience> section each, "
-                    "plus ## Everyone), me/teaching-contract: user_confirmed=true only after "
-                    "the user agrees; "
-                    "otherwise "
-                    "the line waits in inbox.md. op=set_topics (resource or note): text = 0-4 "
+                    "plus ## Everyone): user_confirmed=true only after the user agrees; "
+                    "otherwise the line waits in inbox.md. me/teaching-contract: a rule always "
+                    "waits for the user's Approve in the Cortex app, even with "
+                    "user_confirmed=true. op=set_topics (resource or note): text = 0-4 "
                     "topic hub ids, comma-separated, replacing the page's topics; target is "
                     "ignored.",
     "cortex_add": "Create a domain, area, concept, problem, assessment, application, mistake, "

@@ -833,7 +833,7 @@ def test_patch_personality_confirm_rule(root):
     inbox = (root / "inbox.md").read_text(encoding="utf-8")
     assert inbox.count("## About me (unconfirmed)") == 1
     assert "Curious" not in inbox  # confirmed, so it no longer waits there
-    assert f"- Coding: Vim (proposed {day})\n" in inbox
+    assert f"- Coding: Vim (proposed {day}, me/preferences)\n" in inbox
     assert "- [ ] Foo (2026-01-01)" in inbox
 
 
