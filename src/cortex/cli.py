@@ -445,7 +445,7 @@ def doctor(vault: VaultOpt = None) -> None:
                     doctor_mod.check_git_identity(root), doctor_mod.check_id_clashes(root),
                     doctor_mod.check_contract_size(root), doctor_mod.check_claims(root),
                     doctor_mod.check_kill(root), doctor_mod.check_me_pages(root),
-                    doctor_mod.check_private_browse_git(root)]
+                    doctor_mod.check_private_browse_git(root), *doctor_mod.check_clients(root)]
     except VaultError as e:
         results.append(("FAIL", "Vault", str(e), "Open Cortex from the Start menu and set "
                         "up a vault under Setup." if doctor_mod.installer() else

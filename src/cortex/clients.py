@@ -14,15 +14,20 @@ CONFIG = "claude_desktop_config.json"
 def claude_desktop_config_paths(platform: str | None = None) -> list[Path]:
     """Candidate config files, in probe order, for each Claude folder that exists.
 
-    Windows has three layouts (classic, per-profile Claude-Data, the Store/MSIX virtualised
-    folder); sources disagree on which one the app reads, so callers see them all."""
+    Windows has three layouts (per-profile Claude-Data, classic, the Store/MSIX virtualised
+    folder); callers see them all. The Store app reads its Claude-Data profile (`claude_<id>`,
+    with or without a config yet), so that comes first: a first setup with no config file
+    anywhere writes there, not to the classic folder the Store app left behind."""
     platform = platform or sys.platform
     out: list[Path] = []
     if platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            out += sorted(d / CONFIG for d in Path(local, "Claude-Data").glob("*/")
+                          if (d / CONFIG).is_file() or d.name.lower().startswith("claude_"))
         if roaming := os.environ.get("APPDATA"):
             out.append(Path(roaming, "Claude", CONFIG))
-        if local := os.environ.get("LOCALAPPDATA"):
-            out += sorted(Path(local, "Claude-Data").glob(f"*/{CONFIG}"))
+        if local:
             out += sorted(p / CONFIG for p in Path(local, "Packages").glob(
                 "Claude_*/LocalCache/Roaming/Claude"))
     elif platform == "darwin":

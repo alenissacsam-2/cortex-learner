@@ -1,9 +1,11 @@
 """Automatic chat import (the app every EVERY_S, `cortex import-chats --auto`): one chat page
 per past conversation, written with no model.
 
-Claude Code transcripts (chats.root()) and imported chat exports (chats.export_root()) not saved
-yet, or changed since their page was written, become `resource` pages whose `Timeline:` line
-names their `Source:` app (semantic.is_chat). An ordinary chat keeps the user's own turns only,
+Claude Code transcripts (chats.root(), the desktop app's Code tab included, and its Cowork
+sessions: chats.cowork_files()), imported chat exports (chats.export_root()) and the chats a
+Claude app logged live over MCP (chats.LIVE) not saved yet, or changed since their page was
+written, become `resource` pages whose `Timeline:` line names their `Source:` app
+(semantic.is_chat). An ordinary chat keeps the user's own turns only,
 redacted and capped (chats.LINE_CHARS a turn, chats.PART_CHARS a page); assistant text is never
 copied. A coding session (Edit, Write, NotebookEdit or Bash calls) becomes a short summary:
 project, dates, the user's requests (first lines), files touched (relative paths) and commit
@@ -62,7 +64,7 @@ FIRST_S, EVERY_S = 60, 300  # the app's first pass a minute after start, then ev
 STATE, LOCK = ".cortex/chat-import.sqlite", ".cortex/chat-import.lock"
 BUSY = "A chat import is already running."
 LABELS = {"claude-code": "Claude Code", "claude-chat": "Claude", "chatgpt": "ChatGPT",
-          "gemini": "Gemini", "perplexity": "Perplexity"}
+          "gemini": "Gemini", "perplexity": "Perplexity", chats.LIVE: "Claude"}
 MINE = "My turns only"  # on the Timeline line: harvest.user_turns ends a turn at `### `
 CODING = {"Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"}
 REQUESTS, FILES, COMMITS, TITLE_CHARS = 12, 30, 20, 80
@@ -92,9 +94,11 @@ def enabled() -> bool:
 # ---- which transcripts ------------------------------------------------------------------------
 
 def _transcripts():
-    """(source, path) of every Claude Code transcript and imported export conversation."""
+    """(source, path) of every Claude Code transcript (Cowork's run Claude Code too), imported
+    export conversation and live-logged chat."""
     yield from (("claude-code", p) for p in chats.root().glob("*/*.jsonl"))
-    for d, s in chats.EXPORT_DIRS.values():
+    yield from (("claude-code", p) for p in chats.cowork_files())
+    for d, s in [*chats.EXPORT_DIRS.values(), (chats.LIVE, chats.LIVE)]:
         yield from ((s, p) for p in (chats.export_root() / d).glob("*.jsonl"))
 
 
