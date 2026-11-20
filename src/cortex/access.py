@@ -96,3 +96,47 @@ def audience_of_study(subjects: Iterable[str], hidden: Iterable[str], *,
     hidden = set(hidden)
     return Audience.LOCAL if note_private or any(s in hidden for s in subjects) \
         else Audience.CLOUD
+
+
+# ---- per-agent profiles (plan v9 item 8) ----------------------------------------------------
+# A profile (cortex.profiles) names the context scopes an MCP client may get; None or "all" is
+# everything. A me/ page sits under one scope whole, except preferences and personality, whose
+# `## ` sections each sit under one (the cortex_context scopes: a preferences section is named
+# after its scope). Journal and people pages are personal.
+SCOPES = ("all", "core", "coding", "communication", "learning", "projects", "environment",
+          "career", "personal")
+SECTIONED = ("preferences", "personality")
+# me/ pages outside SECTIONED: their scope, None for every client (rules for the AI, not facts
+# about the user); a page not listed is "personal"
+PAGE_SCOPE = {"core": "core", "teaching-contract": None}
+PERSONALITY_SCOPE = {"communication": "communication", "how i think": "learning"}
+KIND_SCOPE = {"journal": "personal", "person": "personal"}
+
+
+def _all(scopes) -> bool:
+    return scopes is None or "all" in scopes
+
+
+def scope_page(scopes, page: str) -> bool:
+    """May a client with `scopes` get me/<page>? A sectioned page: some of it (scope_section)."""
+    if _all(scopes) or page in SECTIONED:
+        return True
+    need = PAGE_SCOPE.get(page, "personal")
+    return need is None or need in scopes
+
+
+def scope_section(scopes, page: str, heading: str) -> bool:
+    """May a client with `scopes` get the `## heading` section of me/<page>?"""
+    if _all(scopes):
+        return True
+    h = heading.strip().lower()
+    if page == "personality":
+        return PERSONALITY_SCOPE.get(h) in scopes
+    if page == "preferences":
+        return h in SCOPES[2:] and h in scopes
+    return scope_page(scopes, page)
+
+
+def scope_kind(scopes, kind: str) -> bool:
+    """May a client with `scopes` get vault pages of `kind` (journal and people: personal)?"""
+    return _all(scopes) or KIND_SCOPE.get(kind) is None or KIND_SCOPE[kind] in scopes

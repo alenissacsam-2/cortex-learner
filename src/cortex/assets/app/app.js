@@ -194,16 +194,17 @@
     announce('Saved');
     setTimeout(() => mark.remove(), 1500);
   }
-  // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast
-  function copyBtn(text, failMsg, cls, withIcon) {
+  // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast, or
+  // runs `onFail` (e.g. selects the text so Ctrl+C copies it)
+  function copyBtn(text, failMsg, cls, withIcon, onFail) {
     const face = () => (withIcon ? [icon('copy'), 'Copy'] : ['Copy']);
     let timer;
-    const b = btn('', () => navigator.clipboard.writeText(text()).then(() => {
+    const b = btn('', () => Promise.resolve().then(() => navigator.clipboard.writeText(text())).then(() => {
       clearTimeout(timer);
       b.replaceChildren(icon('check'), 'Copied');
       announce('Copied');
       timer = setTimeout(() => b.replaceChildren(...face()), 1500);
-    }, () => toast.error(failMsg)), cls);
+    }, () => (onFail ? onFail() : toast.error(failMsg))), cls);
     b.replaceChildren(...face());
     return b;
   }
@@ -876,7 +877,46 @@
         d.skill_zip_found ? [btn('Open folder', () => post('/api/open', { what: 'skill_zip' }), null, { 'aria-label': 'Open folder: Claude Desktop skill' }),
           copyBtn(() => d.skill_zip, 'Copy failed; select the path and copy it.')] : [ext(d.skill_url, 'Download cortex-skill.zip')]));
     put('connect', board('AI apps', { note: `${found} found · ${on} connected`, btn: ['Apply…', apply] }, ...rows,
-      h('div', { class: 'foot', text: d.vault ? 'Apply shows the exact files first. Backups are named <file>.cortex-<date>.bak, next to each file.' : 'Set up a vault first (Setup); each entry points at it.' })), skill);
+      h('div', { class: 'foot', text: d.vault ? 'Apply shows the exact files first. Backups are named <file>.cortex-<date>.bak, next to each file.' : 'Set up a vault first (Setup); each entry points at it.' })), skill,
+      d.packs ? packsBoard(d.packs) : null, d.profiles ? profilesBoard(d.profiles, d.scopes) : null);
+  }
+  // plan v9 item 8: context packs for web chats with no MCP; Copy, else the text is selected
+  const PACK_NAMES = { general: 'General', coding: 'Coding', writing: 'Writing' };
+  function packsBoard(packs) {
+    return board('Context packs', { note: 'for ChatGPT, Gemini and other web chats' }, ...packs.map((p) => {
+      const name = PACK_NAMES[p.id] || p.id;
+      if (!p.text) return row(name, null, 'Nothing to pack yet: add lines to me/core.md or me/preferences.md.');
+      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, value: p.text, 'aria-label': `${name} pack text` });
+      const what = h('details', { class: 'what' }, h('summary', { text: 'Show the text' }), area);
+      const select = () => { what.open = true; area.focus(); area.select(); toast('Copy is blocked here; the text is selected, press Ctrl+C.'); };
+      return h('div', { class: 'brow' },
+        h('div', { class: 't' },
+          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: name }), h('span', { class: 'val', text: `${p.text.length.toLocaleString()} characters` })),
+          h('span', { class: 'sub', text: 'Your pinned core, then your ' + (p.id === 'general' ? 'preferences' : name.toLowerCase() + ' preferences') + '. Paste it at the start of a chat. Private pages are never in it.' }),
+          what),
+        h('div', { class: 'acts' }, copyBtn(() => p.text, '', null, true, select)));
+    }));
+  }
+  // plan v9 item 8: which scopes each AI app gets over MCP; saved at once, from this page only
+  function profilesBoard(profiles, scopes) {
+    const data = { profiles: profiles.profiles.map((p) => ({ ...p, scopes: [...p.scopes] })), unknown: [...profiles.unknown] };
+    const checks = (list, label, key) => h('div', { class: 'sub' }, scopes.map((s) => {
+      const cb = h('input', { type: 'checkbox', id: `pf-${key}-${s}`, checked: list.includes(s), 'aria-label': `${label}: ${s}` });
+      cb.addEventListener('change', () => {
+        const i = list.indexOf(s);
+        if (cb.checked && i < 0) list.push(s);
+        if (!cb.checked && i >= 0) list.splice(i, 1);
+        post('/api/profiles', data, () => savedMark(cb));
+      });
+      return h('label', { class: 'check' }, cb, h('span', { text: s }));
+    }));
+    const prow = (title, sub, list, key) => h('div', { class: 'brow' },
+      h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: title })),
+        h('span', { class: 'sub', text: sub }), checks(list, title, key)));
+    return board('Agent profiles', { note: 'what each AI app may read' },
+      ...data.profiles.map((p, i) => prow(`Apps named “${p.match}”`, 'The first name that matches the app wins.', p.scopes, i)),
+      prow('Any other app', 'Apps no name above matches.', data.unknown, 'other'),
+      h('div', { class: 'foot', text: 'all: everything, as before. core: your pinned lines. Each other scope: that section of your preferences. personal: your profile, goals, journal, people and past chats. Private pages are never shared.' }));
   }
   function confirmDialog(title, okText, body, ok) {  // the page's one confirm dialog
     const dlg = $('confirm');

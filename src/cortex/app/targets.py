@@ -5,6 +5,8 @@ Each connector has `detect()` (the app is on this computer), `connected()` (its 
 Every write backs the file up first (`<name>.cortex-YYYYmmdd-HHMMSS.bak` beside it), changes
 only the `cortex` entry, and leaves a file it cannot parse untouched with a clear message.
 `entry` is `clients.server_entry(...)`: {"command": ..., "args": ["mcp", "--vault", ...]}.
+Cursor, VS Code (Copilot) and Codex also get a marked Cortex block (the pinned core and the
+cortex_prime line) in a rules file (`Rules`); `refresh_rules` keeps it current.
 """
 
 from __future__ import annotations
@@ -132,6 +134,123 @@ def _row(path: Path, change: str, detail: str = "") -> dict:
     return {"file": str(path), "change": change, "detail": detail}
 
 
+START = "<!-- cortex:start (added by the Cortex app; it removes this block) -->"
+END = "<!-- cortex:end -->"
+_BLOCK = re.compile(r"\n*" + re.escape(START) + r".*?" + re.escape(END) + r"\n?", re.S)
+
+
+def block_text(path: Path, block: str | None, head: str = "") -> str | None:
+    """`path`'s text with the marked Cortex block set to `block` (None: taken out), or None
+    when it would not change. A file with no other text gets `head` (front matter) above the
+    block, and is "" again once only that head is left. ValueError, the file untouched, when
+    it is not UTF-8 or its markers do not pair up."""
+    try:
+        old = _read(path) or ""
+    except UnicodeDecodeError:
+        raise ValueError(f"{path} is not UTF-8 text; Cortex left it untouched.") from None
+    if old.count(START) != old.count(END):
+        raise ValueError(f"{path}: the Cortex block's markers do not pair up; Cortex left it "
+                         "untouched. Fix or remove the block by hand.")
+    rest = _BLOCK.sub("\n", old).strip("\n")
+    if head and rest == head.strip("\n"):
+        rest = ""
+    if block is not None and not rest:
+        rest = head.strip("\n")
+    rest = rest + "\n" if rest else ""
+    new = rest + ("\n" if rest else "") + f"{START}\n{block}{END}\n" if block is not None else rest
+    if new == old:
+        return None
+    crlf = path.is_file() and b"\r\n" in path.read_bytes()
+    return new.replace("\n", "\r\n") if crlf else new  # a Windows file keeps its line ends
+
+
+def _vault_of(base: dict | None) -> Path | None:
+    """The vault folder an entry (`clients.server_entry`) points at."""
+    args = list((base or {}).get("args") or [])
+    i = args.index("--vault") + 1 if "--vault" in args else 0
+    return Path(args[i]) if 0 < i < len(args) else None
+
+
+def rule_block(base: dict | None) -> str:
+    """packs.rule_block for the vault `base` points at; the prime line alone without one."""
+    from cortex import packs
+    from cortex.vault import Vault
+    root = _vault_of(base)
+    try:
+        return packs.rule_block(Vault(root) if root and (root / ".cortex").is_dir() else None)
+    except Exception:  # noqa: BLE001  (an unreadable vault: the app's check refreshes it later)
+        return packs.rule_block(None)
+
+
+class Rules:
+    """A target that also keeps the Cortex block (`rule_block`: the pinned core and the line
+    asking for cortex_prime) in a Markdown rules file its app reads in every chat. Apply adds
+    or refreshes the block, remove takes out only the block (a file left empty goes, after its
+    backup). RULE_HEAD: front matter a new file gets above the block."""
+
+    RULE_HEAD = ""
+
+    def rule_path(self) -> Path:
+        raise NotImplementedError
+
+    def _rule_change(self, add: bool, block: str | None) -> tuple[str, str | None]:
+        """(change, new text or None) for the rules file."""
+        p = self.rule_path()
+        new = block_text(p, block if add else None, self.RULE_HEAD)
+        had = START in (_read(p) or "")
+        return ("remove" if not add else "update" if had else "add"), new
+
+    def plan(self, add: bool, base: dict | None = None) -> list[dict]:
+        out = super().plan(add, base)
+        try:
+            change, new = self._rule_change(add, rule_block(base) if add else None)
+            if new is not None:
+                out.append(_row(self.rule_path(), change, "the Cortex block"))
+        except (OSError, ValueError) as e:
+            out.append(_row(self.rule_path(), "error", str(e)))
+        return out
+
+    def _rule_write(self, add: bool, block: str | None) -> list[dict]:
+        p = self.rule_path()
+        change, new = self._rule_change(add, block)
+        if new is None:
+            return []
+        if new:
+            write(p, new)
+        else:  # only Cortex's block (and its own front matter) was in it
+            backup(p)
+            p.unlink()
+        return [_row(p, change, "the Cortex block")]
+
+    def apply(self, base: dict) -> list[dict]:
+        return super().apply(base) + self._rule_write(True, rule_block(base))
+
+    def remove(self) -> list[dict]:
+        return super().remove() + self._rule_write(False, None)
+
+
+def refresh_rules(base: dict | None) -> list[dict]:
+    """The app's periodic check (each automatic chat-import pass, every 5 minutes): rewrite
+    the Cortex block where a rules file holds one and the pinned core changed since. Never
+    adds a block; a file it cannot read is skipped. Rows of what it rewrote."""
+    have = []
+    for t in targets():
+        try:
+            if isinstance(t, Rules) and START in (_read(t.rule_path()) or ""):
+                have.append(t)
+        except (OSError, ValueError):
+            pass
+    if base is None or not have:
+        return []
+    block, out = rule_block(base), []
+    for t in have:
+        try:
+            out += [{"id": t.id, "label": t.label, **r} for r in t._rule_write(True, block)]
+        except (OSError, ValueError):
+            pass
+    return out
+
+
 # ---- connectors ---------------------------------------------------------------------------
 
 
@@ -181,6 +300,17 @@ class JsonTarget:
         return [_row(p, edit_json(p, self.key, None)) for p in self.all_paths()]
 
 
+class RuleJson(Rules, JsonTarget):
+    """A JsonTarget with a rules file (`rule`: its path)."""
+
+    def __init__(self, *a, rule, head: str = "", **k):
+        super().__init__(*a, **k)
+        self._rule, self.RULE_HEAD = rule, head
+
+    def rule_path(self) -> Path:
+        return self._rule()
+
+
 class ClaudeDesktop(JsonTarget):
     """Claude desktop (Chat): every config file that exists, else the first candidate folder
     (cortex.clients, as `cortex setup` does). Skills cannot be installed by file."""
@@ -221,8 +351,7 @@ class Gemini(JsonTarget):
     """Gemini CLI: `~/.gemini/settings.json` plus a short block in `~/.gemini/GEMINI.md`
     between markers, so it can be taken out again."""
 
-    START = "<!-- cortex:start (added by the Cortex app; it removes this block) -->"
-    END = "<!-- cortex:end -->"
+    START, END = START, END
     BLOCK = ("## Cortex\n"
              "Cortex (the `cortex` MCP server) is my local second brain. At the start of a "
              "chat, call `cortex_prime` with my first message before you answer; use "
@@ -243,14 +372,7 @@ class Gemini(JsonTarget):
 
     def _md_text(self, add: bool) -> str | None:
         """The GEMINI.md text after the change, or None when it would not change."""
-        old = _read(self.md()) or ""
-        pat = re.compile(r"\n*" + re.escape(self.START) + r".*?" + re.escape(self.END) + r"\n?",
-                         re.S)
-        rest = pat.sub("\n", old).strip("\n")
-        rest = rest + "\n" if rest else ""
-        new = (rest + ("\n" if rest else "") + f"{self.START}\n{self.BLOCK}{self.END}\n"
-               if add else rest)
-        return None if new == old else new
+        return block_text(self.md(), self.BLOCK if add else None)
 
     def plan(self, add: bool, base: dict | None = None) -> list[dict]:
         out = super().plan(add, base)
@@ -324,7 +446,7 @@ def codex_text(old: str, entry: dict | None) -> str:
     return text
 
 
-class Codex:
+class CodexToml:
     """Codex CLI: `[mcp_servers.cortex]` in `~/.codex/config.toml`, by an exact text writer."""
 
     id, label, note = "codex", "Codex CLI", ""
@@ -377,6 +499,26 @@ class Codex:
 
     def remove(self) -> list[dict]:
         return self._do(None)
+
+
+class Codex(Rules, CodexToml):
+    """Codex CLI, plus the Cortex block in its global `~/.codex/AGENTS.md`."""
+
+    def rule_path(self) -> Path:
+        return Path.home() / ".codex" / "AGENTS.md"
+
+
+# Plan v9 item 8: the rules files that carry the Cortex block. Cursor documents no global
+# rules file (its User Rules live in its settings database; `.cursor/rules` is per project),
+# so Cortex keeps an always-applied rule at ~/.cursor/rules/cortex.mdc: Cursor applies it in
+# the home folder as a project, and its text is what to paste into Settings → Rules for every
+# project (docs/SETUP.md). VS Code applies every `*.instructions.md` in the user profile's
+# prompts folder to Copilot chats in any workspace (`.github/copilot-instructions.md` is per
+# repository). Codex reads ~/.codex/AGENTS.md in every project.
+CURSOR_RULE = (".cursor", "rules", "cortex.mdc")
+CURSOR_HEAD = "---\ndescription: About me, from Cortex\nalwaysApply: true\n---\n"
+VSCODE_RULE = ("prompts", "cortex.instructions.md")
+VSCODE_HEAD = '---\napplyTo: "**"\n---\n'
 
 
 class ClaudeCode:
@@ -510,9 +652,11 @@ def targets() -> list:
         Gemini(),
         JsonTarget("antigravity", "Antigravity",
                    lambda: h() / ".gemini" / "antigravity" / "mcp_config.json"),
-        JsonTarget("cursor", "Cursor", lambda: h() / ".cursor" / "mcp.json"),
-        JsonTarget("vscode", "VS Code (Copilot)", lambda: _vscode_user() / "mcp.json",
-                   key="servers", extra={"type": "stdio"}),
+        RuleJson("cursor", "Cursor", lambda: h() / ".cursor" / "mcp.json",
+                 rule=lambda: h().joinpath(*CURSOR_RULE), head=CURSOR_HEAD),
+        RuleJson("vscode", "VS Code (Copilot)", lambda: _vscode_user() / "mcp.json",
+                 key="servers", extra={"type": "stdio"},
+                 rule=lambda: _vscode_user().joinpath(*VSCODE_RULE), head=VSCODE_HEAD),
         JsonTarget("windsurf", "Windsurf",
                    lambda: h() / ".codeium" / "windsurf" / "mcp_config.json"),
         LMStudio(),
@@ -535,8 +679,9 @@ def describe(base: dict | None) -> list[dict]:
                "files": [], "snippet": "", "note": getattr(t, "note", ""),
                "private_offer": lms and offer, "private": False}
         try:
+            rules = [t.rule_path()] if isinstance(t, Rules) else []
             row.update(detected=t.detect(), connected=t.connected(),
-                       files=[str(p) for p in t.paths()], private=lms and t.private())
+                       files=[str(p) for p in [*t.paths(), *rules]], private=lms and t.private())
             if base is not None:
                 row["snippet"] = t.snippet(base)
                 # Claude Code's plugin route shows the commands Cortex runs, not an entry

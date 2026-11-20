@@ -33,6 +33,7 @@ from cortex import (
     people,
     planner,
     prime,
+    profiles,
     render,
     review,
     share,
@@ -337,6 +338,9 @@ EXCLUDED_INSTRUCTIONS = "Cortex is turned off in this folder; do not call its to
 # v5 PHASE4 V5: the server's role, fixed at launch (`cortex mcp --role`)
 ROLES = ("owner", "reader")
 READ_TOOLS = frozenset(f"cortex_{t}" for t in session_mod.READS)
+# plan v9 item 8: tools that serve personal text whole (imported chats, writing as the user,
+# the self-review pack); refused to a client whose profile lacks the `personal` scope
+PERSONAL_TOOLS = ("cortex_chats", "cortex_as_me", "cortex_reflect")
 KILLED_NEXT = "Tell the user the kill switch is on; they turn it off with `cortex kill --off`."
 
 Verdict = Literal["correct", "partial", "wrong"]
@@ -454,6 +458,7 @@ class Cortex:
         # plan 5a: set only by the Cortex app (app/server.py), whose every write is the user's own
         # click (Approve, Dismiss, Still true, Retire); never set from tool input
         self.app_clicks = False
+        self.over_mcp = False  # a tool call came over MCP: the client's profile applies
         self.sessions = session_mod.SessionManager(vault)
         self.session: session_mod.Session | None = None
         self.log = self.sessions.log
@@ -475,7 +480,8 @@ class Cortex:
     def _build_index(self) -> None:
         try:
             self._index = Index(self.vault, self.catalog, planner.current_states(
-                self.vault, local_day(self._now()), self.catalog)[0], withhold=self._withheld)
+                self.vault, local_day(self._now()), self.catalog)[0],
+                withhold=self._index_withheld)
         except BaseException as e:  # re-raised on first use, on the caller's thread
             self._index_error = e
         finally:
@@ -484,10 +490,37 @@ class Cortex:
     def _withheld(self) -> set[str]:
         """Bare ids of the me/ pages this server may not serve, anywhere (index, prime,
         context, as_me): none for the owner; for a reader every me/ page not
-        shared with work (share.allowed; a missing `share:` means self)."""
-        if self.role == "owner":
-            return set()
-        return {n.id for n in self.vault.iter_notes("me")} - share.allowed(self.vault, "work")
+        shared with work (share.allowed; a missing `share:` means self). For a client whose
+        profile limits its scopes, also the me/ pages outside them and the journal and people
+        pages unless it has `personal` (access.scope_page, scope_kind)."""
+        out = set() if self.role == "owner" else (
+            {n.id for n in self.vault.iter_notes("me")} - share.allowed(self.vault, "work"))
+        if (scopes := self._scopes()) is not None:  # plan v9 item 8: the client's profile
+            out |= {p.stem for p in self.vault.note_paths("me")
+                    if not access.scope_page(scopes, p.stem)}
+            out |= {p.stem for k in access.KIND_SCOPE if not access.scope_kind(scopes, k)
+                    for p in self.vault.note_paths(k)}
+        return out
+
+    def _scopes(self) -> frozenset[str] | None:
+        """The context scopes the owner's profile (cortex.profiles) gives this MCP client;
+        None is everything. In-process callers (the app's clicks, the CLI) are the owner."""
+        if not self.over_mcp or self.app_clicks:
+            return None
+        return profiles.scopes_for(profiles.load(self.vault), self.sessions.client or "")
+
+    def _allow(self):
+        """`prime.core`'s section filter for this client's profile; None for every section."""
+        scopes = self._scopes()
+        return None if scopes is None else (lambda p, h: access.scope_section(scopes, p, h))
+
+    def _index_withheld(self) -> set[str]:
+        """What the Index keeps out (find, recall, read): `_withheld`, and for a profiled client
+        every me/ page, since prime and context serve only its scopes' sections of them."""
+        out = self._withheld()
+        if self._scopes() is not None:
+            out |= {p.stem for p in self.vault.note_paths("me")}
+        return out
 
     @property
     def index(self) -> Index:
@@ -508,6 +541,7 @@ class Cortex:
 
     def _call(self, name: str, fn, kwargs: dict) -> dict:
         ctx = kwargs.pop("ctx", None)
+        self.over_mcp = self.over_mcp or ctx is not None
         params = getattr(getattr(ctx, "session", None), "client_params", None)
         # the SDK fills client_params from a request's _meta envelope too (stateless MCP)
         if params is not None and params.client_info is not None and params.client_info.name:
@@ -589,6 +623,13 @@ class Cortex:
             return {"error": "killed", "message": "The kill switch is on: Cortex does not act "
                     "as the user" + (" and this server's role is off" if self.role != "owner"
                                      else "") + ".", "next": KILLED_NEXT}
+        if (name in PERSONAL_TOOLS or (name == "cortex_read" and str(kwargs.get(
+                "id", "")).startswith(people.PREFIX))) and not access.scope_kind(
+                self._scopes(), "journal"):  # plan v9 item 8: personal pages, whole chats
+            return {"error": "role_refused", "message": f"The user's profile for this app "
+                    f"does not share personal pages with it, so {what} is refused.",
+                    "next": "Do not retry; the user can change it in the Cortex app under "
+                            "Connect AI apps → Agent profiles."}
         if self.role == "owner":
             return None
         # the reflect pack is the owner's self-review (claims, portrait, inbox about-me lines,
@@ -1240,7 +1281,7 @@ class Cortex:
         xs, xr = xray.settings(self.vault), {"served": {}, "trimmed": {}}
         parts, left = ([], [PRIME_MAX]) if related_only else prime.core(
             self.vault, prompt, list(self.log.iter_events()), self._now(), self._withheld(),
-            xr)
+            xr, self._allow())
         put = prime.putter(parts, left)
         self._refresh_index()
         hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet())[0]
@@ -1303,6 +1344,8 @@ class Cortex:
         keeps = {"personality": (lambda h: h in heads) if heads else None,
                  "goals": (lambda h: h == "now") if scope == "all" else None,
                  "preferences": lambda h: want is None or h == want.lower()}
+        if (allow := self._allow()) is not None:  # plan v9 item 8: the client's profile
+            keeps = {p: k and (lambda h, k=k, p=p: k(h) and allow(p, h)) for p, k in keeps.items()}
         withheld = self._withheld()
         xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"], lines)
         got = {p: self._claim_sections(p, k, served, xr) if k and p not in withheld
@@ -2306,6 +2349,12 @@ class Cortex:
         # plan 5b: a line that may update a live one; the write goes ahead and the agent asks
         update = (review.collision(self.vault, nid, text, day)
                   if op == "append_to_section" and kind == "me" and text.strip() else None)
+        # plan v9 item 8: a profiled client is shown no line of a page outside its scopes (a
+        # sectioned page's line has no section here, so none); the pair is recorded all the same
+        scopes = self._scopes()
+        shown = update if scopes is None or (update and update["page"] not in access.SECTIONED
+                                             and access.scope_page(scopes, update["page"])) \
+            else None
         # while harvesting, old chats are stale evidence: every claim page waits for a yes
         if (op == "append_to_section" and kind == "me" and not user_confirmed
                 and (nid in CONFIRM_PAGES or (harvesting and claim_page))):
@@ -2332,14 +2381,14 @@ class Cortex:
             hint = self.sessions.note("patched", change={
                 "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target})
             if contract:
-                return _update_of(update, {
+                return _update_of(shown, {
                     "changed": False, "queued": True,
                     "summary": "proposed for me teaching-contract; waiting for your Approve in "
                                "the Cortex app",
                     "next": "Tell the user the rule is waiting for their Approve in the Cortex "
                             "app (Review); it does not apply until then, and repeating the "
                             "patch does not apply it." + hint})
-            return _update_of(update, {
+            return _update_of(shown, {
                 "changed": False, "queued": True,
                 "summary": f"proposed for {kind} {nid}; awaits the user's OK",
                 "next": "Saved as unconfirmed; it waits for the user's Approve in the Cortex app "
@@ -2389,7 +2438,7 @@ class Cortex:
         if self.app_clicks:
             change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
-        return _update_of(update, {"changed": changed, **({"claim": claim} if claim else {}),
+        return _update_of(shown, {"changed": changed, **({"claim": claim} if claim else {}),
                                    "summary": f"{op} {target!r} on {kind} {nid}",
                                    "next": self._next(MORE_NEXT) + hint})
 

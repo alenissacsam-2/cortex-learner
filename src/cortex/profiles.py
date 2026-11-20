@@ -1,0 +1,82 @@
+"""Per-agent profiles (plan v9 item 8): which context scopes (cortex.access.SCOPES) each MCP
+client may get. Owner settings in `.cortex/profiles.json`, written only by the Cortex app
+(`/api/profiles`), never from MCP input; mcp_server.Cortex._scopes reads them and the gate in
+cortex.access enforces them. A client matches the first profile whose `match` is in its name
+(letters and digits only, any case); a client no profile matches gets `unknown`.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import logging
+import re
+
+from cortex.access import SCOPES
+from cortex.vault import Vault
+
+PATH = ".cortex/profiles.json"
+CODING = ["core", "coding"]
+DEFAULT = {
+    "profiles": [
+        {"match": "claude", "scopes": ["all"]},  # Claude Desktop, Claude Code: as before
+        {"match": "lmstudio", "scopes": ["all"]},  # a local model may see everything
+        {"match": "cursor", "scopes": CODING},
+        {"match": "visualstudiocode", "scopes": CODING},  # VS Code (Copilot)'s client name
+        {"match": "copilot", "scopes": CODING},
+        {"match": "codex", "scopes": CODING},
+    ],
+    "unknown": ["core", "coding", "learning"],
+}
+MAX_PROFILES = 30
+
+
+def norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def _scopes(v, where: str) -> list[str]:
+    if not isinstance(v, list) or not all(isinstance(s, str) and s in SCOPES for s in v):
+        raise ValueError(f"{where}: scopes must be a list of {', '.join(SCOPES)}")
+    return [s for s in SCOPES if s in v]  # SCOPES order, no duplicates
+
+
+def check(data) -> dict:
+    """`data` as stored: {"profiles": [{"match", "scopes"}], "unknown": scopes}; ValueError
+    when it is not that shape."""
+    if not isinstance(data, dict) or not isinstance(data.get("profiles"), list) \
+            or len(data["profiles"]) > MAX_PROFILES:
+        raise ValueError(f"profiles must be a list of at most {MAX_PROFILES}")
+    out = []
+    for p in data["profiles"]:
+        m = p.get("match") if isinstance(p, dict) else None
+        if not isinstance(m, str) or not norm(m) or len(m) > 60:
+            raise ValueError("each profile needs a client name to match (letters or digits)")
+        out.append({"match": m.strip(), "scopes": _scopes(p.get("scopes"), m)})
+    return {"profiles": out, "unknown": _scopes(data.get("unknown"), "unknown")}
+
+
+def load(vault: Vault) -> dict:
+    """The owner's profiles, else DEFAULT (no file yet, or one Cortex cannot read)."""
+    p = vault.root / PATH
+    try:
+        return check(json.loads(p.read_bytes())) if p.is_file() else copy.deepcopy(DEFAULT)
+    except (OSError, ValueError) as e:
+        logging.getLogger(__name__).warning("%s ignored, using the defaults: %s", PATH, e)
+        return copy.deepcopy(DEFAULT)
+
+
+def save(vault: Vault, data) -> dict:
+    """Check and store the profiles (the app's own click only); returns them as stored."""
+    data = check(data)
+    with vault.lock():
+        vault.write_text(vault.root / PATH, json.dumps(data, indent=2) + "\n")
+    return data
+
+
+def scopes_for(data: dict, client: str) -> frozenset[str] | None:
+    """The scopes of the first profile matching `client`, else `unknown`; None for all."""
+    name = norm(client)
+    scopes = next((p["scopes"] for p in data["profiles"] if norm(p["match"]) in name),
+                  data["unknown"]) if name else data["unknown"]
+    return None if "all" in scopes else frozenset(scopes)

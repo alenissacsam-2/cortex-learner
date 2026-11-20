@@ -104,6 +104,19 @@ def _relayed_cutoff_later(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mcp_client_sees_all(monkeypatch):
+    """An MCP test client that passes no `client_info` is named like a local model app, which
+    the default agent profile gives every scope (cortex.profiles), so it sees what the SDK's
+    default name "mcp" saw before profiles: "mcp" is now an unknown, restricted client
+    (tests/test_agent_context.py). Not a Claude or cloud name: no chat log, private search ok."""
+    from mcp.client import session
+    from mcp.types import Implementation
+
+    monkeypatch.setattr(session, "DEFAULT_CLIENT_INFO",
+                        Implementation(name="lmstudio-test", version="0"))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_reranker(monkeypatch):
     """Tests never load a real cross-encoder from ~/.cortex/models; they inject a fake one."""
     from cortex import semantic

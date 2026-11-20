@@ -293,6 +293,7 @@ class App:
                     "/api/review": self.review, "/api/xray": self.xray}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
+            "/api/profiles": self.profiles_set,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
             "/api/llm/size": self.llm_size,
@@ -369,10 +370,23 @@ class App:
         self.warming.start()
 
     def connect(self) -> dict:
+        """Connect: the AI apps, plus (with a vault) the context packs for web chats and the
+        per-agent profiles (plan v9 item 8)."""
+        from cortex import access, packs, profiles
+        extra = {}
+        if self.entry() is not None:
+            v = self._vault()
+            extra = {"packs": [{"id": n, "text": packs.pack(v, n)} for n in packs.PACKS],
+                     "profiles": profiles.load(v), "scopes": list(access.SCOPES)}
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,
                 "skill_zip": str(_checkout() / "dist" / "cortex-skill.zip"),
                 "skill_zip_found": (_checkout() / "dist" / "cortex-skill.zip").is_file(),
-                "skill_url": skill_url()}
+                "skill_url": skill_url(), **extra}
+
+    def profiles_set(self, body: dict) -> dict:
+        """The owner's per-agent profiles, saved from the app only (never from MCP input)."""
+        from cortex import profiles
+        return {"profiles": profiles.save(self._vault(), body)}  # body: {profiles, unknown}
 
     def llm(self) -> dict:
         """The Local model page: both runners' chat models (embedding models left out by the
@@ -1790,6 +1804,10 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
                 app.chat_import_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: automatic chat import check failed ({type(e).__name__})")
+            try:  # plan v9 item 8: the Cortex block in agents' rules files follows the core
+                targets.refresh_rules(app.entry())
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: rules block refresh failed ({type(e).__name__})")
 
     def updates():  # the quiet update check: a minute after start, then every 6 hours
         wait = UPDATE_FIRST_S
