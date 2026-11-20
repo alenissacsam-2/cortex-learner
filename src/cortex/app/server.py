@@ -320,7 +320,10 @@ class App:
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
             "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
             "/api/review/approve": self.review_approve, "/api/review/dismiss": self.review_dismiss,
-            "/api/review/still": self.review_still, "/api/review/retire": self.review_retire}
+            "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
+            "/api/review/conflict": self.review_conflict,
+            "/api/review/rule/approve": self.review_rule_approve,
+            "/api/review/rule/dismiss": self.review_rule_dismiss}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -587,6 +590,52 @@ class App:
         r = self._live(body)
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
+
+    def review_conflict(self, body: dict) -> dict:
+        """A conflict pair (plan 5b): `keep` both (a `keep_both` change), or `left` or `right`,
+        which retires the other line through cortex_patch's retire op."""
+        from cortex import review
+        from cortex.events import EventLog
+        v, key, keep = self._vault(), body.get("key"), body.get("keep")
+        if keep not in ("both", "left", "right"):
+            raise ValueError("keep must be both, left or right.")
+        events = list(EventLog(v).iter_events())
+        rows = review.live_rows(v, events, self._today())
+        pair = next((c for c in review.conflicts(rows, events) if c["key"] == key), None)
+        if pair is None:
+            raise NotFound
+        if keep == "both":
+            return self._click("cortex_patch", "_keep_both", {"page": pair["left"]["page"],
+                                                              "pair": pair["key"]})
+        r = pair["right" if keep == "left" else "left"]
+        return self._click("cortex_patch", "cortex_patch", {
+            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
+
+    def _rule(self, body: dict) -> dict:
+        from cortex import corrections, review
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        events = list(EventLog(v).iter_events())
+        rows = review.live_rows(v, events, self._today())
+        item = next((x for x in corrections.proposals(v, events, rows) if x["key"] == key), None)
+        if item is None:
+            raise NotFound
+        return item
+
+    def review_rule_approve(self, body: dict) -> dict:
+        """A repeated correction (plan 5b) approved: me/core's `## Core` gets it as the user's
+        own line, written as Approve writes a waiting one (`confirm: clicked`)."""
+        x = self._rule(body)
+        return self._click("cortex_patch", "cortex_patch", {
+            "id": "me/core", "op": "append_to_section", "target": "Core", "text": x["text"],
+            "user_confirmed": True})
+
+    def review_rule_dismiss(self, body: dict) -> dict:
+        """A repeated correction dismissed: a `dismiss` change on page `corrections` holds its
+        text's hash, so it is not offered again."""
+        x = self._rule(body)
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "corrections", "section": "Core", "text": x["text"], "waiting": False})
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
