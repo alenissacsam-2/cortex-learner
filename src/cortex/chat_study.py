@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta
 from cortex import levels, planner, render
 from cortex.catalog import Catalog
 from cortex.events import EventLog
-from cortex.vault import Vault, is_private
+from cortex.vault import Vault
 
 _MD = re.compile(r"[*_`\[\]<>#|]")  # Chat renders **bold**, `code` and [n]: titles stay text
 SHOWN = 15
@@ -270,7 +270,8 @@ def answer(vault: Vault, k: str, got, today: date, private: bool = False) -> str
         return "\n".join(lines)
 
     notes = list(vault.iter_notes("mistake"))
-    hush = set() if private else {n.id for n in notes if is_private(n)}  # D1 unless `private`
+    # D1 unless `private`: private mistakes and, OQ-22, those about a private subject
+    hush = set() if private else planner.hidden_mistakes(mistakes, hide)
     open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                     key=lambda m: (-m.count, m.id))  # as the start card
 

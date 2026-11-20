@@ -59,8 +59,9 @@ def portrait(vault: Vault, catalog, now: dt.datetime) -> dict:
     before, _ = planner.current_states(vault, cut, catalog,
                                        [e for e in events if str(e.get("day", "")) <= cut])
     after, _ = planner.current_states(vault, today.isoformat(), catalog, events)
+    hide = planner.hidden(vault, catalog)  # the pack reaches MCP: no private subject in it
     moved = [{"id": c, "title": getattr(catalog.entries.get(c), "title", c), "to": after[c].state}
-             for c in sorted(after) if after[c].state in ("solid", "learning")
+             for c in sorted(after) if after[c].state in ("solid", "learning") and c not in hide
              and getattr(before.get(c), "state", "not_started") != after[c].state]
     loops = [n for n in notes if n.kind == "loop"]
     return {"due": due, "pack": {

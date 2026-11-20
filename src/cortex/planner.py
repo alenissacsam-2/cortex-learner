@@ -597,12 +597,27 @@ def mock_paper(vault, catalog, states, *, now: datetime,
 def hidden(vault, catalog, private: set[str] | None = None) -> set[str]:
     """Ids generated views must not show: private domains, areas and concepts, and every
     catalog entry under a private domain or area (as the dashboard hides them). `private`, the
-    flagged domain/area/concept ids, saves the vault walk when the caller already has them."""
+    flagged domain/area/concept ids, saves the vault walk when the caller already has them.
+    Also every mistake note that is private or about a hidden concept (OQ-22: a mistake is a
+    study item, `access.audience_of_study`)."""
+    from cortex import access
+    from cortex.index import _edge_targets  # index imports planner
+
     if private is None:
         private = {n.id for k in ("domain", "area", "concept") for n in vault.iter_notes(k)
                    if is_private(n)}
-    return private | {e.id for e in catalog.entries.values() if e.parent in private
-                      or e.domain in private or any(a in private for a in e.areas)}
+    out = private | {e.id for e in catalog.entries.values() if e.parent in private
+                     or e.domain in private or any(a in private for a in e.areas)}
+    return out | {n.id for n in vault.iter_notes("mistake") if access.audience_of_study(
+        _edge_targets(n.fields.get("concepts") or []), out, note_private=is_private(n))
+        is access.Audience.LOCAL}
+
+
+def hidden_mistakes(mistakes: dict, hide: set[str]) -> set[str]:
+    """The folded mistakes (levels.fold) a view must not name: hidden ones (`hidden`) and any
+    graded under a hidden concept, even with no note linking it (OQ-22)."""
+    return {m.id for m in mistakes.values()
+            if m.id in hide or any(c in hide for c in m.concepts)}
 
 
 def is_due(st, day: str) -> bool:
@@ -691,9 +706,12 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
     def status(ms, m):
         return ms[m].status if m in ms else None
 
+    hide = hidden(vault, catalog)  # the week summary reaches MCP: no private subject in it
+    hide |= hidden_mistakes(m_after, hide) | hidden_mistakes(m_before, hide)
     changed = [{"id": c, "title": getattr(catalog.entries.get(c), "title", c),
                 "before": st(before, c), "after": st(after, c)}
-               for c in sorted(set(before) | set(after)) if st(before, c) != st(after, c)]
+               for c in sorted(set(before) | set(after))
+               if st(before, c) != st(after, c) and c not in hide]
     return {
         "from": start.isoformat(), "to": to.isoformat(),
         "sessions": len({e["session"] for e in week if e.get("kind") != "open"
@@ -702,9 +720,9 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
         "correct": verdicts.count("correct"),
         "changed": changed,
         "mistakes_opened": sorted(m for m in m_after if status(m_after, m) == "open"
-                                  and status(m_before, m) != "open"),
+                                  and status(m_before, m) != "open" and m not in hide),
         "mistakes_resolved": sorted(m for m in m_after if status(m_after, m) == "resolved"
-                                    and status(m_before, m) != "resolved"),
+                                    and status(m_before, m) != "resolved" and m not in hide),
         "upcoming": [{k: a[k] for k in ("id", "company", "kind", "date", "days")}
                      | {"readiness": readiness(vault, catalog, after, a),
                         "recall_on_day": recall_on_day(vault, catalog, after, a, now)}

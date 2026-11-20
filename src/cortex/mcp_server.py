@@ -788,7 +788,8 @@ class Cortex:
             today = planner.fit(today, minutes)
         notes = list(self.vault.iter_notes("mistake"))
         titles = {n.id: str(n.fields.get("title") or n.id) for n in notes}
-        hush = {n.id for n in notes if is_private(n)}  # D1
+        # D1: private mistakes and, OQ-22, those about a private subject
+        hush = planner.hidden_mistakes(mistakes, planner.hidden(self.vault, self.catalog))
         open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                         key=lambda m: (-m.count, m.id))
         display = render.start_card(

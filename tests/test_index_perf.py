@@ -148,13 +148,14 @@ def test_snapshot_changed_deleted_new_and_private(tmp_path, parses):
     (root / "resources" / "fresh.md").write_text("# Fresh\n\nfreshword\n", encoding="utf-8")
     parses.clear()
     idx = build(root)
-    # inherited-private pages are parsed (twice: before and after planner.hidden); nothing else
-    assert set(parses) == {"arrays-basics", "fresh", "r-5", "two-pointers"}
+    # inherited-private pages are parsed (twice: before and after planner.hidden); nothing else.
+    # dsa.off-by-one is a mistake about those concepts, so it is hidden too (OQ-22)
+    assert set(parses) == {"arrays-basics", "fresh", "r-5", "two-pointers", "dsa.off-by-one"}
     assert [h["id"] for h in idx.find("newword")] == ["r-5"]
     assert [h["id"] for h in idx.find("freshword")] == ["fresh"]
     assert "r-6" not in idx._notes and not idx.find("n6")
     assert idx.find("hiddenword") == [] and "secret" in idx._private
-    assert {"dsa.arrays", "two-pointers", "arrays-basics"} <= idx._private
+    assert {"dsa.arrays", "two-pointers", "arrays-basics", "dsa.off-by-one"} <= idx._private
     assert "two-pointers" not in [h["id"] for h in idx.find("two pointers")]
     assert "dsa.arrays" in idx._flagged
 
