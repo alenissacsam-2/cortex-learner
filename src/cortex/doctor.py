@@ -309,6 +309,12 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _has_cortex(path: Path) -> bool:
+    """`path`'s mcpServers hold a Cortex server."""
+    servers = _read_json(path).get("mcpServers")
+    return isinstance(servers, dict) and any(_is_cortex_server(e) for e in servers.values())
+
+
 def plugin_enabled(settings: Path | None = None) -> bool:
     """True when ~/.claude/settings.json enables a `cortex@...` Claude Code plugin."""
     settings = settings or Path.home() / ".claude" / "settings.json"
@@ -317,17 +323,81 @@ def plugin_enabled(settings: Path | None = None) -> bool:
         str(k).startswith("cortex@") and v is True for k, v in plugins.items())
 
 
+def last_calls(root: Path) -> dict[str, float]:
+    """Client name -> the time (epoch s) of its latest call, from the marks the server writes
+    (mcp_server.SEEN: one file per client, its mtime the call, rewritten at most once a
+    minute)."""
+    out = {}
+    for p in (Path(root) / ".cortex" / "clients").glob("*.txt"):
+        try:
+            out[p.read_text(encoding="utf-8").strip() or p.stem] = p.stat().st_mtime
+        except OSError:
+            continue
+    return out
+
+
+def _when(t: float | None) -> str:
+    from datetime import datetime
+    return f"last call {datetime.fromtimestamp(t):%Y-%m-%d %H:%M}" if t else \
+        "no call recorded yet"
+
+
+def check_clients(root: Path, settings: Path | None = None,
+                  desktop_configs: list[Path] | None = None) -> list[tuple[str, str, str, str]]:
+    """Per Claude client: Cortex configured, the Claude Code prime hook, and its last call."""
+    calls = last_calls(root)
+    seen = {k.casefold(): t for k, t in calls.items()}
+
+    def last(chat: bool) -> float | None:  # the Chat tab names itself claude-ai; Code claude-code
+        ts = [t for k, t in seen.items() if "claude" in k and ("claude-code" in k) != chat]
+        return max(ts, default=None)
+
+    rows = []
+    paths = claude_desktop_config_paths() if desktop_configs is None else desktop_configs
+    have = [str(p) for p in paths if _has_cortex(p)]
+    name, t = "Claude Desktop (Chat)", last(True)
+    if not paths:
+        rows.append(("PASS", name, "not installed", ""))
+    elif not have:
+        rows.append(("WARN", name, f"Cortex is not in {paths[0]}, so its chats are not "
+                     "logged", "Tick Claude Desktop under Connect in the Cortex app (or run "
+                     "`cortex setup`), then quit Claude Desktop from the tray and open it again."))
+    else:
+        rows.append(("PASS" if t else "WARN", name, f"Cortex in {'; '.join(have)}; {_when(t)}",
+                     "" if t else "Quit Claude Desktop from the tray, open it again and start "
+                     "a new chat; if no call shows up, see docs/INSTALL.md (Troubleshooting)."))
+    home = Path.home()
+    settings = settings or home / ".claude" / "settings.json"
+    plugin = plugin_enabled(settings)
+    entry = _has_cortex(home / ".claude.json")
+    hook = plugin or "prime-hook" in json.dumps(_read_json(settings).get("hooks") or {})
+    name, t = "Claude Code", last(False)
+    if not (home / ".claude").is_dir() and not (home / ".claude.json").is_file():
+        rows.append(("PASS", name, "not installed", ""))
+        return rows
+    how = "plugin" if plugin else "~/.claude.json" if entry else \
+        "the desktop config only (its Code tab)" if have else ""
+    detail = (f"Cortex from {how}" if how else "Cortex not configured") + \
+        f"; prime hook {'installed' if hook else 'missing'}; {_when(t)}"
+    ok = bool(how) and hook and t
+    rows.append(("PASS" if ok else "WARN", name, detail, "" if ok else
+                 "Tick Claude Code under Connect in the Cortex app: it installs the Cortex "
+                 "plugin, which brings the server and the prime hook. Its chats are saved "
+                 "from their transcripts either way."
+                 if not (plugin and hook) else
+                 "Restart Claude Code and start a new chat; if no call shows up, see "
+                 "docs/INSTALL.md (Troubleshooting)."))
+    return rows
+
+
 def check_duplicate_servers(settings: Path | None = None,
                             desktop_configs: list[Path] | None = None
                             ) -> tuple[str, str, str, str]:
     """WARN when the Claude Code plugin and a desktop-config entry both register Cortex."""
     name = "One Cortex server per client"
     plugin_on = plugin_enabled(settings)
-    desktop = []
-    for path in claude_desktop_config_paths() if desktop_configs is None else desktop_configs:
-        servers = _read_json(path).get("mcpServers")
-        if isinstance(servers, dict) and any(_is_cortex_server(e) for e in servers.values()):
-            desktop.append(str(path))
+    desktop = [str(p) for p in (claude_desktop_config_paths() if desktop_configs is None
+                                else desktop_configs) if _has_cortex(p)]
     if plugin_on and desktop:
         return ("WARN", name, "the Claude Code plugin and the desktop config "
                 f"({'; '.join(desktop)}) both register Cortex; the desktop app's Code tab loads "

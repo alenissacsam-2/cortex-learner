@@ -3,9 +3,10 @@
 Claude Code transcripts are `<root>/<project-dir>/<session-id>.jsonl` (root: ~/.claude/projects,
 or CORTEX_CHATS_DIR). Chats from claude.ai, ChatGPT, Gemini and Perplexity come from their data
 exports, which `import_export` converts into the same line format under
-`export_root()/<source folder>/` (EXPORT_DIRS; claude.ai's source is `claude-chat`). Only
-user/assistant text survives: tool calls and results, sidechains, meta lines and
-system-reminder/command wrappers are dropped.
+`export_root()/<source folder>/` (EXPORT_DIRS; claude.ai's source is `claude-chat`). A chat
+in a Claude app with no transcript of its own (Claude Desktop's Chat tab) is logged there live
+over MCP (`log_live`, folder and source LIVE). Only user/assistant text survives: tool calls and
+results, sidechains, meta lines and system-reminder/command wrappers are dropped.
 """
 
 from __future__ import annotations
@@ -45,7 +46,9 @@ EXPORT_PROJECT = "claude-ai"
 # import source -> (its folder under export_root(), the source list_chats reports)
 EXPORT_DIRS = {"claude": (EXPORT_PROJECT, "claude-chat"), "chatgpt": ("chatgpt", "chatgpt"),
                "gemini": ("gemini", "gemini"), "perplexity": ("perplexity", "perplexity")}
-SOURCES = ("claude-code", *(s for _, s in EXPORT_DIRS.values()))
+LIVE = "claude-live"  # chats a Claude app logs over MCP (cortex_prime, cortex_log chat_turn)
+LIVE_ID = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")  # a live chat's id: a ULID the server made
+SOURCES = ("claude-code", *(s for _, s in EXPORT_DIRS.values()), LIVE)
 _UUID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 EXPECTED = ("Expected a claude.ai or ChatGPT export (the .zip, or its conversations.json), a "
             "Google Takeout of Gemini Apps activity (My Activity/Gemini Apps/MyActivity.json or "
@@ -500,7 +503,29 @@ def path_for(chat_id: str) -> Path:
 def source_of(p: Path) -> str:
     if p.parent.parent.resolve() != export_root().resolve():
         return "claude-code"
-    return next((s for d, s in EXPORT_DIRS.values() if d == p.parent.name), "claude-chat")
+    return next((s for d, s in [*EXPORT_DIRS.values(), (LIVE, LIVE)] if d == p.parent.name),
+                "claude-chat")
+
+
+def log_live(cid: str, turns: list[tuple[str, str]], now: datetime) -> None:
+    """Append (role, text) turns, redacted, to the live chat log `cid` as transcript lines
+    stamped `now`; chat_import makes the page."""
+    out = export_root() / LIVE
+    out.mkdir(parents=True, exist_ok=True)
+    lines = "".join(json.dumps({"type": r, "message": {"content": redact(t)},
+                                "timestamp": now.isoformat()}) + "\n"
+                    for r, t in turns if t.strip())
+    with (out / f"{cid}.jsonl").open("a", encoding="utf-8") as f:
+        f.write(lines)  # one write: a reader sees whole lines (chat_import waits for quiet)
+
+
+def cowork_files() -> Iterator[Path]:
+    """Claude Code transcripts of Claude Desktop's Cowork sessions, in the app's own data
+    folders (Windows; shortcut: no macOS path yet, add it when someone runs Cowork there)."""
+    for var, sub in (("LOCALAPPDATA", "Claude-Data/*"), ("APPDATA", "Claude")):
+        if base := os.environ.get(var):
+            for d in Path(base).glob(f"{sub}/local-agent-mode-sessions"):
+                yield from d.glob("**/.claude/projects/*/*.jsonl")
 
 
 def _files() -> list[Path]:
@@ -509,7 +534,7 @@ def _files() -> list[Path]:
     code = sorted(root().glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     if code and time.time() - code[0].stat().st_mtime < LIVE_SECONDS:
         code = code[1:]
-    return sorted(code + [p for d, _ in EXPORT_DIRS.values()
+    return sorted(code + [p for d in [*(d for d, _ in EXPORT_DIRS.values()), LIVE]
                           for p in export_root().glob(f"{d}/*.jsonl")],
                   key=lambda p: p.stat().st_mtime, reverse=True)
 
