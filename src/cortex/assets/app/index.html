@@ -18,6 +18,7 @@
     <option value="setup">Setup</option>
     <option value="chat">Chat</option>
     <option value="status">Status</option>
+    <option value="review" id="review-option">Review</option>
     <option value="connect">Connect AI apps</option>
     <option value="llm">Local model</option>
     <option value="browse">Browsing</option>
@@ -42,6 +43,7 @@
     <button type="button" data-s="setup">Setup</button>
     <button type="button" data-s="chat">Chat</button>
     <button type="button" data-s="status">Status</button>
+    <button type="button" data-s="review">Review<span class="badge" id="review-badge" hidden></span></button>
     <button type="button" data-s="connect">Connect AI apps</button>
     <button type="button" data-s="llm">Local model</button>
     <button type="button" data-s="browse">Browsing</button>
@@ -62,6 +64,11 @@
       <h1 tabindex="-1">Status</h1>
       <p class="lede">Each part of Cortex on this computer, and what to do when one needs you.</p>
       <div id="status"></div>
+    </section>
+    <section id="s-review" hidden tabindex="-1">
+      <h1 tabindex="-1">Review</h1>
+      <p class="lede">Lines about you and teaching rules that wait for your own click. A teaching rule an AI app suggests applies only after you approve it here.</p>
+      <div id="review"></div>
     </section>
     <section id="s-connect" hidden tabindex="-1">
       <h1 tabindex="-1">Connect AI apps</h1>

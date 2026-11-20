@@ -220,7 +220,8 @@ def tiers(vault, events, log=None, today: str | None = None) -> list[dict]:
     the `claims_baseline` holds it, else `typed`.
     With no baseline yet, the current lines are the baseline; with `log` it is recorded once.
     A `confirmed` row's `confirm` (idea 11) is `clicked` when the user ticked yes in Cortex's
-    own dialog, `reflected` for a yes in a clean reflect (a `promote` reconfirm), else
+    own dialog or clicked Approve or Still true in the Cortex app (plan 5a: the strongest tier,
+    never a late relay), `reflected` for a yes in a clean reflect (a `promote` reconfirm), else
     `relayed` (the model's word, as every yes before the dialog)."""
     all_rows = rows(vault)
     events = list(events)
@@ -229,6 +230,13 @@ def tiers(vault, events, log=None, today: str | None = None) -> list[dict]:
     for ev in events:
         pl = ev.get("payload")
         if not isinstance(pl, dict):
+            continue
+        if (ev.get("kind") == "log" and pl.get("kind") == "reconfirm" and pl.get("confirm") ==
+                "clicked" and pl.get("verdict") == "yes" and ev.get("id") not in voided):
+            for r in all_rows:  # plan 5a: Still true clicked in the Cortex app, any tier
+                if r["id"] == pl.get("claim"):
+                    wrote[(r["page"], r["id"])] = ("confirmed", ev.get("session"), ev.get("day"),
+                                                   "clicked")
             continue
         if (ev.get("kind") == "log" and pl.get("kind") == "reconfirm" and pl.get("promote") is True
                 and ev.get("id") not in voided):  # v6 U3: a user's yes in a clean reflect

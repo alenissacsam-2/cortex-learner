@@ -11,7 +11,7 @@
   history.replaceState(null, '', '/manage' + location.hash);
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const SECTIONS = ['setup', 'chat', 'status', 'connect', 'llm', 'browse', 'vault'];
+  const SECTIONS = ['setup', 'chat', 'status', 'review', 'connect', 'llm', 'browse', 'vault'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---- DOM helpers ---- */
@@ -1294,6 +1294,40 @@
         h('p', { class: 'help', text: 'Off (the default): private browsing pages stay out of git. On: they are saved in the history with everything else, so undo covers them and deleting one later leaves a copy in old commits.' })));
   }
 
+  /* Review (plan 5a): what waits for the user's own click. One quiet count in the nav, no
+     popups. Every text is the server's shown text, set with textContent. Contradictions and
+     repeated corrections come later, as a fourth board here. */
+  function badge(n) {
+    const k = Number(n) > 0 ? Number(n) : 0, b = $('review-badge'), o = $('review-option');
+    b.textContent = k ? String(k) : '';
+    b.hidden = !k;
+    b.setAttribute('aria-label', `${k} waiting`);
+    if (o) o.textContent = k ? `Review (${k})` : 'Review';
+  }
+  const PAGE = { 'teaching-contract': 'Teaching rule', preferences: 'Preferences', personality: 'Personality',
+    goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait' };
+  function renderReview(d) {
+    badge(d.count);
+    const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
+    const where = (x) => (PAGE[x.page] || x.page) + (x.section ? ` · ${x.section}` : '');
+    const list = (rows, empty) => (rows.length ? rows : [note(empty)]);
+    put('review',
+      board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) =>
+        row(p.text, where(p), p.since ? `Suggested ${p.since}` : null, [
+          btn('Approve', () => act('/api/review/approve', { key: p.key }, 'Approved.'), 'btn lit', { 'aria-label': `Approve: ${p.text}` }),
+          btn('Dismiss', () => act('/api/review/dismiss', { key: p.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${p.text}` })])),
+      'Nothing is waiting.')),
+      board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) =>
+        row(x.text, where(x), `Ended ${x.until}`, [
+          btn('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, { 'aria-label': `Retire: ${x.text}` })])),
+      'No line is past its end date.')),
+      board('Still true?', { note: String(d.stale.length) }, ...list(d.stale.map((x) =>
+        row(x.text, where(x), `Last confirmed ${x.since}`, [
+          btn('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', { 'aria-label': `Still true: ${x.text}` }),
+          btn('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, { 'aria-label': `Retire: ${x.text}` })])),
+      'Nothing to check this month.')));
+  }
+
   /* Setup */
   const skipped = new Set(), opened = new Set();
   const pick = { model: null, runner: null };
@@ -1415,7 +1449,7 @@
     put('setup', ...d.order.map((k) => steps[k]), sFinish);
   }
 
-  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
+  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 
   /* ---- header: wordmark, theme, quit, nav ---- */
   $('wordmark').append(dm('CORTEX', 3, 'Cortex'));
@@ -1458,6 +1492,7 @@
   else { landing = true; show('status'); }
   idle();
   poll(true);
+  if (current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});  // the nav's count; no vault yet: none
   // the app starts the automatic history import by itself: the job line shows it within 15 s
   setInterval(() => { if (!dead && !document.hidden) poll(true); }, 15000);
 })();
