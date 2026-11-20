@@ -440,7 +440,16 @@
     put('status', wn.show && wn.show.length ? newsBoard(wn.show, true) : null,
       board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
         ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
+      d.first_run ? null : chatImportBoard(d.chat_import !== false),
       d.update ? updatesBoard(d.update, wn.current) : null);
+  }
+  /* app.chat_import: past AI chats saved as chat pages every 5 minutes, no model (on by default) */
+  function chatImportBoard(on) {
+    const cb = h('input', { type: 'checkbox', id: 'chat-import', checked: on });
+    cb.addEventListener('change', () => post('/api/app/chat-import', { enabled: cb.checked }, () => savedMark(cb)));
+    return board('Past AI chats', {},
+      h('div', { class: 'field' }, h('label', { class: 'check', for: 'chat-import' }, cb, h('span', { text: 'Save new AI chats to your notes automatically' })),
+        h('p', { class: 'help', text: 'Every 5 minutes, Claude Code chats and the chats you imported become chat pages: your own messages only (a coding session as a short summary of files and commits, never code), with keys and passwords removed. No AI model is used. Chats in a category you set to skip are never saved.' })));
   }
 
   /* What's new: shown once after an update (Got it records it), and any time from Updates */
@@ -466,10 +475,13 @@
     b.querySelector('h2').focus();
   }
 
-  /* Updates: GitHub is asked only on a click, never in the background */
+  /* Updates: the app checks GitHub every 6 hours and prepares a newer release (u.ready); it is
+     installed only on a click */
   let upd = null;  // the last check or update job
   function updatesBoard(u, cur) {
     const r = upd && upd.result;
+    const cmd = (c) => h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: c }),
+      copyBtn(() => c, 'Copy failed; select the command and copy it.')));
     const out = [row(`Cortex ${u.current}`, null, null, [cur ? btn('What’s new', () => openNews(cur)) : null,
       btn('Check for updates', () => { upd = null; return job('/api/update/check', {}); })])];
     if (upd && upd.error) out.push(row('That did not work', null, upd.error, null));
@@ -482,12 +494,14 @@
         () => job('/api/update/apply', {}));
       out.push(row(`Cortex ${r.latest} is available`, null, r.command ? 'Run this in a terminal to update:' : null,
         [ext(r.notes_url, 'Release notes'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
-      if (r.command) {
-        out.push(h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: r.command }),
-          copyBtn(() => r.command, 'Copy failed; select the command and copy it.'))));
-      }
+      if (r.command) out.push(cmd(r.command));
+    } else if (u.ready) {  // found and prepared by the app's own check
+      out.push(row(`Cortex ${u.ready.version} is ready`, null, u.ready.command ? 'Run this in a terminal to update:'
+        : 'Downloaded and checked. Cortex closes, installs it and reopens.',
+      [ext(u.ready.notes_url, 'Release notes'), u.ready.command ? null : btn('Restart to update', () => job('/api/update/apply', {}), 'btn lit')]));
+      if (u.ready.command) out.push(cmd(u.ready.command));
     }
-    return board('Updates', { note: 'checked only when you click' }, ...out);
+    return board('Updates', { note: 'checked every 6 hours, installed only when you click' }, ...out);
   }
 
   /* Chat: a model on this computer answers from your notes, saved chats and browsing; never a
@@ -1286,6 +1300,23 @@
   }
 
   /* Dashboard and vault */
+  // Export snapshot: the desktop app asks where to save it (then a job writes it); the browser downloads it
+  async function exportSnapshot() {
+    const r = await post('/api/vault/export', {});
+    if (!r || r.cancelled) return;
+    if (r.job) { poll(); return; }
+    try {
+      const res = await fetch(r.download, { headers: { 'X-Cortex-Token': T } });
+      if (!res.ok) throw new Error(`The app answered ${res.status}.`);
+      const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const a = h('a', { href: URL.createObjectURL(await res.blob()), download: name ? name[1] : 'cortex-snapshot.html' });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      toast.ok('Snapshot saved to your downloads.');
+    } catch (e) { toast.error(e.message); }
+  }
   const noObsidian = (r) => { if (r.obsidian === false) toast('Obsidian is not installed, so it opened with this computer’s own app.', true); };
   function renderVault(d) {
     if (!d.ok) {
@@ -1297,8 +1328,8 @@
         btn('Open folder', () => post('/api/open', { what: 'folder' }), null, { 'aria-label': 'Open folder: Vault' })]),
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
         h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
-      row('Dashboard', d.dashboard ? `built ${d.dashboard}` : 'not built', 'An offline page of your notes and the 3D brain.',
-        [btn('Build dashboard', () => job('/api/vault/dashboard', {})), d.dashboard ? btn('Open dashboard', () => post('/api/open', { what: 'dashboard' })) : null]),
+      row('Snapshot', null, 'One page of your notes and the 3D brain that opens without Cortex. Private items are never in it.',
+        [btn('Export snapshot', exportSnapshot)]),
       row('Backups', d.backups ? `${d.backups}, last ${d.last_backup}` : 'none yet', 'A zip of the whole vault in .cortex/backups. Copy it to another drive now and then.',
         [btn('Back up vault', () => job('/api/vault/backup', {}))]),
       row('Health', null, 'Checks Python, the vault folder, git and a few common problems.', [btn('Run doctor', () => job('/api/vault/doctor', {}))])),

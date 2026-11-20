@@ -930,7 +930,8 @@ SENDS = {
     "status": {"Check for updates": [["/api/update/check", {}]],
                "Import new history now": [["/api/browse/import", {"sources": ["chrome/Default"],
                                                                  "from": "browse"}]],
-               "Start at login": [["/api/browse/login", {"on": True}]]},
+               "Start at login": [["/api/browse/login", {"on": True}]],
+               "chat-import": [["/api/app/chat-import", {"enabled": False}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
                            ["/api/connect/apply", {"want": {}}]],
                 "Open folder: Claude Desktop skill": [["/api/open", {"what": "skill_zip"}]]},
@@ -960,7 +961,7 @@ SENDS = {
     "vault": {
         "Open vault in Obsidian": [["/api/open", {"what": "vault"}]],
         "Open folder: Vault": [["/api/open", {"what": "folder"}]],
-        "Build dashboard": [["/api/vault/dashboard", {}]],
+        "Export snapshot": [["/api/vault/export", {}]],
         "Back up vault": [["/api/vault/backup", {}]],
         "Run doctor": [["/api/vault/doctor", {}]],
         "Save: History": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},

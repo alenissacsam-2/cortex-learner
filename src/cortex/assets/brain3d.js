@@ -3185,6 +3185,7 @@ void main() {
       get selected() { return selected >= 0 ? PG[selected].id : null; },
       get spin() { return spin; },
       get growth() { return growthMonth; },
+      get focused() { return focus >= 0 ? String(lobes[focus].id) : null; },
       get busy() { return !!anim || !!goal || ptrs.size > 0 || Math.abs(vel[0]) + Math.abs(vel[1]) > 1e-4; },
       // select a page without flying to it (a remount restores the selection)
       reselect(id) {
@@ -3214,6 +3215,11 @@ void main() {
         const k = id === null || id === undefined ? undefined : lobeIdx.get(String(id));
         if (k === undefined) { focus = -1; restyle(); retint(); relines(); fly(home); }
         else focusOn(k);
+      },
+      // focus a lobe without flying (a remount restores it; the camera is restored already)
+      refocus(id) {
+        const k = lobeIdx.get(String(id));
+        if (k !== undefined) { focus = k; restyle(); retint(); relines(); }
       },
       highlight(ids) {
         if (!ids) hl = null;

@@ -3,7 +3,7 @@
 (async () => {
   'use strict';
   const T0 = performance.now();
-  // The snapshot (cortex dashboard) carries its data; the app's live home fetches it and keeps
+  // The snapshot (Export snapshot) carries its data; the app's live home fetches it and keeps
   // it current from /api/home/delta.
   const BLOB = document.getElementById('data'), LIVE = !BLOB;
   let KEY = '';
@@ -12,19 +12,22 @@
     try { if (KEY) sessionStorage.setItem('cortex.key', KEY); else KEY = sessionStorage.getItem('cortex.key') || ''; } catch (e) { /* storage off */ }
     history.replaceState(null, '', '/' + location.hash);
   }
-  async function api(path) {
-    const r = await fetch(path, { headers: { 'X-Cortex-Token': KEY }, cache: 'no-store' });
-    if (!r.ok) throw new Error(`The app answered ${r.status}.`);
+  // GET, or POST with a JSON body; a refused key (401, 403) throws an error marked `key`
+  async function api(path, body) {
+    const r = await fetch(path, body === undefined ? { headers: { 'X-Cortex-Token': KEY }, cache: 'no-store' } : {
+      method: 'POST', headers: { 'X-Cortex-Token': KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw Object.assign(new Error(`The app answered ${r.status}.`), { key: r.status === 401 || r.status === 403 });
     return r.json();
   }
-  function offline(on) {  // the header chip: the app is not answering
+  function offline(err) {  // the header chip: the app is not answering, or no longer takes this page's key
     const s = document.getElementById('stale');
-    s.textContent = '· not connected to Cortex';
-    s.hidden = !on;
+    s.textContent = err && err.key ? '· This page’s key expired. Open Cortex from the tray or Start menu.'
+      : '· not connected to Cortex';
+    s.hidden = !err;
   }
   async function fetchHome() {
     for (;;) {
-      try { const d = await api('/api/home'); offline(false); return d; } catch (e) { offline(true); }
+      try { const d = await api('/api/home'); offline(null); return d; } catch (e) { offline(e); }
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
@@ -156,6 +159,8 @@
     help: ['M12 3a9 9 0 1 0 0.01 0', 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7', 'M12 17h.01'],
     gear: ['M12 5.5a6.5 6.5 0 1 0 0.01 0', 'M12 9.5a2.5 2.5 0 1 0 0.01 0', 'M12 3v2.5', 'M12 18.5V21', 'M3 12h2.5',
       'M18.5 12H21', 'M5.6 5.6l1.8 1.8', 'M16.6 16.6l1.8 1.8', 'M5.6 18.4l1.8-1.8', 'M16.6 7.4l1.8-1.8'],
+    lock: ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 7 0v3'],
+    unlock: ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 6.8-1.2'],
   };
   function icon(name) {
     const s = svgEl('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
@@ -793,6 +798,53 @@
     a.append(icon('gear'));
     $('theme').before(a);
   }
+  /* ---- the Private switch (live home): private items show only after Windows Hello verifies
+     the user; the app relocks it after 10 minutes, on minimise and on restart ---- */
+  let PRIVATE = false, switching = false, privGen = 0;
+  const lockBtn = LIVE ? button('icon-btn', null, () => setPrivate(!PRIVATE)) : null;
+  function syncLock() {
+    const word = PRIVATE ? 'Hide private items' : 'Show private items';
+    lockBtn.replaceChildren(icon(PRIVATE ? 'unlock' : 'lock'));
+    lockBtn.setAttribute('aria-label', word);
+    lockBtn.title = word;
+  }
+  async function setPrivate(on) {
+    if (switching) return;
+    switching = true;
+    try {
+      const r = await api(on ? '/api/home/unlock' : '/api/home/lock', {});
+      if (on && !r.unlocked) { toast(r.message || 'Private items stay hidden.', 'error'); return; }
+      const d = await api(on ? '/api/home?private=1' : '/api/home');  // the whole home again, not a delta
+      PRIVATE = on && !d.relock;
+      privGen++;
+      syncLock();
+      applyDelta({ ...d, full: true });
+    } catch (e) {
+      toast(e.key ? 'This page’s key expired. Open Cortex from the tray or Start menu.' : 'Cortex is not answering.', 'error');
+    } finally { switching = false; }
+  }
+  // a newer Cortex the app has already downloaded: Restart to update, applied only on this click
+  let updBtn = null;
+  function showUpdate(u) {
+    if (!u) { if (updBtn) updBtn.hidden = true; return; }
+    if (!updBtn) {
+      updBtn = button('chip', 'Restart to update', async () => {
+        if (updBtn.dataset.mode !== 'installer') { location.href = '/manage#status'; return; }  // its command: Status, Updates
+        try {
+          await api('/api/update/apply', {});
+          toast('Cortex is closing to install the update. It reopens by itself when it is done.');
+        } catch (e) { toast(e.message, 'error'); }
+      });
+      $('open-search').before(updBtn);
+    }
+    updBtn.dataset.mode = u.mode;
+    updBtn.title = `Cortex ${u.version} is ready`;
+    updBtn.hidden = false;
+  }
+  if (LIVE) {
+    syncLock();
+    $('open-search').before(lockBtn);
+  }
   const fit = () => `${phone()} ${roomy()}`;
   let wasFit = fit();
   window.addEventListener('resize', () => {
@@ -917,7 +969,7 @@
     const ids = remountIds, old = brain;
     remountIds = null;
     const keep = { camera: old.camera, mode: old.mode, style: old.style, selected: old.selected,
-      spin: old.spin, growth: old.growth };
+      spin: old.spin, growth: old.growth, focused: old.focused };
     hideTip();
     old.destroy();
     brain = null;
@@ -925,6 +977,7 @@
     brain.setArchive(brainHost.parentNode === $('brain-slot') && archiveOn);
     if (brainUi) applyBrainFilter();
     if (keep.growth) brain.setGrowth(keep.growth);
+    if (keep.focused) brain.refocus(keep.focused);
     if (keep.selected) brain.reselect(keep.selected);
     if (keep.spin) brain.setSpin(true);
     syncLook();
@@ -3073,8 +3126,18 @@
       apply();
     }
     function retheme() { if (R) R.update(); }
+    // live home: forget the drawn map, so the next init draws it from the current D. Its
+    // controls stay. shortcut: the Domain list keeps the domains it was first built with.
+    function reset() {
+      if (!ready) return;
+      sim.stop();
+      ready = false; touched = false; R = null; hover = null;
+      $('graph').replaceChildren();
+      $('tree').replaceChildren();
+      if (!$('tree').hidden) renderTree();
+    }
 
-    return { init, onlyState, setList, setCurrent, retheme };
+    return { init, onlyState, setList, setCurrent, retheme, reset };
   })();
 
   const RENDER = { home: renderHome, brain: ensureBrainUi, library: renderLibrary, you: renderYou,
@@ -3105,8 +3168,9 @@
       LIB.hits = LIB.q ? new Set(search(LIB.q).map((h) => h.h.p.id)) : null;
       renderLibraryRows();
     } else if (name === 'brain') {
-      // shortcut: the 2D map keeps the data it was first drawn with, until the page reloads
       if (brainUi && !brainFailed) { fillOutline(); if (brain) renderLegend(brain.mode); }
+      G.reset();  // the 2D map is drawn again from the new data: now if it shows, else when it does
+      if (view !== '3d') G.init();
     } else {
       for (const id of CLEAR[name] || []) $(id).replaceChildren();
       if (name === 'study') $('sprint').hidden = false;
@@ -3117,7 +3181,7 @@
   let V = D.v;
   function applyDelta(d) {
     const had = new Set(BRAIN_IDS);
-    if (d.full) { delete d.full; D = d; }
+    if (d.full) { delete d.full; delete d.relock; D = d; }
     else {
       Object.assign(D, d.sections);
       if (d.pages) {
@@ -3160,14 +3224,20 @@
     if (polling || document.hidden) return;  // hidden: no timer; showing the tab polls at once
     polling = true;
     let d = null;
+    const gen = privGen;
     try {
-      const { v } = await api('/api/home/version');
-      if (v !== V) d = await api('/api/home/delta?since=' + encodeURIComponent(V));
-      offline(false);
-    } catch (e) { offline(true); }
+      const ver = await api('/api/home/version');
+      // the switch relocked (10 minutes, a minimise): the public home whole, no private item kept
+      if (PRIVATE && !ver.private) d = { ...(await api('/api/home')), full: true, relock: true };
+      else if (ver.v !== V) d = await api('/api/home/delta?since=' + encodeURIComponent(V) + (PRIVATE ? '&private=1' : ''));
+      showUpdate(ver.update);
+      offline(null);
+    } catch (e) { offline(e); }
     polling = false;
     pollTimer = setTimeout(poll, 3000);
-    if (d && d.v !== V) applyDelta(d);
+    if (!d || gen !== privGen || switching) return;  // the switch moved meanwhile: its own load wins
+    if (d.relock && PRIVATE) { PRIVATE = false; privGen++; syncLock(); }
+    if (d.full || d.v !== V) applyDelta(d);
   }
   if (LIVE) {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

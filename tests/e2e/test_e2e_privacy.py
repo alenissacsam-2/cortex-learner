@@ -8,7 +8,7 @@ term. A BOM + CRLF `private: true` note and a private assessment must stay out o
 
 import io
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import anyio
 import numpy as np
@@ -21,7 +21,7 @@ from ruamel.yaml import YAML
 from test_browse import Embed, hubbed
 from typer.testing import CliRunner
 
-from cortex import cloudllm, localllm, mcp_server, semantic
+from cortex import cloudllm, dashboard, localllm, mcp_server, semantic
 from cortex.app import server as app_server
 from cortex.app import status as app_status
 from cortex.cli import app
@@ -146,7 +146,8 @@ def outward(root, opener: Opener, outputs: list[str]) -> dict[str, str | bytes]:
     outputs.append(cli("today", "--vault", root))
     out["Today.md"] = (root / "Today.md").read_bytes()
     outputs.append(cli("dashboard", "--no-open", "--vault", root))
-    out["dashboard.html"] = (root / ".cortex" / "dashboard.html").read_bytes()
+    out["index.md"] = (root / "index.md").read_bytes()
+    out["snapshot"] = dashboard.snapshot(Vault(root), now=datetime.now(UTC))  # Export snapshot
     a = app_server.App(root)
     out["app status"] = json.dumps([a.status(), a.browse(), a.vault()], default=str)
     with np.load(root / semantic.CACHE, allow_pickle=False) as z:

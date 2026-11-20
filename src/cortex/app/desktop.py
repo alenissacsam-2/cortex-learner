@@ -28,7 +28,7 @@ from cortex.app import server, status
 AUTOSTART = "Cortex"  # the HKCU Run value: `"<cortex-app.exe>" --hidden`
 SIZE, MIN_SIZE = (1200, 800), (640, 480)
 AMBER, GROUND = "#ffb000", "#0b0b0a"  # app.css's night --lit and --ground
-NOTIFY = ("reviews", "exams", "jobs")  # app.notify in ~/.cortex/config.yaml, all on by default
+NOTIFY = ("reviews", "exams", "jobs", "updates")  # app.notify in config.yaml, all on by default
 EXAM_DAYS = (3, 1)
 FIRST_S, EVERY_S = 60, 30 * 60  # the first daily check after start, then every 30 minutes
 KEEP_DAYS = 40  # a sent notification's key is remembered this long
@@ -195,9 +195,11 @@ class Notifier:
                 echo(f"Cortex app: the notification check failed ({type(e).__name__})")
 
     def job_ended(self, job) -> None:
-        """"<job> finished" or "<job> failed"; a cancelled job says nothing. Job names are the
-        app's own words, never a page's title."""
-        if job.cancelled.is_set() or not notify_settings()["jobs"]:
+        """"<job> finished" or "<job> failed"; a cancelled job, or a background one whose result
+        is `quiet` (it found nothing to do), says nothing. Job names are the app's own words,
+        never a page's title."""
+        quiet = isinstance(job.result, dict) and job.result.get("quiet") is True
+        if job.cancelled.is_set() or quiet or not notify_settings()["jobs"]:
             return
         failed = job.error is not None or (
             isinstance(job.result, dict) and job.result.get("ok") is False)
@@ -244,9 +246,14 @@ class Desktop:
                 traceback.print_exc(limit=1)
         if self.quitting or self.tray is None or _shutting_down():
             return True
+        self.app.lock()  # the Private switch relocks when the window goes to the tray
         # hidden from another thread: this handler runs on the GUI thread inside FormClosing
         threading.Thread(target=self.win.hide, daemon=True, name="cortex-hide").start()
         return False
+
+    def minimized(self) -> None:
+        self.state = "minimized"
+        self.app.lock()  # the Private switch relocks when the window is minimised
 
     def end(self) -> None:
         """cortex-end: once the app stops, close the window (that ends `webview.start`)."""
@@ -356,7 +363,7 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
                                       background_color=GROUND, **_geometry(webview))
         ev = d.win.events
         ev.closing += d.closing
-        ev.minimized += lambda: setattr(d, "state", "minimized")
+        ev.minimized += d.minimized
         ev.maximized += lambda: setattr(d, "state", "maximized")
         ev.restored += lambda: setattr(d, "state", "normal")
         threading.Thread(target=d.end, daemon=True, name="cortex-end").start()

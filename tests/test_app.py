@@ -242,7 +242,7 @@ def test_status_shapes(app, vault):
     assert js["first_run"] is False and js["vault"] == str(vault.resolve())
     ids = [r["id"] for r in js["rows"]]
     assert ids == ["vault", "git", "embed", "apps", "llm", "receiver", "extension", "processing",
-                   "history", "dashboard"]
+                   "history"]
     for r in js["rows"]:
         assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
     v = js["rows"][0]
@@ -820,7 +820,37 @@ def test_vault_actions(app, vault, fakes):
     assert call(app, "POST", "/api/open", {"what": "vault"})[0] == 200
     assert fakes[-1][1].startswith("obsidian://open?path=")
     assert call(app, "POST", "/api/open", {"what": "../etc"})[0] == 400
-    assert call(app, "POST", "/api/open", {"what": "dashboard"})[0] == 400  # not built
+    assert call(app, "POST", "/api/open", {"what": "dashboard"})[0] == 400  # Export snapshot now
+
+
+def test_export_snapshot_downloads_in_the_browser_and_saves_by_dialog_in_the_window(
+        app, vault, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from conftest import note
+    note(vault, "notes/private-thoughts.md",
+         'id: "private-thoughts"\ntitle: "PRIVMARKER"\nprivate: true\n', "PRIVMARKER diary")
+    assert call(app, "POST", "/api/vault/export", {})[1] == {"download": "/api/vault/snapshot"}
+    code, _, raw, r = call(app, "GET", "/api/vault/snapshot")
+    assert code == 200 and r.getheader("Content-Type").startswith("text/html")
+    assert r.getheader("Content-Disposition") == f'attachment; filename="{server.snapshot_name()}"'
+    assert b"default-src 'none'" in raw and b"PRIVMARKER" not in raw
+    assert call(app, "GET", "/api/vault/snapshot", token=False)[0] == 401
+    assert not (vault / ".cortex" / "dashboard.html").exists()
+    dest, asked = tmp_path / "out" / "snap.html", []
+    dest.parent.mkdir()
+    webview = SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30))
+    monkeypatch.setitem(__import__("sys").modules, "webview", webview)
+
+    def dialog(kind, **kw):
+        asked.append((kind, kw["save_filename"]))
+        return str(dest) if len(asked) == 1 else None
+    app.desktop = SimpleNamespace(win=SimpleNamespace(create_file_dialog=dialog))
+    assert call(app, "POST", "/api/vault/export", {})[1]["job"] == "Exporting a snapshot"
+    assert wait_job(app)["result"] == {"ok": True, "path": str(dest)}
+    assert b"default-src 'none'" in dest.read_bytes()
+    assert call(app, "POST", "/api/vault/export", {})[1] == {"cancelled": True}
+    assert asked == [(30, server.snapshot_name())] * 2
 
 
 def test_llm_page_lists_both_runners_chat_models_and_the_recommendation(app, monkeypatch):
@@ -2048,8 +2078,9 @@ def test_update_state_and_status_ask_no_one(app, monkeypatch):
     from cortex import update
     monkeypatch.setattr(update, "latest", lambda: pytest.fail("a GET went to GitHub"))
     monkeypatch.setattr(update, "current", lambda: "0.1.0")
-    assert call(app, "GET", "/api/update")[1] == {"current": "0.1.0", "mode": "dev"}
-    assert call(app, "GET", "/api/status")[1]["update"] == {"current": "0.1.0", "mode": "dev"}
+    want = {"current": "0.1.0", "mode": "dev", "ready": None}
+    assert call(app, "GET", "/api/update")[1] == want
+    assert call(app, "GET", "/api/status")[1]["update"] == want
 
 
 def test_update_check_newer_same_and_errors(app, github, monkeypatch):
@@ -2120,6 +2151,59 @@ def test_update_apply_when_already_latest_or_cancelled(app, github, monkeypatch)
 
 
 # ---- v7 review A: install, app manager, first run --------------------------------------------
+
+
+def test_quiet_update_prepares_once_notifies_once_and_waits_for_the_click(
+        app, github, monkeypatch):
+    """The background check downloads a newer installer once, shows Restart to update (home
+    and Status) and notifies once per version, never applying it; the click reuses the file."""
+    from types import SimpleNamespace
+
+    from cortex import update
+    from cortex.app import desktop
+    got = []
+
+    def download(info, dest, on_progress, cancel):
+        got.append(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / update.EXE).write_bytes(b"MZ")
+        return dest / update.EXE
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    monkeypatch.setattr(update, "install_dir", lambda: None)
+    monkeypatch.setattr(update, "download", download)
+    notes = []
+    app.desktop = SimpleNamespace(notify=notes.append, win=None)
+    app.update_quietly()
+    app.update_quietly()  # every 6 hours: the same version is not fetched or told again
+    assert got == [update.dest_dir(_release())] and github == [] and not app.stop.is_set()
+    assert notes == ["Cortex 9.0.0 is ready: restart to update"]
+    assert call(app, "GET", "/api/home/version")[1]["update"] == {"version": "9.0.0",
+                                                                   "mode": "installer"}
+    assert call(app, "GET", "/api/update")[1]["ready"]["version"] == "9.0.0"
+    app.update_ready = None  # a restart: the same version is not notified again
+    app.update_quietly()
+    assert len(notes) == 1
+    app.update_ready = None
+    desktop.save_notify({"updates": False})
+    desktop.save_state("update_notified", None)
+    app.update_quietly()
+    assert len(notes) == 1  # the setting is off
+    monkeypatch.setattr(update, "download", lambda *a: pytest.fail("downloaded it again"))
+    call(app, "POST", "/api/update/apply", {})  # Restart to update
+    assert wait_job(app)["result"]["launched"] is True
+    assert github == [(got[0] / update.EXE, os.getpid(), None)]
+    assert app.stop.wait(5)
+
+
+def test_quiet_update_in_a_dev_install_notes_the_command(app, github, monkeypatch):
+    from cortex import update
+    monkeypatch.setattr(update, "download", lambda *a: pytest.fail("a dev install downloaded"))
+    app.update_quietly()
+    assert app.update_ready["command"] == update.command("v9.0.0") and github == []
+    monkeypatch.setattr(update, "latest", lambda: _release((0, 1, 0)))
+    app.update_ready = None
+    app.update_quietly()  # not newer: nothing
+    assert app.update_ready is None
 
 
 def test_update_check_sweeps_old_installers(app, github):

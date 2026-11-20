@@ -16,6 +16,8 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from ruamel.yaml import YAML
 
+from cortex import dashboard
+from cortex.vault import Vault
 from e2e.conftest import CLI
 
 pytestmark = pytest.mark.slow
@@ -193,10 +195,12 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
         asked = [b for b in fake_ollama.chats() if QUESTION in b["messages"][-1]["content"]]
         assert asked and "<untrusted_note" in asked[-1]["messages"][-1]["content"]
 
-        # 7. the dashboard, written only, keeps its CSP
+        # 7. the dashboard: index.md on demand, no page in the vault; a snapshot keeps its CSP
         r = run_cli("dashboard", "--no-open")
         assert r.returncode == 0, r.stdout + r.stderr
-        html = (vault / ".cortex" / "dashboard.html").read_text(encoding="utf-8")
+        assert (vault / "index.md").is_file()
+        assert not (vault / ".cortex" / "dashboard.html").exists()
+        html = dashboard.snapshot(Vault(vault), now=datetime.now(UTC))
         assert "default-src 'none'" in html
 
         # 8. the MCP tools over stdio: nothing private, no secret

@@ -65,9 +65,20 @@ def _no_real_run_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_windows_hello(monkeypatch):
+    """Tests never show a real Windows Hello prompt: the Private switch's tests mock it."""
+    from cortex.app import hello
+
+    def refuse(*a, **k):
+        raise AssertionError("a test reached the real Windows Hello prompt")
+    monkeypatch.setattr(hello, "verify", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_chat_export(tmp_path_factory, monkeypatch):
-    """Tests never see the user's imported Claude Chat conversations."""
+    """Tests never see the user's imported chat exports or Claude Code transcripts."""
     monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path_factory.mktemp("chat-export")))
+    monkeypatch.setenv("CORTEX_CHATS_DIR", str(tmp_path_factory.mktemp("claude-projects")))
 
 
 @pytest.fixture(autouse=True)

@@ -18,6 +18,7 @@ from collections import defaultdict
 import numpy as np
 
 from cortex import chats, claims, topics
+from cortex.chat_import import MINE
 from cortex.events import live
 from cortex.index import GLYPHS, _wrap, link_targets
 from cortex.reflect import unconfirmed
@@ -42,12 +43,18 @@ def user_turns(body: str) -> list[str] | None:
     """The text of each `**Me:**` turn of an imported chat page, up to the page app's own
     speaker line (`**Gemini:**` on a Gemini page). None when a turn's end cannot be found (no
     `Source:` app, no turn, or a `**Me:**` with no reply before the next one or the end): the
-    caller then serves the title only, never a guess that could hold assistant text."""
+    caller then serves the title only, never a guess that could hold assistant text. A page
+    whose Timeline line says MINE (chat_import's) holds no reply: a turn ends at the next
+    `### ` or `**Me:**` line, or the end."""
     app = topics.page_source(body)
     if not app:
         return None
+    mine = MINE in (topics.TL_RE.search(body) or [""])[0]
     them, out, cur = f"**{app}:**", [], None
     for ln in body.splitlines():
+        if mine and cur is not None and ln.startswith(("### ", ME)):
+            out.append("\n".join(cur).strip())
+            cur = None
         if ln.startswith(ME):
             if cur is not None:
                 return None
@@ -58,6 +65,9 @@ def user_turns(body: str) -> list[str] | None:
             cur = None
         elif cur is not None:
             cur.append(ln)
+    if mine and cur is not None:
+        out.append("\n".join(cur).strip())
+        cur = None
     return None if cur is not None or not out else out
 
 
