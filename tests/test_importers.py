@@ -269,14 +269,16 @@ def test_cli_private_is_refused_for_chats_and_google_activity(root_plain):
     for f in ("perplexity_thread.md", "takeout_MyActivity.json"):
         r = runner.invoke(app, ["import", str(EXPORTS / f), "--private", "--vault",
                                 str(root_plain)])
-        assert r.exit_code == 1 and "--private applies to notes and calendars" in r.output
+        assert r.exit_code == 1 and "--private applies to notes, calendars" in r.output
     assert not any(importers.chats.export_root().rglob("*.jsonl"))
 
 
 def test_guides_for_notes_and_calendar():
-    assert set(importers.GUIDES) == {"notes", "calendar"}
-    for g in importers.GUIDES.values():
-        assert g["steps"] and g["link"].startswith("https://") and g["wait"] and g["pick"]
+    assert set(importers.GUIDES) == {"notes", "calendar", "docs", "repos", "highlights"}
+    for k, g in importers.GUIDES.items():
+        assert g["steps"] and g["wait"] and g["pick"]
+        # docs and repos are folders on this computer: nothing to open
+        assert g["link"].startswith("https://") or (k in ("docs", "repos") and not g["link"])
 
 
 def test_detect_takeout_in_another_language(tmp_path):

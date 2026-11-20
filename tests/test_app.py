@@ -1841,6 +1841,36 @@ def test_notes_and_calendar_imports_count_and_mark_history(app, home, vault, tmp
     assert s["imports"]["chatgpt"]["count"] == 0  # chat cards unchanged
 
 
+def test_docs_repos_and_highlights_cards(app, home, vault, tmp_path):
+    """v9 item 14: the three new cards preview (dry run, tier preselected), import at the
+    page's tier, and count on their cards."""
+    from test_more_sources import CLIPPINGS, _docs_folder, _repo
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert {"docs", "repos", "highlights"} <= set(s["guides"])
+    assert s["imports"]["repos"] == {"count": 0, "when": None}
+    docs, clip = _docs_folder(tmp_path / "docs"), tmp_path / "My Clippings.txt"
+    clip.write_bytes(CLIPPINGS.encode("utf-8"))
+    _repo(tmp_path / "projects", "planner")
+    before = snapshot(vault / "resources")
+    for source, path, n in (("docs", docs, 3), ("repos", tmp_path / "projects", 1),
+                            ("highlights", clip, 2)):
+        call(app, "POST", "/api/import/preview", {"source": source, "path": str(path)})
+        r = wait_job(app)["result"]
+        assert r["found"] == n and r["tier"] == "cloud" and r["lines"][0].startswith(
+            f"Found {n} new item"), r
+    assert snapshot(vault / "resources") == before
+    call(app, "POST", "/api/import/run", {"source": "repos", "path": str(tmp_path / "projects"),
+                                          "tier": "local"})
+    assert wait_job(app)["result"]["counts"] == {"repos": 1}
+    assert "private: true" in (vault / "resources" / "repo-planner.md").read_text("utf-8")
+    call(app, "POST", "/api/import/run", {"source": "highlights", "path": str(clip)})
+    assert wait_job(app)["result"]["counts"] == {"highlights": 2}
+    call(app, "POST", "/api/import/preview", {"source": "highlights", "path": str(docs)})
+    assert "not reading highlights: use the Notes card" in wait_job(app)["error"]
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["imports"]["repos"]["count"] == 1 and s["imports"]["highlights"]["count"] == 2
+
+
 def test_last_indexed_is_one_answer(app, vault):
     """QA 4: Setup's "Index my notes", Status and Dashboard and vault read the same file (the
     vector cache Index my notes writes), so they never disagree."""

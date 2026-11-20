@@ -33,7 +33,8 @@ REPORT = ("read", "imported", "private", "duplicate", "reasons")  # report_line'
 LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
-           **dict.fromkeys(LABELS, "notes"), "calendar": "calendar"}
+           **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
+           "repos": "repos", "highlights": "highlights"}
 
 GUIDES = {
     "notes": {
@@ -64,6 +65,33 @@ GUIDES = {
                   "Export and save the .ics (one calendar at a time)."],
         "wait": "instant",
         "pick": "the .ics file, or Google's .zip as it is; attendees' emails are left out"},
+    "docs": {
+        "name": "Documents (PDF, Word, text)",
+        "link": "",
+        "steps": ["Nothing to export: put the PDFs, Word (.docx), .md and .txt files you want "
+                  "Cortex to know into one folder (subfolders are fine).",
+                  "Each document becomes one page: its title, its date and its first 1,500 "
+                  "characters. Encrypted and scanned (image only) PDFs are skipped."],
+        "wait": "instant",
+        "pick": "paste the full path of the folder"},
+    "repos": {
+        "name": "Your code projects (git)",
+        "link": "",
+        "steps": ["Nothing to export: pick the folder that holds your git projects, such as "
+                  "C:\\Users\\you\\Projects. Projects one or two folders down are found.",
+                  "Each project becomes one page: its README's start, its languages (from file "
+                  "names such as package.json), and your commit count, dates and last 20 commit "
+                  "messages. Code, diffs and other files are never read."],
+        "wait": "seconds",
+        "pick": "paste the full path of the folder of projects"},
+    "highlights": {
+        "name": "Reading highlights (Kindle, Readwise, Pocket)",
+        "link": "https://readwise.io/export",
+        "steps": ["Kindle: plug it in by USB and copy documents/My Clippings.txt.",
+                  "Readwise: open readwise.io/export and click Export to CSV.",
+                  "Pocket: the export .csv (or its .zip), if you saved one."],
+        "wait": "instant",
+        "pick": "My Clippings.txt, the Readwise .csv, or the Pocket .csv or .zip"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -207,7 +235,10 @@ def json_value(read):
 def detect(path: Path) -> list[str]:
     """The importers an export needs, in order: "chats" (claude.ai, ChatGPT, Gemini,
     Perplexity), "takeout" (Search, YouTube, Chrome activity), "calendar", "notes"."""
+    from cortex import more_sources  # it imports this module
     from cortex.browse import takeout  # takeout imports this module
+    if more_sources.holds_repos(path):  # before _files, which would walk every repo
+        return ["repos"]
     files = _files(path)
     names = [n.lower() for n, *_ in files]
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
@@ -232,8 +263,12 @@ def detect(path: Path) -> list[str]:
         raise VaultError("invalid_argument", f"{Path(path).name} holds HTML activity but no "
                          "Search, YouTube, Chrome or Gemini Apps rows Cortex can read. "
                          + takeout.READ_HINT)
+    if not kinds and any(more_sources.highlight_format(n, read) for n, _, _, read in files):
+        kinds.append("highlights")
     if not kinds and any(_is_note(n) for n in names):
         kinds.append("notes")
+    elif not kinds and any(n.endswith(more_sources.DOC_SUFFIXES) for n in names):
+        kinds.append("docs")  # PDFs among notes (attachments) still mean notes
     return kinds
 
 
@@ -269,7 +304,8 @@ def report_line(label: str, r: dict) -> str:
     skipped, with the reason for each skip."""
     why = {k: n for k, n in r.get("reasons", {}).items() if n}
     reasons = f" ({', '.join(f'{n:,} {k}' for k, n in why.items())})" if why else ""
-    return (f"{label}: read {r['read']:,}, imported {r['imported']:,}, private "
+    updated = f", updated {r['updated']:,}" if r.get("updated") else ""
+    return (f"{label}: read {r['read']:,}, imported {r['imported']:,}{updated}, private "
             f"{r['private']:,}, duplicate {r['duplicate']:,}, skipped "
             f"{sum(why.values()):,}{reasons}")
 
@@ -293,25 +329,30 @@ def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
                                              for p in n.split("/")) else "notes")
 
     def items():
-        for name, size, mtime, read in files:
-            data = read() if _is_note(name) and size <= MAX_BYTES else b"\0"
-            try:
-                text = data.decode("utf-8-sig") if b"\0" not in data else None
-            except UnicodeDecodeError:
-                text = None
-            if text is None:
-                yield ("not a note" if not _is_note(name) else "over 5 MB" if size > MAX_BYTES
-                       else "not UTF-8 text")
-                continue
-            rel = _clean(name)
-            fm = _FRONT.match(text)
-            yield sources.Item(PurePosixPath(rel).stem,
-                               datetime.fromtimestamp(mtime, UTC).date().isoformat(),
-                               text[fm.end():] if fm else text, rel,
-                               private=bool(fm and _is_private(fm.group(1))), key=text)
+        for f in files:
+            yield note_item(*f)
 
     return sources.Source("notes", LABELS[flavor], "folder", items, prefix=flavor,
                           skips=("not a note", "over 5 MB", "not UTF-8 text"))
+
+
+def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
+    """One `_files` entry as a note Item, or the reason it is skipped. Its key is the whole
+    text, so the docs source's .md/.txt dedupe against an earlier notes import."""
+    data = read() if _is_note(name) and size <= MAX_BYTES else b"\0"
+    try:
+        text = data.decode("utf-8-sig") if b"\0" not in data else None
+    except UnicodeDecodeError:
+        text = None
+    if text is None:
+        return ("not a note" if not _is_note(name) else "over 5 MB" if size > MAX_BYTES
+                else "not UTF-8 text")
+    rel = _clean(name)
+    fm = _FRONT.match(text)
+    return sources.Item(PurePosixPath(rel).stem,
+                        datetime.fromtimestamp(mtime, UTC).date().isoformat(),
+                        text[fm.end():] if fm else text, rel,
+                        private=bool(fm and _is_private(fm.group(1))), key=text)
 
 
 def _tier(private: bool, tier: str | None) -> sources.Audience:

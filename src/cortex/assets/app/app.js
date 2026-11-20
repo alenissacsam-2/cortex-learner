@@ -1112,13 +1112,16 @@
   }
 
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'browser'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
     'google-activity': 'Searches, YouTube and Chrome activity, from Google Takeout.',
     notes: 'An Obsidian vault, a Notion export or a folder of .md and .txt notes.',
     calendar: 'Your events, from an .ics calendar file.',
+    docs: 'A folder of PDFs, Word documents and text files.',
+    repos: 'Your own git projects: READMEs, languages and your commit messages, never the code.',
+    highlights: 'Kindle clippings, a Readwise export or a Pocket list.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
@@ -1181,12 +1184,12 @@
     const err = guide.error ? row('That did not work', null, guide.error, null, 'gerr') : null;
     if (s === 1) {
       return [steps, h('ol', { class: 'how' }, g.steps.map((t) => h('li', { text: t }))),
-        h('p', { class: 'help' }, ext(g.link, `Open ${new URL(g.link).hostname}`), ` · Typical wait: ${g.wait}.`),
+        h('p', { class: 'help' }, g.link ? [ext(g.link, `Open ${new URL(g.link).hostname}`), ' · '] : null, `Typical wait: ${g.wait}.`),
         h('p', { class: 'help', text: `The file to pick: ${g.pick}.` }),
         h('div', { class: 'inline' }, btn('I have the file', () => { guide.step = 2; load('setup'); }, 'btn lit'))];
     }
     if (s === 2) {
-      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics', disabled: !!guide.busy });
+      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics,.csv,.pdf,.docx', disabled: !!guide.busy });
       file.addEventListener('change', () => { if (file.files[0]) upload(file.files[0]); });
       const drop = h('div', { class: 'drop' }, h('strong', { text: guide.busy || 'Drop the file here' }),
         guide.busy && guide.sent ? [h('progress', { id: 'up-bar', max: guide.sent.total || 1, value: guide.sent.loaded, 'aria-label': 'Upload progress' }),

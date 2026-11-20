@@ -1040,24 +1040,27 @@ def digest_cmd(yes: Annotated[bool, typer.Option(
 @_errors
 def import_cmd(path: Annotated[Path, typer.Argument(
         help="A chat export (claude.ai, ChatGPT, Gemini Takeout, Perplexity .md), a Google "
-             "Takeout of My Activity, a notes folder or .zip (Obsidian, Notion, .md/.txt), or "
-             "a calendar .ics (or Google's .zip of them).")],
+             "Takeout of My Activity, a notes folder or .zip (Obsidian, Notion, .md/.txt), "
+             "a calendar .ics (or Google's .zip of them), a folder of documents (.pdf, "
+             ".docx), a folder of your git projects, or reading highlights (Kindle "
+             "My Clippings.txt, a Readwise or Pocket .csv).")],
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
-                 "obsidian, notion, notes or calendar.")] = None,
+                 "obsidian, notion, notes, calendar, docs, repos or highlights.")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
             "--private", help="The same as --tier private.")] = False,
         tier: Annotated[str | None, typer.Option(
-            help="Who may read the imported notes or calendar pages: private (local models "
+            help="Who may read the imported pages (notes, calendar, docs, repos, "
+                 "highlights): private (local models "
                  "only), normal (the AI apps you connect too) or skip (import nothing). "
                  "Without it a terminal asks once per source; the choice is remembered. "
                  "Refused for chats and Google activity.")] = None,
         vault: VaultOpt = None) -> None:
     """Import anything about you; the kind is detected from the file. Re-importing skips notes
     and events already in and updates chats. `import-chats` still imports chat exports only."""
-    from cortex import chats, importers, sources
+    from cortex import chats, importers, more_sources, sources
 
     if source is not None and source not in importers.SOURCES:
         raise VaultError("invalid_argument",
@@ -1073,7 +1076,8 @@ def import_cmd(path: Annotated[Path, typer.Argument(
                          f"{'|'.join(importers.SOURCES)}.")
     if given and {"chats", "takeout"} & set(kinds):  # G5: these have no private mode
         flag = "--private" if private else "--tier"
-        raise VaultError("invalid_argument", f"{flag} applies to notes and calendars only. "
+        raise VaultError("invalid_argument", f"{flag} applies to notes, calendars, docs, "
+                         "repos and highlights only. "
                          "Chats are always readable by /cortex; Google activity follows your "
                          f"Browsing settings. Run again without {flag}.")
     dry = " (dry run: nothing written)" if dry_run else ""
@@ -1093,7 +1097,8 @@ def import_cmd(path: Annotated[Path, typer.Argument(
             continue
         v, flavor = _vault(vault), source if source in importers.LABELS else None
         src = importers.notes_source(path, flavor) if kind == "notes" else \
-            importers.calendar_source(path)
+            importers.calendar_source(path) if kind == "calendar" else \
+            more_sources.SOURCE_OF[kind](path)
         # C2: asked once per source in a real terminal, then remembered (sources.TIERS_FILE)
         ask = _ask_tier if given is None and sys.stdin.isatty() else None
         t, how = sources.pick_tier(v, src, given, ask, save=not dry_run)
@@ -1108,6 +1113,8 @@ def import_cmd(path: Annotated[Path, typer.Argument(
                        f"already imported, {r['skipped']} skipped (hidden, not text or over "
                        f"5 MB){dry}")
             typer.echo(importers.report_line(importers.LABELS[r["source"]], r))
+        elif kind in more_sources.SOURCE_OF:
+            typer.echo(importers.report_line(src.label, sources.run(v, src, t, dry_run)) + dry)
         else:
             r = importers.import_calendar(v, path, dry_run, tier=t)
             typer.echo(f"calendar: {r['events']} events in {r['months']} months, {r['new']} "
