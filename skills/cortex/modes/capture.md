@@ -7,7 +7,7 @@ One source at a time, with the learner watching:
 5. `cortex_log(kind="capture", payload={resource, pages:[ids touched]})`.
 A rough thought with no source is a fleeting note: `cortex_add(kind="note", title, fields={note_type: "fleeting"})` puts one line in the inbox.
 
-**Cap:** from a single chat or source, propose at most 3 permanent notes. Everything else becomes a fleeting line or a journal sentence. Ask before a 4th. A source with no durable idea becomes only a `resource` plus a journal line.
+**Cap:** from a single chat or source, write at most 3 permanent notes. Everything else becomes a fleeting line or a journal sentence, without asking. A source with no durable idea becomes only a `resource` plus a journal line.
 
 ## Zettelkasten rules for notes
 - **Permanent note** (`note_type="permanent"`): one idea, in the learner's own words, understandable alone. The `summary` states the idea in one line.

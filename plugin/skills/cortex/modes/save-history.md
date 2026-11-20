@@ -16,7 +16,7 @@ The learner wants everything worth keeping from THIS conversation recorded.
    - traits and preferences → `cortex_patch(…, user_confirmed=true)` only for the ones they confirmed in step 3;
    - learning evidence → `cortex_grade` (one item, or `items` for a quiz) only for questions actually asked and answered in the chat (exactly what happened, U1); `cortex_log(kind="taught")` for things explained but not tested;
    - sources → `cortex_add(kind="resource")`;
-   - ideas → permanent notes (rules in `modes/capture.md`). From one chat propose at most 3 permanent notes; everything else becomes a fleeting line or a journal sentence; ask before a 4th. A source with no durable idea becomes only a `resource` plus a journal line;
+   - ideas → permanent notes (rules in `modes/capture.md`). From one chat write at most 3 permanent notes; everything else becomes a fleeting line or a journal sentence, without asking. A source with no durable idea becomes only a `resource` plus a journal line;
    - decisions → `cortex_add(kind="decision")`;
    - projects → `cortex_add(kind="project")` or patch the existing one.
    Search first with `cortex_find` and update existing pages rather than duplicating them. Link everything with `[[id]]`.
