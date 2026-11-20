@@ -29,7 +29,7 @@ For scripts: `CortexSetup.exe --quiet [--dir PATH] [--no-shortcuts] [--no-path] 
 
 Cortex looks for updates only when you click; it never checks in the background.
 
-- **Installed with `CortexSetup.exe`:** open the app, go to **Status**, and click **Check for updates** under **Updates**. When a newer version is out, **Release notes** opens them and **Update now** downloads the new `CortexSetup.exe` from the GitHub release, checks it against the release's SHA-256 checksum, closes Cortex, updates it in place and opens it again. Status then shows what changed and anything you need to do, once: **Got it** hides it, and **Updates** → **What's new** shows it again. If AI apps (such as Claude) or the browsing receiver are still using Cortex, the installer names them and asks before closing them. Restart those AI apps afterwards so they reconnect, and if you use the browser extension, reload it (on the extensions page, the reload arrow on Cortex capture). If an older receiver is still running after the update, the app says so: restart it, or restart the computer. If GitHub is limiting update checks from your network (common on campus networks), Cortex reads the latest release from GitHub's release page instead.
+- **Installed with `CortexSetup.exe`:** open the app, go to **Status**, and click **Check for updates** under **Updates**. When a newer version is out, **Release notes** opens them and **Update now** downloads the new `CortexSetup.exe` from the GitHub release, checks it against the release's SHA-256 checksum, closes Cortex, updates it in place and opens it again. Status then shows what changed and anything you need to do, once: **Got it** hides it, and **Updates** → **What's new** shows it again. If AI apps (such as Claude) or the browsing receiver are still using Cortex, the installer names them and asks before closing them. Restart those AI apps afterwards so they reconnect. A receiver that starts at login runs the new version from the next login. If GitHub is limiting update checks from your network (common on campus networks), Cortex reads the latest release from GitHub's release page instead.
 - **Cortex 0.1.0** has no update button. Download the newest `CortexSetup.exe` from the **Releases** page once and run it; it updates in place, and from then on the button works.
 - **Installed from the repository (sections 3 and 4):** the button shows the command to run instead: `git pull` in your Cortex-app folder, then `uv tool install --editable . --reinstall` (section 11). A fixed (non-editable) copy installed with `uv tool install --force --reinstall "<folder>"` gets the same command with that line, so it stays a fixed copy.
 
@@ -72,7 +72,7 @@ uv tool update-shell
 
 ## 4. Install Cortex
 
-Cortex installs from a copy of its repository (a *clone*), which also holds the Claude Code plugin, the Chat skill and the browser extension. The last line opens the Cortex app by its full path, so it works before the terminal knows the `cortex` command.
+Cortex installs from a copy of its repository (a *clone*), which also holds the Claude Code plugin and the Chat skill. The last line opens the Cortex app by its full path, so it works before the terminal knows the `cortex` command.
 
 **Windows (PowerShell):**
 
@@ -223,7 +223,7 @@ cortex doctor
 
 ## 11. Updating and uninstalling
 
-Update the program by running `git pull` in your Cortex-app folder. If the update adds a dependency or a command, also run `uv tool install --editable . --reinstall` there. In Claude Code, run `/plugin update cortex@cortex` and restart. If you use the browser extension, restart the receiver and reload the extension on your browser's extensions page.
+Update the program by running `git pull` in your Cortex-app folder. If the update adds a dependency or a command, also run `uv tool install --editable . --reinstall` there. In Claude Code, run `/plugin update cortex@cortex` and restart. If the receiver starts at login, restart the computer (or log out and in) so it runs the new version.
 
 To remove Cortex completely:
 

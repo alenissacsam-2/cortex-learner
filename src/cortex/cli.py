@@ -466,9 +466,9 @@ FIRST_PROMPTS = ("what do you know about me?", "/cortex",
                  "remember that I prefer short answers")
 PRIVACY = ("Privacy: the vault stays in a folder on this disk; Cortex has no account or "
            "telemetry. The one download it makes for you is the search model (huggingface.co); "
-           "the app downloads Ollama or a local model only when you click. Its servers (`cortex "
-           "app`, `cortex browse serve`) listen on 127.0.0.1 only. Tool results go to the AI "
-           "model you chat with. See docs/PRIVACY.md.")
+           "the app downloads Ollama or a local model only when you click. Its server (`cortex "
+           "app`) listens on 127.0.0.1 only. Tool results go to the AI model you chat with. "
+           "See docs/PRIVACY.md.")
 
 
 def _marketplace() -> str | None:
@@ -2500,7 +2500,8 @@ def browse_import(since: Annotated[str | None, typer.Option(
                       "(unreadable date)" if google.skipped else ""))
     srcs = _browse_sources(browser, profile)
     if not srcs:
-        typer.echo(NO_BROWSERS + "; only the capture extension's inbox, if any, is read")
+        typer.echo(NO_BROWSERS + "; only visits the old capture extension saved, if any, "
+                   "are read")
     embed = semantic.load_embedder()
     if embed is None:
         typer.echo(NO_MODEL)
@@ -2606,7 +2607,7 @@ def browse_forget(site: Annotated[str | None, typer.Option(
                       "--category", help="A category, such as health or shopping.")] = None,
                   vault: VaultOpt = None) -> None:
     """Remove everything stored about one site or one category: the private day page lines,
-    the site counts and pages, the extension inbox and its archive, the local model's site
+    the site counts and pages, the old capture extension's saved visits, the local model's site
     notes and the search vectors. Prints counts only. Your browsers still hold recent visits:
     add the site to deny_domains (or skip the category) so the next import leaves them out.
     Old versions in the vault's git history stay (see `cortex doctor`)."""
@@ -2630,39 +2631,28 @@ def browse_forget(site: Annotated[str | None, typer.Option(
     c = forget.purge(v, rule)
     typer.echo(f"forgot {what}: {c['day_lines']} lines on {c['day_pages']} private day pages, "
                f"{c['site_keys']} site counts and {c['site_rows']} titles or searches, "
-               f"{c['sites_removed']} site pages, {c['inbox_records']} extension records, "
+               f"{c['sites_removed']} site pages, {c['inbox_records']} saved extension visits, "
                f"{c['cache_sites'] + c['cache_descriptions']} local-model notes, "
                f"{c['vectors']} search vectors")
     typer.echo("next: add it to browse.deny_domains (or set the category to skip) so the next "
                "import does not bring back what your browsers still hold")
 
 
-def _receiver():
-    try:
-        from cortex import browse_serve
-    except ImportError:
-        raise VaultError("invalid_argument", "the browse receiver is not installed in this "
-                         "version.") from None
-    return browse_serve
-
-
-@browse_app.command("pair")
-@_errors
-def browse_pair(vault: VaultOpt = None) -> None:
-    """Print a new pairing token for the capture extension (the old one stops working)."""
-    typer.echo(_receiver().pair(_vault(vault)))
-
-
 @browse_app.command("serve")
 @_errors
-def browse_serve_cmd(port: Annotated[int, typer.Option(help="Port on 127.0.0.1.")] = 8799,
+def browse_serve_cmd(port: Annotated[int | None, typer.Option(
+                         hidden=True, help="Ignored: the receiver opens no port since 0.3.2.")]
+                     = None,
                      vault: VaultOpt = None) -> None:
-    """Run the capture extension's receiver on 127.0.0.1 only, until Ctrl+C."""
-    mod = _receiver()
+    """Import new browser history in the background, every browse.auto_import_hours (as Start
+    at login runs it), until Ctrl+C. Opens no network port."""
+    from cortex import browse_serve
+
+    v = _vault(vault)
+    typer.echo("Cortex browse receiver: imports new browser history in the background; "
+               "Ctrl+C stops it.")
     try:
-        mod.serve(_vault(vault), port=port)
-    except ValueError as e:
-        raise VaultError("invalid_argument", str(e)) from None
+        browse_serve.serve(v)
     except KeyboardInterrupt:
         pass
 

@@ -32,7 +32,8 @@ from cortex.render import esc
 from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 log = logging.getLogger(__name__)
-ARCHIVE = ".cortex/browse/inbox-archive"  # the consumed extension inbox (review C5)
+# the consumed extension inbox (review C5); the extension is gone (0.3.2), its files stay
+ARCHIVE = ".cortex/browse/inbox-archive"
 # a private day page's search line names its engine, not its host
 ENGINE_HOSTS = {"google": "google.com", "bing": "bing.com", "duckduckgo": "duckduckgo.com",
                 "brave": "search.brave.com", "youtube": "youtube.com",
@@ -309,7 +310,7 @@ def _inbox(vault: Vault, rule: Rule) -> Counter:
     c: Counter = Counter()
     base = vault.root / ".cortex" / "browse"
     files = [*sorted(base.glob("inbox-*.jsonl")), *sorted((vault.root / ARCHIVE).glob("*.jsonl"))]
-    with vault.lock():  # the receiver appends under the same lock
+    with vault.lock():  # the receiver appended under the same lock (before 0.3.2)
         for p in files:
             try:
                 lines = p.read_bytes().decode("utf-8", "replace").splitlines()

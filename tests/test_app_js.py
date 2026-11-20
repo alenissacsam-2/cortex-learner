@@ -7,7 +7,6 @@ order, never uses innerHTML (static and runtime), and the upload progress event 
 import json
 import re
 import shutil
-import socket
 import subprocess
 
 import pytest
@@ -394,12 +393,6 @@ def test_data_examples_need_no_model():
         assert sites or chat_study.kind(q) is not None, q
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def test_app_js_has_no_html_sinks():
     assert not HTML_SINKS.findall(APP_JS.read_text(encoding="utf-8"))
 
@@ -416,7 +409,6 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("started a process"))
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     (root_committed / ".cortex").mkdir(exist_ok=True)
     app = server.App(root_committed)
     setup = app.setup()  # the server's own shape, not a hand-made one
@@ -548,11 +540,6 @@ def test_installs_offer_admin_override_and_licenses():
     assert "inst.license ? ext(inst.license, 'License') : null" in js
     assert "r.install ? btn(r.install.label, () => job('/api/setup/git', { from: 'status' })" in js
     assert "r.install ? ext(r.install.license, 'License')" in js
-
-
-def test_setup_and_browsing_name_the_same_browsers():
-    js = APP_JS.read_text(encoding="utf-8")
-    assert "Chrome or Comet" not in js and js.count("${EXT_BROWSERS}") == 2
 
 
 def test_a_command_that_failed_shows_as_failed(tmp_path):
@@ -877,7 +864,6 @@ def _sweep_routes(root, monkeypatch):
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("started a process"))
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     monkeypatch.setattr(status, "ollama_models", lambda: ["qwen3.5:4b"])
     monkeypatch.setattr(status, "lms_models", lambda: [
         {"key": "qwen/qwen3.5-2b", "name": "Qwen 3.5 2B", "size": 2 * 10**9, "params": "2B"}])
@@ -900,8 +886,7 @@ def _sweep_routes(root, monkeypatch):
              "sources": [{"n": 1, "path": "notes/heap.md", "title": "Heap", "kind": "note"}]}]},
         "/api/chat/settings": chat_state["settings"],
         "/api/connect/plan": {"rows": [{"change": "add", "label": "Claude Code", "file": "x"}]},
-        "/api/browse/setup": {"token": "PAIRKEY", "opened": True},
-        "/api/browse/pair": {"token": "PAIRKEY"}, "/api/chat/delete": {"deleted": 1},
+        "/api/chat/delete": {"deleted": 1},
         "/api/open": {"obsidian": True},
         "/api/job": {"job": {"name": "Sweep", "section": "sweep", "running": False,
                              "seconds": 1, "error": None, "result": {"ok": True}}},
@@ -950,11 +935,7 @@ SENDS = {
             "deny": "", "allow": "", "private": ""}]],
         "Save: Cloud model": [["/api/browse/cloud", {"cloud_processing": False, "provider": "",
                                            "model": "", "base_url": "", "api_key_env": ""}]],
-        "Start: Receiver": [["/api/browse/receiver", {"on": True}]],
         "Add": [["/api/browse/login", {"on": True}]],
-        "Set up the extension": [["/api/browse/setup", {}]],
-        "Pair": [["/api/browse/pair", {}]],
-        "Open folder: Extension": [["/api/open", {"what": "extension"}]],
         "Process now": [["/api/browse/process", {}]],
         "Run self-test": [["/api/browse/selftest", {}]],
         "Open private folder in Obsidian": [["/api/open", {"what": "private"}]]},
@@ -1214,16 +1195,6 @@ const toastNow = () => $('toast-msg').textContent;
     named('browse', 'Save: Privacy').fire('click');
     await tick();
     out.outside = document.activeElement === $('quit');
-    // 4. Stop (receiver) says so like Start; the focused button is gone, so the heading takes focus
-    Object.assign(DATA.routes['/api/browse'], { in_app: true, receiver: 'running' });
-    await go('browse');
-    const stop = named('browse', 'Stop: Receiver');
-    Object.assign(DATA.routes['/api/browse'], { in_app: false, receiver: 'stopped' });
-    stop.focus();
-    stop.fire('click');
-    await tick();
-    out.stop = [$('toast').className, toastNow(), document.activeElement === ($('s-browse').querySelector('h1') || $('s-browse')),
-      !!named('browse', 'Start: Receiver')];
     // 4. an empty hours field is not 0: it says what to enter and sends nothing
     $('b-auto').value = '';
     $('b-auto').fire('change');
@@ -1312,8 +1283,8 @@ def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_p
                                                             monkeypatch):
     """Check this file is busy while it posts, so a double click checks once; a double click on
     Send is not a Stop (a Stop later is); a redraw keeps focus on the same control (a radio,
-    Save: Privacy), on the heading when that control is gone, and leaves focus outside the
-    section alone; Stop (receiver) confirms in a toast; an empty hours field sends nothing."""
+    Save: Privacy) and leaves focus outside the section alone; an empty hours field sends
+    nothing."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -1327,7 +1298,6 @@ def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_p
                             "posts": [{"source": "chatgpt", "path": "C:\\x\\export.zip"}]}
     assert out["radio"] == [True, True, True]
     assert out["save"] == [True, True] and out["outside"] is True
-    assert out["stop"] == ["toast on ok", "Receiver stopped.", True, True]
     assert out["empty"] == ["Enter hours from 0 to 168; 0 turns it off.", []]
     assert out["hours"] == [{"hours": 12}, {"hours": 0}]
     assert out["double"] == ["Stop", False, 1]
@@ -1335,10 +1305,10 @@ def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_p
 
 
 def test_setup_texts_copy_paths_skill_switch_and_get_claude_desktop():
-    """DEPS-UX-AUDIT A8, A9, A11: Copy beside the extension folder and the skill zip path, the
+    """DEPS-UX-AUDIT A8, A9, A11: Copy beside the skill zip path, the
     Code execution switch named before the skill upload, and a Get Claude Desktop link (an
     ordinary external link) when no AI app is found."""
     js = APP_JS.read_text(encoding="utf-8")
-    assert "copyBtn(() => x.folder," in js and "copyBtn(() => d.skill_zip," in js
+    assert "copyBtn(() => d.skill_zip," in js
     assert "First turn on Code execution and file creation on that page, then upload" in js
     assert "ext('https://claude.ai/download', 'Get Claude Desktop')" in js

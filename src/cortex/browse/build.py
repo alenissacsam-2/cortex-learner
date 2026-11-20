@@ -1,7 +1,8 @@
 """`cortex browse import` and `status` (docs/design/browse-brain.md §3, §4).
 
-Visits from the browsers (and the extension's `.cortex/browse/inbox-*.jsonl`) pass the §2
-filter first; only derived pages are written, through `cortex.vault`:
+Visits from the browsers (and the `.cortex/browse/inbox-*.jsonl` files the capture extension
+wrote before 0.3.2 removed it; no new ones arrive) pass the §2 filter first; only derived pages
+are written, through `cortex.vault`:
 - `browse/browse-YYYY-MM-DD.md` (kind browse) per day, rebuilt whole from that day's visits:
   no third-party text at all (second privacy review), only the owner's topic hubs as links
   with time and counts, from items with no sensitive category that sit under a hub, and the
@@ -118,6 +119,9 @@ def load_state(vault: Vault) -> dict:
 
 
 # ---- the extension's inbox ----------------------------------------------------------------
+# The capture extension (removed in 0.3.2) wrote these through the receiver. No new files
+# arrive, but the inbox files and the archive it left still import, so its visits, time on
+# screen and excerpts stay in the store, the day pages, Chat and search.
 
 def _inbox_time(v) -> datetime | None:
     try:
@@ -139,7 +143,8 @@ ARCHIVE_DAYS = 90
 
 def read_inbox(vault: Vault, folder: str = ".cortex/browse"
                ) -> tuple[list[sources.Visit], dict[str, list[int]]]:
-    """The receiver's records as visits (secs = active time), and each file's [size, mtime].
+    """The old extension's inbox records as visits (secs = active time), and each file's
+    [size, mtime].
     `folder=ARCHIVE` reads the archive of consumed files instead."""
     out, stats = [], {}
     for p in sorted((vault.root / folder).glob("inbox-*.jsonl")):
@@ -172,7 +177,8 @@ def inbox_stats(vault: Vault) -> dict[str, list[int]]:
 
 
 def inbox_visits(records: list) -> list[sources.Visit]:
-    """The receiver's records as visits (secs = active time); a malformed one is skipped."""
+    """The old extension's inbox records as visits (secs = active time); a malformed one is
+    skipped."""
     out = []
     for r in records:
         if not isinstance(r, dict) or not isinstance(r.get("url"), str):
@@ -1238,7 +1244,7 @@ def _archive_consumed(vault: Vault, stats: dict[str, list[int]], settings: Setti
     the extension saw. Its records are filtered again on the way (the settings of now): a
     dropped one goes, a private one keeps no excerpt. The stats of the files that stay."""
     left = dict(stats)
-    with vault.lock():  # the receiver appends under the same lock
+    with vault.lock():  # the receiver appended under the same lock (before 0.3.2)
         for name, st in stats.items():
             p = vault.root / ".cortex" / "browse" / name
             try:

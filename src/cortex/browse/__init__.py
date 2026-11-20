@@ -2,8 +2,7 @@
 machine only, filtered (`privacy`) and turned into Cortex pages (`build`). `sources` finds and
 reads the browsers' own SQLite files; `lists` holds the built-in domain and word lists.
 
-The receiver (`cortex browse serve`) reuses the filter: `filter_record(url, title,
-settings=load_settings()) -> Kept | None`.
+The filter: `filter_record(url, title, settings=load_settings()) -> Kept | None`.
 """
 
 from cortex.browse.privacy import Kept, Settings, filter_record, load_settings

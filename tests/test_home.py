@@ -293,7 +293,6 @@ def test_the_routes_need_the_key_and_private_needs_the_switch(root, monkeypatch)
             assert not shown and js["relock"] is True, path
         assert server.App(root).private_unlocked is False  # a restart starts locked
     finally:
-        app.receiver.stop()
         srv.shutdown()
         srv.server_close()
 
@@ -625,6 +624,5 @@ def test_the_site_route_needs_the_key_and_hides_private_sites_while_locked(brain
         call(app, "POST", "/api/home/lock", {})
         assert call(app, "GET", "/api/home/site?site=secret.example&private=1")[0] == 404
     finally:
-        app.receiver.stop()
         srv.shutdown()
         srv.server_close()

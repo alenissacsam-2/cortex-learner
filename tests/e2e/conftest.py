@@ -30,15 +30,14 @@ def free_port() -> int:
 @pytest.fixture
 def env(tmp_path) -> dict[str, str]:
     """The environment for every process: HOME, USERPROFILE, APPDATA and LOCALAPPDATA under
-    tmp_path/home; no CORTEX_* or Claude variables; the receiver port is a free one; and PATH
-    without the venv's `cortex` (a new user has not put it on PATH yet)."""
+    tmp_path/home; no CORTEX_* or Claude variables; and PATH without the venv's `cortex` (a
+    new user has not put it on PATH yet)."""
     home = tmp_path / "home"
     e = {k: v for k, v in os.environ.items()
          if not k.upper().startswith(("CORTEX_", "CLAUDE")) and k.upper() not in
          ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "PYTHONPATH")}
     e.update(HOME=str(home), USERPROFILE=str(home), APPDATA=str(home / "AppData" / "Roaming"),
              LOCALAPPDATA=str(home / "AppData" / "Local"),
-             CORTEX_E2E_RECEIVER_PORT=str(free_port_number()),
              PATH=os.pathsep.join(p for p in e.get("PATH", "").split(os.pathsep)
                                   if p and not shutil.which("cortex", path=p)))
     for k in ("APPDATA", "LOCALAPPDATA"):

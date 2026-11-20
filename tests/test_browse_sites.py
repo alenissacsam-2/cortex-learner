@@ -301,7 +301,7 @@ def test_a_vector_failure_is_reported_not_raised(vault, monkeypatch):
     assert lines == ["private browse search not updated: Run cortex model download first."]
 
 
-def test_the_receiver_deepens_once_after_30_idle_minutes(tmp_path, monkeypatch):
+def test_the_receiver_deepens_once_30_minutes_after_start(tmp_path, monkeypatch):
     runs = []
     monkeypatch.setattr(bs, "run_deepen", lambda v, say=None: runs.append(1) or {})
     t = [0.0]
@@ -311,10 +311,7 @@ def test_the_receiver_deepens_once_after_30_idle_minutes(tmp_path, monkeypatch):
     t[0] = bs.DEEPEN_IDLE_S
     assert p.tick() and runs == [1]
     t[0] += bs.DEEPEN_IDLE_S * 3
-    assert not p.tick() and runs == [1]  # once per idle period
-    p.batch(0, False)
-    t[0] += bs.DEEPEN_IDLE_S
-    assert p.tick() and runs == [1, 1]
+    assert not p.tick() and runs == [1]  # once per start
 
 
 def test_privacy_apply_follows_hidden_and_skip():

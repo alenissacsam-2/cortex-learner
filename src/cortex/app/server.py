@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -76,14 +77,6 @@ _open = webbrowser.open  # tests replace this
 def _checkout() -> Path:
     from cortex import cli
     return cli.CHECKOUT
-
-
-def extension_dir() -> Path:
-    """The browser extension: shipped in the package (an installed wheel), else the source
-    checkout's extension/ (an editable install)."""
-    from importlib.resources import files
-    p = Path(str(files("cortex") / "assets" / "extension"))
-    return p if p.is_dir() else _checkout() / "extension"
 
 
 def skill_url() -> str:
@@ -275,7 +268,6 @@ class App:
         self.token = secrets.token_urlsafe(32)
         self.port = 0
         self.jobs = Jobs()
-        self.receiver = actions.Receiver()
         self.scanned: dict = {}  # source key -> the last scan's counts
         self.uploads: dict[str, Path] = {}  # upload id -> its file under ~/.cortex/tmp
         self.chatting = threading.Lock()  # one chat answer at a time, beside any job
@@ -303,9 +295,9 @@ class App:
             "/api/llm/size": self.llm_size,
             "/api/browse/settings": self.browse_settings, "/api/browse/cloud": self.cloud,
             "/api/browse/auto": self.auto_settings,
-            "/api/browse/receiver": self.receive, "/api/chat": None,  # do_POST streams it
+            "/api/chat": None,  # do_POST streams it
             "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
-            "/api/browse/login": self.login, "/api/browse/pair": self.pair,
+            "/api/browse/login": self.login,
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/export": self.export, "/api/vault/backup": self.backup,
@@ -317,7 +309,7 @@ class App:
             "/api/setup/git": self.setup_git,
             "/api/setup/pull": self.setup_pull, "/api/setup/test": self.setup_test,
             "/api/setup/start": self.setup_start, "/api/setup/model": self.setup_model,
-            "/api/browse/setup": self.extension_setup, UPLOAD: None,  # do_POST streams it
+            UPLOAD: None,  # do_POST streams it
             "/api/import/preview": self.import_preview, "/api/import/run": self.import_run,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
@@ -352,7 +344,7 @@ class App:
         ready = v["ok"] and (_connect_skipped() or any(
             t["connected"] for t in status.kept(("targets", json.dumps(entry, sort_keys=True)),
                                                 lambda: targets.describe(entry))))
-        return {"rows": status.rows(self.root, self.receiver.status()),
+        return {"rows": status.rows(self.root),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
@@ -390,10 +382,8 @@ class App:
                 "hardware": hw, "recommend": wizard.model(wizard.recommend(hw["gb"], hw["kind"]))}
 
     def browse(self) -> dict:
-        # the receiver probe kept like Status's: a refused connect waits ~0.6 s on Windows
-        b = status.browse(self.root if self.entry() else None, self.receiver.status(), quick=True)
-        return {**b, "extension": str(extension_dir()),
-                "history": status.history(self.root if self.entry() else None, self.scanned),
+        b = status.browse(self.root if self.entry() else None)
+        return {**b, "history": status.history(self.root if self.entry() else None, self.scanned),
                 "cloud": status.cloud(self.root if self.entry() else None)}
 
     def vault(self) -> dict:
@@ -513,15 +503,12 @@ class App:
         from cortex import chats, cli, importers
         if self.warming not in (None, threading.current_thread()):
             self.warming.join()  # the warm-up is asking the same probes: wait, not ask twice
-        token = self.root / ".cortex" / "browse" / "token" if self.entry() else None
         return {**wizard.state(self.root, self.scanned),
                 "connect": [{k: t[k] for k in ("id", "label", "detected", "connected")}
                             for t in targets.describe(self.entry())],
                 "first_prompts": list(cli.FIRST_PROMPTS), "connect_skipped": _connect_skipped(),
                 "guides": {**chats.GUIDES, **importers.GUIDES},
-                "imports": status.imports(self.root if self.entry() else None),
-                "extension": {"paired": bool(token and token.is_file()),
-                              "folder": str(extension_dir())}}
+                "imports": status.imports(self.root if self.entry() else None)}
 
     # ---- POST ----
     def _want(self, body: dict) -> dict:
@@ -781,35 +768,10 @@ class App:
         from cortex import chat
         return chat.save_settings(body)
 
-    def receive(self, body: dict) -> dict:
-        if _bool(body, "on"):
-            self.receiver.start(self.need_root())
-        else:
-            self.receiver.stop()
-        return {"ok": True}
-
     def login(self, body: dict) -> dict:
         on, root = _bool(body, "on"), self.need_root()
         return self.jobs.start("Start at login" if on else "Removing start at login", "browse",
                                lambda job: actions.login(job, root, on))
-
-    def pair(self, body: dict) -> dict:
-        return {"token": actions.pair(self.need_root())}
-
-    def extension_setup(self, body: dict) -> dict:
-        """Pair, start the receiver (unless one answers already) and open the extension folder.
-        The page shows the key with Copy; Start at login stays its own click."""
-        root = self.need_root()
-        token = actions.pair(root)
-        state = "running" if self.receiver.srv is not None else status.receiver_probe(root)[0]
-        if state == "stopped":
-            self.receiver.start(root)
-            state = "running"
-        folder = extension_dir()
-        if folder.is_dir():
-            _open_path(folder)
-        return {"token": token, "folder": str(folder), "opened": folder.is_dir(),
-                "receiver": state}
 
     def process(self, body: dict) -> dict:
         root = self.need_root()
@@ -921,8 +883,8 @@ class App:
                     or p.relative_to(root).parts[0].startswith("."):
                 raise ValueError("not a page in this vault")
             return _open_note(p)
-        if what in ("skill_zip", "extension"):
-            p = _checkout() / "dist" if what == "skill_zip" else extension_dir()
+        if what == "skill_zip":
+            p = _checkout() / "dist"
             if not p.is_dir():
                 raise ValueError(f"{p} is not there; build it first.")
             _open_path(p)
@@ -1460,14 +1422,49 @@ def _handler(app: App):
     return H
 
 
+MAX_CONNECTIONS = 32  # open connections at once: one thread each
+
+
+class _Server(ThreadingHTTPServer):
+    """No port sharing: Windows binds a used port without SO_EXCLUSIVEADDRUSE, and the token
+    would go to its owner. At most MAX_CONNECTIONS connections at once: a local program opening
+    thousands of idle ones would otherwise start a thread for each; one over the cap is closed
+    at once. Each handler's `timeout` bounds how long an idle one keeps its slot."""
+    allow_reuse_address = False
+
+    def __init__(self, *a, **kw):
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        super().__init__(*a, **kw)
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:  # no thread started, so none will release the slot
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def make_server(root: Path | None, port: int = 0) -> tuple[ThreadingHTTPServer, App]:
     """The app's server on 127.0.0.1 only (port 0 picks a free one)."""
     app = App(root)
     actions.sweep_uploads()  # left by an app that was killed before its `finally` ran
     actions.sweep_updates(update.prepared())  # installers an update already ran; a newer one
     # downloaded and still matching its checksum stays for Restart to update
-    from cortex.browse_serve import _Server  # no port sharing: Windows binds a used port
-    srv = _Server((HOST, port), _handler(app))  # and the token would go to its owner
+    srv = _Server((HOST, port), _handler(app))
     srv.daemon_threads = True
     app.port = srv.server_address[1]
     return srv, app
@@ -1617,10 +1614,9 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
 
 
 def finish(srv: ThreadingHTTPServer, app: App) -> None:
-    """After serving: app.json, the in-app receiver and unused uploads go; the port closes."""
+    """After serving: app.json and unused uploads go; the port closes."""
     app.stop.set()
     _drop_state(app)
-    app.receiver.stop()
     for uid in list(app.uploads):  # exports added but never imported
         app._drop(uid)
     srv.server_close()

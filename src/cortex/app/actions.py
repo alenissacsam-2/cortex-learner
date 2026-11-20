@@ -9,7 +9,6 @@ import contextlib
 import io
 import re
 import subprocess
-import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -172,8 +171,9 @@ def _vault(root: Path):
 
 def browse_process(job, root: Path) -> dict:
     from cortex import browse_serve
-    job.say("processing waiting visits and new browser history (counts only)")
-    v = _vault(root)  # like the popup's button: only the profiles imported before
+    job.say("importing new browser history (counts only)")
+    v = _vault(root)  # only the profiles imported before; old extension visits not yet
+    # imported come along (build.run reads what is left of its inbox)
     report = browse_serve.run_import(v, srcs=browse_serve.auto_sources(v))
     return {"ok": True, "counts": status.safe(report)}
 
@@ -510,53 +510,6 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
     return {"ok": True, "kind": "import", "counts": {"conversations": n}, "lines": [
         f"Imported {n:,} {chats.GUIDES[got]['name']} conversation{_s(n)} into {where}. "
         + _cortex_hint(), importers.report_line(chats.GUIDES[got]["name"], res.report())]}
-
-
-def pair(root: Path) -> str:
-    from cortex import browse_serve
-    return browse_serve.pair(_vault(root))
-
-
-class Receiver:
-    """The browse receiver run inside the app (it stops when the app stops)."""
-
-    def __init__(self):
-        self.srv = self.done = None
-
-    def status(self) -> dict | None:
-        if self.srv is None:
-            return None
-        proc = getattr(self.srv, "processor", None)
-        try:
-            return status.safe(proc.status()) if proc is not None else {}
-        except Exception:  # noqa: BLE001
-            return {}
-
-    def start(self, root: Path) -> None:
-        from cortex import browse_serve
-        if self.srv is not None:
-            return
-        if not (root / ".cortex" / "browse" / "token").is_file():
-            raise ValueError("Pair the extension first: the receiver needs its token.")
-        try:
-            srv = browse_serve.make_server(_vault(root), browse_serve.PORT)
-        except OSError:
-            raise ValueError(f"port {browse_serve.PORT} is busy: a receiver may already run "
-                             "(Start at login?)") from None
-        self.done = threading.Event()
-        if (proc := getattr(srv, "processor", None)) is not None:
-            threading.Thread(target=proc.loop, args=(self.done,), daemon=True).start()
-        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.2},
-                         daemon=True).start()
-        self.srv = srv
-
-    def stop(self) -> None:
-        if self.srv is None:
-            return
-        srv, self.srv = self.srv, None
-        self.done.set()
-        srv.shutdown()
-        srv.server_close()
 
 
 def drop_old_task() -> bool:

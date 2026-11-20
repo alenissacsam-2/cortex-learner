@@ -115,7 +115,6 @@ flowchart LR
         DASH["Dashboard<br/>offline HTML, 3D brain"]
         IMP["Importers<br/>chats, notes, calendar, Takeout"]
         BR["Browse brain<br/>history import + receiver"]
-        EXT["Browser extension"]
         LLM["Local model<br/>Ollama or LM Studio"]
     end
     CLOUD["Cloud model<br/>opt-in, off by default"]
@@ -125,7 +124,6 @@ flowchart LR
     APP --> VW
     IMP --> VW
     BR --> VW
-    EXT -->|127.0.0.1, token| BR
     VW --> VAULT
     VAULT --> IDX
     VAULT --> FOLD
@@ -157,7 +155,7 @@ Cortex is local-first. [docs/PRIVACY.md](docs/PRIVACY.md) has the full detail; i
 
 - **No account and no telemetry.** Your vault is a folder you choose; settings live in `~/.cortex/`.
 - **What reaches the internet** happens only because you asked: the one-time search model download, and in the app, downloading Ollama or a local model, or checking GitHub for a Cortex update, when you click. Installing or upgrading fetches Python packages as usual.
-- **Servers listen on 127.0.0.1 only.** The app needs a key that changes each launch and stops after 30 minutes idle. The browser extension's receiver accepts only the paired extension's token. The MCP server talks over standard input and output.
+- **Servers listen on 127.0.0.1 only.** The app needs a key that changes each launch and stops after 30 minutes idle. The MCP server talks over standard input and output.
 - **What the AI model sees.** Whatever a Cortex tool returns goes to the AI app you are chatting with (Anthropic, when you use Claude). Pages marked `private: true` are left out of search, recall and context. `cortex exclude add <folder>` turns Cortex off for chats in one folder.
 - **Browsing has three settings per category.** *Don't save* (adult, by default), *Local AI only* (health, money, betting, dating, sexuality, drugs and self-harm start here: only a model on this computer may read them), or *Cloud AI apps can read*. Nothing from browsing is visible to cloud AI apps until you turn that switch on. Sign-in, payment and bank pages are dropped and never stored.
 - **The cloud model is off by default.** If you opt in, it may sort and summarise only the *Cloud AI apps can read* categories. It needs an HTTPS endpoint, reads its API key from an environment variable you name (the app never takes a key), sends at most 500 requests a run unless you change the cap, refuses a request that looks like it holds a secret, and logs counts only. It never sees a skipped or local-only category, and if no local model is running, local-only data is skipped rather than sent.
@@ -195,7 +193,7 @@ uv tool install --editable .
 & "$HOME\.local\bin\cortex.exe" app
 ```
 
-Keep the `Cortex-app` folder: the installed program runs from it (it also holds the Claude Code plugin, the Chat skill and the browser extension). If a new terminal says `cortex` is not found, run `uv tool update-shell` and open a new terminal. [docs/INSTALL.md](docs/INSTALL.md) has every step for a first-time user, manual setup for each client, updating and a full uninstall.
+Keep the `Cortex-app` folder: the installed program runs from it (it also holds the Claude Code plugin and the Chat skill). If a new terminal says `cortex` is not found, run `uv tool update-shell` and open a new terminal. [docs/INSTALL.md](docs/INSTALL.md) has every step for a first-time user, manual setup for each client, updating and a full uninstall.
 
 ## First run
 
@@ -256,7 +254,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
 ### Browsing
 
-`cortex browse scan` shows counts of your browser history without writing anything; `cortex browse import` turns it into pages, private by default. The optional browser extension (Chrome, Edge, Brave, Comet) adds time on screen and short excerpts; see [extension/README.md](extension/README.md). [docs/GUIDE.md](docs/GUIDE.md) section 6 covers every step and setting.
+`cortex browse scan` shows counts of your browser history without writing anything; `cortex browse import` turns it into pages, private by default. New history then comes in by itself from your browsers' own history files. [docs/GUIDE.md](docs/GUIDE.md) section 6 covers every step and setting.
 
 ## Local models
 
@@ -292,7 +290,7 @@ Always run Python through `uv run`. Tests use only synthetic data in `tests/fixt
 - **The `/cortex` skill:** edit `skills/cortex/`, then run `uv run python scripts/build_skills.py` to refresh the plugin copy and `dist/cortex-skill.zip`.
 - **A demo vault:** `uv run cortex init <folder>` then `uv run python scripts/make_demo_vault.py <folder>` fills a throwaway vault with the sample learner and made-up study history, as in the screenshots. Never point it at a real vault.
 
-Layout in brief: `src/cortex/` is the Python package (`vault.py` for every write, `events.py` for the log, `levels.py` for the folds, `planner.py` for Today, `mcp_server.py` for the tools, `cli.py` for the commands, `app/` for the Cortex app, `browse/` for browsing); `src/cortex/assets/` holds the dashboard and app pages; `plugin/` is the Claude Code plugin; `extension/` is the browser extension.
+Layout in brief: `src/cortex/` is the Python package (`vault.py` for every write, `events.py` for the log, `levels.py` for the folds, `planner.py` for Today, `mcp_server.py` for the tools, `cli.py` for the commands, `app/` for the Cortex app, `browse/` for browsing); `src/cortex/assets/` holds the dashboard and app pages; `plugin/` is the Claude Code plugin.
 
 ## FAQ and troubleshooting
 

@@ -5,7 +5,7 @@ hard drop (scheme, local hosts, sign-in, payment and bank pages, secret-carrying
 scrubbing (no query or fragment but a search term or a YouTube `v=`), the user's lists, then
 the sensitive categories (`browse.skip_categories` drops; one not in `browse.cloud_categories`
 stays on the private pages; by default adult is skipped and every other category kept private).
-`filter_record` is the whole filter; the receiver (`cortex browse serve`) reuses it.
+`filter_record` is the whole filter.
 """
 
 from __future__ import annotations
@@ -335,7 +335,8 @@ def clean_title(title: str) -> str:
 def judge(url: str, title: str, *, settings: Settings, channel: str = "") -> Kept | None:
     """Steps 1-3 and the category of step 4, before the category's skip/private action
     (`apply`). None: dropped by a hard rule, a secret, a bank title or the user's lists.
-    `channel` (a video's, from the extension) counts for the secret and category checks."""
+    `channel` (a video's, from the old extension's inbox) counts for the secret and category
+    checks."""
     if drop_reason(url):
         return None
     title = clean_title(title)

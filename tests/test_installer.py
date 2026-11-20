@@ -363,9 +363,9 @@ def test_quiet_update_waits_for_the_app_then_reopens_it(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow
-def test_the_wheel_ships_the_extension_and_the_receiver(tmp_path):
-    """A2: an installer install (the wheel) has the browser extension as package data; A10:
-    and the no-console receiver entry point."""
+def test_the_wheel_ships_the_receiver_and_no_extension(tmp_path):
+    """A10: an installer install (the wheel) has the no-console receiver entry point; the
+    capture extension is gone (0.3.2), so the wheel holds none of it."""
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is not on PATH")
@@ -373,8 +373,7 @@ def test_the_wheel_ships_the_extension_and_the_receiver(tmp_path):
                    capture_output=True)
     z = zipfile.ZipFile(next(tmp_path.glob("cortex_learner-*.whl")))
     names = set(z.namelist())
-    for f in (ROOT / "extension").iterdir():
-        assert f"cortex/assets/extension/{f.name}" in names, f.name
+    assert not [n for n in names if "/extension/" in n]
     ep = next(n for n in names if n.endswith(".dist-info/entry_points.txt"))
     assert "cortex-receiver = cortex.app.launch:receiver" in z.read(ep).decode()
 

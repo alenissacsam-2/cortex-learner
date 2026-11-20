@@ -22,7 +22,6 @@ from typer.testing import CliRunner
 
 from cortex import cloudllm, dashboard, localllm, mcp_server, semantic
 from cortex.app import server as app_server
-from cortex.app import status as app_status
 from cortex.cli import app
 from cortex.events import live
 from cortex.vault import Vault
@@ -158,7 +157,7 @@ def outward(root, opener: Opener, outputs: list[str]) -> dict[str, str | bytes]:
 @pytest.fixture
 def world(root, home, monkeypatch):
     """The I3 History under the fake %LOCALAPPDATA%, the hubbed vault with step 6's private
-    pages, the fake embedder, the fake cloud endpoint, and no local model or receiver."""
+    pages, the fake embedder, the fake cloud endpoint, and no local model."""
     fake_profile_root(home / "LOCALAPPDATA", {"chrome": history_rows()})
     hubbed(root)
     private_pages(root)
@@ -170,7 +169,6 @@ def world(root, home, monkeypatch):
     def no_network(url, body, timeout):  # status probes of Ollama and LM Studio
         raise OSError("no local model in E2")
     monkeypatch.setattr(localllm, "_request", no_network)
-    monkeypatch.setattr(app_status, "RECEIVER_PORT", 1)  # nothing listens; never a real one
     return root, opener
 
 

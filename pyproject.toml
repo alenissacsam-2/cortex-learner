@@ -36,8 +36,6 @@ build-backend = "hatchling.build"
 packages = ["src/cortex"]
 
 [tool.hatch.build.targets.wheel.force-include]
-# the browser extension ships inside the package (the repo keeps its one copy at extension/)
-"extension" = "cortex/assets/extension"
 # the dashboard's Help tab and glossary; the repo files stay the one source (dashboard._help)
 "skills/cortex/modes/help.md" = "cortex/assets/help/help.md"
 "docs/GUIDE.md" = "cortex/assets/help/GUIDE.md"

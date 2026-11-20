@@ -1,19 +1,16 @@
 """Read-only checks behind the app's sections, and thin adapters to `cortex.localllm` and the
 browse code (both still growing: every call is guarded, so a missing function shows as "not
 available yet"). Nothing here writes, and nothing from browsing leaves as text: only counts,
-states, dates and the owner's own settings (`safe` filters the receiver's answers)."""
+states, dates and the owner's own settings (`safe` filters the browse answers)."""
 
 from __future__ import annotations
 
 import contextlib
-import hmac
-import http.client
 import json
 import logging
 import os
 import plistlib
 import re
-import secrets
 import shlex
 import sys
 import threading
@@ -25,9 +22,6 @@ from pathlib import Path
 from cortex.vault import VaultError
 
 log = logging.getLogger(__name__)
-RECEIVER_PORT = 8799
-PORT_BUSY = f"port {RECEIVER_PORT} is used by another program"
-RECEIVER_OLD = "an older Cortex receiver is running: restart it (or restart the computer)"
 LOGIN_TASK = "Cortex browse receiver"
 LOGIN_ID = "cortex-browse-receiver"  # LaunchAgent label, unit and .desktop name
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
@@ -46,8 +40,8 @@ def safe(d) -> dict:
             if isinstance(v, (bool, int, float)) or (isinstance(v, str) and _DATE.fullmatch(v))}
 
 
-# The Status board's slow probes (HTTP to Ollama and LM Studio, `lms`, the receiver's port: about
-# 3 s together on Windows, where a refused loopback connect waits) are kept for KEEP_S: the first
+# The Status board's slow probes (HTTP to Ollama and LM Studio, `lms`: seconds together on
+# Windows, where a refused loopback connect waits) are kept for KEEP_S: the first
 # read waits, later ones answer at once and refresh a stale answer in the background. `forget`
 # drops them all (any action, and Check again), so the next read waits for fresh answers.
 KEEP_S = 30.0
@@ -224,60 +218,6 @@ def lms_models() -> list[dict]:
 
 
 # ---- browsing (adapter to cortex.browse and cortex.browse_serve): counts and states only ----
-
-
-def _browse_dir(root: Path) -> Path:
-    return root / ".cortex" / "browse"
-
-
-def _receiver_get(path: str, token: str | None = None) -> tuple[int, dict]:
-    conn = http.client.HTTPConnection("127.0.0.1", RECEIVER_PORT, timeout=0.6)
-    try:
-        conn.request("GET", path, headers={
-            "Host": f"127.0.0.1:{RECEIVER_PORT}",
-            **({"Authorization": f"Bearer {token}"} if token else {})})
-        r = conn.getresponse()
-        body = r.read(65536)
-    finally:
-        conn.close()
-    try:
-        data = json.loads(body)
-    except ValueError:
-        data = {}
-    return r.status, data if isinstance(data, dict) else {}
-
-
-def receiver_probe(root: Path | None) -> tuple[str, dict]:
-    """Is this vault's receiver on 127.0.0.1:8799? ("running"|"stopped"|"busy"|"old", its
-    counts). "running" only once the listener proves it holds the token (HMAC of a fresh nonce,
-    asked without the token); only then does the token go to it. "busy": another program
-    answers. "old": an older Cortex receiver (its /v1/hello asks for the token: a 401 with its
-    own JSON refusal), which a restart replaces; it never gets the token either."""
-    token = None
-    if root is not None:
-        try:
-            token = (_browse_dir(root) / "token").read_text(encoding="utf-8").strip() or None
-        except OSError:
-            pass
-    nonce = secrets.token_hex(32)
-    try:
-        code, hello = _receiver_get(f"/v1/hello?n={nonce}")
-    except http.client.HTTPException:  # an answer, but not HTTP the receiver would send
-        return "busy", {}
-    except OSError:
-        return "stopped", {}
-    if code == 401 and hello.keys() == {"ok", "error"} and hello["ok"] is False:
-        return "old", {}
-    proof = hello.get("proof") if code == 200 else None
-    want = hmac.new(token.encode(), nonce.encode(), "sha256").hexdigest() if token else ""
-    if not (want and isinstance(proof, str) and proof.isascii()
-            and hmac.compare_digest(proof, want)):
-        return "busy", {}
-    try:
-        code, data = _receiver_get("/v1/status", token)
-    except (OSError, http.client.HTTPException):
-        return "running", {}
-    return "running", safe(data) if code == 200 else {}
 
 
 def browse_settings() -> dict:
@@ -499,12 +439,10 @@ def login_shown(root: Path) -> str:
                       *("Then runs: " + shlex.join(c) for c in login_commands(True))])
 
 
-def browse(root: Path | None, in_app: dict | None, quick: bool = False) -> dict:
-    """The Browsing section: settings, receiver, pairing, queue and last processing; `quick`:
-    the receiver's probe as `kept`."""
-    out = {"settings": browse_settings(), "paired": False, "receiver": "stopped",
-           "in_app": in_app is not None, "queued": 0, "last_contact": None,
-           "last_processed": None, "processing": False, "login": login_task()}
+def browse(root: Path | None) -> dict:
+    """The Browsing section: settings, the last import and Start at login (the receiver that
+    imports in the background)."""
+    out = {"settings": browse_settings(), "last_processed": None, "login": login_task()}
     try:
         from cortex import browse_serve  # noqa: F401
     except ImportError:
@@ -517,15 +455,6 @@ def browse(root: Path | None, in_app: dict | None, quick: bool = False) -> dict:
     out["available"] = True
     if root is None:
         return out
-    d = _browse_dir(root)
-    out["paired"] = (d / "token").is_file()
-    inbox = sorted(d.glob("inbox-*.jsonl"))
-    for p in inbox:  # newlines counted, the lines never parsed
-        try:
-            out["queued"] += p.read_bytes().count(b"\n")
-        except OSError:
-            pass
-    out["last_contact"] = max((when(p) or "" for p in inbox), default=None) or None
     try:
         from cortex.browse import build
         from cortex.vault import Vault
@@ -535,16 +464,6 @@ def browse(root: Path | None, in_app: dict | None, quick: bool = False) -> dict:
         pass
     except Exception:  # noqa: BLE001
         log.exception("browse state read failed")
-    if in_app is not None:
-        out["receiver"] = "running"
-        live = safe(in_app)
-    else:
-        out["receiver"], live = kept(("receiver", str(root)), lambda: receiver_probe(root)) \
-            if quick else receiver_probe(root)
-    out["processing"] = bool(live.get("processing"))
-    out["queued"] = live.get("queued_records", out["queued"])
-    out["last_processed"] = live.get("last_processed") or out["last_processed"]
-    out["last_contact"] = live.get("last_contact") or out["last_contact"]
     if out["login"].get("supported"):
         out["login"]["command"] = login_shown(root)
     return out
@@ -557,7 +476,7 @@ def _go(section: str, label: str) -> dict:
     return {"go": section, "label": label}
 
 
-def rows(root: Path | None, in_app: dict | None) -> list[dict]:
+def rows(root: Path | None) -> list[dict]:
     """One row per check: {id, label, state: ok|warn|off, value, detail, action}."""
     v, out = vault(root), []
     if not v["path"]:
@@ -586,22 +505,7 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 "Without one, nothing reads or records anything.",
                 "action": _go("connect", "Open" if on else "Connect")})
     out.append(llm_row())
-    b = browse(root if v["ok"] else None, in_app, quick=True)
-    out.append({"id": "receiver", "label": "Browse receiver",
-                "state": "ok" if b["receiver"] == "running" else "off",
-                "value": {"busy": PORT_BUSY, "old": RECEIVER_OLD}.get(b["receiver"],
-                                                                      b["receiver"]),
-                "detail": "Takes visits from the browser extension, on this computer only.",
-                "action": _go("browse", "Open")})
-    out.append({"id": "extension", "label": "Extension", "state": "ok" if b["paired"] else "off",
-                "value": "paired" if b["paired"] else "not paired",
-                "detail": f"Last contact {b['last_contact']}." if b["last_contact"]
-                else "No contact recorded yet.", "action": _go("browse", "Open")})
-    out.append({"id": "processing", "label": "Browse processing",
-                "state": "ok" if b["last_processed"] else "off",
-                "value": b["last_processed"] or "never", "count": b["queued"],
-                "detail": f"{b['queued']} visits waiting to be processed.",
-                "action": _go("browse", "Open")})
+    b = browse(root if v["ok"] else None)
     out.append(history_row(root if v["ok"] else None, b))
     return out
 

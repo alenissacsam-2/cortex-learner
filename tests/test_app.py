@@ -56,7 +56,6 @@ def fakes(monkeypatch):
     monkeypatch.setattr(server, "_obsidian", lambda: True)  # never this computer's registry
     monkeypatch.setattr(localllm, "_request", no_runner)
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())  # never the owner's receiver
     monkeypatch.setattr(server, "PORT", 0)  # never the owner's app port
     return calls
 
@@ -78,7 +77,6 @@ def _serve(root):
 def app(vault):
     srv, a = _serve(vault)
     yield a
-    a.receiver.stop()
     srv.shutdown()
     srv.server_close()
 
@@ -180,7 +178,6 @@ def test_first_run_home_goes_to_setup(home):
         assert st == 302 and r.getheader("Location") == "/manage#setup"
         assert call(a, "GET", "/manage", token=False)[0] == 200
     finally:
-        a.receiver.stop()
         srv.shutdown()
         srv.server_close()
 
@@ -244,8 +241,7 @@ def test_status_shapes(app, vault):
     _, js, _, _ = call(app, "GET", "/api/status")
     assert js["first_run"] is False and js["vault"] == str(vault.resolve())
     ids = [r["id"] for r in js["rows"]]
-    assert ids == ["vault", "git", "embed", "apps", "llm", "receiver", "extension", "processing",
-                   "history"]
+    assert ids == ["vault", "git", "embed", "apps", "llm", "history"]
     for r in js["rows"]:
         assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
     v = js["rows"][0]
@@ -258,7 +254,7 @@ def test_status_shapes(app, vault):
 
 
 def test_status_keeps_its_slow_probes_and_asks_again_after_an_action(app, monkeypatch):
-    """The Status board's slow probes (runners, `lms`, the receiver port) are kept: a second
+    """The Status board's slow probes (runners, `lms`) are kept: a second
     read answers at once without asking them; any POST, a finished job and Check again
     (?fresh=1) ask again; a stale answer is refreshed in the background."""
     monkeypatch.setattr(status, "kept", REAL_KEPT)
@@ -270,30 +266,27 @@ def test_status_keeps_its_slow_probes_and_asks_again_after_an_action(app, monkey
         time.sleep(0.4)
         return ["qwen3:1.7b"]
     monkeypatch.setattr(status, "ollama_models", slow_ollama)
-    monkeypatch.setattr(status, "receiver_probe", lambda root: (asked.append("rx"), time.sleep(0.4),
-                                                                ("stopped", {}))[2])
-    monkeypatch.setattr(app.receiver, "status", lambda: None)  # the app's own receiver is off
     t = time.perf_counter()
     first = call(app, "GET", "/api/status")[1]
-    assert time.perf_counter() - t >= 0.8 and sorted(asked) == ["ollama", "rx"]
+    assert time.perf_counter() - t >= 0.4 and asked == ["ollama"]
     t = time.perf_counter()
     again = call(app, "GET", "/api/status")[1]
-    assert time.perf_counter() - t < 0.3 and len(asked) == 2  # kept
+    assert time.perf_counter() - t < 0.3 and len(asked) == 1  # kept
     assert again["rows"] == first["rows"]
     call(app, "GET", "/api/status?fresh=1")  # Check again
-    assert len(asked) == 4
+    assert len(asked) == 2
     call(app, "POST", "/api/whats_new/seen", {})  # any action
     call(app, "GET", "/api/status")
-    assert len(asked) == 6
+    assert len(asked) == 3
     monkeypatch.setattr(status, "KEEP_S", 0.0)  # stale: the kept answer now, a fresh one behind
     t = time.perf_counter()
     call(app, "GET", "/api/status")
     assert time.perf_counter() - t < 0.3
     for _ in range(50):
-        if len(asked) == 8:
+        if len(asked) == 4:
             break
         time.sleep(0.05)
-    assert len(asked) == 8
+    assert len(asked) == 4
     status.forget()
 
 
@@ -304,8 +297,6 @@ def test_status_is_warmed_at_start_and_the_first_read_waits_for_it(app, monkeypa
     status.forget()
     asked = []
     monkeypatch.setattr(status, "ollama_models", lambda: (asked.append(1), time.sleep(0.5), [])[2])
-    monkeypatch.setattr(status, "receiver_probe", lambda root: ("stopped", {}))
-    monkeypatch.setattr(app.receiver, "status", lambda: None)
     app.warm_status()
     assert call(app, "GET", "/api/status")[0] == 200 and asked == [1]  # asked once, not twice
     t = time.perf_counter()
@@ -322,8 +313,6 @@ def test_setup_keeps_its_slow_probes_and_the_warm_up_asks_them(app, monkeypatch)
     status.forget()
     asked = []
     monkeypatch.setattr(status, "ollama_models", lambda: (asked.append(1), time.sleep(0.4), [])[2])
-    monkeypatch.setattr(status, "receiver_probe", lambda root: ("stopped", {}))
-    monkeypatch.setattr(app.receiver, "status", lambda: None)
     app.warm_status()
     app.warming.join()
     n = len(asked)
@@ -626,7 +615,8 @@ def test_connect_over_the_api(app, home, vault):
 
 
 def _browsing(home: Path, vault: Path) -> None:
-    """Synthetic history and extension inbox, every text field carrying a marker."""
+    """Synthetic history and an inbox the old extension left, every text field carrying a
+    marker."""
     from cortex.browse.selftest import _chromium
 
     now = datetime.now(UTC) - timedelta(days=1)
@@ -637,7 +627,6 @@ def _browsing(home: Path, vault: Path) -> None:
                (now + timedelta(minutes=9), "https://example.org/a", "Algebra TITLEMARKER")])
     d = vault / ".cortex" / "browse"
     d.mkdir(parents=True)
-    (d / "token").write_text("tok", encoding="utf-8")
     rec = {"url": "https://markerdomain.example/x?URLMARKER=1", "title": "Read TITLEMARKER",
            "start": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "active_ms": 60000,
            "excerpt": "EXCERPTMARKER text", "kind": "page"}
@@ -665,7 +654,7 @@ def test_browsing_answers_hold_counts_only(app, home, vault):
     every = b"".join(seen)
     assert every and not [m for m in MARKERS if m in every]
     _, b, _, _ = call(app, "GET", "/api/browse")
-    assert b["paired"] is True and b["last_processed"] and isinstance(b["queued"], int)
+    assert b["last_processed"] and "paired" not in b and "receiver" not in b
 
 
 def test_past_history_scan_then_import_mocked(app, home, monkeypatch):
@@ -865,19 +854,12 @@ def test_auto_import_setting_saved_and_checked(app, home):
     assert call(app, "POST", "/api/browse/auto", {"hours": 6}, token="wrong")[0] == 401
 
 
-def test_pair_and_in_app_receiver(app, vault, monkeypatch):
-    from cortex import browse_serve
-    monkeypatch.setattr(browse_serve, "PORT", 0)  # never 8799: the owner's may be running
-    code, body, _, _ = call(app, "POST", "/api/browse/receiver", {"on": True})
-    assert code == 400 and "Pair" in body["error"]
-    _, body, _, _ = call(app, "POST", "/api/browse/pair", {})
-    assert len(body["token"]) > 20
-    assert (vault / ".cortex" / "browse" / "token").read_text().strip() == body["token"]
-    assert call(app, "POST", "/api/browse/receiver", {"on": True})[0] == 200
-    _, b, _, _ = call(app, "GET", "/api/browse")
-    assert b["receiver"] == "running" and b["in_app"] is True
-    assert call(app, "POST", "/api/browse/receiver", {"on": False})[0] == 200
-    assert app.receiver.srv is None
+def test_the_extension_routes_are_gone(app, vault):
+    """0.3.2 removed the capture extension: no pairing, in-app receiver or setup route."""
+    for path in ("/api/browse/pair", "/api/browse/receiver", "/api/browse/setup"):
+        assert call(app, "POST", path, {"on": True})[0] == 404, path
+    assert call(app, "POST", "/api/open", {"what": "extension"})[0] == 400
+    assert not (vault / ".cortex" / "browse" / "token").exists()
 
 
 def test_browse_settings_saved_and_checked(app, home):
@@ -1362,11 +1344,11 @@ def test_browsing_privacy_defaults_and_categories(app, home):
     assert taint.config()["browse"]["private_mcp"] is False
 
 
-# ---- onboarding: runner start, one-click model, extension, guided imports -----------------
+# ---- onboarding: runner start, one-click model, guided imports -----------------------------
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 NEW_POSTS = ("/api/import/upload", "/api/import/preview", "/api/import/run", "/api/setup/start",
-             "/api/setup/model", "/api/browse/setup", "/api/update/check", "/api/update/apply")
+             "/api/setup/model", "/api/update/check", "/api/update/apply")
 
 
 def upload(app, data: bytes, name: str, *, length: int | None = None,
@@ -1500,37 +1482,6 @@ def test_setup_start_and_one_click_model(app, monkeypatch):
     assert job["error"] is None and pulled == [["C:\\o\\ollama.exe", "pull", "qwen3.5:2b"]]
     assert job["result"]["answer"] == "programming"  # pull, then Test
     assert taint.config()["localllm"]["model"] == "qwen3.5:2b"
-
-
-def test_extension_setup_pairs_then_starts_the_receiver(app, vault, monkeypatch, fakes):
-    from cortex import browse_serve
-    monkeypatch.setattr(browse_serve, "PORT", 0)
-    code, body, _, _ = call(app, "POST", "/api/browse/setup", {})
-    assert code == 200 and len(body["token"]) > 20
-    assert (vault / ".cortex" / "browse" / "token").read_text().strip() == body["token"]
-    assert app.receiver.srv is not None
-    if body["opened"]:
-        assert fakes[-1][0] == "open" and fakes[-1][1].endswith("/extension")
-    assert body["receiver"] == "running"
-
-
-def test_extension_setup_with_another_program_on_the_port(app, monkeypatch, fakes):
-    """Something that cannot prove it holds the key is not the receiver: setup says the port
-    is busy and starts nothing (that program never gets the key; see test_browse_serve)."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    other = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)  # answers 501
-    threading.Thread(target=lambda: other.serve_forever(0.05), daemon=True).start()
-    monkeypatch.setattr(status, "RECEIVER_PORT", other.server_address[1])
-    try:
-        code, body, _, _ = call(app, "POST", "/api/browse/setup", {})
-        assert code == 200 and body["receiver"] == "busy" and app.receiver.srv is None
-        _, b, _, _ = call(app, "GET", "/api/browse")
-        assert b["receiver"] == "busy"
-        row = next(r for r in call(app, "GET", "/api/status")[1]["rows"] if r["id"] == "receiver")
-        assert row["state"] == "off" and "another program" in row["value"]
-    finally:
-        other.shutdown()
-        other.server_close()
 
 
 # ---- chat, the audience control, cloud settings, setup order --------------------------------
@@ -2637,11 +2588,8 @@ def test_installer_wording(app, monkeypatch):
     assert "uv tool" not in doctor.check_on_path()[3]
 
 
-def test_extension_and_skill_paths(app):
-    """A2: the extension resolves to the package copy, else the checkout's; the Chat skill
-    links to the latest release when no local zip exists."""
-    root = Path(__file__).resolve().parents[1]
-    assert server.extension_dir() == root / "extension"  # an editable (dev) install
+def test_skill_path(app):
+    """A2: the Chat skill links to the latest release when no local zip exists."""
     js = call(app, "GET", "/api/connect")[1]
     assert js["skill_url"].startswith("https://github.com/")
     assert js["skill_url"].endswith("/releases/latest/download/cortex-skill.zip")
@@ -2718,10 +2666,16 @@ def test_receiver_entry_runs_browse_serve(monkeypatch, vault):
     from cortex.app import launch
     got = {}
     monkeypatch.setattr(sys, "argv", ["cortex-receiver.exe", "--vault", str(vault)])
-    monkeypatch.setattr(browse_serve, "serve", lambda v, port: got.update(root=v.root, port=port))
+    monkeypatch.setattr(browse_serve, "serve", lambda v: got.update(root=v.root))
     with pytest.raises(SystemExit) as e:
         launch.receiver()
-    assert e.value.code == 0 and got == {"root": vault.resolve(), "port": 8799}
+    assert e.value.code == 0 and got == {"root": vault.resolve()}
+    got.clear()  # a command line with the --port older versions took still runs
+    monkeypatch.setattr(sys, "argv", ["cortex-receiver.exe", "--vault", str(vault),
+                                      "--port", "8799"])
+    with pytest.raises(SystemExit) as e:
+        launch.receiver()
+    assert e.value.code == 0 and got == {"root": vault.resolve()}
 
 
 def test_disconnect_removes_cortex_from_every_app(home):
@@ -2750,6 +2704,42 @@ def test_a_busy_port_is_refused_not_shared(vault):
             server.run(vault, open_browser=False, port=busy, echo=lambda *a: None)
     finally:
         other.close()
+
+
+def test_connections_over_the_cap_are_closed_at_once(home, monkeypatch):
+    """A local program cannot exhaust threads with idle connections."""
+    monkeypatch.setattr(server, "MAX_CONNECTIONS", 4)
+    s = server.make_server(None)[0]
+    threading.Thread(target=lambda: s.serve_forever(0.05), daemon=True).start()
+    port = s.server_address[1]
+    try:
+        idle = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(4)]
+        extra = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(3)]
+        for x in extra:  # closed by the server without a byte sent
+            try:
+                assert x.recv(1) == b""
+            except (ConnectionResetError, ConnectionAbortedError):
+                pass
+        idle[0].settimeout(0.3)
+        with pytest.raises(TimeoutError):  # a connection under the cap stays open
+            idle[0].recv(1)
+        for x in idle + extra:
+            x.close()
+        code = None
+        for _ in range(50):  # the handlers see EOF and give their slots back
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                c.request("GET", "/manage")
+                code = c.getresponse().status
+                break
+            except (ConnectionResetError, ConnectionAbortedError, http.client.HTTPException):
+                threading.Event().wait(0.1)
+            finally:
+                c.close()
+        assert code == 200
+    finally:
+        s.shutdown()
+        s.server_close()
 
 
 # ---- What's new: shown once after an update -----------------------------------------------
@@ -2816,8 +2806,12 @@ def test_whats_new_a_bad_record_is_ignored(newsfile, monkeypatch, bad):
 
 
 def test_whats_new_ships_plain_entries():
+    from cortex import update
     from cortex.app import news
 
+    running = news._v(update.current())
     for v, e in news._entries().items():
-        assert news._v(v) and 3 <= len(e["items"]) <= 6 and isinstance(e["do"], list), v
+        # a draft for the next release (ahead of this package, so never shown) may be shorter
+        least = 1 if running and update.newer(news._v(v), running) else 3
+        assert news._v(v) and least <= len(e["items"]) <= 6 and isinstance(e["do"], list), v
         assert all(isinstance(x, str) and x for x in e["items"] + e["do"]), v

@@ -1,4 +1,12 @@
 {
+  "0.3.2": {
+    "items": [
+      "The Cortex capture browser extension is gone. Your history still comes in by itself from your browsers: every 10 minutes while the app runs, and from the receiver when it starts at login."
+    ],
+    "do": [
+      "Remove \"Cortex capture\" from your browser's extensions page."
+    ]
+  },
   "0.3.1": {
     "items": [
       "Cortex shows as Cortex: its own Cortex.exe and logo in the title bar, taskbar, Start menu and Task Manager, and pinning it pins Cortex.",
