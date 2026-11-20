@@ -55,7 +55,7 @@ def run(raw: str) -> str:
             return ""
         from datetime import UTC, datetime
 
-        from cortex import prime
+        from cortex import prime, xray
         from cortex.events import EventLog
         from cortex.vault import Vault
 
@@ -66,9 +66,14 @@ def run(raw: str) -> str:
 
         def work() -> None:
             try:
+                xr: dict = {}
                 parts, _ = prime.core(vault, prompt, list(EventLog(vault).iter_events()),
-                                      datetime.now(UTC))
-                box["out"] = "\n\n".join(parts)
+                                      datetime.now(UTC), frozenset(), xr)
+                out = "\n\n".join(parts)
+                # before `out` is handed over: the process may exit as soon as it is
+                xray.record(vault, "prime-hook", "claude-code", xr["served"], xr["trimmed"],
+                            len(out))
+                box["out"] = out
             except Exception:  # noqa: BLE001  (no traceback on the hook's stderr; nudge instead)
                 pass
 
