@@ -951,7 +951,7 @@ def apply_split(vault: Vault, index: Index, embed, hub: str, hash: str, children
         base = f"{hub}-{slugify(title)}"[:70].rstrip("-.")
         cid, n = base, 2
         while cid in ids or any((vault.root / d / f"{cid}.md").exists()
-                                for d in vault.KIND_DIRS.values()):
+                                for k in vault.KIND_DIRS for d in vault.dirs(k)):
             cid = f"{base[:66].rstrip('-.')}-{n}"
             n += 1
         ids.append(cid)

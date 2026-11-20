@@ -22,13 +22,14 @@ from typer.testing import CliRunner
 from cortex import chat_import, chats, harvest, taint
 from cortex.app import desktop, server
 from cortex.events import local_day
-from cortex.vault import Vault
+from cortex.vault import CHAT_ARCHIVE, Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
 KEY = "sk-" + "a" * 24  # a secret pattern
 CWD = "D:\\Dev\\proj"
 T0 = "2026-11-10T09:00:00Z"
+CHATS = CHAT_ARCHIVE  # where the import writes chat pages (C5)
 
 
 @pytest.fixture
@@ -75,7 +76,7 @@ def saved(root):
 
 def page(root, source, cid):
     p = [x for x in saved(root) if (x["source"], x["chat_id"]) == (source, cid)][-1]
-    return (root / "resources" / f"{p['pages'][0]}.md").read_text(encoding="utf-8")
+    return (root / CHATS / f"{p['pages'][0]}.md").read_text(encoding="utf-8")
 
 
 def chat(code, name="sess1", extra=()):
@@ -172,7 +173,7 @@ def test_a_rerun_is_idempotent_and_a_no_change_pass_only_stats(root_committed, d
     chat(code)
     v = Vault(root_committed)
     chat_import.run(v)
-    before = (events(root_committed), sorted((root_committed / "resources").glob("*.md")))
+    before = (events(root_committed), sorted((root_committed / CHATS).glob("*.md")))
 
     def no_read(*a):
         raise AssertionError("read a transcript on a no-change pass")
@@ -183,7 +184,7 @@ def test_a_rerun_is_idempotent_and_a_no_change_pass_only_stats(root_committed, d
         f.unlink()
     assert chat_import.run(Vault(root_committed)) == {"unchanged": 1}
     assert (events(root_committed),
-            sorted((root_committed / "resources").glob("*.md"))) == before
+            sorted((root_committed / CHATS).glob("*.md"))) == before
     for f in root_committed.glob(chat_import.STATE + "*"):
         f.unlink()
     (root_committed / chat_import.STATE).write_bytes(b"not a database " * 100)  # broken cache
@@ -196,7 +197,7 @@ def test_a_changed_transcript_updates_its_page_in_place(root_committed, dirs):
     p = chat(code)
     chat_import.run(Vault(root_committed))
     pid = saved(root_committed)[0]["pages"][0]
-    md = root_committed / "resources" / f"{pid}.md"
+    md = root_committed / CHATS / f"{pid}.md"
     text = md.read_text(encoding="utf-8")  # topics.place files it under a hub
     md.write_text(text.replace(f"{chat_import.MINE}\n", f"{chat_import.MINE}\nTopics: [[x]]\n"),
                   encoding="utf-8")
@@ -236,7 +237,7 @@ def test_a_grown_transcript_is_read_from_its_offset_a_rewritten_one_from_the_sta
     _append(p, u("THIRD QUESTION"))
     assert chat_import.run(Vault(root_committed)) == {"updated": 1}
     assert seen == [0, size]
-    md = next((root_committed / "resources").glob("chat-*.md"))
+    md = next((root_committed / CHATS).glob("chat-*.md"))
     body = md.read_text(encoding="utf-8")
     assert body.count("**Me:**") == 3 and "THIRD QUESTION" in body
     write(p, [u("A different first question"), u("THIRD QUESTION")], age=300)  # same size or not
@@ -309,7 +310,7 @@ def test_an_owner_edit_or_deletion_is_left_alone(root_committed, dirs):
     code, _ = dirs
     p = chat(code)
     chat_import.run(Vault(root_committed))
-    md = root_committed / "resources" / f"{saved(root_committed)[0]['pages'][0]}.md"
+    md = root_committed / CHATS / f"{saved(root_committed)[0]['pages'][0]}.md"
     md.write_text(md.read_text(encoding="utf-8") + "My own note.\n", encoding="utf-8")
     chat(code, extra=[u("MORE")])
     os.utime(p, (time.time() - 600, time.time() - 600))
@@ -381,7 +382,7 @@ def test_saved_by_hand_excluded_folders_and_earlier_imports_are_left_alone(root_
         assert st.get("gemini:gemini/2026-11-10-0900") == {"adopted": "gemini-tides"}
     finally:
         st.close()
-    assert len(list((root_committed / "resources").glob("chat-*.md"))) == 0
+    assert len(list((root_committed / CHATS).glob("chat-*.md"))) == 0
     p = exp / "gemini" / "2026-11-10-0900.jsonl"
     _append(p, {"type": "user", "message": {"content": "and the moon?"}, "timestamp": T0})
     assert chat_import.run(Vault(root_committed)) == {"earlier_import": 1}  # not read again
@@ -543,7 +544,7 @@ def _export(tmp_path, uid="aaaa-bbbb-1", hour=10):
 
 
 def _pages(root):
-    return sorted(p.stem for p in (root / "resources").glob("chat-*.md"))
+    return sorted(p.stem for p in (root / CHATS).glob("chat-*.md"))
 
 
 def _keys(root):
@@ -551,7 +552,7 @@ def _keys(root):
 
 
 def _turns(root, pid):
-    body = (root / "resources" / f"{pid}.md").read_text("utf-8")
+    body = (root / CHATS / f"{pid}.md").read_text("utf-8")
     assert "EXPORT-ANSWER" not in body and "gist" not in body
     return harvest.user_turns(body.split("---\n", 2)[2])
 
@@ -600,11 +601,11 @@ def test_an_export_then_its_live_log_is_one_page(root_committed, dirs, tmp_path)
     _export(tmp_path)
     assert chat_import.run(Vault(root_committed)) == {"saved": 1}
     [pid] = _pages(root_committed)
-    before = (root_committed / "resources" / f"{pid}.md").read_text("utf-8")
+    before = (root_committed / CHATS / f"{pid}.md").read_text("utf-8")
     _live(exp)
     assert chat_import.run(Vault(root_committed)) == {"unchanged": 1}
     assert _pages(root_committed) == [pid]
-    assert (root_committed / "resources" / f"{pid}.md").read_text("utf-8") == before
+    assert (root_committed / CHATS / f"{pid}.md").read_text("utf-8") == before
     assert _keys(root_committed) == {LIVE_KEY: [pid], ("claude-chat", "claude-ai/aaaa-bbbb-1"):
                                      [pid]}
 

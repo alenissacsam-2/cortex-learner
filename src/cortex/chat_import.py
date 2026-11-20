@@ -5,11 +5,12 @@ Claude Code transcripts (chats.root(), the desktop app's Code tab included, and 
 sessions: chats.cowork_files()), imported chat exports (chats.export_root()) and the chats a
 Claude app logged live over MCP (chats.LIVE) not saved yet, or changed since their page was
 written, become `resource` pages whose `Timeline:` line names their `Source:` app
-(semantic.is_chat). An ordinary chat keeps the user's own turns only,
-redacted and capped (chats.LINE_CHARS a turn, chats.PART_CHARS a page); assistant text is never
-copied. A coding session (Edit, Write, NotebookEdit or Bash calls) becomes a short summary:
-project, dates, the user's requests (first lines), files touched (relative paths) and commit
-subjects, never code, diffs, tool output or file contents.
+(semantic.is_chat), new ones in the git-ignored archive/chats/ (cortex.chat_archive). An
+ordinary chat keeps the user's own turns only, redacted and capped (chats.LINE_CHARS a turn,
+chats.PART_CHARS a page); assistant text is never copied. A coding session (Edit, Write,
+NotebookEdit or Bash calls) becomes a short summary: project, dates, the user's requests (first
+lines), files touched (relative paths) and commit subjects, never code, diffs, tool output or
+file contents.
 
 Each page written gets a `chat_saved` log event (payload `auto: true` and the body's `hash`).
 A page is rewritten only while its body (less a `Topics:` line) is still what was written: an
@@ -48,7 +49,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from cortex import chats, render, taint, topics
+from cortex import chat_archive, chats, render, taint, topics
 from cortex.browse import privacy
 from cortex.catalog import slugify
 from cortex.events import EventLog, live, local_day
@@ -465,6 +466,7 @@ class Ctx:
         self.vault = vault
         # an imported AI chat is global unless its category says otherwise
         self.settings = replace(settings or privacy.load_settings(), visible_to_claude=True)
+        self.folder = chat_archive.folder()  # where a new page goes (C5: the archive)
         self._projects: dict[str, str] | None = None
         self._pages: dict | None = None
         self._excluded: dict[str, bool] = {}
@@ -495,7 +497,7 @@ class Ctx:
         first `**Me:**` line matches `c`'s first turn, dated within a day of it."""
         if self._pages is None:
             self._pages = {}
-            for p in (self.vault.root / "resources").glob("*.md"):
+            for p in self.vault.note_paths("resource"):  # resources/ and archive/chats/
                 try:
                     with p.open("rb") as f:
                         head = f.read(4096).decode("utf-8", "replace")
@@ -684,7 +686,7 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
         fields = {"title": page.title, "kind": "resource", "resource_type": "other",
                   "status": "reference", "covers": [], "related": page.related,
                   "date": page.day, **({"private": True} if audience == "local" else {})}
-        vault.create_note("resource", pid, fields, page.body)
+        vault.create_note("resource", pid, fields, page.body, folder=ctx.folder)
         mark()
         return "saved", rec
     now = _hash(vault.read("resource", pid).body)
@@ -716,6 +718,8 @@ def run(vault: Vault, *, progress: Callable | None = None,
         evlog = EventLog(vault)
         ledger = _ledger(evlog.iter_events())
         ctx, t0, pace = Ctx(vault, settings), time.monotonic(), Pace(cancelled)
+        if ctx.folder:
+            chat_archive.ensure_ignored(vault)  # an older vault: before a page lands there
         for k, (source, path, sig) in enumerate(todo, 1):
             key = _key(source, path)
             try:

@@ -70,6 +70,13 @@ def _md(folder: str) -> list:
         return []
 
 
+def _kind_md(root: str, kind: str) -> list:
+    """(vault-relative path, mtime_ns, size) of a kind's *.md pages in all its folders
+    (Vault.dirs: an archived chat page in archive/chats/ too)."""
+    return [(os.path.join(*d.split("/"), n), m, s) for d in Vault.dirs(kind)
+            for n, m, s in _md(os.path.join(root, *d.split("/")))]
+
+
 def _browse(root: str) -> list:
     """browse/'s *.md files at any depth (paths relative to it), except under browse/private/
     and the site pages in browse/sites/<category>/."""
@@ -133,8 +140,8 @@ def _scan(root: Path, day: str) -> dict:
     """The listings `version` hashes: {"events", "notes": {kind: files}, FILES..., "day"}, in
     directory order (stable while a folder is unchanged)."""
     r = str(root)
-    notes = {kind: tuple(_browse(r) if kind == "browse" else _md(os.path.join(r, d)))
-             for kind, d in Vault.KIND_DIRS.items()}
+    notes = {kind: tuple(_browse(r) if kind == "browse" else _kind_md(r, kind))
+             for kind in Vault.KIND_DIRS}
     db = os.path.join(r, *store.PATH.split("/"))
     return {"events": tuple(_events(r)), "notes": notes,
             **{k: _stat(os.path.join(r, *f.split("/"))) for k, f in FILES.items()},
@@ -353,7 +360,9 @@ class HomeCache:
             if had is not None and had[0] == files:
                 keep[kind] = had
                 continue
-            d, ns, old, by = Vault.KIND_DIRS[kind], [], (had or (0, {}))[1], {}
+            # _browse paths are browse/-relative, _kind_md ones vault-relative
+            d = Vault.KIND_DIRS[kind] if kind == "browse" else ""
+            ns, old, by = [], (had or (0, {}))[1], {}
             for rel, mtime, size in sorted(files, key=lambda f: os.path.normcase(f[0]).split(
                     os.sep)):  # iter_notes' order
                 got = old.get(rel)

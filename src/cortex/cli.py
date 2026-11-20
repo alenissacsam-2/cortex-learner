@@ -30,7 +30,7 @@ from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from cortex.session import _git
 from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
-from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
+from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError
 
 EPILOG = ("About you: claims [--unasked|--summary], needs, voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
@@ -63,7 +63,9 @@ SECTIONS = ("me", "tracks", "concepts", "areas", "domains", "mistakes", "problem
 PRE_PUSH = "#!/bin/sh\necho 'cortex: this vault is local only; push refused.' >&2\nexit 1\n"
 WORKSPACE_IGNORE = ".obsidian/workspace*.json"
 PRIVATE_BROWSE_IGNORE = PRIVATE_BROWSE_DIR + "/"  # v7 C3: private browsing never enters git
-GITIGNORE = f".cortex/*\n!.cortex/config.yaml\n{WORKSPACE_IGNORE}\n{PRIVATE_BROWSE_IGNORE}\n"
+CHAT_ARCHIVE_IGNORE = CHAT_ARCHIVE + "/"  # v9 C5: imported AI chats never enter git
+GITIGNORE = (f".cortex/*\n!.cortex/config.yaml\n{WORKSPACE_IGNORE}\n{PRIVATE_BROWSE_IGNORE}\n"
+             f"{CHAT_ARCHIVE_IGNORE}\n")
 SESSION_ID_RE = re.compile(r"^s_[0-9A-HJKMNP-TV-Z]{26}$")
 OLD_COLOR_GROUPS = [("[cortex_status:solid]", "1D9E75"), ("[cortex_status:learning]", "BA7517"),
                     ("[cortex_status:needs_refresh]", "993556"), ("path:domains", "7F77DD"),
@@ -369,7 +371,8 @@ def _init(root: Path, default: bool = False) -> tuple[list[str], list[str], list
     old = ignore.read_text(encoding="utf-8")
     # older vaults: append if missing; the private line only while private browsing stays out
     # of git (the default)
-    for line in (WORKSPACE_IGNORE, *(() if private_kept else (PRIVATE_BROWSE_IGNORE,))):
+    for line in (WORKSPACE_IGNORE, *(() if private_kept else (PRIVATE_BROWSE_IGNORE,)),
+                 CHAT_ARCHIVE_IGNORE):
         if line not in old.splitlines():
             old += ("" if old.endswith("\n") or not old else "\n") + line + "\n"
             vault.write_text(ignore, old)
@@ -447,7 +450,8 @@ def doctor(vault: VaultOpt = None) -> None:
                     doctor_mod.check_git_identity(root), doctor_mod.check_id_clashes(root),
                     doctor_mod.check_contract_size(root), doctor_mod.check_claims(root),
                     doctor_mod.check_kill(root), doctor_mod.check_me_pages(root),
-                    doctor_mod.check_private_browse_git(root), *doctor_mod.check_clients(root)]
+                    doctor_mod.check_private_browse_git(root),
+                    doctor_mod.check_chat_archive_git(root), *doctor_mod.check_clients(root)]
     except VaultError as e:
         results.append(("FAIL", "Vault", str(e), "Open Cortex from the Start menu and set "
                         "up a vault under Setup." if doctor_mod.installer() else
@@ -838,22 +842,64 @@ def needs_cmd(vault: VaultOpt = None) -> None:
         typer.echo("No open needs.")
 
 
-@app.command("chats")
+chats_app = typer.Typer(invoke_without_command=True)
+app.add_typer(chats_app, name="chats")
+
+
+@chats_app.callback()
 @_errors
-def chats_cmd(since: Annotated[str | None, typer.Option(help="Only chats updated on or after "
+def chats_cmd(ctx: typer.Context,
+              since: Annotated[str | None, typer.Option(help="Only chats updated on or after "
                                                          "this date (YYYY-MM-DD).")] = None,
               limit: Annotated[int, typer.Option(help="Show at most this many.")] = 20,
               vault: VaultOpt = None) -> None:
     r"""List past chats (Claude Code, and Claude Chat once imported), newest first; \[saved]
-    marks ones already saved."""  # \[ keeps Rich markup in --help from eating [saved]
+    marks ones already saved. `cortex chats archive` moves chat pages out of git."""  # \[ keeps
+    # Rich markup in --help from eating [saved]
     from cortex import chats
 
+    if ctx.invoked_subcommand:
+        return
     v = _vault(vault)
     saved = {c for _, c in chats.saved_ids(EventLog(v).iter_events())}
     for c in chats.list_chats(saved, since, limit):
         mark = " [saved]" if c["saved"] else ""
         typer.echo(render.term(f"{c['updated'][:16]}  {c['id']}  {c['turns']} turns{mark}  "
                                f"{c['first_user_line']}"))
+
+
+@chats_app.command("archive")
+@_errors
+def chats_archive_cmd(
+        dry_run: Annotated[bool, typer.Option(
+            "--dry-run", help="List the pages that would move; change nothing.")] = False,
+        undo: Annotated[bool, typer.Option(
+            "--undo", help="Instead: move them back to resources/ and keep new chat pages "
+                           "there.")] = False,
+        vault: VaultOpt = None) -> None:
+    """Move imported AI chat pages from resources/ into archive/chats/, which git ignores: they
+    stay searchable, links keep working, and they leave the vault's git (old commits keep
+    them). New chat pages go there too. --undo moves them back."""
+    from cortex import chat_archive
+
+    v = _vault(vault)
+    where, to = (CHAT_ARCHIVE, "resources") if undo else ("resources", CHAT_ARCHIVE)
+    r = chat_archive.move(v, undo=undo, dry_run=dry_run)
+    n = len(r["ids"])
+    for i in r["ids"] if dry_run else ():
+        typer.echo(f"  {i}")
+    typer.echo(f"{'Would move' if dry_run else 'Moved'} {n} chat page{'s' * (n != 1)} from "
+               f"{where}/ to {to}/" + (" (dry run: nothing changed)." if dry_run else "."))
+    if r["kept"]:
+        typer.echo(f"Left {len(r['kept'])} where they are (another page of that id is in "
+                   f"{to}/, or the file is open): {', '.join(r['kept'][:10])}")
+    if r["git"]:
+        typer.echo(r["git"])
+    elif not dry_run and not (v.root / ".git").exists():
+        typer.echo("The vault is not a git repo: no git step.")
+    if not dry_run:
+        typer.echo("New chat pages go to resources/ until you run `cortex chats archive` again."
+                   if undo else "New chat pages go to archive/chats/; `--undo` reverses this.")
 
 
 @app.command("import-chats")

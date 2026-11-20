@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,80}$")
 # The private browse folder, vault-relative: kept from Claude, git and the index.
 PRIVATE_BROWSE_DIR = "browse/private"
+# C5: imported AI chat pages (resources), vault-relative; git-ignored, read like resources/
+CHAT_ARCHIVE = "archive/chats"
 
 # SPEC §15a.2: fields marked * per kind. TOOL_PROPS are written only by set_tool_props.
 SET_FIELD_WHITELIST = {
@@ -321,6 +323,14 @@ class Vault:
         "browse": "browse",  # browse-brain.md §3: generated day pages; browse/private/ is not read
         "rollup": "rollups",  # cortex.rollups: generated week, month and year pages
     }
+    # more folders a kind's pages may sit in, read like its own; a new page goes to the main
+    # folder unless create_note names one of these (cortex.chat_archive)
+    EXTRA_DIRS = {"resource": (CHAT_ARCHIVE,)}
+
+    @classmethod
+    def dirs(cls, kind: str) -> tuple[str, ...]:
+        """A kind's folders, vault-relative: its own, then EXTRA_DIRS."""
+        return (cls.KIND_DIRS[kind], *cls.EXTRA_DIRS.get(kind, ()))
 
     def __init__(self, root: Path):
         self.root = Path(root).resolve()
@@ -348,7 +358,11 @@ class Vault:
                              f"{', '.join(self.KIND_DIRS)}.")
         if not isinstance(id, str) or not ID_RE.fullmatch(id):
             raise VaultError("invalid_id", "IDs must match ^[a-z0-9][a-z0-9.-]{0,80}$.")
-        return self._contained(self.root / self.KIND_DIRS[kind] / f"{id}.md")
+        path = self._contained(self.root / self.KIND_DIRS[kind] / f"{id}.md")
+        if not path.is_file():  # an extra folder's page; else the main folder's path
+            return next((p for d in self.EXTRA_DIRS.get(kind, ())
+                         if (p := self._contained(self.root / d / f"{id}.md")).is_file()), path)
+        return path
 
     def _contained(self, path: Path) -> Path:
         p = Path(path)
@@ -387,9 +401,11 @@ class Vault:
         if not p.is_file():
             raise VaultError("unknown_id", f"{p.name} does not exist in the vault.")
         kinds = {d: k for k, d in self.KIND_DIRS.items()}
+        extra = {d: k for k, ds in self.EXTRA_DIRS.items() for d in ds}
         try:
-            return self._parse(p, kinds.get(p.parent.name, "file") if p.parent != self.root
-                               else "file")
+            return self._parse(p, "file" if p.parent == self.root else
+                               extra.get(p.parent.relative_to(self.root).as_posix())
+                               or kinds.get(p.parent.name, "file"))
         except Exception as e:
             raise VaultError("invalid_argument", f"{p.name} cannot be parsed: {e}") from e
 
@@ -397,10 +413,11 @@ class Vault:
         """The .md files of a kind folder. browse/ is read recursively (the site pages sit in
         browse/sites/<category>/) except its private/ subfolder, which is never read."""
         folder = self.root / self.KIND_DIRS[kind]
+        if kind != "browse":
+            return [p for d in self.dirs(kind) if (f := self.root / d).is_dir()
+                    for p in f.glob("*.md")]
         if not folder.is_dir():
             return []
-        if kind != "browse":
-            return list(folder.glob("*.md"))
         hidden = self.root / PRIVATE_BROWSE_DIR
         return [p for p in folder.rglob("*.md") if not p.is_relative_to(hidden)]
 
@@ -683,8 +700,15 @@ class Vault:
         self._mutate(self.path_for(kind, id), change)
         return changed
 
-    def create_note(self, kind: str, id: str, fields: dict, body: str) -> Path:
+    def create_note(self, kind: str, id: str, fields: dict, body: str,
+                    folder: str | None = None) -> Path:
+        """A new page in its kind's folder, or in `folder`, one of Vault.dirs(kind)."""
         path = self.path_for(kind, id)
+        if folder is not None:
+            if folder not in self.dirs(kind):
+                raise VaultError("invalid_argument", f"A {kind} page cannot go in {folder}/.")
+            if not path.exists():
+                path = self._contained(self.root / folder / f"{id}.md")
         if fields.get("id", id) != id:
             raise VaultError("invalid_argument", "fields.id must match the note id.")
         data = CommentedMap((k, _to_yaml(v)) for k, v in {"id": id, **fields}.items())
@@ -697,7 +721,7 @@ class Vault:
                 raise VaultError("invalid_argument", f"{kind} '{id}' already exists; patch it "
                                  "instead.")
             # ids are unique across kinds: the index keys nodes by id alone
-            other = next((k for k, d in self.KIND_DIRS.items()
+            other = next((k for k in self.KIND_DIRS for d in self.dirs(k)
                           if (self.root / d / f"{id}.md").is_file()), None)
             if other:
                 title = fields.get("title") or id
@@ -750,6 +774,21 @@ class Vault:
                                          "program; try again.") from None
                     time.sleep(0.05 * 2**attempt)
         return False  # unreachable
+
+    def move(self, src: Path, dst: Path) -> None:
+        """Move one vault file under the lock: `dst` written atomically with `src`'s bytes and
+        mtime, then `src` removed. A crash between leaves the same bytes in both, and a rerun
+        finishes; VaultError when `dst` already holds something else."""
+        src, dst = self._contained(src), self._contained(dst)
+        with self.lock():
+            st, data = src.stat(), src.read_bytes()
+            if dst.exists() and dst.read_bytes() != data:
+                raise VaultError("invalid_argument", f"{dst.name} is already in "
+                                 f"{dst.parent.relative_to(self.root).as_posix()}/.")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(dst, data)
+            os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))  # pages keep their dates
+            self.remove(src)
 
     def update_text(self, path: Path, change: Callable[[str], str], default: str = "") -> bool:
         """Read-modify-write a page the owner may edit at the same time (B13): `change` (which
