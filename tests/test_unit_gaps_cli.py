@@ -94,7 +94,6 @@ CASES = [
     (["browse", "scan"], {0}),
     (["browse", "import", "--dry-run", "--vault", "{V}"], {0}),
     (["browse", "status", "--vault", "{V}"], {0}),
-    (["browse", "pair", "--vault", "{V}"], {0}),
     (["llm", "status"], {0}),
     (["sample", "remove", "--vault", "{V}"], {0}),
 ]

@@ -334,7 +334,8 @@ def ingest_files(con: sqlite3.Connection, vault: Vault, settings: Settings, tz, 
                  *, quiet_until: float | None = None) -> Counter:
     """The extension's inbox files (and the archive of consumed ones) not read since they last
     changed. A record's key is a hash of its start, URL and title, so the same record in the
-    inbox and later in the archive is one row."""
+    inbox and later in the archive is one row. The extension is gone (0.3.2) and no new files
+    arrive; the ones it left still import."""
     from cortex.browse import build
 
     c: Counter = Counter()

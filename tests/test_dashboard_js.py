@@ -597,10 +597,10 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     """`/` on the app server: a note added while the page is open reaches the feed within a few
     seconds and pops into the brain, which is remounted where the camera was with the same lobe
     focused; 30 more mounts leave the page's WebGL context alive."""
-    from test_app import _free_port, _serve
+    from test_app import _serve
 
     from cortex import localllm
-    from cortex.app import server, status
+    from cortex.app import server
     from cortex.events import local_day
 
     def no_runner(*a, **k):
@@ -609,7 +609,6 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     monkeypatch.setattr(localllm, "_request", no_runner)  # never this computer's LM Studio
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(server, "_open", lambda url: None)
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     root = made[0]
     (root / ".cortex").mkdir(exist_ok=True)
     srv, app = _serve(root)
@@ -632,7 +631,6 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
         out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
                    ready=str(ready), live=title)
     finally:
-        app.receiver.stop()
         srv.shutdown()
         srv.server_close()
     assert out["errors"] == []
@@ -654,11 +652,11 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     Legend opens on the first visit (folded at 1024x768) and remembers a click, the Stem button
     flies there and back, and the outline's Browsing group opens a site's panel from the
     keyboard. Screenshots of the stem are kept in the run folder."""
-    from test_app import _free_port, _serve
+    from test_app import _serve
     from test_home import _ago, _sites, _stem_sites
 
     from cortex import localllm
-    from cortex.app import server, status
+    from cortex.app import server
 
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
@@ -666,7 +664,6 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     monkeypatch.setattr(localllm, "_request", no_runner)
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(server, "_open", lambda url: None)
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     root = made[0]
     (root / ".cortex").mkdir(exist_ok=True)
     evil = '<img src=x onerror="window.__pwned=1">'
@@ -685,7 +682,6 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
                    stem={"pick": "site:odd.example", "absent": ["site:secret.example"],
                          "sites": ["odd.example", "secret.example"], "shots": shots})
     finally:
-        app.receiver.stop()
         srv.shutdown()
         srv.server_close()
     assert out["errors"] == []

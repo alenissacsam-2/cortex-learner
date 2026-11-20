@@ -373,7 +373,6 @@
   let current = null, landing = false;  // landing: Status opened in place of the app's own choice
   function show(s, focus) {
     if (!SECTIONS.includes(s)) s = 'status';
-    if (current !== s) pairToken = null;  // the key is shown once
     if (focus) landing = false;  // the user chose: Status's answer does not move them
     current = s;
     try { sessionStorage.setItem('cortex.section', s); } catch (e) { /* storage off */ }
@@ -1024,43 +1023,8 @@
       h('span', { class: 'sub', text: hist.imported ? `Last import ${hist.imported}.` : 'Never imported.' })))];
   }
 
-  /* The extension: one click pairs, starts the receiver and opens its folder; the key is
-     shown with Copy and never copied by itself. Start at login stays its own click. */
-  function tokenBox() {
-    return pairToken ? h('div', { class: 'pad' }, h('strong', { text: 'The key for the extension (shown once):' }),
-      h('div', { class: 'token' }, h('code', { text: pairToken }),
-        copyBtn(() => pairToken, 'Copy failed; select the key and copy it.'))) : null;
-  }
-  function extensionBtn(paired) {
-    return btn('Set up the extension', () => {
-      if (paired && !window.confirm('Set it up again? The key the extension has now stops working.')) return null;
-      return post('/api/browse/setup', {}, (r) => {
-        pairToken = r.token;
-        toast(r.receiver === 'busy' ? 'Paired, but the receiver could not start: port 8799 is used by another program. Close it, then press Start under Browsing.'
-          : r.receiver === 'old' ? `Paired, but ${RECEIVER_OLD}.`
-          : r.opened ? 'Paired, receiver started, folder opened.' : 'Paired and receiver started.');
-        load(current);
-      });
-    }, 'btn lit');
-  }
-  const RECEIVER_OLD = 'an older Cortex receiver is running: restart it (or restart the computer)';  // status.RECEIVER_OLD
-  // the browsers extension/README.md names; Setup and Browsing say the same
-  const EXT_BROWSERS = 'Comet, Chrome, Edge or Brave';
-  const extPage = () => h('li', {}, 'Open the extensions page: ', h('code', { text: 'chrome://extensions' }), ' (Chrome, Comet), ',
-    h('code', { text: 'edge://extensions' }), ' or ', h('code', { text: 'brave://extensions' }), '.');
-  function extensionSetup(x) {
-    return [row('Set up the extension', x.paired ? 'paired' : 'not set up', 'One click pairs it, starts the receiver and opens the extension folder. Start at login is under Browsing.', [extensionBtn(x.paired)]),
-      tokenBox(),
-      h('div', { class: 'pad' }, h('strong', { text: `Then, in ${EXT_BROWSERS}` }),
-        h('ol', { class: 'how' }, extPage(),
-          h('li', { text: 'Turn on Developer mode.' }),
-          h('li', {}, 'Click Load unpacked and choose the folder that opened: ', h('code', { text: x.folder }),
-            x.folder ? copyBtn(() => x.folder, 'Copy failed; select the folder path and copy it.') : null),
-          h('li', { text: 'Open the Cortex capture popup, paste the key and press Save and test.' })))];
-  }
-
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'browser', 'extension'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
@@ -1068,7 +1032,6 @@
     notes: 'An Obsidian vault, a Notion export or a folder of .md and .txt notes.',
     calendar: 'Your events, from an .ics calendar file.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
-    extension: ['Browser extension', 'Captures new browsing as you go.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
   let guide = null;  // {source, step, upload, path, busy, wait, preview, done, error}
@@ -1123,7 +1086,6 @@
 
   function guidePanel(d, id) {
     if (id === 'browser') return historyRows(d.history, 'setup');
-    if (id === 'extension') return extensionSetup(d.extension);
     const g = d.guides[id], s = guide.step;
     const back = (to) => btn('Back', () => { Object.assign(guide, { step: to, error: null }); load('setup'); });
     const steps = h('div', { class: 'gsteps' }, ['Get your export', 'Add it', 'Check and import'].map((t, i) =>
@@ -1183,8 +1145,7 @@
       const imp = d.imports[id], open = !!guide && guide.source === id;
       const [name, blurb] = d.guides[id] ? [d.guides[id].name, CARD[id]] : CARD[id];
       const stat = imp ? (imp.count ? `imported ${imp.count.toLocaleString()} on ${imp.when.slice(0, 10)}` : 'not yet')
-        : id === 'browser' || id === 'google-activity' ? (hi.imported ? `browsing last imported ${hi.imported.slice(0, 10)}` : 'not yet')
-          : id === 'extension' ? (d.extension.paired ? 'paired' : 'not set up') : '';
+        : id === 'browser' || id === 'google-activity' ? (hi.imported ? `browsing last imported ${hi.imported.slice(0, 10)}` : 'not yet') : '';
       out.push(row(name, stat, blurb, [btn(open ? 'Close' : 'Start', () => {
         guide = open ? null : { source: id, step: 1 };
         opened.add('history');  // stays open when an import marks the step done
@@ -1235,7 +1196,6 @@
           h('li', {}, 'macOS: add ', h('code', { text: `export ${name}="your-key"` }), ' to ~/.zshrc, then open a new terminal.')))),
     board('Recent cloud runs', { note: 'counts only' }, runs)];
   }
-  let pairToken = null;
   function renderBrowse(d) {
     if (d.available === false) { put('browse', board('Browsing', {}, note('Not available in this version yet.'))); return; }
     const s = d.settings || {};
@@ -1272,37 +1232,18 @@
           list('b-private', 'Private only', 'Kept, but only on your private pages.', s.private))));
     }
     const recv = board('Receiver', {},
-      row('Receiver', d.receiver === 'running' ? (d.in_app ? 'running in this app' : 'running')
-        : d.receiver === 'busy' ? 'port 8799 is used by another program'
-          : d.receiver === 'old' ? RECEIVER_OLD : 'stopped',
-        'Takes visits from the browser extension on 127.0.0.1:8799, this computer only. Started here, it stops when this app stops.',
-        [d.in_app ? btn('Stop', () => post('/api/browse/receiver', { on: false }, () => { toast.ok('Receiver stopped.'); load('browse'); }), null, { 'aria-label': 'Stop: Receiver' })
-          : d.receiver === 'running' ? null : btn('Start', () => post('/api/browse/receiver', { on: true }, () => { toast.ok('Receiver started.'); load('browse'); }), null, { 'aria-label': 'Start: Receiver' })]),
       d.login.supported
-        ? row('Start at login', d.login.exists ? 'on' : 'off', 'Adds or removes a login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
+        ? row('Start at login', d.login.exists ? 'on' : 'off', 'The receiver imports new browser history in the background, with no window. This adds or removes its login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
           [btn(d.login.exists ? 'Remove' : 'Add', () => job('/api/browse/login', { on: !d.login.exists }))])
         : row('Start at login', 'not on this system', 'Windows only: start the receiver from your login items instead.'),
       d.login.command ? h('div', { class: 'pad' }, h('pre', { text: d.login.command })) : null);
-    const pairBtn = btn(d.paired ? 'Pair again' : 'Pair', () => {
-      if (d.paired && !window.confirm('Pair again? The key the extension has now stops working.')) return null;
-      return post('/api/browse/pair', {}, (r) => { pairToken = r.token; load('browse'); });
-    });
-    const extn = board('Extension', {},
-      row('Pairing', d.paired ? 'paired' : 'not paired', d.last_contact ? `Last contact ${d.last_contact}.` : 'No contact recorded yet.', [extensionBtn(d.paired), pairBtn]),
-      tokenBox(),
-      h('div', { class: 'pad' }, h('strong', { text: `Load it in ${EXT_BROWSERS}` }),
-        h('ol', { class: 'how' }, extPage(),
-          h('li', { text: 'Turn on Developer mode.' }),
-          h('li', {}, 'Click Load unpacked and choose this folder: ', h('code', { text: d.extension }), ' ',
-            btn('Open folder', () => post('/api/open', { what: 'extension' }), 'linkbtn', { 'aria-label': 'Open folder: Extension' })),
-          h('li', { text: 'Open the Cortex capture popup, enter port 8799, paste the key and press Save and test. Its top line then says Receiver connected, and its Process now button does the same as the one below.' }))));
     const past = board('Past history', { note: d.history && d.history.imported ? `last import ${d.history.imported}` : 'never imported' },
       ...autoImportRows(d.history, s, d.login), ...historyRows(d.history, 'browse'));
-    const acts = board('Actions', { note: `${d.queued} waiting · processed ${d.last_processed || 'never'}` },
-      row('Process now', null, 'Turns waiting visits and new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
+    const acts = board('Actions', { note: `processed ${d.last_processed || 'never'}` },
+      row('Process now', null, 'Turns new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
       row('Self-test', null, 'Runs the whole import on made-up history in a temp folder; your vault and browsers are not touched.', [btn('Run self-test', () => job('/api/browse/selftest', {}))]),
       row('Private pages', null, 'Your browsing pages are for you only: open them in Obsidian.', [btn('Open private folder in Obsidian', () => post('/api/open', { what: 'private' }, noObsidian))]));
-    put('browse', ...parts, ...(d.cloud ? cloudBoard(d.cloud) : []), past, recv, extn, acts);
+    put('browse', ...parts, ...(d.cloud ? cloudBoard(d.cloud) : []), past, recv, acts);
   }
 
   /* Dashboard and vault */
@@ -1469,7 +1410,7 @@
         h('ol', { class: 'how' }, d.first_prompts.map((x) => h('li', {}, h('code', { text: x })))),
         h('p', { class: 'help', text: 'This step never gets a check mark: Cortex cannot see your chats in Claude. When Claude answers one of these using Cortex, you are set.' })),
       row('Chat', null, 'Or ask about your notes here, with a model on this computer.', [btn('Open Chat', () => show('chat', true))]),
-      row('Browsing', null, 'Capture new browsing with the extension, privately.', [btn('Open', () => show('browse', true))])], first);
+      row('Browsing', null, 'Bring in your browser history, privately.', [btn('Open', () => show('browse', true))])], first);
     const steps = { vault: sVault, embed: sEmbed, connect: sConnect, history: sHistory, llm: sLlm };
     put('setup', ...d.order.map((k) => steps[k]), sFinish);
   }

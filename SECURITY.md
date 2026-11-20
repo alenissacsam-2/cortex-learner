@@ -18,7 +18,7 @@ Please include:
 Anything that breaks a promise in [docs/PRIVACY.md](docs/PRIVACY.md), for example:
 - a private note, private browse page or hidden category reaching Claude, another AI app, the dashboard, search or a cloud model;
 - note text running as code in the dashboard or the app, or being read as instructions outside `<untrusted_note>`;
-- the browse receiver or the app accepting a request from a web page or another computer;
+- the app accepting a request from a web page or another computer;
 - a secret surviving the redaction on import or at session close.
 
 Bugs in Claude, Obsidian, your browser or a model runner belong to those projects.

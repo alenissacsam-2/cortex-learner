@@ -1,11 +1,12 @@
 """Vault backup copies: one zip of the whole vault, .git included, and the durable browse stores
-in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, the
-receiver's not-yet-imported inbox-*.jsonl, filtered like the archive), which hold browsing the
-browsers have already forgotten. The SQLite stores (DBS: the browsing store and the two vector
-stores, which take minutes to embed again) are copied by SQLite's own backup, a consistent
-snapshot, never the live file and its WAL. Left out: old backups, the pairing token, the local
-chat history (.cortex/browse/chat), lock files, the rebuilt dashboard and stray *.tmp files.
-A zip holds private browsing: keep it as private as the vault. The last KEEP zips are kept."""
+in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, any
+not-yet-imported inbox-*.jsonl the capture extension left before 0.3.2, filtered like the
+archive), which hold browsing the browsers have already forgotten. The SQLite stores (DBS: the
+browsing store and the two vector stores, which take minutes to embed again) are copied by
+SQLite's own backup, a consistent snapshot, never the live file and its WAL. Left out: old
+backups, the old extension's pairing token (a leftover file), the local chat history
+(.cortex/browse/chat), lock files, the rebuilt dashboard and stray *.tmp files. A zip holds
+private browsing: keep it as private as the vault. The last KEEP zips are kept."""
 
 from __future__ import annotations
 

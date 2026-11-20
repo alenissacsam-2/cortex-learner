@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 # every shipped path; tests/fixtures hold made-up addresses on purpose, so they stay out
-SCOPE = ["src", "plugin", "skills", "scripts", "extension", "installer", "docs", "README.md",
+SCOPE = ["src", "plugin", "skills", "scripts", "installer", "docs", "README.md",
          "CLAUDE.md", "filemap.md", "pyproject.toml", ".claude-plugin"]
 PATTERNS = {
     "D: drive path": re.compile(r"\bD:[\\/]"),

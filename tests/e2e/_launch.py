@@ -1,7 +1,6 @@
 """`cortex` for the E2E tests, run as `sys.executable -I _launch.py <args>`: FakeEmbed as the
-embedder (no model download), no browser opened, and the app's fixed ports redirected to ports
-the test picked (Ollama's 11434 to CORTEX_E2E_OLLAMA, else refused; the receiver's 8799 to
-CORTEX_E2E_RECEIVER_PORT). No src/ change is needed."""
+embedder (no model download), no browser opened, and Ollama's fixed port 11434 redirected to
+the one the test picked (CORTEX_E2E_OLLAMA, else refused). No src/ change is needed."""
 
 import os
 import sys
@@ -13,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for conf
 from conftest import FakeEmbed  # noqa: E402
 
 from cortex import localllm, semantic  # noqa: E402
-from cortex.app import server, status  # noqa: E402
+from cortex.app import server  # noqa: E402
 from cortex.cli import app  # noqa: E402
 
 OLLAMA = "http://127.0.0.1:11434"
@@ -21,8 +20,6 @@ OLLAMA = "http://127.0.0.1:11434"
 webbrowser.open = lambda *a, **k: True
 server._open = lambda *a, **k: True  # a distinct object: _open_path would os.startfile otherwise
 semantic._embedder = FakeEmbed()
-if port := os.environ.get("CORTEX_E2E_RECEIVER_PORT"):
-    status.RECEIVER_PORT = int(port)
 _real_request = localllm._request
 
 

@@ -2,7 +2,8 @@
 and a negative case per rule), discovery and read-only reading of synthetic Chromium and
 Firefox History files built here (never real history), `cortex browse scan` (counts only), and
 the import: day pages, private pages, the index, interest signals, "New interest?" lines,
-idempotency, the extension inbox merge, the local LLM hooks and the dashboard lobe."""
+idempotency, the inbox merge (visits the capture extension saved before 0.3.2), the local LLM
+hooks and the dashboard lobe."""
 
 import hashlib
 import json
@@ -11,12 +12,10 @@ import re
 import shutil
 import socket
 import sqlite3
-import subprocess
 import time
 import zipfile
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -940,25 +939,6 @@ def test_l4_stale_temp_copies_are_swept_and_fresh_ones_kept(tmp_path, monkeypatc
     assert not old.exists() and new.exists()
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_m3_m4_the_extension_mirror_drops_the_same_urls(tmp_path):
-    """M3 in the extension's lib.js: the same decoded-word sign-in and bank rules."""
-    lib = Path(__file__).parents[1] / "extension" / "lib.js"
-    shutil.copy(lib, tmp_path / "lib.mjs")
-    urls = DROPPED[:6] + ["https://www.sc.com/in/digital-banking/",
-                          "http://100.101.102.103:8080/admin"]
-    (tmp_path / "t.mjs").write_text(
-        'import { denyReason, bankTitle } from "./lib.mjs";\n'
-        f"const urls = {json.dumps(urls)};\n"
-        'console.log(JSON.stringify([urls.map((u) => denyReason(u)), '
-        'denyReason("https://example.com/blog/how-payments-work"), '
-        'bankTitle("Account Summary | SBI Card")]));\n', encoding="utf-8")
-    out = subprocess.run(["node", str(tmp_path / "t.mjs")], capture_output=True, text=True,
-                         timeout=30)
-    reasons, article, bank = json.loads(out.stdout)
-    assert all(reasons) and article is None and bank is True
-
-
 def test_adult_skip_writes_no_adult_item_anywhere(vault, browsers):
     run_import(vault, browsers, settings=Settings())
     assert b"ADULTMARKER" not in b"".join(files(vault).values())
@@ -1346,12 +1326,6 @@ def test_h3_cli_import_uses_the_runner_only_when_enabled(vault, machine, monkeyp
     assert used == [1]
     out = cli("llm", "status").output
     assert "enabled: true" not in out
-
-
-def test_cli_pair_prints_a_token(vault):
-    pytest.importorskip("cortex.browse_serve")
-    out = cli("browse", "pair", "--vault", str(vault))
-    assert out.exit_code == 0 and len(out.output.strip()) >= 20
 
 
 # ---- self-checks and a sturdier import (owner can't run it blind) -------------------------

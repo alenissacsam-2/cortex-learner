@@ -5,10 +5,10 @@ of pythonw named and drawn as Cortex, so Windows shows Cortex, not Python); `cor
 the same, handing over to that Cortex.exe when it sits beside its Python. It is the desktop
 app (desktop.py: its own window and a tray icon; `--hidden`, as Start with Windows runs it,
 starts in the tray), or, when one already runs (~/.cortex/app.json), that app's window
-brought up. `cortex-receiver` is Start at login's browse receiver, as `cortex browse serve`
-runs it. With no console (a GUI script's sys.stdout and sys.stderr are None) their output
-goes to ~/.cortex/logs/, and a failed app start says so in a message box with the log's
-path."""
+brought up. `cortex-receiver` is Start at login's browse receiver (the background history
+import), as `cortex browse serve` runs it. With no console (a GUI script's sys.stdout and
+sys.stderr are None) their output goes to ~/.cortex/logs/, and a failed app start says so in a
+message box with the log's path."""
 
 from __future__ import annotations
 
@@ -93,7 +93,8 @@ def main() -> None:
 
 
 def receiver() -> None:
-    """`cortex-receiver [--vault V] [--port N]`: `cortex browse serve` with no console."""
+    """`cortex-receiver [--vault V]`: `cortex browse serve` (the background import) with no
+    console."""
     _log_to("receiver.log")
     from cortex import cli
     cli.app(["browse", "serve", *sys.argv[1:]], prog_name="cortex")

@@ -4,7 +4,6 @@ GET changes nothing, the upload lifecycle (upload, preview counts only, run, upl
 one job at a time, cancel and Quit leave no upload, and no response carries a title or URL."""
 
 import json
-import socket
 import threading
 import urllib.error
 import urllib.request
@@ -13,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from cortex import chats, localllm
-from cortex.app import actions, server, status, targets
+from cortex.app import actions, server, targets
 from integration.builders import EXPORTS, chatgpt_zip
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -22,15 +21,9 @@ LEAKS = ("Graph revision", "Explain Dijkstra", "sk-chatgpttesttesttesttest99", "
          "youtube.com", "wikipedia.org", "Shortest path", "dijkstra algorithm", "Graph Channel")
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch):
-    """No real runner, receiver, `claude` CLI, opener or process."""
+    """No real runner, `claude` CLI, opener or process."""
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
 
@@ -42,7 +35,6 @@ def fakes(monkeypatch):
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(actions, "_popen", no_proc)
     monkeypatch.setattr(server, "_open", lambda url: None)
-    monkeypatch.setattr(status, "RECEIVER_PORT", _free_port())
     monkeypatch.setattr(server, "PORT", 0)  # never the owner's app port
 
 
@@ -58,7 +50,6 @@ def app(vault):
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05},
                      daemon=True).start()
     yield a
-    a.receiver.stop()
     srv.shutdown()
     srv.server_close()
 
