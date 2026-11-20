@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-SOURCES = {"tutor", "self", "external", "imported", "run"}
+SOURCES = {"tutor", "self", "external", "imported", "run", "safety_net"}
 KINDS = {"ask", "grade", "log", "taught", "void", "remap", "resume", "close", "open",
          "change"}
 MODES = {"home", "learn", "short", "review", "log", "about", "week", "ambient", "capture",
