@@ -171,8 +171,34 @@ def test_download_checks_the_hash_and_reports_progress(tmp_path):
     out = update.download(info(), tmp_path / "d", lambda g, t: seen.append((g, t)),
                           threading.Event(), opener=fake(files()))
     assert out == tmp_path / "d" / "CortexSetup.exe" and out.read_bytes() == EXE
-    assert os.listdir(tmp_path / "d") == ["CortexSetup.exe"]  # no .part left
+    assert sorted(os.listdir(tmp_path / "d")) == ["CortexSetup.exe", "CortexSetup.exe.sha256"]
+    assert (tmp_path / "d" / "CortexSetup.exe.sha256").read_text() == SHA  # no .part left
     assert seen and seen[-1][1] == len(EXE)
+
+
+def test_an_installer_already_there_is_not_fetched_again(tmp_path):
+    update.download(info(), tmp_path, opener=fake(files()))
+    op = fake(files())
+    assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE
+    assert [s["url"] for s in op.seen] == [DL + "CortexSetup.exe.sha256"]  # only the checksum
+    (tmp_path / "CortexSetup.exe").write_bytes(b"MZ changed")  # not the release's: fetched again
+    op = fake(files())
+    assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE and len(op.seen) == 2
+
+
+def test_prepared_is_a_newer_installer_that_still_matches_its_checksum(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(update, "current", lambda: "0.2.0")
+    tmp = Path.home() / ".cortex" / "tmp"
+    assert update.prepared() is None
+    for ver, body, sha in (("0.1.9", EXE, SHA), ("0.2.0", EXE, SHA), ("0.3.0", EXE, SHA),
+                           ("0.4.0", b"MZ half", SHA), ("0.5.0", EXE, None)):
+        (tmp / f"update-{ver}").mkdir(parents=True)
+        (tmp / f"update-{ver}" / "CortexSetup.exe").write_bytes(body)
+        if sha:
+            (tmp / f"update-{ver}" / "CortexSetup.exe.sha256").write_text(sha)
+    (tmp / "update-junk").mkdir()
+    assert update.prepared() == tmp / "update-0.3.0"  # older, same, torn, unchecked: not kept
 
 
 def test_a_hash_mismatch_deletes_the_file(tmp_path):

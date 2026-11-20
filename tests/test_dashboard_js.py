@@ -349,12 +349,14 @@ window.__L = (() => {
   }
   async function before() {
     for (let i = 0; i < 200 && !mounts.length; i++) await sleep(100);
+    const lobe = (opts.brain.lobes || [])[0];  // a focused lobe stays focused through the remount
+    if (lobe) { mounts[mounts.length - 1].focusCluster(lobe.id); await settle(); }
     const start = await settle();
     const box = document.querySelector('.brain-host').firstElementChild, r = box.getBoundingClientRect();
     box.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, clientX: r.left + r.width / 3,
       clientY: r.top + r.height / 3, bubbles: true, cancelable: true }));
     const cam = await settle();
-    return { moved: !same(start, cam), cam, feed: feed() };
+    return { moved: !same(start, cam), cam, feed: feed(), focused: mounts[mounts.length - 1].focused };
   }
   async function after(title) {
     const n = mounts.length, t0 = Date.now();
@@ -362,6 +364,7 @@ window.__L = (() => {
     const waited = Date.now() - t0;
     await sleep(400);
     return { waited, feed: feed().includes(title), mounts: mounts.length - n, cam: cam(),
+      focused: mounts[mounts.length - 1].focused,
       fresh: [...document.querySelectorAll('.feed .brow.fresh')].map((e) => e.textContent),
       stale: document.getElementById('stale').hidden,
       llm: !!document.querySelector('.quick-chat a[href="/manage#llm"]'),
@@ -396,6 +399,45 @@ window.__L = (() => {
       heads: [...r.querySelectorAll('h4')].map((h) => h.textContent) };
     await __T.go('brain');
     out.legend = document.getElementById('legend').textContent;
+    // the legend: open on the first visit (stored closed for the next), a click toggles and keeps it
+    const lt = document.getElementById('legend-toggle'), lg = document.getElementById('legend');
+    const lstate = () => [lt.getAttribute('aria-expanded'), lg.hidden, localStorage.getItem('cortex.legend')];
+    out.legendUi = { first: lstate(), dots: lg.querySelectorAll('.sw .dot').length };
+    lt.click();
+    out.legendUi.closed = lstate();
+    lt.click();
+    out.legendUi.reopened = lstate();
+    // the Stem button flies to the stem and, pressed again, back
+    const sb = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Stem' && x.offsetParent);
+    out.stemBtn = [!!sb];
+    if (sb) {
+      const c0 = await settle();
+      sb.click();
+      const c1 = await settle();
+      out.stemBtn.push(sb.getAttribute('aria-pressed'), b.atStem, !same(c0, c1));
+      sb.click();
+      await settle();
+      out.stemBtn.push(sb.getAttribute('aria-pressed'), b.atStem);
+    }
+    // the outline's Browsing group, by keyboard: open it, step to a site, Enter opens its panel
+    const ri = document.querySelector('#outline [data-id="region:browsing"]');
+    const key_ = (k) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    out.outline = { region: !!ri };
+    if (ri) {
+      ri.focus();
+      out.outline.closed = ri.getAttribute('aria-expanded');
+      key_('ArrowRight');
+      out.outline.opened = ri.getAttribute('aria-expanded');
+      key_('ArrowDown');
+      const li = document.activeElement;
+      out.outline.sites = ri.querySelectorAll('.site').length;
+      out.outline.id = li.dataset.id;
+      r.replaceChildren();
+      key_('Enter');
+      for (let i = 0; i < 100 && !r.querySelector('h4'); i++) await sleep(50);
+      out.outline.panel = r.textContent.includes(li.dataset.id.slice(5));
+      out.outline.selected = li.getAttribute('aria-selected');
+    }
     const key = sessionStorage.getItem('cortex.key');
     out.codes = [];
     for (const s of c.sites) out.codes.push((await fetch('/api/home/site?site=' + encodeURIComponent(s), { headers: { 'X-Cortex-Token': key } })).status);
@@ -548,8 +590,8 @@ def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
 
 def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeypatch):  # noqa: F811
     """`/` on the app server: a note added while the page is open reaches the feed within a few
-    seconds and pops into the brain, which is remounted where the camera was; 30 more mounts
-    leave the page's WebGL context alive."""
+    seconds and pops into the brain, which is remounted where the camera was with the same lobe
+    focused; 30 more mounts leave the page's WebGL context alive."""
     from test_app import _free_port, _serve
 
     from cortex import localllm
@@ -593,6 +635,7 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     assert before["moved"] and title not in before["feed"]
     assert after["feed"] and after["mounts"] >= 1 and after["waited"] < 10000, after
     assert all(abs(after["cam"][k] - v) < 1e-6 for k, v in before["cam"].items()), after["cam"]
+    assert before["focused"] and after["focused"] == before["focused"], (before, after)
     assert any(title in f for f in after["fresh"])
     assert after["stale"] and after["llm"] and after["settings"]
     assert leak["connected"] and leak["lost"] is not True, leak
@@ -602,8 +645,10 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
                                                                  monkeypatch):
     """The live home's brain with a synthetic browsing store: websites in the stem, a chosen
     site's panel from /api/home/site with an HTML-looking title and search shown as text (no
-    element made from them), and the private site absent while locked. Screenshots of the stem
-    are kept in the run folder."""
+    element made from them), and the private site absent while locked. Then the Explore view: the
+    Legend opens on the first visit and remembers a click, the Stem button flies there and back,
+    and the outline's Browsing group opens a site's panel from the keyboard. Screenshots of the
+    stem are kept in the run folder."""
     from test_app import _free_port, _serve
     from test_home import _ago, _sites, _stem_sites
 
@@ -650,4 +695,13 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     assert any(h.startswith("Visit days (2)") for h in rd["heads"])
     assert "41 websites" in s["legend"] and "secret" not in s["legend"]
     assert s["codes"] == [200, 404]
+    lg = s["legendUi"]
+    assert lg["first"] == ["true", False, "closed"] and lg["dots"] >= 1, lg
+    assert lg["closed"] == ["false", True, "closed"], lg
+    assert lg["reopened"] == ["true", False, "open"], lg
+    assert s["stemBtn"] == [True, "true", True, True, "false", False], s["stemBtn"]
+    o = s["outline"]
+    assert o["region"] and o["closed"] == "false" and o["opened"] == "true", o
+    assert o["sites"] == 20 and o["id"].startswith("site:") and "secret" not in o["id"], o
+    assert o["panel"] and o["selected"] == "true", o
     assert all(Path(p).stat().st_size > 10_000 for p in shots)

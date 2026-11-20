@@ -500,7 +500,12 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
             add(e["ts"], d, "result", i, look.title(i),
                 " ".join(str(p[k]) for k in ("outcome", "score") if p.get(k) is not None),
                 "study")
-        elif pk in ("chat_saved", "chat_learned") and not p.get("auto"):  # auto: page dates
+        elif pk == "chat_saved" and p.get("auto"):  # the automatic chat import: each page as
+            for i in p.get("pages") or []:  # an added one, on the day it came in, once
+                if isinstance(i, str) and i in look.notes and i not in added:
+                    added.add(i)
+                    add(e["ts"], d, "chat", i, look.title(i), str(p.get("source") or ""), "chat")
+        elif pk in ("chat_saved", "chat_learned") and not p.get("auto"):
             pages = [x for x in p.get("pages") or [] if isinstance(x, str)]
             i = pages[0] if pages else None
             add(e["ts"], d, "chat", i, str(p.get("title") or "Chat"), str(p.get("source") or ""),

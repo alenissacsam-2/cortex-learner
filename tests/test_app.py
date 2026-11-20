@@ -3,6 +3,7 @@ on a temp home (add, remove, other keys kept, backups, bad files refused), the s
 the Setup steps, and browsing answers that hold counts only. Nothing runs `claude`, installs or
 downloads: every subprocess, opener and runner probe is faked."""
 
+import hashlib
 import http.client
 import io
 import json
@@ -16,11 +17,13 @@ from pathlib import Path
 
 import pytest
 
+from cortex import update
 from cortex.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
 ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\notes \"v\""]}
-MARKERS = (b"TITLEMARKER", b"URLMARKER", b"SEARCHMARKER", b"markerdomain", b"EXCERPTMARKER")
+REAL_KEPT = status.kept  # before conftest's fixture makes every probe fresh
+MARKERS = (b"TITLEMARKER",b"URLMARKER", b"SEARCHMARKER", b"markerdomain", b"EXCERPTMARKER")
 
 
 def _free_port() -> int:
@@ -252,6 +255,46 @@ def test_status_shapes(app, vault):
         assert code == 200 and isinstance(body, dict), path
     _, llm, _, _ = call(app, "GET", "/api/llm")
     assert llm["enabled"] is False and llm["lms"] is None and llm["ollama"] is None
+
+
+def test_status_keeps_its_slow_probes_and_asks_again_after_an_action(app, monkeypatch):
+    """The Status board's slow probes (runners, `lms`, the receiver port) are kept: a second
+    read answers at once without asking them; any POST, a finished job and Check again
+    (?fresh=1) ask again; a stale answer is refreshed in the background."""
+    monkeypatch.setattr(status, "kept", REAL_KEPT)
+    status.forget()
+    asked = []
+
+    def slow_ollama():
+        asked.append("ollama")
+        time.sleep(0.4)
+        return ["qwen3:1.7b"]
+    monkeypatch.setattr(status, "ollama_models", slow_ollama)
+    monkeypatch.setattr(status, "receiver_probe", lambda root: (asked.append("rx"), time.sleep(0.4),
+                                                                ("stopped", {}))[2])
+    monkeypatch.setattr(app.receiver, "status", lambda: None)  # the app's own receiver is off
+    t = time.perf_counter()
+    first = call(app, "GET", "/api/status")[1]
+    assert time.perf_counter() - t >= 0.8 and sorted(asked) == ["ollama", "rx"]
+    t = time.perf_counter()
+    again = call(app, "GET", "/api/status")[1]
+    assert time.perf_counter() - t < 0.3 and len(asked) == 2  # kept
+    assert again["rows"] == first["rows"]
+    call(app, "GET", "/api/status?fresh=1")  # Check again
+    assert len(asked) == 4
+    call(app, "POST", "/api/whats_new/seen", {})  # any action
+    call(app, "GET", "/api/status")
+    assert len(asked) == 6
+    monkeypatch.setattr(status, "KEEP_S", 0.0)  # stale: the kept answer now, a fresh one behind
+    t = time.perf_counter()
+    call(app, "GET", "/api/status")
+    assert time.perf_counter() - t < 0.3
+    for _ in range(50):
+        if len(asked) == 8:
+            break
+        time.sleep(0.05)
+    assert len(asked) == 8
+    status.forget()
 
 
 def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
@@ -2218,6 +2261,18 @@ def test_update_check_sweeps_old_installers(app, github):
     assert list(tmp.iterdir()) == []
 
 
+def test_a_launch_keeps_a_prepared_newer_installer(app, monkeypatch):
+    """A restart before Restart to update does not fetch the same installer again."""
+    monkeypatch.setattr(update, "current", lambda: "0.2.0")
+    tmp = Path.home() / ".cortex" / "tmp"
+    for name in ("update-0.1.0", "update-0.3.0"):
+        (tmp / name).mkdir(parents=True)
+        (tmp / name / "CortexSetup.exe").write_bytes(b"MZ")
+        (tmp / name / "CortexSetup.exe.sha256").write_text(hashlib.sha256(b"MZ").hexdigest())
+    server.make_server(None)[0].server_close()
+    assert [p.name for p in tmp.iterdir()] == ["update-0.3.0"]
+
+
 def test_quit_cancels_the_running_job(app):
     """A13: Quit says running jobs are cancelled; a download's process is ended too."""
     ended = threading.Event()
@@ -2504,7 +2559,7 @@ def test_status_git_row_installs_and_llm_row_judges_the_chosen_runner(vault, mon
     assert status.git_row()["state"] == "ok" and "install" not in status.git_row()
 
     def llm(runner, ollama, loaded=(), lms=None, model="qwen3.5:2b"):
-        monkeypatch.setattr(status, "llm", lambda: {
+        monkeypatch.setattr(status, "llm", lambda quick=False: {
             "enabled": True, "runner": runner, "model": model, "loaded": list(loaded),
             "ollama": ollama, "lms": lms, "server_port": None})
         r = status.llm_row()

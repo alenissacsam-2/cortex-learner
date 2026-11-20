@@ -153,7 +153,7 @@ Object.assign(globalThis, {
           next();
         }) }) } };
     }
-    const data = DATA.routes[path] || { job: 'stub', seq: 1 };
+    const data = DATA.routes[path] || DATA.routes[path.split('?')[0]] || { job: 'stub', seq: 1 };
     return { status: 200, ok: true, json: async () => JSON.parse(JSON.stringify(data)) };
   },
   XMLHttpRequest: class { constructor() { this.headers = {}; this.upload = {}; xhrs.push(this); }
@@ -1254,6 +1254,58 @@ const toastNow = () => $('toast-msg').textContent;
   process.exit(0);
 })();
 """  # noqa: E501  (JavaScript)
+
+
+LANDING = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const shown = () => Object.keys(DATA.routes).map((p) => p.slice(5)).filter((s) => $('s-' + s) && !$('s-' + s).hidden);
+// the section answers wait until release(): what the page shows meanwhile
+const slow = globalThis.fetch, waits = [];
+globalThis.fetch = async (path, o) => { if (!(o && o.method)) await new Promise((r) => waits.push(r)); return slow(path, o); };
+const answer = async () => { for (const r of waits.splice(0)) r(); await tick(); };
+(async () => {
+  try {
+    if (DATA.last) sessionStorage.setItem('cortex.section', DATA.last);
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    out.before = { shown: shown(), text: DATA.last ? $(DATA.last).textContent : $('status').textContent };
+    await answer();
+    out.after = { shown: shown(), kept: sessionStorage.getItem('cortex.section') };
+    await answer();
+    if (!DATA.last) {
+      nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+      await answer();
+      $('status').querySelector('.band').querySelectorAll('button').find((b) => b.textContent === 'Check again').fire('click');
+      await answer();
+    }
+    out.asked = fetched.filter((f) => f.path.startsWith('/api/status')).map((f) => f.path);
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_manage_shows_a_section_at_once_and_fills_it(root_committed, tmp_path, monkeypatch):
+    """/manage with no section in its link is never blank: Status (or the section this tab used
+    last) shows at once with Loading…, then fills; Status's first answer moves a fresh page to the
+    app's choice (Setup until it is done). Check again asks every probe afresh."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/status"]["land"] = "setup"
+    out = _run(node, tmp_path, "landing", LANDING, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["before"] == {"shown": ["status"], "text": "Loading…"}
+    assert out["after"] == {"shown": ["setup"], "kept": "setup"}
+    assert out["asked"] == ["/api/status", "/api/status", "/api/status?fresh=1"]
+    out = _run(node, tmp_path, "landing2", LANDING, {"routes": routes, "stream": [],
+                                                    "last": "browse"})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["before"] == {"shown": ["browse"], "text": "Loading…"}
+    assert out["after"] == {"shown": ["browse"], "kept": "browse"}  # no jump to Setup
 
 
 def test_double_clicks_focus_after_redraws_and_rough_edges(root_committed, tmp_path,

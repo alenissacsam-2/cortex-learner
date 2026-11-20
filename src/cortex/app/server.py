@@ -52,7 +52,7 @@ STATIC = {"/": (None, "text/html; charset=utf-8"),
                                                         "dashboard.js")}}
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
 QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta",  # GETs that read the query
-              "/api/home/site"}
+              "/api/home/site", "/api/status"}
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -214,6 +214,7 @@ class Jobs:
                     traceback.print_exc(limit=3)
             finally:
                 job.running, job.ended = False, time.time()
+                status.forget()  # a job may have changed what Status shows
                 if self.on_end is not None:
                     try:
                         self.on_end(job)
@@ -337,11 +338,16 @@ class App:
         return clients.server_entry(clients.cortex_command(), self.root)
 
     # ---- GET (never changes anything) ----
-    def status(self) -> dict:
+    def status(self, q: dict | None = None) -> dict:
+        """The Status board; its slow probes are `status.kept` (`?fresh=1`: asked again)."""
         from cortex import chat_import
+        if (q or {}).get("fresh") == ["1"]:
+            status.forget()
         v = status.vault(self.root)
+        entry = self.entry() if v["ok"] else None
         ready = v["ok"] and (_connect_skipped() or any(
-            t["connected"] for t in targets.describe(self.entry())))
+            t["connected"] for t in status.kept(("targets", json.dumps(entry, sort_keys=True)),
+                                                lambda: targets.describe(entry))))
         return {"rows": status.rows(self.root, self.receiver.status()),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
@@ -1311,6 +1317,7 @@ def _handler(app: App):
             if path == "/api/chat":
                 self._chat(body)
                 return
+            status.forget()  # an action: Status asks its slow probes again
             self._run(app.post[path], body)
 
         def _chat(self, body: dict):
@@ -1431,7 +1438,8 @@ def make_server(root: Path | None, port: int = 0) -> tuple[ThreadingHTTPServer, 
     """The app's server on 127.0.0.1 only (port 0 picks a free one)."""
     app = App(root)
     actions.sweep_uploads()  # left by an app that was killed before its `finally` ran
-    actions.sweep_updates()  # installers an update already ran
+    actions.sweep_updates(update.prepared())  # installers an update already ran; a newer one
+    # downloaded and still matching its checksum stays for Restart to update
     from cortex.browse_serve import _Server  # no port sharing: Windows binds a used port
     srv = _Server((HOST, port), _handler(app))  # and the token would go to its owner
     srv.daemon_threads = True

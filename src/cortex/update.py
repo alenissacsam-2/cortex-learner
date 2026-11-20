@@ -29,6 +29,7 @@ CHECKOUT = HERE.parents[2]  # the source checkout of an editable install
 
 API = "https://api.github.com"
 EXE = "CortexSetup.exe"
+SHA = EXE + ".sha256"  # the release checksum, saved beside a downloaded installer
 MARKER = "cortex-install.txt"  # installer/setup_app.py drops it in the install folder
 MAX_BYTES = 200 * 2**20
 TIMEOUT = 10
@@ -208,6 +209,9 @@ def download(info: dict, dest: Path, on_progress=None, cancel=None, opener=None)
     want = m[1].decode().lower()
     dest.mkdir(parents=True, exist_ok=True)
     out = dest / EXE
+    if out.is_file() and _sha256(out) == want:  # prepared before a restart: not fetched again
+        (dest / SHA).write_text(want, encoding="ascii")
+        return out
     part = out.with_name(EXE + ".part")
     h, got, said = hashlib.sha256(), 0, -1
     try:
@@ -238,7 +242,37 @@ def download(info: dict, dest: Path, on_progress=None, cancel=None, opener=None)
         raise UpdateError("The download does not match the release's checksum, so it was "
                           "deleted. Try again later.")
     os.replace(part, out)
+    (dest / SHA).write_text(want, encoding="ascii")  # what `prepared` checks at the next launch
     return out
+
+
+def _sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prepared() -> Path | None:
+    """The update-<version> folder (dest_dir) of an installer already downloaded for a newer
+    Cortex than this one, whose file still matches the release checksum saved beside it; the
+    newest such, else None. The launch sweep keeps it, so a restart does not fetch it again."""
+    best: tuple | None = None
+    try:
+        cur = parse_version(current())
+    except (UpdateError, ValueError):
+        return None
+    for d in (Path.home() / ".cortex" / "tmp").glob("update-*"):
+        try:
+            v = parse_version(d.name.removeprefix("update-"))
+            ok = newer(v, cur) and (best is None or newer(v, best[0])) and \
+                _sha256(d / EXE) == (d / SHA).read_text(encoding="ascii").strip().lower()
+        except (UpdateError, OSError, UnicodeDecodeError):
+            continue
+        if ok:
+            best = (v, d)
+    return best[1] if best else None
 
 
 def launch(exe: Path, app_pid: int, install: Path | None = None) -> None:

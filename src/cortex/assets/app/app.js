@@ -370,11 +370,13 @@
   }
 
   /* ---- sections ---- */
-  let current = null;
+  let current = null, landing = false;  // landing: Status opened in place of the app's own choice
   function show(s, focus) {
     if (!SECTIONS.includes(s)) s = 'status';
     if (current !== s) pairToken = null;  // the key is shown once
+    if (focus) landing = false;  // the user chose: Status's answer does not move them
     current = s;
+    try { sessionStorage.setItem('cortex.section', s); } catch (e) { /* storage off */ }
     for (const x of SECTIONS) $('s-' + x).hidden = x !== s;
     document.querySelectorAll('.side button').forEach((b) => b.setAttribute('aria-current', b.dataset.s === s ? 'page' : 'false'));
     $('section-select').value = s;
@@ -385,15 +387,15 @@
       $('s-' + s).scrollIntoView({ block: 'start' });
     }
   }
-  async function load(s) {
+  async function load(s, fresh) {
     const box = $(s);
-    if (!box.firstChild) box.append(note('Checking…'));
+    if (!box.firstChild) box.append(note('Loading…'));
     else {  // the old boards stay up, dimmed, until the new answer replaces them
       box.classList.add('refreshing');
       box.setAttribute('aria-busy', 'true');
     }
     try {
-      const d = await api('/api/' + s);
+      const d = await api('/api/' + s + (fresh ? '?fresh=1' : ''));  // fresh: Status asks every probe again
       if (current === s) RENDER[s](d);
     } catch (e) {
       if (!dead) fail(s, e.message);
@@ -418,6 +420,10 @@
   }
 
   function renderStatus(d) {
+    if (landing) {  // the first answer of a page opened with no section: the app's choice (Setup until it is done)
+      landing = false;
+      if (d.land !== 'status' && SECTIONS.includes(d.land)) { show(d.land); return; }
+    }
     const rows = d.rows.map((r) => {
       // at: a time the row names where "{ago}" stands, in words, the exact time in a title
       const fill = (t) => (r.at ? String(t).replace('{ago}', daysAgo(r.at, true)) : t);
@@ -438,7 +444,7 @@
     const t = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
     const wn = d.whats_new || {};
     put('status', wn.show && wn.show.length ? newsBoard(wn.show, true) : null,
-      board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status')] },
+      board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status', true)] },
         ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
       d.first_run ? null : chatImportBoard(d.chat_import !== false),
       d.update ? updatesBoard(d.update, wn.current) : null);
@@ -775,7 +781,7 @@
       if (!r.ok) {
         let data = {};
         try { data = await r.json(); } catch (e) { /* no body */ }
-        if (r.status === 401) gone('This page lost its key. Open the link that cortex app printed, or run it again.');
+        if (r.status === 401) gone('This page lost its key. ' + REOPEN);
         throw new Error(data.error || `The app answered ${r.status}.`);
       }
       const reader = r.body.getReader(), dec = new TextDecoder();
@@ -1501,9 +1507,14 @@
   $('section-select').addEventListener('change', (e) => (e.target.value === 'home' ? location.assign('/') : show(e.target.value, true)));
   window.addEventListener('popstate', () => { const s = location.hash.slice(1); if (s !== current) show(s, true); });  // Back switches sections
 
+  // a section at once: the link's, else the last one this tab used, else Status (its first
+  // answer may move to the app's choice); each shows Loading… until its answer comes
   const want = location.hash.slice(1);
+  let lastSection = null;
+  try { lastSection = sessionStorage.getItem('cortex.section'); } catch (e) { /* storage off */ }
   if (SECTIONS.includes(want)) show(want);
-  else api('/api/status').then((d) => show(d.land), () => show('status'));
+  else if (SECTIONS.includes(lastSection)) show(lastSection);
+  else { landing = true; show('status'); }
   idle();
   poll(true);
   // the app starts the automatic history import by itself: the job line shows it within 15 s

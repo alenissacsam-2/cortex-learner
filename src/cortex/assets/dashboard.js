@@ -22,7 +22,7 @@
   function offline(err) {  // the header chip: the app is not answering, or no longer takes this page's key
     const s = document.getElementById('stale');
     s.textContent = err && err.key ? '· This page’s key expired. Open Cortex from the tray or Start menu.'
-      : '· not connected to Cortex';
+      : '· Cortex is not answering. Reopen it from the tray or Start menu.';
     s.hidden = !err;
   }
   async function fetchHome() {
@@ -161,6 +161,7 @@
       'M18.5 12H21', 'M5.6 5.6l1.8 1.8', 'M16.6 16.6l1.8 1.8', 'M5.6 18.4l1.8-1.8', 'M16.6 7.4l1.8-1.8'],
     lock: ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 7 0v3'],
     unlock: ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 6.8-1.2'],
+    update: ['M12 4v11', 'M7.5 10.5L12 15l4.5-4.5', 'M5 19h14'],
   };
   function icon(name) {
     const s = svgEl('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
@@ -696,6 +697,7 @@
     for (const w of siteWords(n)) meta.append(el('span', null, w));
     reader.append(meta);
     live(`Selected ${n.title}, ${siteWords(n).join(', ')}.`);
+    markOutline(id);
     let s = null;
     try {
       s = await api('/api/home/site?site=' + encodeURIComponent(n.site) + (PRIVATE ? '&private=1' : ''));
@@ -828,11 +830,12 @@
   /* ---- header: wordmark, greeting, clock, theme ---- */
   const phone = () => window.innerWidth <= 760;
   const roomy = () => window.innerWidth > 1360;  // room for "AS OF" beside the tabs (150% laptops are ~1280)
+  const snug = () => window.innerWidth < 1300;  // the header's narrow widths: a smaller clock, no greeting
   function renderHeader() {
     $('wordmark').replaceChildren(dm('CORTEX', phone() ? 2 : 3, 'Cortex'));
     $('greet').textContent = greeting();
     const hm = D.as_of.slice(11, 16);
-    $('clock').replaceChildren(dm(roomy() ? 'AS OF ' + hm : hm, phone() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
+    $('clock').replaceChildren(dm(roomy() ? 'AS OF ' + hm : hm, snug() ? 2 : 3, `As of ${fmtDay(TODAY)}, ${hm}`));
     $('clock').title = `Built ${fmtDay(TODAY)} ${TODAY.slice(0, 4)}, ${hm}`;
     if (!LIVE) $('stale').hidden = !(Date.now() - Date.parse(D.as_of) > 12 * 36e5);
     $('open-search').replaceChildren(icon('search'));
@@ -872,28 +875,37 @@
     } finally { switching = false; }
   }
   // a newer Cortex the app has already downloaded: Restart to update, applied only on this click
+  // (below 1300 px only its icon shows, named by its label and tooltip); a dev install's is a
+  // link to Status, where Updates shows its command
   let updBtn = null;
   function showUpdate(u) {
     if (!u) { if (updBtn) updBtn.hidden = true; return; }
+    if (updBtn && updBtn.dataset.mode !== u.mode) { updBtn.remove(); updBtn = null; }
     if (!updBtn) {
-      updBtn = button('chip', 'Restart to update', async () => {
-        if (updBtn.dataset.mode !== 'installer') { location.href = '/manage#status'; return; }  // its command: Status, Updates
-        try {
-          await api('/api/update/apply', {});
-          toast('Cortex is closing to install the update. It reopens by itself when it is done.');
-        } catch (e) { toast(e.message, 'error'); }
-      });
+      if (u.mode === 'installer') {
+        updBtn = button('chip upd', null, async () => {
+          try {
+            await api('/api/update/apply', {});
+            toast('Cortex is closing to install the update. It reopens by itself when it is done.');
+          } catch (e) { toast(e.message, 'error'); }
+        });
+      } else {
+        updBtn = el('a', 'chip upd');
+        updBtn.href = '/manage#status';
+      }
+      updBtn.setAttribute('aria-label', 'Restart to update');
+      updBtn.append(icon('update'), el('span', 'upd-word', 'Restart to update'));
+      updBtn.dataset.mode = u.mode;
       $('open-search').before(updBtn);
     }
-    updBtn.dataset.mode = u.mode;
-    updBtn.title = `Cortex ${u.version} is ready`;
+    updBtn.title = `Restart to update: Cortex ${u.version} is ready` + (u.mode === 'installer' ? '' : '. Status shows the command.');
     updBtn.hidden = false;
   }
   if (LIVE) {
     syncLock();
     $('open-search').before(lockBtn);
   }
-  const fit = () => `${phone()} ${roomy()}`;
+  const fit = () => `${phone()} ${roomy()} ${snug()}`;
   let wasFit = fit();
   window.addEventListener('resize', () => {
     if (fit() !== wasFit) { wasFit = fit(); renderHeader(); setHdr(); }
@@ -961,6 +973,7 @@
         keyHelp: HAS_STYLE ? 'L opens Look.' : '',
         onStyle(s) { saveStyle(s); syncLook(); },
         onCrumbs(c) {
+          syncStem();
           const words = (c || []).map((x) => (typeof x === 'string' ? x : x && (x.label || x.title))).filter(Boolean);
           if (words.length) live(words.join(' › '));
         },
@@ -987,12 +1000,18 @@
     requestAnimationFrame(() => { document.body.dataset.brainFrameMs = String(Math.round(performance.now() - T0)); });
     syncMode(brain.mode);
     syncAlive(!!brain.alive);
+    syncStem();
     return brain;
   }
   // No 3D brain: Home says so in one line, the Brain section opens on the 2D map.
+  function noBrainNote(tail) {
+    const p = el('p', 'empty', (LIVE ? 'The 3D brain did not start in this window. Cortex builds it from your pages by itself, '
+      + 'so reloading the page usually brings it back. ' : 'This snapshot has no 3D brain: Export snapshot in the Cortex app makes a new one. ') + tail);
+    if (LIVE) p.append(' ', button('btn', 'Reload', () => location.reload()));
+    return p;
+  }
   function noBrain() {
-    $('home-brain-slot').replaceChildren(el('p', 'empty',
-      'The 3D brain needs a fresh build: run cortex dashboard. The 2D map is in Brain.'));
+    $('home-brain-slot').replaceChildren(noBrainNote('The 2D map is in Brain.'));
     $('home-brain-tools').hidden = true;
     $('viewswitch').querySelector('[data-view="3d"]').hidden = true;
     if (view === '3d') view = '2d';
@@ -1018,7 +1037,7 @@
     const ids = remountIds, old = brain;
     remountIds = null;
     const keep = { camera: old.camera, mode: old.mode, style: old.style, selected: old.selected,
-      spin: old.spin, growth: old.growth, focused: old.focused };
+      spin: old.spin, growth: old.growth, focused: old.focused, atStem: old.atStem };
     hideTip();
     old.destroy();
     brain = null;
@@ -1026,9 +1045,11 @@
     brain.setArchive(brainHost.parentNode === $('brain-slot') && archiveOn);
     if (brainUi) applyBrainFilter();
     if (keep.growth) brain.setGrowth(keep.growth);
-    if (keep.focused) brain.refocus(keep.focused);
+    if (keep.focused) { brain.refocus(keep.focused); markLobe(brain.focused); }
     if (keep.selected) brain.reselect(keep.selected);
     if (keep.spin) brain.setSpin(true);
+    if (keep.atStem) brain.atStem = true;
+    syncStem();
     syncLook();
     if (ids.length) {
       brain.highlight(ids);
@@ -1065,6 +1086,21 @@
     b.title = 'Replay what you saved today, then settle on the first departure';
     b.append(icon('target'), ' Today');
     return b;
+  }
+  // Stem: fly to the browsing stem's websites; pressed again, back to the overview
+  const stemBtns = [];
+  function stemBtn() {
+    const b = button('btn tbtn', 'Stem', () => { if (brain) { const on = brain.stem(); live(on ? 'Showing the websites in the brain stem.' : 'Back to the whole brain.'); } syncStem(); });
+    b.title = 'Fly to the websites in the brain stem; press again for the whole brain';
+    stemBtns.push(b);
+    syncStem();
+    return b;
+  }
+  function syncStem() {
+    for (const b of stemBtns) {
+      b.hidden = !(brain && brain.hasStem);
+      b.setAttribute('aria-pressed', String(!!(brain && brain.atStem)));
+    }
   }
   function playToday() {
     if (!brain) return;
@@ -1644,6 +1680,16 @@
       lg.append(el('p', null, `The stem below holds ${plural(st.shown, 'website')} from your browsing: size by visits, `
         + 'brightness by the last visit, colour by category' + (st.sites.some((x) => x[5]) ? ', a hollow ring when private' : '') + '.'
         + (st.total > st.shown ? ` It shows the most visited and those of the last 30 days; the other ${st.total - st.shown} stay in the browsing store.` : '')));
+      const key = el('div', 'sw');
+      for (const c of Object.keys(st.colors || {}).sort()) {
+        const col = String(st.colors[c]);
+        if (!/^#[0-9a-f]{6}$/i.test(col)) continue;
+        const dot = el('span', 'dot'), item = el('span');
+        dot.style.background = col;
+        item.append(dot, c.replace(/-/g, ' '));
+        key.append(item);
+      }
+      if (key.childElementCount) lg.append(key);
     }
     lg.append(el('p', null, 'drag to turn · scroll to zoom · click a lobe name for its pages · click a point to inspect it · double-click empty space for the overview'));
     lg.append(el('p', null, 'keys: Esc back · [ ] step · Backspace previous · F frame · 0 reset · arrows turn · + − zoom · A M G modes · S spin'
@@ -1688,6 +1734,7 @@
   function activate(li) {
     if (li.classList.contains('region')) setExpanded(li, li.getAttribute('aria-expanded') !== 'true');
     else if (li.classList.contains('lobe')) { setExpanded(li, true); selectLobe(li.dataset.id); }
+    else if (li.classList.contains('site')) exploreSite(li.dataset.id);
     else explorePage(li.dataset.id);
   }
   // The tree's rows from D (again on a live update: open lobes and closed regions stay so).
@@ -1716,7 +1763,24 @@
         addGroup(li);
       }
     }
+    const st = D.brain.stem;
+    if (st && st.shown && Array.isArray(st.sites)) {
+      const ri = treeItem('region', 1, [icon('chevron'), el('span', 'nm', 'Browsing'), el('span', 'n', st.shown.toLocaleString('en'))], tree);
+      ri.dataset.id = 'region:browsing';
+      ri.setAttribute('aria-expanded', 'false');
+      const rg = addGroup(ri), visits = (x) => +x[2] || 0;
+      for (const x of st.sites.filter(Array.isArray).sort((a, b) => visits(b) - visits(a) || String(a[0]).localeCompare(String(b[0]))).slice(0, 20)) {
+        const li = treeItem('page site', 2, [el('span'), el('span', 'nm', String(x[0])), el('span', 'n', visits(x).toLocaleString('en'))], rg);
+        li.dataset.id = 'site:' + x[0];
+        li.title = `${x[0]} · ${plural(visits(x), 'visit')}`;
+        li.setAttribute('aria-label', `${x[0]}, website, ${plural(visits(x), 'visit')}`);
+        li.setAttribute('aria-selected', 'false');
+      }
+    }
     if (!lobes.length) tree.after(el('p', 'empty', 'No lobes yet. Pages you save gather into lobes here.'));
+    const f = brain && brain.focused;  // a refill keeps the focused lobe marked
+    $('all-lobes').setAttribute('aria-pressed', String(!f));
+    for (const li of tree.querySelectorAll('.lobe')) li.setAttribute('aria-selected', String(li.dataset.id === f));
     for (const li of tree.querySelectorAll('[aria-expanded]')) {
       const open = was.get(okey(li));
       if (open && open !== li.getAttribute('aria-expanded')) setExpanded(li, open === 'true');
@@ -1760,10 +1824,27 @@
     });
   }
 
+  const LEGEND_KEY = 'cortex.legend';
+  function legendToggle() {
+    let open = true;  // the first visit: open; after it, closed unless the viewer opened it
+    try {
+      const v = localStorage.getItem(LEGEND_KEY);
+      if (v === null) localStorage.setItem(LEGEND_KEY, 'closed'); else open = v === 'open';
+    } catch (e) { /* storage off: open */ }
+    const t = $('legend-toggle'), set = (on) => { t.setAttribute('aria-expanded', String(on)); $('legend').hidden = !on; };
+    t.prepend(icon('chevron'));
+    set(open);
+    t.addEventListener('click', () => {
+      const on = t.getAttribute('aria-expanded') !== 'true';
+      set(on);
+      try { localStorage.setItem(LEGEND_KEY, on ? 'open' : 'closed'); } catch (e) { /* not kept */ }
+    });
+  }
   function renderBrainSection() {
     for (const b of $('viewswitch').children) b.addEventListener('click', () => setView(b.dataset.view));
+    legendToggle();
     if (brainFailed) {
-      $('b2d').prepend(el('p', 'empty', 'The 3D brain needs a fresh build: run cortex dashboard. Showing the 2D map.'));
+      $('b2d').prepend(noBrainNote('Showing the 2D map.'));
       return;
     }
     // The toolbar: modes, spin, Today, the unsorted-chat ring, and the Growth scrubber.
@@ -1816,7 +1897,8 @@
     range.addEventListener('input', () => { setOut(); if (brain) brain.setGrowth(months[+range.value] || null); });
     scrub.append(el('span', null, 'Up to'), range, out);
     if (!months.length) range.disabled = true;
-    tools.append(modeGroup(), spin, alive, todayBtn('btn'), arch);
+    tools.append(modeGroup(), spin, alive, todayBtn('btn'), stemBtn(), arch);
+    tools.addEventListener('click', syncStem);  // another flight (Today) leaves the stem
     if (HAS_STYLE) tools.append(lookBtn());
     tools.append(scrub);
     buildOutline();
@@ -2588,6 +2670,14 @@
     const KINDS = [['concept', '●', 'Concepts'], ['project', '▢', 'Projects'],
       ['resource', '◆', 'Resources'], ['note', '•', 'Notes'], ['decision', '▲', 'Decisions']];
     const kchips = $('kinds'), chips = $('chips'), sel = $('domain');
+    // the Domain list from the current data; a chosen domain that is gone goes back to All domains
+    function fillDomains() {
+      const doms = D.graph.nodes.filter((x) => x.kind === 'domain');
+      if (F.domain && !doms.some((n) => n.id === F.domain)) F.domain = '';
+      sel.replaceChildren(sel.options[0], ...doms.map((n) => { const o = el('option', null, n.title); o.value = n.id; return o; }));
+      sel.value = F.domain;
+      sel.disabled = sel.options.length < 2;  // no domains yet: nothing to choose
+    }
     function build() {  // the controls, once
       if (built) return;
       built = true;
@@ -2612,12 +2702,7 @@
         chips.append(b);
       }
       syncChips();
-      for (const n of D.graph.nodes.filter((x) => x.kind === 'domain')) {
-        const o = el('option', null, n.title);
-        o.value = n.id;
-        sel.append(o);
-      }
-      sel.disabled = sel.options.length < 2;  // no domains yet: nothing to choose
+      fillDomains();
       sel.addEventListener('change', () => {
         F.domain = sel.value;
         apply();
@@ -3182,8 +3267,9 @@
     }
     function retheme() { if (R) R.update(); }
     // live home: forget the drawn map, so the next init draws it from the current D. Its
-    // controls stay. shortcut: the Domain list keeps the domains it was first built with.
+    // controls stay; the Domain list is filled again.
     function reset() {
+      if (built) fillDomains();
       if (!ready) return;
       sim.stop();
       ready = false; touched = false; R = null; hover = null;

@@ -82,6 +82,15 @@ def _no_real_chat_export(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _status_probes_fresh(monkeypatch):
+    """Status's kept probes are asked every time in tests (a test changes a fake runner and
+    reads Status again); test_app's cache test puts `status.kept` back."""
+    from cortex.app import status
+
+    monkeypatch.setattr(status, "kept", lambda key, fn: fn())
+
+
+@pytest.fixture(autouse=True)
 def _relayed_cutoff_later(monkeypatch):
     """Tests write relayed yeses on the real clock; keep them act-grade whatever the date.
     Tests of the cutoff (claims.late_relay) set claims.RELAYED_FROM themselves."""

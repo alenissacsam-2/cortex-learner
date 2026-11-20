@@ -25,6 +25,8 @@
   const DIST_MIN = 0.65, DIST_MAX = 3.2, PITCH_MAX = 0.35 * Math.PI;  // polar angle kept in [.15π, .85π]
   const DAMP = 0.88, FLY_MS = 600, SEL_FLY_MS = 900, IDLE_MS = 3000, HOVER_MS = 120, PICK_REST_MS = 40, BEACON_MS = 8000;
   const LINK_CAP = 60, LABELS = 16, PAGE_LABELS = 12, LABEL_GAP = 22, PHONE = 640, ZOOMED = 1.15;
+  const STEM_GLASS = 0.5, STEM_DUST = 0.03, SITE_LABELS = 5;  // the stem's tube: its share of the shell's glass and
+  // of its dust points; the sites named
   const TRAIL_CAP = 120, HISTORY = 20, STYLE_MS = 300, SEL_ORBIT = 0.02, DIM_NODE = 0.2, DIM_FIB = 0.15;
   const MODES = ['activity', 'mastery', 'growth'];
   const STATE_PI = { solid: 2, learning: 3, needs_refresh: 4 };  // palette: node, grey, solid, learning, refresh
@@ -585,7 +587,7 @@ void main() {
       buf(gl.ARRAY_BUFFER, m.lobe); attr(2, 1, gl.UNSIGNED_SHORT, false, 0, 0);
       buf(gl.ELEMENT_ARRAY_BUFFER, m.idx);
       gl.bindVertexArray(null);
-      return { vao, count: m.idx.length, ccw: m.ccw };
+      return { vao, count: m.idx.length, ccw: m.ccw, k: m.name === 'stem' ? STEM_GLASS : 1 };
     });
     const tintTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tintTex);
@@ -804,8 +806,9 @@ void main() {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tintTex);
       gl.uniform1i(mu.uTint, 0);
-      const drawBodies = () => {
+      const drawBodies = (k) => {
         for (const b of bodies) {
+          gl.uniform1f(mu.uShellK, k * b.k);
           gl.frontFace(b.ccw ? gl.CCW : gl.CW);
           gl.bindVertexArray(b.vao);
           gl.drawElements(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0);
@@ -815,17 +818,15 @@ void main() {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         if (!S.V3) gl.enable(gl.CULL_FACE);
         gl.uniform1f(mu.uPass, 0);
-        gl.uniform1f(mu.uShellK, F.shellK * F.glassK);
-        drawBodies();
+        drawBodies(F.shellK * F.glassK);
         gl.disable(gl.CULL_FACE);
       }
       if (F.shellK * (F.rimK + F.conK) > 0.001) {
         gl.blendFunc(gl.ONE, gl.ONE);
         gl.uniform1f(mu.uPass, 1);
-        gl.uniform1f(mu.uShellK, F.shellK);
         gl.uniform1f(mu.uRimW, F.rimK);
         gl.uniform1f(mu.uConW, F.conK);
-        drawBodies();
+        drawBodies(F.shellK);
       }
       if (dustVao && F.shellK * F.dustK > 0.001) {
         gl.blendFunc(gl.ONE, gl.ONE);
@@ -1584,17 +1585,28 @@ void main() {
       GLOW[i] = Number.isFinite(age) ? 0.3 + 0.7 * Math.exp(-Math.max(0, age) / 30) : 0.3;
     }
 
-    // Bounds: the centre of the shell (else of the points) and the radius that holds both.
+    // Bounds: the centre of the shell (else of the points) and the radius that holds both. The stem's
+    // tube and its sites hang below and stay out of them (flights, fog and the glass fade keep the brain's).
+    const shell = mesh.filter((m) => m.name !== 'stem');
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     const grow = (arr) => { for (let k = 0; k < arr.length; k++) { const d = k % 3; if (arr[k] < lo[d]) lo[d] = arr[k]; if (arr[k] > hi[d]) hi[d] = arr[k]; } };
-    for (const m of mesh) grow(m.pos);
+    for (const m of shell) grow(m.pos);
     if (!mesh.length) grow(P.subarray(0, N * 3));
     if (lo[0] > hi[0]) { lo.fill(-1); hi.fill(1); }
     const ctr = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
     let Rb = 0.2;
     const reach = (arr) => { for (let k = 0; k < arr.length; k += 3) Rb = Math.max(Rb, Math.hypot(arr[k] - ctr[0], arr[k + 1] - ctr[1], arr[k + 2] - ctr[2])); };
-    for (const m of mesh) reach(m.pos);
-    reach(P.subarray(0, N * 3));
+    for (const m of shell) reach(m.pos);
+    reach(P.subarray(0, SF * 3));
+    // The overview's sphere (the camera without a fill): the brain's, else the one holding the brain,
+    // the stem's tube and every site.
+    let OC = ctr, OR = Rb;
+    if (SF < N || shell.length < mesh.length) {
+      const l2 = lo.slice(), h2 = hi.slice(), pts = [P.subarray(SF * 3, N * 3), ...mesh.map((m) => m.pos)];
+      for (const a of pts) for (let k = 0; k < a.length; k++) { const d = k % 3; l2[d] = Math.min(l2[d], a[k]); h2[d] = Math.max(h2[d], a[k]); }
+      OC = [(l2[0] + h2[0]) / 2, (l2[1] + h2[1]) / 2, (l2[2] + h2[2]) / 2];
+      for (const a of pts.concat([P.subarray(0, SF * 3)])) for (let k = 0; k < a.length; k += 3) OR = Math.max(OR, Math.hypot(a[k] - OC[0], a[k + 1] - OC[1], a[k + 2] - OC[2]));
+    }
     // ~600 shell vertices outline the silhouette for the label columns and the overview framing.
     const SIL = [];
     {
@@ -1613,7 +1625,7 @@ void main() {
     const shBin = (x, y, z, r) => Math.min(SHV - 1, Math.floor(Math.acos(Math.max(-1, Math.min(1, y / (r || 1)))) / Math.PI * SHV)) * SHB
       + Math.min(SHB - 1, Math.floor((Math.atan2(z, x) / TAU + 1) % 1 * SHB));
     let shellR = 0;
-    for (const m of mesh) {
+    for (const m of shell) {
       for (let k = 0; k < m.pos.length; k += 3) {
         const x = m.pos[k] - ctr[0], y = m.pos[k + 1] - ctr[1], z = m.pos[k + 2] - ctr[2], r = Math.hypot(x, y, z), b = shBin(x, y, z, r);
         if (r > SHR[b]) SHR[b] = r;
@@ -1687,7 +1699,15 @@ void main() {
     // the lobe centres the GPU arranges pages around (w = 1 when the lobe has one)
     const lobeC = new Float32Array(Math.max(1, L) * 4);
     for (let k = 0; k < L; k++) { const c = centreOf(k); if (c) lobeC.set([c[0], c[1], c[2], 1], k * 4); }
-    const dust = V3 && mesh.length ? dustOf(mesh, 9000) : new Float32Array(0);
+    // the shell's dust, and a sparse sprinkle on the stem's tube (the same look, fainter)
+    const tube = mesh.filter((m) => m.name === 'stem');
+    let dust = V3 && shell.length ? dustOf(shell, 9000) : new Float32Array(0);
+    if (V3 && tube.length) {
+      const td = dustOf(tube, Math.round(STEM_DUST * 9000)), both = new Float32Array(dust.length + td.length);
+      both.set(dust);
+      both.set(td, dust.length);
+      dust = both;
+    }
 
     // Shared scene for the renderers. TP and TFC are the arranged positions and control points.
     const COL = new Uint8Array(N * 4), FX = new Uint8Array(N * 4), PI = new Uint16Array(N);
@@ -1771,6 +1791,11 @@ void main() {
       leads.push(svgEl('path', { 'stroke-opacity': '0.45' }, gLead));
     }
     for (let j = 0; j < PAGE_LABELS; j++) pagePl.push(plate(gPage, 12.5, false));
+    // the stem's most visited sites carry a small name (hover names any site)
+    const topSites = [];
+    for (let i = SF; i < N; i++) topSites.push(i);
+    topSites.sort((a, b) => PG[b].visits - PG[a].visits || a - b).splice(SITE_LABELS);
+    const sitePl = topSites.map(() => plate(gPage, 11, false));
     const hoverPl = plate(gPage, 12.5, false);
     const selRing = svgEl('circle', { r: '9', 'stroke-width': '1.2' }, gMark);
     const beaconRings = [0, 1, 2].map(() => svgEl('circle', { 'stroke-width': '1.5' }, gMark));
@@ -2132,9 +2157,9 @@ void main() {
     // centred, then nudged right. fill 0 is v3's camera.
     function rehome() {
       if (!W || !H) return;
-      const half = Math.min(FOV / 2, Math.atan(Math.tan(FOV / 2) * W / H)), fit = Math.max(DIST_MIN, Rb / Math.sin(half) * 1.02);
+      const half = Math.min(FOV / 2, Math.atan(Math.tan(FOV / 2) * W / H)), fit = Math.max(DIST_MIN, OR / Math.sin(half) * 1.02);
       const cs = camSpec;
-      if (!V3 || !cs || !(cs.fill > 0)) Object.assign(home, { yaw: 0.9, pitch: 0.55, dist: fit, tx: ctr[0], ty: ctr[1], tz: ctr[2] });
+      if (!V3 || !cs || !(cs.fill > 0)) Object.assign(home, { yaw: 0.9, pitch: 0.55, dist: fit, tx: OC[0], ty: OC[1], tz: OC[2] });
       else {
         const yaw = (cs.azimuth - 90) * Math.PI / 180, pitch = clampPitch(cs.elevation * Math.PI / 180);
         const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -2144,6 +2169,7 @@ void main() {
           const k = LOBE[i] < L ? LOBE[i] : -1, c = k >= 0 && S.arrange ? centreOf(k) : null;
           for (let d = 0; d < 3; d++) pts.push(c ? ctr[d] + (c[d] - ctr[d]) * style.spread + (P[i * 3 + d] - c[d]) * s : P[i * 3 + d]);
         }
+        for (let i = SF; i < N; i++) pts.push(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]);  // every site in the stem
         const boxAt = (d, t) => {
           let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
           for (let k = 0; k < pts.length; k += 3) {
@@ -2171,6 +2197,17 @@ void main() {
       }
       maxDist = Math.max(DIST_MAX, home.dist * 1.3);
     }
+    // The stem's sites from the overview's side, a little below the brain: the column fills ~80 % of
+    // the stage height. null without a stem.
+    function stemView() {
+      const n = N - SF;
+      if (n <= 0) return null;
+      let y0 = Infinity, y1 = -Infinity, x = 0, z = 0;
+      for (let i = SF; i < N; i++) { const y = P[i * 3 + 1]; y0 = Math.min(y0, y); y1 = Math.max(y1, y); x += P[i * 3]; z += P[i * 3 + 2]; }
+      const h = Math.max(0.3, y1 - y0) + 0.2;
+      return { yaw: home.yaw, pitch: clampPitch(0.12), dist: clampDist(h / 2 * focal / (0.4 * H)), tx: x / n, ty: (y0 + y1) / 2, tz: z / n };
+    }
+    let atStem = false;  // the last flight was stem(): its button's second press flies back
     function viewToward(x, y, z, standoff, side) {
       const dx = x - ctr[0], dy = y - ctr[1], dz = z - ctr[2], d = Math.hypot(dx, dy, dz) || 1;
       const yaw = Math.atan2(dx, dz), pitch = clampPitch(Math.asin(dy / d));
@@ -2339,6 +2376,7 @@ void main() {
       vel[0] = vel[1] = 0;
       goal = null;
       selOrbit = false;
+      atStem = false;
       if (reduced) { Object.assign(cam, to); anim = null; invalidate(); return; }
       const from = Object.assign({}, cam);
       let dy = (to.yaw - from.yaw) % TAU;
@@ -2480,6 +2518,13 @@ void main() {
         }
       }
       for (; pj < PAGE_LABELS; pj++) pagePl[pj].g.style.display = 'none';
+      topSites.forEach((i, n) => {
+        const q = lm !== 'none' && i !== hover && COL[i * 4 + 3] ? at(i) : null;
+        const text = q && trunc(PG[i].title, 28), r = q && [q[0] + 3, q[1] - 8, q[0] + textW(text, 11) + 16, q[1] + 8];
+        if (!q || q[0] < 0 || q[1] < 8 || r[2] > W || q[1] > H - 8 || !fits(r)) { sitePl[n].g.style.display = 'none'; return; }
+        boxes.push(r);
+        setPlate(sitePl[n], text, q[0] + 8, q[1], false, 11, 0.75, colors.label);
+      });
       // Hover title and rings (v4: the chosen page's ring only in the Canvas fallback; WebGL has the glimmer).
       const hq = lm !== 'none' ? at(hover) : null;
       if (hq) {
@@ -3211,6 +3256,18 @@ void main() {
       get spin() { return spin; },
       get growth() { return growthMonth; },
       get focused() { return focus >= 0 ? String(lobes[focus].id) : null; },
+      // the browsing stem: whether there is one, whether the camera went to it, and the flight there
+      // (a second call flies back to the overview); true when it flew to the stem
+      get hasStem() { return SF < N; },
+      get atStem() { return atStem; },
+      set atStem(on) { atStem = !!on && SF < N; },  // a remount: the camera is back at the stem already
+      stem() {
+        if (SF >= N) return false;
+        if (atStem) { fly(home); return false; }
+        fly(stemView());
+        atStem = true;
+        return true;
+      },
       get busy() { return !!anim || !!goal || ptrs.size > 0 || Math.abs(vel[0]) + Math.abs(vel[1]) > 1e-4; },
       // select a page without flying to it (a remount restores the selection)
       reselect(id) {

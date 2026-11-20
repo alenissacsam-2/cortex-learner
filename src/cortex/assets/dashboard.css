@@ -82,7 +82,7 @@ input[type="search"]::placeholder { color: var(--ink-3); }
 /* header strip */
 .top {
   position: sticky; top: 0; z-index: 15; background: var(--band); color: var(--band-ink);
-  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); align-items: center;  /* the right side never runs under the tabs */
   gap: 16px; padding: 8px 20px; min-height: 56px; border-bottom: 1px solid var(--rule);
 }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -260,6 +260,7 @@ a.icon-btn { color: inherit; }
 .outline [aria-expanded="true"] > .ti .ico { transform: rotate(90deg); }
 .outline .region > .ti { grid-template-columns: 14px minmax(0, 1fr) auto; color: var(--ink-2); font-weight: 600; }
 .outline .page > .ti { grid-template-columns: 14px minmax(0, 1fr); padding-left: 16px; }
+.outline .site > .ti { grid-template-columns: 14px minmax(0, 1fr) auto; }
 .outline .n { color: var(--ink-3); font-size: 12px; }
 .outline .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
@@ -295,9 +296,15 @@ a.icon-btn { color: inherit; }
   border: 1px solid var(--rule); border-radius: 2px; padding: 8px 12px; font-size: 12.5px;
   color: var(--ink-2); max-width: 460px;
 }
+.legend:has(> .legend-toggle[aria-expanded="false"]) { padding: 4px 10px; }
+.legend-toggle { border: 0; background: none; padding: 0; color: var(--ink-2); font: inherit; cursor: pointer;
+  display: inline-flex; gap: 4px; align-items: center; }
+.legend-toggle .ico { width: 12px; height: 12px; transition: transform .15s; }
+.legend-toggle[aria-expanded="true"] .ico { transform: rotate(90deg); }
+.legend-body { margin-top: 4px; }
 .legend p { margin: 2px 0; }
 .legend .honest { color: var(--ink-3); }
-.legend .sw { display: inline-flex; gap: 12px; flex-wrap: wrap; margin: 2px 0; }
+.legend .sw { display: inline-flex; gap: 2px 12px; flex-wrap: wrap; margin: 2px 0; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lit);
   vertical-align: 0; margin-right: 4px; }
 .b2d { display: flex; flex-direction: column; padding: 60px 16px 16px; }
@@ -315,6 +322,9 @@ a.icon-btn { color: inherit; }
 :root[data-theme="day"] .chips button[aria-pressed="true"] { color: var(--band-ink); }
 .chip-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 button.chip { cursor: pointer; }
+/* Restart to update: a chip with its words; below 1300 px its icon alone */
+.chip.upd { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--ink); text-decoration: none; cursor: pointer; }
+.chip.upd .ico { display: none; }
 .g-solid { color: var(--solid); } .g-learning { color: var(--learning); }
 .g-needs_refresh { color: var(--refresh); } .g-unverified, .g-not_started { color: var(--hollow); }
 .flag { color: var(--refresh); }
@@ -567,6 +577,13 @@ table.props { margin-top: 2px; }
 .tip .k { color: var(--ink-2); }
 :root[data-theme="day"] .tip { background: var(--panel); }
 
+@media (max-width: 1299px) {  /* the header keeps one line: no greeting, Restart to update as an icon */
+  .greet { display: none; }
+  .tabs button { padding: 8px 7px; }
+  .chip.upd { width: 32px; height: 32px; padding: 0; justify-content: center; }
+  .chip.upd .ico { display: block; }
+  .chip.upd .upd-word { display: none; }
+}
 @media (max-width: 1280px) {  /* Departures keeps room for its item names */
   .home-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }

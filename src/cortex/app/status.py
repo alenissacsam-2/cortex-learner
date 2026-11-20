@@ -16,6 +16,8 @@ import re
 import secrets
 import shlex
 import sys
+import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -42,6 +44,47 @@ def safe(d) -> dict:
         return {}
     return {str(k): v for k, v in d.items()
             if isinstance(v, (bool, int, float)) or (isinstance(v, str) and _DATE.fullmatch(v))}
+
+
+# The Status board's slow probes (HTTP to Ollama and LM Studio, `lms`, the receiver's port: about
+# 3 s together on Windows, where a refused loopback connect waits) are kept for KEEP_S: the first
+# read waits, later ones answer at once and refresh a stale answer in the background. `forget`
+# drops them all (any action, and Check again), so the next read waits for fresh answers.
+KEEP_S = 30.0
+_kept: dict = {}  # key -> [monotonic time, answer, refreshing]
+_kept_lock = threading.Lock()
+
+
+def kept(key, fn):
+    """`fn()`'s answer kept under `key` (see KEEP_S)."""
+    with _kept_lock:
+        hit = _kept.get(key)
+        if hit is not None:
+            if time.monotonic() - hit[0] > KEEP_S and not hit[2]:
+                hit[2] = True
+                threading.Thread(target=_refresh, args=(key, fn, hit), daemon=True).start()
+            return hit[1]
+    v = fn()
+    with _kept_lock:
+        _kept[key] = [time.monotonic(), v, False]
+    return v
+
+
+def _refresh(key, fn, hit: list) -> None:
+    try:
+        v = fn()
+    except Exception:  # noqa: BLE001  (the probes catch their own; a bug keeps the old answer)
+        log.exception("status probe refresh failed")
+        hit[2] = False
+        return
+    with _kept_lock:
+        if _kept.get(key) is hit:  # not forgotten meanwhile
+            _kept[key] = [time.monotonic(), v, False]
+
+
+def forget() -> None:
+    with _kept_lock:
+        _kept.clear()
 
 
 def when(p: Path) -> str | None:
@@ -126,12 +169,9 @@ def lms_path() -> str | None:
         return None
 
 
-def llm() -> dict:
-    c = _llm_cfg()
-    out = {"enabled": c.get("enabled") is True, "runner": c.get("runner") or "auto",
-           "model": c.get("model") or None, "background_model": c.get("background_model") or None,
-           "lms": lms_path(), "server_port": None,
-           "loaded": [], "ollama": ollama_models(), "available": True, "error": None}
+def _lms_state() -> dict:
+    """LM Studio's server port, loaded models and localllm's error, read-only."""
+    out = {"server_port": None, "loaded": [], "available": True, "error": None}
     try:
         from cortex import localllm
         got = localllm.status(lms=True)  # read-only; "error": a cloud model or non-local url
@@ -147,6 +187,20 @@ def llm() -> dict:
     except Exception:  # noqa: BLE001
         log.exception("LM Studio state check failed")
     return out
+
+
+def llm(quick: bool = False) -> dict:
+    """The local model's settings and both runners' state; `quick`: the probes as `kept`."""
+    c = _llm_cfg()
+    key = json.dumps(c, sort_keys=True, default=str)  # a settings change asks again
+
+    def probe(name, fn):
+        return kept((name, key), fn) if quick else fn()
+    return {"enabled": c.get("enabled") is True, "runner": c.get("runner") or "auto",
+            "model": c.get("model") or None,
+            "background_model": c.get("background_model") or None,
+            "lms": probe("lms", lms_path), "ollama": probe("ollama", ollama_models),
+            **probe("lms_state", _lms_state)}
 
 
 def lms_models() -> list[dict]:
@@ -443,8 +497,9 @@ def login_shown(root: Path) -> str:
                       *("Then runs: " + shlex.join(c) for c in login_commands(True))])
 
 
-def browse(root: Path | None, in_app: dict | None) -> dict:
-    """The Browsing section: settings, receiver, pairing, queue and last processing."""
+def browse(root: Path | None, in_app: dict | None, quick: bool = False) -> dict:
+    """The Browsing section: settings, receiver, pairing, queue and last processing; `quick`:
+    the receiver's probe as `kept`."""
     out = {"settings": browse_settings(), "paired": False, "receiver": "stopped",
            "in_app": in_app is not None, "queued": 0, "last_contact": None,
            "last_processed": None, "processing": False, "login": login_task()}
@@ -482,7 +537,8 @@ def browse(root: Path | None, in_app: dict | None) -> dict:
         out["receiver"] = "running"
         live = safe(in_app)
     else:
-        out["receiver"], live = receiver_probe(root)
+        out["receiver"], live = kept(("receiver", str(root)), lambda: receiver_probe(root)) \
+            if quick else receiver_probe(root)
     out["processing"] = bool(live.get("processing"))
     out["queued"] = live.get("queued_records", out["queued"])
     out["last_processed"] = live.get("last_processed") or out["last_processed"]
@@ -520,14 +576,15 @@ def rows(root: Path | None, in_app: dict | None) -> list[dict]:
                 else "Without it, search matches words only.",
                 "action": None if e["downloaded"] else _go("setup", "Download")})
     from cortex.app import targets
-    on = [t["label"] for t in targets.describe(None) if t["connected"]]
+    on = [t["label"] for t in kept(("targets", None), lambda: targets.describe(None))
+          if t["connected"]]
     out.append({"id": "apps", "label": "AI apps", "state": "ok" if on else "off",
                 "value": ", ".join(on) or "none connected",
                 "detail": "They read and record through Cortex." if on else
                 "Without one, nothing reads or records anything.",
                 "action": _go("connect", "Open" if on else "Connect")})
     out.append(llm_row())
-    b = browse(root if v["ok"] else None, in_app)
+    b = browse(root if v["ok"] else None, in_app, quick=True)
     out.append({"id": "receiver", "label": "Browse receiver",
                 "state": "ok" if b["receiver"] == "running" else "off",
                 "value": {"busy": PORT_BUSY, "old": RECEIVER_OLD}.get(b["receiver"],
@@ -572,7 +629,7 @@ def llm_row() -> dict:
     """The configured runner by name, "ok" only when that runner holds the chosen model
     (runner auto: whichever does)."""
     from cortex import localllm
-    m = llm()
+    m = llm(quick=True)
     want = str(m["model"] or "")
     loaded = [x for x in m["loaded"] if want and x.lower() == want.lower()]
     in_ollama = bool(want and localllm._local_name(m["ollama"] or [], want))
@@ -581,7 +638,8 @@ def llm_row() -> dict:
     elif m["runner"] == "lmstudio":
         name = "LM Studio"
         ready = bool(m["lms"] and want and (loaded or any(
-            want.lower() in (r["key"].lower(), r["name"].lower()) for r in lms_models())))
+            want.lower() in (r["key"].lower(), r["name"].lower())
+            for r in kept(("lms_models", m["lms"]), lms_models))))
     else:
         name = "Ollama" if in_ollama else "LM Studio" if loaded else ""
         ready = bool(name)
