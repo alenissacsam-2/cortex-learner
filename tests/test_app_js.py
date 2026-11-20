@@ -246,8 +246,12 @@ const out = {};
     DATA.routes['/api/chat'] = { vault: true, missing: [], model: 'qwen3.5-2b', settings, chats: [] };
     DATA.routes['/api/chat/list'] = { chats };
     const ev = (o) => JSON.stringify(o) + '\n';
-    const line = ev({ t: 'src', sources: [{ n: 1, path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse' }] });
-    DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'think' }),
+    const line = ev({ t: 'src', sources: [{ n: 1, path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse', at: 12, len: 300 }], coverage: { read: 1, matched: 4 } });
+    const facts = { kind: 'count', query: 'github', period: ['2026-11-10', '2026-11-16'], total: 1234, sources: { browsing: 1230, notes: 4 },
+      rows: [], focus: null, unit: 'times', coverage: { read: 5000, matched: 1234, off: ['private'] } };
+    DATA.routes['/api/chat/passage'] = { path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse',
+      heading: 'Topics', text: '- Car motor <img src=x> repair' };
+    DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'facts', facts }) + ev({ t: 'think' }),
       ev({ t: 'tok', s: 'You read **two** pages' }), ev({ t: 'tok', s: ' [1].\n- `heap` notes' }),
       line.slice(0, 20), line.slice(20) + ev({ t: 'done', id: chats[0].id, model: 'qwen3.5-2b', seconds: 1.2, stopped: false })];
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
@@ -274,11 +278,20 @@ const out = {};
     out.role = [log.getAttribute('role'), log.getAttribute('aria-live')];
     out.inputAfter = $('chat-input').value;
     out.list = $('chat-side').querySelectorAll('.chat-open').map((b) => [b.querySelector('.t').textContent, b.querySelector('.d').textContent, b.getAttribute('aria-current')]);
-    bot.querySelector('.cite').fire('click');
-    out.flash = bot.querySelector('.chip').className;
-    bot.querySelector('.chip').fire('click');
+    out.facts = bot.querySelector('.facts').textContent;
+    out.cov = bot.querySelector('.cov').textContent;
+    bot.querySelector('.cite').fire('click');  // [1] opens its exact passage
+    await tick();
+    out.passageGet = fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path);
+    out.passage = bot.querySelector('.passage').querySelector('.pv-where').textContent;
+    out.passageText = bot.querySelector('.passage').querySelector('.pv-text').textContent;
+    out.pressed = bot.querySelector('.chip').getAttribute('aria-pressed');
+    bot.querySelector('.passage').querySelectorAll('button').find((b) => b.textContent === 'Open the page in Obsidian').fire('click');
     await tick();
     out.opened = fetched.filter((f) => f.path === '/api/open').map((f) => f.body);
+    bot.querySelector('.chip').fire('click');  // the open pill again closes it
+    await tick();
+    out.closed = bot.querySelector('.passage') === null;
     // a second answer that cites nothing lists the pages searched, marked as not cited
     DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'tok', s: 'Probably heaps.' })
       + ev({ t: 'src', sources: [], searched: [{ path: 'notes/heap.md', title: 'Heap notes', kind: 'note' }] })
@@ -481,7 +494,16 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["caret"] == 0 and out["busy"] == "false" and out["role"] == ["log", "polite"]
     assert out["inputAfter"] == ""
     assert out["list"] == [["Which sites did I visit yesterday?", "today", "true"]]
-    assert "flash" in out["flash"]
+    # the facts box above the words, the coverage line, the passage a citation opens
+    assert out["facts"] == ("Computed from your data2026-11-10 to 2026-11-16 · “github”"
+                            "1,234mentionsbrowsing1,230notes4"
+                            "Counted all 1,234 matches in 5,000 items read · switched off: private")
+    assert out["cov"] == "Read 1 of 4 matches"
+    assert out["passageGet"] == ["/api/chat/passage?path=browse%2Fprivate%2Fbrowse-private-"
+                                 "2026-11-17.md&at=12&len=300"]
+    assert out["passage"] == "browsingBrowsing 2026-11-17 (private)› Topics"
+    assert out["passageText"] == "- Car motor <img src=x> repair"  # text, never markup
+    assert out["pressed"] == "true" and out["closed"] is True
     assert out["opened"] == [{"what": "page",
                               "path": "browse/private/browse-private-2026-11-17.md"}]
     assert out["skipNote"] == "Skipped"
@@ -949,7 +971,6 @@ SENDS = {
     "chat": {
         "Delete chat: Heaps": [["/api/chat/delete", {"id": CHAT_ID}]],
         "Delete all chats": [["/api/chat/delete", {"all": True}]],
-        "1 · Heapnote": [["/api/open", {"what": "page", "path": "notes/heap.md"}]],
         "chat-length": [["/api/chat/settings", {"length": "short"}]],
         "chat-temp": [["/api/chat/settings", {"temperature": 0.7}]],
         "chat-k": [["/api/chat/settings", {"passages": 4}]],

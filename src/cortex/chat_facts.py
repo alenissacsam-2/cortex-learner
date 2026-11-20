@@ -271,7 +271,7 @@ def _visits(vault, lo: str, hi: str, sources: dict, ws: list[str], match,
             if (ts > e[0]) if last else (ts < e[0]):
                 e[0], e[1] = ts, title
             e[2] += n
-    return read, [(d, float(ts), "browsing", title or site, n, n, site)
+    return read, [(d, float(ts), "browsing", chat_study._title(title) or site, n, n, site)
                   for (d, site), (ts, title, n) in got.items()]
 
 

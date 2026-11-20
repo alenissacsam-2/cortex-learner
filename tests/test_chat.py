@@ -515,7 +515,7 @@ def test_settings_validate_and_keep_other_keys(home):
     cfg = taint.config()
     assert cfg["vault"] == "x" and cfg["chat"]["other"] == 1
     taint.write_config({"chat": {"temperature": "hot", "passages": 99}})  # bad on disk: defaults
-    assert chat.get_settings()["temperature"] == 0.2 and chat.get_settings()["passages"] == 8
+    assert chat.get_settings()["temperature"] == 0.2 and chat.get_settings()["passages"] == 5
 
 
 # ---- a turn ------------------------------------------------------------------------------------
@@ -559,8 +559,85 @@ def test_an_answer_citing_nothing_lists_the_pages_searched(vault, stream):
     cid, ev = _turn(vault, None, "car motor", s.runner())
     src = ev[-2]
     assert src["sources"] == [] and 1 <= len(src["searched"]) <= chat.SEARCHED
-    assert all(set(p) == {"path", "title", "kind"} for p in src["searched"])
+    assert all(set(p) == {"path", "title", "kind", "at", "len"} for p in src["searched"])
     assert chat.load(vault, cid)[1]["searched"] == src["searched"]
+
+
+# ---- trust: coverage, typed pills and the exact passage (v9 B3/B4) -------------------------
+
+def test_default_passages_are_five_short_ones(vault, stream):
+    assert chat.DEFAULTS["passages"] == 5 and ask.PASSAGE <= 700
+    note(vault.root, "notes/long-engines.md", "title: Long engines\n",
+         "# Long engines\n\n" + "Car motor pistons and valves. " * 200)
+    found = ask._passages(vault, "car motor", chat.DEFAULTS["passages"], sources=ask.SOURCES)
+    assert 1 <= len(found) <= 5 and all(len(p["text"]) <= 700 for p in found)
+    s = stream("ollama", ["Pistons [1]."])
+    _turn(vault, None, "car motor", s.runner())
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert 1 <= user.count('<untrusted_note id="') <= 5
+
+
+def test_coverage_counts_what_was_read_of_what_matched(vault, stream, monkeypatch):
+    stats = {}
+    found = ask._passages(vault, "car motor", 2, sources=ask.SOURCES, stats=stats)
+    every = ask._passages(vault, "car motor", 12, sources=ask.SOURCES)
+    assert len(found) == 2 and stats["matched"] == len(every) > 2
+    s = stream("ollama", ["Forum [1]."])
+    cid, ev = _turn(vault, None, "car motor", s.runner(),
+                    settings=dict(chat.get_settings(), passages=4))
+    cov = ev[-2]["coverage"]
+    n = len(ask._passages(vault, "car motor", 4, sources=chat.get_settings()["sources"]))
+    assert cov == {"read": n, "matched": len(every)}
+    assert chat.load(vault, cid)[-1]["coverage"] == cov
+
+
+def test_pills_are_typed_and_titles_escaped(vault, stream):
+    note(vault.root, "notes/linky.md", "title: '![x](http://evil.example/a.png) [Car](http://"
+         "evil.example) <b>motor</b>'\n", "# Linky\n\nCar motor link page.")
+    s = stream("ollama", ["[1] [2] [3] [4] [5]"])
+    _, ev = _turn(vault, None, "car motor", s.runner())
+    src = ev[-2]["sources"]
+    assert src and all(p["kind"] in ("note", "chat", "browse") for p in src)
+    assert {"note", "browse"} <= {p["kind"] for p in src}
+    blob = json.dumps(src)
+    assert "evil.example" not in blob and "<b>" not in blob and "](" not in blob
+
+
+def test_a_citation_opens_its_exact_passage(vault):
+    body = ("# Engines\n\nAutomobile car motor basics.\n\n## Gearbox\n\n"
+            + "Shifting gears needs a clutch. " * 60 + "\n\n## Pistons\n\nPistons go up.\n")
+    note(vault.root, "notes/engines.md", "title: Engines\n", body)
+    found = ask._passages(vault, "car motor", 8, sources=ask.SOURCES)
+    p = next(x for x in found if x["path"] == "notes/engines.md")
+    got = chat.passage(vault, p["path"], p["at"], p["len"], ask.SOURCES)
+    assert got["kind"] == "note" and got["title"] == "Engines"
+    assert len(got["text"]) <= 700 and got["text"] in p["text"]
+    assert got["text"].startswith("Automobile car motor basics.")
+    assert p["text"].rstrip().endswith(got["text"][-40:])  # both ends, whatever the line ends
+    at = vault.read_path(vault.root / "notes/engines.md").body.index("Shifting")
+    later = chat.passage(vault, "notes/engines.md", at, 100, ask.SOURCES)
+    assert later["heading"] == "Gearbox" and later["text"].startswith("Shifting gears")
+    browse = next(x for x in found if x["kind"] == "browse")
+    got = chat.passage(vault, browse["path"], browse["at"], browse["len"], ask.SOURCES)
+    assert got["kind"] == "browse" and got["text"]
+    assert got["text"] in browse["text"].replace("\r\n", "\n")  # the view drops line ends
+    for bad in ("../outside.md", "/etc/x.md", "notes/engines.txt", "notes\\engines.md"):
+        with pytest.raises(ValueError):
+            chat.passage(vault, bad, 0, 100, ask.SOURCES)
+
+
+def test_the_passage_view_keeps_to_the_switches(vault):
+    _secret(vault)
+    on = dict(ask.SOURCES)
+    assert "zanzibarquux" in chat.passage(vault, SECRET, 0, 700, on)["text"]
+    with pytest.raises(PermissionError):
+        chat.passage(vault, SECRET, 0, 700, dict(on, private=False))
+    priv = "browse/private/browse-private-2026-11-15.md"
+    assert chat.passage(vault, priv, 0, 700, on)["text"]
+    with pytest.raises(PermissionError):
+        chat.passage(vault, priv, 0, 700, dict(on, private=False))
+    with pytest.raises(PermissionError):
+        chat.passage(vault, "notes/engines.md", 0, 700, dict(on, notes=False))
 
 
 def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, monkeypatch):

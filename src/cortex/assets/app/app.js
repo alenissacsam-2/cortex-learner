@@ -558,27 +558,71 @@
     const n = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
     return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 || hours ? `${n} days ago` : d.toISOString().slice(0, 10);
   }
-  function sourceRow(sources, searched) {
+  // each pill opens its passage (`open`); the pill of the open one is pressed
+  function sourceRow(sources, searched, open, shown) {
+    const pill = (s, label) => h('button', { class: 'chip', type: 'button', 'data-n': s.n, 'aria-pressed': String(shown === s),
+      title: 'Show the passage', onclick: () => open(s) },
+    h('span', { class: 'ct', text: label }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }));
     if ((!sources || !sources.length) && searched && searched.length)  // the model cited nothing
       return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Searched, not cited' }),
-        searched.map((s) => h('button', { class: 'chip', type: 'button', title: 'Open in Obsidian', onclick: () => post('/api/open', { what: 'page', path: s.path }) },
-          h('span', { class: 'ct', text: s.title || s.path }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }))));
+        searched.map((s) => pill(s, s.title || s.path)));
     if (!sources || !sources.length) return null;
     return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Sources' }),
-      sources.map((s) => h('button', { class: 'chip', type: 'button', 'data-n': s.n, title: 'Open in Obsidian', onclick: () => post('/api/open', { what: 'page', path: s.path }) },
-        h('span', { class: 'ct', text: `${s.n} · ${s.title || s.path}` }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }))));
+      sources.map((s) => pill(s, `${s.n} · ${s.title || s.path}`)));
   }
-  function botMsg(m) {  // {text, sources, searched, model, stopped}; returns the element and its updater
+  // the facts Cortex computed (chat_facts), above the model's words: exactly as counted
+  const FACT_NOUN = { notes: 'notes', chats: 'saved AI chats', journal: 'journal lines', browsing: 'visits', study: 'study events' };
+  const FACT_SRC = { notes: 'notes', chats: 'chats', journal: 'journal', browsing: 'browsing', study: 'study' };
+  function factsBox(f) {
+    const n = (x) => Number(x).toLocaleString();
+    const period = f.period ? (f.period[0] === f.period[1] ? f.period[0] : `${f.period[0]} to ${f.period[1]}`) : 'all time';
+    const big = (num, label) => [h('span', { class: 'fx-n', text: n(num) }), h('span', { text: label })];
+    let head;
+    if (f.kind === 'count') head = big(f.total, f.unit === 'days' ? 'days' : f.focus ? FACT_NOUN[f.focus] : 'mentions');
+    else if (f.kind === 'timeline') head = big(f.total, `items across ${n(f.rows.length + (f.more || 0))} ${f.unit}s`);
+    else if (f.kind === 'about') head = big(f.total, 'mentions');
+    else head = f.item ? [h('span', { class: 'fx-n', text: f.item.day }), h('span', { text: `${f.kind} time: ${f.item.title} (${FACT_SRC[f.item.source] || f.item.source})` })]
+      : big(0, 'matches');
+    const extra = f.kind === 'about' && f.first ? h('div', { class: 'fx-line', text: `First ${f.first.day}, last ${f.last.day}` + (f.page ? ` · page: ${f.page.title}` : '') }) : '';
+    const cov = f.coverage || {};
+    return h('div', { class: 'facts', role: 'group', 'aria-label': 'Facts computed by Cortex' },
+      h('div', { class: 'fx-top' }, h('span', { class: 'fx-ttl', text: 'Computed from your data' }), h('span', { class: 'ink-3', text: period + (f.query ? ` · “${f.query}”` : '') })),
+      h('div', { class: 'fx-head' }, ...head), extra,
+      Object.keys(f.sources || {}).length ? h('div', { class: 'fx-src' }, Object.entries(f.sources).map(([s, c]) =>
+        h('span', { class: 'fx-chip' }, h('span', { class: 'tag', text: FACT_SRC[s] || s }), h('span', { text: n(c) })))) : '',
+      cov.read != null ? h('div', { class: 'fx-cov', text: `Counted all ${n(cov.matched)} matches in ${n(cov.read)} items read`
+        + (cov.off && cov.off.length ? ` · switched off: ${cov.off.join(', ')}` : '') }) : '');
+  }
+  // the exact passage a source stands for (GET /api/chat/passage, under the switches of now)
+  function passageView(s, p, close) {
+    const kids = p.error ? [h('p', { class: 'ink-3 small', text: p.error })]
+      : !p.data ? [h('p', { class: 'thinking', text: 'Opening the passage…' })]
+        : [h('div', { class: 'pv-where' }, h('span', { class: 'tag', text: KIND[p.data.kind] || p.data.kind }),
+          h('strong', { text: p.data.title || s.path }), p.data.heading ? h('span', { class: 'ink-3', text: `› ${p.data.heading}` }) : ''),
+        h('div', { class: 'pv-text', text: p.data.text || '(this part of the page is empty now)' })];
+    return h('div', { class: 'passage', role: 'region', 'aria-label': `Passage ${s.n || ''}`.trim() }, ...kids,
+      h('div', { class: 'msg-acts' }, btn('Open the page in Obsidian', () => post('/api/open', { what: 'page', path: s.path }), 'btn quiet'),
+        btn('Close', close, 'btn quiet')));
+  }
+  function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
+    let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
+    const open = async (s) => {
+      if (shown === s) { shown = p = null; draw(live); return; }
+      shown = s; p = {};
+      draw(live);
+      const mine = p;
+      try {
+        mine.data = await api(`/api/chat/passage?path=${encodeURIComponent(s.path)}&at=${s.at || 0}&len=${s.len || 0}`);
+      } catch (e) { mine.error = e.message; }
+      if (p === mine) draw(live);
+    };
     const cite = (n) => {
-      const chip = [...el.querySelectorAll('.chip')].find((c) => c.getAttribute('data-n') === String(n));
-      if (!chip) return;
-      chip.scrollIntoView({ block: 'nearest' });
-      chip.focus();
-      chip.classList.add('flash');
-      setTimeout(() => chip.classList.remove('flash'), 1200);
+      const s = (m.sources || []).find((x) => String(x.n) === String(n));
+      if (s) open(s);
     };
     const draw = (streaming) => {
+      live = streaming;
       who.textContent = 'Cortex' + (m.model === 'Cortex' ? ' · from your data' : m.model ? ` · ${m.model}` : '') + (!streaming && m.seconds ? ` · ${Math.round(m.seconds)} s` : '');
       if (streaming && !m.text) {  // each stage with a live count, so a slow one never looks frozen
         const secs = Math.floor((Date.now() - m.t0) / 1000);
@@ -594,7 +638,10 @@
       // a finished answer gets Copy: its text without the [n] markers; the sources stay out
       const copy = !streaming && m.text ? h('div', { class: 'msg-acts' }, copyBtn(() => m.text.replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, ''),
         'Copy failed; select the answer and copy it.', 'btn quiet', true)) : '';
-      el.replaceChildren(who, body, copy, sourceRow(m.sources, m.searched) || '',
+      const cov = m.coverage;  // what the model read of what the search found
+      el.replaceChildren(who, m.facts ? factsBox(m.facts) : '', body, copy, sourceRow(m.sources, m.searched, open, shown) || '',
+        shown ? passageView(shown, p, () => open(shown)) : '',
+        cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}` }) : '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
@@ -804,7 +851,8 @@
           else if (ev.t === 'think') m.thinking = true;
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'text') m.text = ev.s;
-          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; }
+          else if (ev.t === 'facts') m.facts = ev.facts;
+          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }

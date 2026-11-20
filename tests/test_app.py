@@ -14,6 +14,7 @@ import time
 import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -223,9 +224,10 @@ def test_writes_need_post_with_json(app):
 def test_get_never_changes_anything(app, vault, home, fakes):
     (home / ".cursor").mkdir()
     before = snapshot(home, vault)
-    for path in [*app.get, *app.post]:  # a stem site's details with no site named: not found
+    for path in [*app.get, *app.post]:  # a site or passage with none named: not found
         code = call(app, "GET", path)[0]
-        assert code in ((404,) if path == "/api/home/site" else (200, 405)), path
+        assert code in ((404,) if path in ("/api/home/site", "/api/chat/passage")
+                        else (200, 405)), path
     after = snapshot(home, vault)
     # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
     after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
@@ -1573,6 +1575,15 @@ def test_chat_streams_ndjson_and_keeps_the_chat(app, embed, llm, vault):
     ev = chat_stream(app, {"id": cid, "text": "and why?"})[2]
     assert ev[-1]["id"] == cid and len(llm.bodies[-1]["messages"]) == 4
     assert call(app, "POST", "/api/open", {"what": "page", "path": src[0]["path"]})[0] == 200
+    # the cited passage itself, under the switches of now; never with no key or a bad path
+    q = f"path={quote(src[0]['path'])}&at={src[0]['at']}&len={src[0]['len']}"
+    code, got, _, _ = call(app, "GET", "/api/chat/passage?" + q)
+    assert code == 200 and got["text"] and got["kind"] == src[0]["kind"]
+    assert call(app, "GET", "/api/chat/passage?" + q, token=False)[0] == 401
+    assert call(app, "GET", "/api/chat/passage?path=..%2F..%2Fx.md")[0] == 400
+    off = {k: False for k in ("notes", "chats", "browsing", "private")}
+    assert call(app, "POST", "/api/chat/settings", {"sources": off})[0] == 200
+    assert call(app, "GET", "/api/chat/passage?" + q)[0] == 400
     assert call(app, "POST", "/api/chat/delete", {"id": cid})[1] == {"deleted": 1}
     assert call(app, "POST", "/api/chat/delete", {"all": True})[1] == {"deleted": 0}
 
