@@ -364,10 +364,10 @@ def _update_of(u: dict | None, out: dict) -> dict:
     if u:
         ref = f"me/{u['page']}"
         out["possible_update_of"] = {"id": u["id"], "page": ref, "text": _wrap(ref, u["text"])}
-        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). Ask the "
-                       "user whether it replaces that line: if yes, retire it (or revise it to "
-                       "the new wording) with cortex_patch rather than keeping both; if both "
-                       "hold, leave them. " + out["next"])
+        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). If the "
+                       "user's own words clearly replace it, retire it (or revise it to the new "
+                       "wording) with cortex_patch; otherwise leave both: the pair waits in the "
+                       "Cortex app's Review. Don't stop to ask. " + out["next"])
     return out
 
 
@@ -2301,8 +2301,8 @@ class Cortex:
             return _update_of(update, {
                 "changed": False, "queued": True,
                 "summary": f"proposed for {kind} {nid}; awaits the user's OK",
-                "next": "Saved to inbox.md as unconfirmed. Ask the user; if they agree, repeat "
-                        "the patch with user_confirmed=true." + hint})
+                "next": "Saved as unconfirmed; it waits for the user's Approve in the Cortex app "
+                        "(Review). Say so in one line; don't stop to ask." + hint})
         if op == "append_to_section" and kind == "me" and nid in CONFIRM_PAGES:
             text = f"{text.rstrip()} (confirmed {day})"
             if nid == "portrait":
