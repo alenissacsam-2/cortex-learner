@@ -145,7 +145,8 @@ def test_attach_leave_one_out_drops_the_pages_own_vector(vault):
     v = vec(f"{BASE} d1")
     own = dict(topics.attach(v, t, cents, margin=0.2).near)
     loo = dict(topics.attach(v, t, cents, exclude={"a-x-1"}, margin=0.2).near)
-    assert loo["a-x-1"] == pytest.approx(0.9) and own["a-x-1"] > 0.93
+    # the centroids come from the stored vectors, float16 (read back after a save)
+    assert loo["a-x-1"] == pytest.approx(0.9, abs=1e-3) and own["a-x-1"] > 0.93
 
 
 def test_evaluate_leave_one_out(vault):

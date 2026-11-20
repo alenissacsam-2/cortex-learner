@@ -357,8 +357,7 @@ def _chunk_text(n: dict, at: int) -> str:
 
 
 def _pages(index: Index) -> dict[str, tuple]:
-    root = index.vault.root
-    return {id: (p.relative_to(root).as_posix(), *index._stats[p])
+    return {id: (index._rel(p), *index._stats[p])  # not relative_to: most of a warm query
             for p, id in index._ids.items() if id in index._notes}
 
 

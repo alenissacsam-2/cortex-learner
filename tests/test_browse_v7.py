@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from conftest import FakeEmbed, git
 from test_browse import LINK, Embed, chromium, hubbed, m
-from test_browse_sites import OWNER, hidden, visible
+from test_browse_sites import OWNER, days_text, hidden, visible
 from typer.testing import CliRunner
 
 from cortex import cli, cloudllm, doctor, localllm, semantic, session
@@ -114,7 +114,7 @@ def test_c1_search_terms_are_local_without_a_local_model(vault, hist):
     text = visible_text(vault)
     assert "chess tactics lesson" in text  # an ordinary title stays visible (word lists only)
     assert "searches that led here" not in text and "chess tactics ·" not in text
-    days = (vault / sites.DAYS).read_text(encoding="utf-8")
+    days = days_text(vault)
     assert "chess tactics" in days  # stored for the private pages, never shown
 
 
@@ -192,9 +192,7 @@ def forgotten_day(vault, day="2026-01-05"):
     src = vault / PRIV / "browse-private-2026-11-09.md"
     (src.parent / f"browse-private-{day}.md").write_text(
         src.read_text(encoding="utf-8").replace("2026-11-09", day), encoding="utf-8")
-    days = json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
-    days[day] = days["2026-11-09"]
-    (vault / sites.DAYS).write_text(json.dumps(days), encoding="utf-8")
+    sites._put_days(Vault(vault), {day: sites.load_days(Vault(vault))[0]["2026-11-09"]})
 
 
 @pytest.fixture
@@ -357,7 +355,7 @@ def test_c5_extension_only_visits_survive_a_rebuild(vault, hist):
     assert "a public excerpt" in archived and "leaked?" not in archived  # private: no excerpt
     imp(vault, hist, replace(OWNER, hidden_from_claude=("adult", "health", "money")))  # reset
     assert "Chess from the extension" in page.read_text(encoding="utf-8")
-    assert "extonly" in (vault / sites.DAYS).read_text(encoding="utf-8")
+    assert "extonly" in days_text(vault)
 
 
 def test_c16_every_read_file_is_archived_and_old_ones_pruned(vault, hist):
@@ -397,7 +395,7 @@ def old_day(tmp_path, vault, profile_1=True):
 
 def on_old_day(vault, url, title) -> bool:
     """The visit is in OLD's counts and on its private page."""
-    days = json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
+    days = sites.load_days(Vault(vault))[0]
     return (url in json.dumps(days[OLD])
             and title in (vault / PRIV / f"browse-private-{OLD}.md").read_text(encoding="utf-8"))
 

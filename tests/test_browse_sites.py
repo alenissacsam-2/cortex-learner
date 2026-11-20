@@ -4,6 +4,7 @@ browse/private/."""
 
 import json
 import time
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, timedelta
 
@@ -12,7 +13,7 @@ from test_browse import LINK, Embed, chromium, hubbed, m
 
 from cortex import browse_serve as bs
 from cortex import localllm
-from cortex.browse import Settings, build, privacy, sites, sources
+from cortex.browse import Settings, build, privacy, sites, sources, store
 from cortex.browse.build import Item
 from cortex.vault import Vault, VaultError
 
@@ -61,6 +62,11 @@ def visible(r):
 def hidden(r):
     return {p.relative_to(r).as_posix(): p.read_bytes()
             for p in (r / "browse" / "private").rglob("*") if p.is_file()}
+
+
+def days_text(r) -> str:
+    """The stored site counts as one JSON text."""
+    return json.dumps(sites.load_days(Vault(r))[0], ensure_ascii=False)
 
 
 def assert_clean(r, markers=HIDDEN_MARKERS):
@@ -139,7 +145,7 @@ def test_skip_categories_are_never_stored(vault, hist):
         assert w.encode() not in every, w
     # a category skipped later is purged from the stored counts too
     imp(vault, hist, replace(s, skip_categories=("adult", "health")), since="2026-11-09")
-    days = (vault / sites.DAYS).read_text(encoding="utf-8")
+    days = days_text(vault)
     assert "webmd" not in days and "|health|" not in days
 
 
@@ -241,7 +247,7 @@ def test_a_site_the_model_files_under_a_skip_category_leaves_every_store(vault, 
     def stored():
         priv = b"".join(p.read_bytes() for p in (vault / "browse" / "private").glob(
             "browse-private-*.md")).lower()
-        return priv + (vault / sites.DAYS).read_bytes().lower()
+        return priv + days_text(vault).encode().lower()
     assert b"ana.github.io" in stored() and b"blog post" in stored()
     llm = FakeLLM(lambda name, c: {"category": "adult" if name == "ana.github.io" else "news",
                                    "description": "x", "related": [], "topics": []})
@@ -403,8 +409,11 @@ def test_r2_7_a_torn_site_days_file_is_set_aside_and_removes_nothing(vault, hist
     imp(vault, hist)
     before = set(visible(vault)) | set(hidden(vault))
     p = vault / sites.DAYS
-    torn = p.read_text(encoding="utf-8")[:60]
+    torn = days_text(vault)[:60]
     p.write_text(torn, encoding="utf-8")
+    with closing(store.connect(Vault(vault))) as con, con:  # a store from before the counts
+        con.execute("DELETE FROM site_days")
+        store.set_meta(con, "days_migrated", False)
     lines = []
     r = imp(vault, hist, say=lines.append)
     bad = list(p.parent.glob("site-days.json.bad-*"))
@@ -525,5 +534,5 @@ def test_a_visit_at_0359_counts_as_the_previous_study_day_everywhere(vault, tmp_
     assert "first seen 2026-11-09 · last seen 2026-11-09" in page
     assert 'first_seen: "2026-11-09"' in page and 'last_seen: "2026-11-09"' in page
     assert "lichess.org,gaming,2,10,2026-11-09,2026-11-09," in v["browse/sites.csv"].decode()
-    days = json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
+    days = sites.load_days(Vault(vault))[0]
     assert [d for d, keys in days.items() if any("lichess" in k for k in keys)] == ["2026-11-09"]

@@ -2,11 +2,14 @@
 stay out; only the last 10 zips are kept."""
 
 import shutil
+import sqlite3
 import zipfile
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cortex import backup
+from cortex import backup, semantic
+from cortex.browse import store, vectors
 from cortex.events import EventLog
 from cortex.vault import Vault
 
@@ -64,13 +67,33 @@ def test_keeps_durable_browse_stores_and_leaves_out_secrets(tmp_path):
     (b / "inbox-archive").mkdir(parents=True)
     (b / "chat").mkdir()
     keep = ["site-days.json", "sites.json", "verdicts.json", "state.json",
-            "vectors-private.npz", "inbox-archive/inbox-2026-11-01.jsonl",
+            "vectors-private.npz", "store.db", "vectors-private.db",
+            "inbox-archive/inbox-2026-11-01.jsonl",
             "inbox-2026-11-19.jsonl"]  # filtered on arrival, like the archive
     drop = ["token", "lock", "chat/01JABCDEFGHJKMNPQRSTVWXYZ0.jsonl"]
     for name in keep + drop:
-        (b / name).write_text("x", encoding="utf-8")
-    with zipfile.ZipFile(backup.backup(root)) as z:
-        names = set(z.namelist())
-    assert {f".cortex/browse/{n}" for n in keep} <= names
+        if not name.endswith(".db"):
+            (b / name).write_text("x", encoding="utf-8")
+    assert set(backup.DBS) == {store.PATH, vectors.CACHE, semantic.CACHE}
+    live = []
+    for rel in backup.DBS:  # open, with rows in the WAL: the copy still holds them
+        con = sqlite3.connect(root / rel)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE t(x)")
+        con.execute("INSERT INTO t VALUES ('in the wal')")
+        con.commit()
+        live.append(con)
+    try:
+        with zipfile.ZipFile(backup.backup(root)) as z:
+            names = set(z.namelist())
+            z.extractall(tmp_path / "out")
+    finally:
+        for con in live:
+            con.close()
+    assert {f".cortex/browse/{n}" for n in keep} | {".cortex/vectors.db"} <= names
     assert not [n for n in names if n.startswith(".cortex/browse/")
                 and n.removeprefix(".cortex/browse/") not in keep]
+    assert not [n for n in names if n.endswith(("-wal", "-shm"))]
+    for rel in backup.DBS:
+        with closing(sqlite3.connect(tmp_path / "out" / rel)) as con:
+            assert con.execute("SELECT x FROM t").fetchall() == [("in the wal",)]

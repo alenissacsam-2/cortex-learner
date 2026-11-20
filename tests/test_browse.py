@@ -1257,7 +1257,7 @@ def test_a_partly_expired_oldest_day_keeps_its_stored_counts(tmp_path, vault):
         build.run(Vault(vault), sources.discover(local, roaming),
                   replace(ADULT_PRIVATE, visible_to_claude=True), embed=Embed(), tz=UTC,
                   now=m(0, 90), **kw)
-        days = build.sites._load(Vault(vault), build.sites.DAYS)
+        days = build.sites.load_days(Vault(vault))[0]
         return {d: sum(a["n"] for a in v.values()) for d, v in days.items()}
     assert go() == {"2026-11-09": 2, "2026-11-10": 1}  # the first import counts it
     hist.unlink()
@@ -1611,7 +1611,7 @@ def test_r2_8_takeout_is_cut_only_on_days_a_browser_holds(vault, tmp_path):
               now=m(0, 3))
     assert "gapday" in gap.read_text(encoding="utf-8")
     from cortex.browse import sites
-    assert str(m(0, -10).date()) in json.loads((vault / sites.DAYS).read_text(encoding="utf-8"))
+    assert str(m(0, -10).date()) in sites.load_days(Vault(vault))[0]
 
 
 def test_s2_a_takeout_import_reads_only_the_chosen_browsers(vault, browsers, tmp_path,
