@@ -19,8 +19,9 @@ What Cortex never captures (docs/PRIVACY.md), and where each line is enforced:
 - sign-in, payment and bank pages: browse.privacy.drop_reason (browse.lists AUTH/PAY/BANK);
 - adult browsing: browse.privacy.Settings.adult defaults to "skip";
 - AI replies in chat imports: chat_import keeps the user's own turns only;
-- code, diffs, command output: `scrub` here drops fenced code; chat_import's coding summary
-  keeps paths and commit subjects only;
+- code, diffs, command output from AI chats and coding sessions: chat_import (user turns only;
+  a coding session keeps paths and commit subjects only). A source of such text sets
+  `drops_code` and `scrub` drops its fenced code; the owner's own notes keep their code;
 - image or audio content: an Item is text only; importers' notes source skips non-text files
   and drops embeds;
 - other people's quoted text in mail: `scrub` here;
@@ -51,8 +52,8 @@ CODE_LEFT_OUT = "[code left out]"
 _HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
 _WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
-# "On Tue, 3 Nov 2026 at 09:30, Asha <asha@x.com> wrote:", which mail clients may wrap once
-_ATTRIBUTION = re.compile(r"^On [^\n]{1,200}(?:\n[^\n]{1,200})?wrote:[ \t]*\r?$", re.M)
+# "On Tue, 3 Nov 2026 at 09:30, Asha <her address> wrote:", which mail clients may wrap once
+_ATTRIBUTION = re.compile(r"^On [^\n]{1,200}(?:\n[^\n]{0,200})?wrote:[ \t]*\r?$", re.M)
 _QUOTED = re.compile(r"^[ \t]*>[^\n]*(?:\n|\Z)", re.M)
 _FORWARDED = re.compile(r"^[ \t]*-{2,}[ \t]*(?:Original Message|Forwarded message)[ \t]*-{2,}",
                         re.M | re.I)
@@ -83,6 +84,7 @@ class Source:
     prefix: str = ""  # page ids; the id when empty
     noun: str = "items"  # a month page's heading and summary: "events"
     skips: tuple[str, ...] = ()  # the skip reasons, in the order the report lists them
+    drops_code: bool = False  # AI or tool text: fenced code becomes CODE_LEFT_OUT
 
 
 def tier(value: str | Audience) -> Audience:
@@ -132,13 +134,13 @@ def _coarse(m: re.Match) -> str:
     return f"{lat:.1f}{m.group(2)}{lon:.1f}"
 
 
-def scrub(text: str) -> str:
-    """The never-capture filter every imported text passes: fenced code blocks become
-    CODE_LEFT_OUT, quoted mail (the `>` lines after an "On … wrote:" line, and everything from
-    an "Original Message" or "Forwarded message" line on) is dropped, precise coordinates are
-    rounded to 0.1 degree, and secrets become [redacted]."""
+def scrub(text: str, drops_code: bool = False) -> str:
+    """The never-capture filter every imported text passes: quoted mail (the `>` lines after an
+    "On … wrote:" line, and everything from an "Original Message" or "Forwarded message" line
+    on) is dropped, precise coordinates are rounded to 0.1 degree, and secrets become
+    [redacted]. With `drops_code`, fenced code blocks become CODE_LEFT_OUT."""
     out, fence = [], ""
-    for line in text.splitlines(keepends=True):
+    for line in text.splitlines(keepends=True) if drops_code else ():
         if fence:
             s = line.strip()
             if s.startswith(fence) and not s.strip(fence[0]):
@@ -149,7 +151,7 @@ def scrub(text: str) -> str:
             out.append(CODE_LEFT_OUT + ("\n" if line.endswith("\n") else ""))
             continue
         out.append(line)
-    text = "".join(out)
+    text = "".join(out) if drops_code else text
     if m := _ATTRIBUTION.search(text):
         text = text[:m.start()] + _QUOTED.sub("", text[m.end():])
     if m := _FORWARDED.search(text):
@@ -209,8 +211,9 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             r["duplicate"] += 1
             continue
         known.add(h)
-        nid = _free_id(vault, f"{src.prefix or src.id}-{slugify(it.title) or 'untitled'}"[:81]
-                       .rstrip("-."), taken)
+        # the id comes from the filtered title, so a key in a title never reaches a file name
+        nid = _free_id(vault, f"{src.prefix or src.id}-{slugify(scrub(it.title)) or 'untitled'}"
+                       [:81].rstrip("-."), taken)
         todo.append((nid, it, h, private or it.private))
     r["imported"] = r["pages"] = len(todo)
     r["private"] = sum(t[3] for t in todo)
@@ -227,7 +230,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         return f"[[{to}|{text}]]" if to else text
 
     for nid, it, h, hidden in todo:
-        body = scrub(_WIKI.sub(link, it.text)).strip().removeprefix(f"# {it.title}\n")
+        body = scrub(_WIKI.sub(link, it.text), src.drops_code).strip() \
+            .removeprefix(f"# {it.title}\n")
         first = next((s.strip("# ").strip() for s in body.splitlines()
                       if s.strip("# ").strip()), it.title)
         fields = {"title": scrub(it.title), "kind": "resource", "resource_type": "other",
@@ -245,7 +249,7 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
 def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
     months = defaultdict(set)
     for it in _read(src, r):
-        months[it.date[:7], private or it.private].add(f"- {scrub(it.text)}")
+        months[it.date[:7], private or it.private].add(f"- {scrub(it.text, src.drops_code)}")
     r["pages"] = len(months)
     for (month, hidden), lines in sorted(months.items()):
         prefix = src.prefix or src.id

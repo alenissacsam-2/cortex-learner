@@ -107,7 +107,21 @@ While the app runs, it also saves those chats as chat pages in your vault every 
 
 ## Imported notes and calendars
 
-`cortex import` turns a notes folder (Obsidian, Notion or any `.md`/`.txt` files) or a calendar (`.ics`) into pages in `resources/`. **These pages are normal pages that Claude and every other connected AI app can read**, unless the note's frontmatter marks it private or you import with `--private`, which makes every imported page private. A note counts as private when its frontmatter sets `private` to any yes value (`true`, `"true"`, `yes`, `on`, `1`), when it has a `private` tag, or when its frontmatter cannot be read. Every import ends with a report line: how many items it read, imported, made private, found already imported, and skipped, with the reason. Attendees' email addresses are left out of calendar pages, and secrets are redacted. `cortex import --dry-run` shows the counts first and writes nothing.
+`cortex import` turns a notes folder (Obsidian, Notion or any `.md`/`.txt` files) or a calendar (`.ics`) into pages in `resources/`. **Each import asks who may read them** (in a terminal window, and in the app before Import), once per source, and remembers your answer in the vault's `.cortex/import-tiers.json`. `private` makes every imported page private. `skip` imports nothing. `normal`, the default, makes **normal pages that Claude and every other connected AI app can read**, unless the note's frontmatter marks it private. When nothing can be asked, the import uses your last answer or the default, and says which. `--tier` (or `--private`) sets it on the command line. A note counts as private when its frontmatter sets `private` to any yes value (`true`, `"true"`, `yes`, `on`, `1`), when it has a `private` tag, or when its frontmatter cannot be read. Every import ends with a report line: how many items it read, imported, made private, found already imported, and skipped, with the reason. Attendees' email addresses are left out of calendar pages, and secrets are redacted. `cortex import --dry-run` shows the counts first and writes nothing.
+
+## What Cortex never captures
+
+Each line says where it holds.
+
+- **Secrets, keys and passwords.** They become `[redacted]` before anything is written. A write that still holds one is refused.
+- **Sign-in, payment and bank pages.** Browsing visits to them are dropped and never stored.
+- **Adult browsing.** It is skipped by default. You can choose to keep it on private pages instead.
+- **AI replies in your vault's chat pages.** A saved chat page keeps only your own messages. The copy of an imported export in `~/.cortex/claude-chat`, which `cortex_chats` reads, keeps the whole conversation.
+- **Code, diffs and command output from AI chats and coding sessions.** A coding session keeps only the files touched and the commit messages. Your own notes keep the code you wrote in them.
+- **The content of images and audio.** Cortex imports text only. At most a date and a coarse place are kept from a photo or recording, never what it shows or says.
+- **Other people's quoted text in mail.** In imported files, the quoted lines after "On … wrote:" are dropped, and so is everything from an "Original Message" or "Forwarded message" line on.
+- **Location finer than a city, in imported files.** Coordinates in imported notes, calendars and other files are rounded to about 10 km. Browsing keeps the addresses you visit as they are, map links included.
+- **Labels about your health, sexuality, religion or politics.** Cortex never guesses them. Browsing categories with those names exist only to keep those visits on this computer.
 
 ## Reporting a problem
 

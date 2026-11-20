@@ -1034,11 +1034,11 @@
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
-  let guide = null;  // {source, step, upload, path, busy, wait, preview, done, error}
+  let guide = null;  // {source, step, upload, path, busy, wait, preview, tier, done, error}
   const guideSrc = () => ({ source: guide.source, ...(guide.upload ? { upload: guide.upload } : { path: guide.path }) });
-  async function guided(path, wait) {
+  async function guided(path, wait, extra) {
     Object.assign(guide, { error: null, wait });
-    try { await api(path, guideSrc()); poll(); } catch (e) { Object.assign(guide, { wait: null, error: e.message }); }
+    try { await api(path, { ...guideSrc(), ...extra }); poll(); } catch (e) { Object.assign(guide, { wait: null, error: e.message }); }
     load('setup');
   }
   function check() {
@@ -1129,7 +1129,15 @@
         out.push(h('div', { class: 'inline' }, btn('Download the search model', () => job('/api/setup/embed', {}), 'btn lit'),
           btn('Check again', check), back(2)));
       } else if (!done || again) {
-        out.push(h('div', { class: 'inline' }, btn('Import', () => guided('/api/import/run', 'import'), 'btn lit', { disabled: !!guide.wait || !p.found }),
+        // C2: notes and calendars ask who may read the pages before Import (last choice preselected)
+        const tier = p.tier ? h('select', { id: 'imp-tier', 'aria-label': `${g.name}: who may read it` },
+          Object.entries(AUDIENCE).map(([v, t]) => h('option', { value: v, text: t }))) : null;
+        if (tier) {
+          tier.value = guide.tier || p.tier;
+          tier.addEventListener('change', () => { guide.tier = tier.value; });
+          out.push(row('Who may read these pages', null, null, [tier]));
+        }
+        out.push(h('div', { class: 'inline' }, btn('Import', () => guided('/api/import/run', 'import', tier ? { tier: tier.value } : {}), 'btn lit', { disabled: !!guide.wait || !p.found }),
           guide.wait ? h('span', { class: 'sub', text: 'Importing; the progress shows at the top.' }) : back(2)));
       }
     }
