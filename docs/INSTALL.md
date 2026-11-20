@@ -164,7 +164,7 @@ To keep Cortex out of one folder (a client's repository, code you cloned), run `
 
 ## 7. Claude desktop app (Chat)
 
-The setup adds the entry for you when it finds the app's config folder. To do it by hand:
+The setup adds the entry for you when it finds the app's config folder. When Cortex is installed with CortexSetup.exe, the entry runs that install's `bin\cortex.exe`, so updating the app also updates what Claude Desktop runs. If the entry points at another copy (for example a `uv tool` one in `~\.local\bin`), **Status** says "Claude Desktop runs a different Cortex copy"; **Apply** under **Connect** points it back at the install (the old file is backed up beside it). To do it by hand:
 
 1. Open **Settings > Developer > Edit Config**. This opens `claude_desktop_config.json`:
    - Windows: `%APPDATA%\Claude\claude_desktop_config.json`. Some Windows installs (for example from the Microsoft Store) use a file under `%LOCALAPPDATA%\Claude-Data\<profile>\` or `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead. Trust the file that Edit Config opens.

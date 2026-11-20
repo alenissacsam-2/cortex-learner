@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from cortex import update
+from cortex import clients, update
 from cortex.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -2008,6 +2008,62 @@ def test_status_has_an_ai_apps_row(app):
     _, js, _, _ = call(app, "GET", "/api/status")
     r = next(r for r in js["rows"] if r["id"] == "apps")
     assert r["state"] == "off" and r["action"]["go"] == "connect"
+
+
+def _install(home) -> Path:
+    """A fake CortexSetup.exe install in the installer's default folder; its bin\\cortex.exe."""
+    d = home / "LOCALAPPDATA" / "Programs" / "Cortex"
+    (d / "bin").mkdir(parents=True)
+    (d / "cortex-install.txt").write_text("x", encoding="utf-8")
+    (d / "bin" / "cortex.exe").write_bytes(b"")
+    return d / "bin" / "cortex.exe"
+
+
+def test_connect_points_claude_desktop_at_the_installed_cortex_and_repairs_a_stale_copy(
+        app, home, vault):
+    """D7: one Cortex version. A `uv tool` copy in the Claude Desktop config is reported on
+    Status and Apply under Connect rewrites only its entry (backup first, other keys kept)."""
+    exe = _install(home)
+    cfg = home / "LOCALAPPDATA" / "Claude-Data" / "claude_p1" / "claude_desktop_config.json"
+    cfg.parent.mkdir(parents=True)
+    tool = str(home / ".local" / "bin" / "cortex.exe")
+    old = {"theme": "dark", "mcpServers": {
+        "other": {"command": "x", "args": ["y"]},
+        "cortex": {"command": tool, "args": ["mcp", "--vault", str(vault)]}}}
+    cfg.write_text(json.dumps(old), encoding="utf-8")
+
+    row = next(r for r in status.rows(vault) if r["id"] == "apps")
+    assert row["state"] == "warn" and "different Cortex copy" in row["value"]
+    assert str(cfg) in row["detail"] and row["action"] == {"go": "connect", "label": "Fix"}
+
+    want = {"claude-desktop": True}
+    _, plan, _, _ = call(app, "POST", "/api/connect/plan", {"want": want})
+    assert [(r["id"], r["change"]) for r in plan["rows"]] == [("claude-desktop", "update")]
+    assert call(app, "POST", "/api/connect/apply", {"want": want})[0] == 200
+    assert wait_job(app)["error"] is None
+    got = json.loads(cfg.read_text(encoding="utf-8"))
+    assert got["theme"] == "dark" and got["mcpServers"]["other"] == old["mcpServers"]["other"]
+    assert got["mcpServers"]["cortex"] == {"command": str(exe),
+                                           "args": ["mcp", "--vault", str(vault.resolve())]}
+    assert [json.loads(b.read_text(encoding="utf-8"))
+            for b in cfg.parent.glob(cfg.name + ".cortex-*.bak")] == [old]
+    assert not list(cfg.parent.glob("*.tmp"))
+    assert next(r for r in status.rows(vault) if r["id"] == "apps")["state"] != "warn"
+
+
+def test_without_an_install_connect_keeps_the_cortex_on_path(app, home, vault, monkeypatch):
+    monkeypatch.setattr("cortex.clients.cortex_command", lambda: "/abs/cortex")
+    assert clients.installed_cortex() is None
+    assert app.entry()["command"] == "/abs/cortex"
+    assert not clients.other_copy({"command": "/elsewhere/cortex"})  # nothing to repair
+    d = home / "LOCALAPPDATA" / "Programs" / "Cortex"  # a folder without the marker: no install
+    (d / "bin").mkdir(parents=True)
+    (d / "bin" / "cortex.exe").write_bytes(b"")
+    assert clients.installed_cortex() is None
+    (d / "cortex-install.txt").write_text("x", encoding="utf-8")
+    assert app.entry()["command"] == str(d / "bin" / "cortex.exe")
+    assert not clients.other_copy({"command": str(d / "bin" / "cortex.exe")})
+    assert clients.other_copy({"command": "/elsewhere/cortex"})
 
 
 def _history(vault, last=None, hours=6, login=False, keys=("chrome/Default",)):

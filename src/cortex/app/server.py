@@ -329,7 +329,7 @@ class App:
         if self.root is None or not (self.root / ".cortex").is_dir():
             return None
         from cortex import clients
-        return clients.server_entry(clients.cortex_command(), self.root)
+        return clients.server_entry(clients.mcp_command(), self.root)
 
     # ---- GET (never changes anything) ----
     def status(self, q: dict | None = None) -> dict:

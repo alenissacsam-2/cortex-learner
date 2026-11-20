@@ -50,6 +50,47 @@ def cortex_command() -> str:
     return str(Path(found or sys.argv[0]).resolve())
 
 
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Cortex"  # the installer's
+
+
+def _registry_install() -> Path | None:  # tests replace this: never the real registry
+    """The install folder Apps & Features names (installer/setup_app.py), else None."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
+            return Path(winreg.QueryValueEx(k, "InstallLocation")[0])
+    except (ImportError, OSError):
+        return None
+
+
+def installed_cortex() -> Path | None:
+    """`bin\\cortex.exe` of the CortexSetup.exe install (the folder this Python runs from, else
+    the one Apps & Features names, else the installer's default folder), else None."""
+    from cortex import update
+    local = os.environ.get("LOCALAPPDATA")
+    for d in (update.install_dir(), _registry_install(),
+              Path(local, "Programs", "Cortex") if local else None):
+        if d and (d / update.MARKER).is_file() and (d / "bin" / "cortex.exe").is_file():
+            return d / "bin" / "cortex.exe"
+    return None
+
+
+def mcp_command() -> str:
+    """The `command` of the `cortex` MCP entry: the installed Cortex when there is one, so AI
+    apps run the version the installer updates (not a separate `uv tool` copy); else
+    `cortex_command()`."""
+    exe = installed_cortex()
+    return str(exe) if exe else cortex_command()
+
+
+def other_copy(entry) -> bool:
+    """`entry` (a `cortex` MCP entry) runs another cortex executable while an installed Cortex
+    exists."""
+    exe = installed_cortex()
+    cmd = entry.get("command") if isinstance(entry, dict) else None
+    return bool(exe and isinstance(cmd, str) and cmd and Path(cmd).resolve() != exe.resolve())
+
+
 def server_entry(command: str, vault: Path) -> dict:
     return {"command": command, "args": ["mcp", "--vault", str(vault)]}
 
