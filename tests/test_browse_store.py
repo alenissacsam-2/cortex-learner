@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import zipfile
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC
 
 import pytest
@@ -20,9 +21,10 @@ from test_browse import LINK, Embed, chrome_raw, chromium, hubbed, m
 from test_browse_sites import OWNER, ROWS
 from test_browse_v7 import every_byte
 
-from cortex import backup, cli, localllm
+from cortex import backup, browse, cli, localllm
 from cortex.app.server import Job
-from cortex.browse import build, forget, sources, store, titles
+from cortex.browse import build, forget, sites, sources, store, titles
+from cortex.events import local_day
 from cortex.vault import Vault
 
 HISTORY = ("Google", "Chrome", "User Data", "Default", "History")
@@ -170,6 +172,126 @@ def test_a_stop_mid_read_keeps_each_saved_chunk_and_the_next_run_goes_on_from_it
     imp(vault, hist)
     assert opened[0].total < len(ROWS)  # from the saved chunks' cursor on, not the whole file
     assert rows(vault) == rows(whole) and browse_files(vault) == browse_files(whole)
+
+
+def test_a_stopped_refilter_goes_on_from_the_days_left_not_from_the_oldest(
+        vault, hist, tmp_path, monkeypatch):
+    """A settings change makes the next import filter everything again and redo every day; a
+    stop in the middle keeps the days already made, so the next run does only the rest."""
+    for day in (1, 2, 3):
+        add_visit(hist, m(10, day), "https://lichess.org/practice", "Chess practice")
+    changed = replace(OWNER, deny=("medium.com",))
+
+    def run(r, settings=changed, **kw):
+        return build.run(Vault(r), sources.discover(*hist), settings, embed=Embed(), tz=UTC,
+                         now=m(0, 5), **kw)
+    run(vault, OWNER)
+    whole = tmp_path / "whole"
+    shutil.copytree(vault, whole)
+    run(whole)
+    monkeypatch.setattr(build, "RENDER_VISITS", 1)  # one day per run of days
+
+    def stop(n, done, total):
+        if n == 4 and done == 2:  # the newest day saved, the next one written, not saved
+            raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        run(vault, step=stop)
+    totals: dict = {}
+    run(vault, step=lambda n, done, total: totals.setdefault(n, total))
+    assert totals[4] == 3  # not all 4 days again
+    assert browse_files(vault) == browse_files(whole)
+
+
+def legacy(r, tmp_path, *, stop_after: int | None = None, old_build: bool = False):
+    """A vault imported before the store (pages, site-days.json, cursors in a state with no
+    sites_stamp) with two Chrome profiles, then the app's import with only Default ticked
+    (stopped after `stop_after` saved chunks, then run again; `old_build`: the stopped run
+    left no "legacy" meta, as a build before it did). Day 0's private page before and
+    after."""
+    from cortex import browse_serve, semantic
+    from cortex.app import actions
+
+    ud = tmp_path / "local" / "Google" / "Chrome" / "User Data"
+    chromium(ud / "Default" / "History", ROWS)
+    chromium(ud / "Profile 1" / "History",
+             [(m(80), "https://www.chess.com/lessons/9", "Chess lesson nine", 300)])
+    found = sources.discover(tmp_path / "local", tmp_path / "roaming")
+    v = Vault(r)
+    build.run(v, found, OWNER, embed=Embed())
+    sites._save(v, sites.DAYS, sites.load_days(v)[0])  # the counts as they were kept then
+    for p in (r / ".cortex" / "browse").glob("store.db*"):
+        p.unlink()
+    state = build.load_state(v)
+    del state["sites_stamp"]
+    (r / build.STATE).write_text(json.dumps(state), encoding="utf-8")
+    page = r / "browse" / "private" / f"browse-private-{local_day(m(0), None)}.md"
+    before = page.read_bytes()
+    add_visit((tmp_path / "local",), m(10, 1), "https://lichess.org/practice", "Chess practice")
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(semantic, "load_embedder", lambda *a, **k: Embed())
+        mp.setattr(browse_serve, "idle_runner", lambda *a, **k: (None, None))
+        mp.setattr(browse, "load_settings", lambda *a, **k: OWNER)
+        mp.setattr(sources, "discover", lambda *a, **k: list(found))
+        if stop_after is not None:
+            mp.setattr(store, "CHUNK", 2)
+            job = Job("import", "browse", True)
+            real = job.progress
+
+            def progress(step, steps, done, total, label):
+                if label == build.PHASES[1] and done >= 2 * stop_after:
+                    job.cancelled.set()
+                real(step, steps, done, total, label)
+            job.progress = progress
+            assert actions.history_import(job, r, {"chrome/Default"})["cancelled"]
+            assert 0 < rows(r) < len(ROWS)
+            if old_build:
+                with closing(store.connect(v)) as con, con:
+                    con.execute("DELETE FROM meta WHERE k = 'legacy'")
+        assert actions.history_import(Job("import", "browse", True), r,
+                                      {"chrome/Default"})["ok"]
+    finally:
+        mp.undo()
+    return before, page.read_bytes()
+
+
+def test_the_app_s_first_import_into_the_store_keeps_the_days_made_before_it(vault, tmp_path):
+    """The app moves the site pages into the store before the import, which then reads every
+    visit once; the days up to the old cursor keep their pages (an unticked profile's visits
+    too) and only the new day is made."""
+    before, after = legacy(vault, tmp_path)
+    assert b"lesson nine" in before.lower()
+    assert after == before
+
+
+def test_a_stopped_first_import_into_the_store_still_keeps_the_days_made_before_it(
+        vault, tmp_path):
+    before, after = legacy(vault, tmp_path, stop_after=1)
+    assert after == before
+
+
+def test_a_first_import_an_older_build_stopped_keeps_the_days_it_had_not_read_yet(
+        vault, tmp_path):
+    before, after = legacy(vault, tmp_path, stop_after=1, old_build=True)
+    assert after == before
+
+
+def test_the_first_read_into_the_store_keeps_a_partly_expired_oldest_day(vault, hist):
+    """The browser expired the first hours of the oldest day since the old import: that day
+    is partial in the store, so no later run makes its page again from what is left."""
+    add_visit(hist, m(10, 1), "https://lichess.org/practice", "Chess practice")
+    v = Vault(vault)
+    imp(vault, hist)
+    sites._save(v, sites.DAYS, sites.load_days(v)[0])
+    for p in (vault / ".cortex" / "browse").glob("store.db*"):
+        p.unlink()
+    with closing(sqlite3.connect(hist[0].joinpath(*HISTORY))) as con, con:
+        con.execute("DELETE FROM visits WHERE id <= 3")
+    # day 0 is being expired by now
+    build.run(v, sources.discover(*hist), OWNER, embed=Embed(), tz=UTC, now=m(0, 100))
+    with closing(store.connect(v)) as con:
+        assert store.partial(con) == {"2026-11-09"}
+        assert store.get_meta(con, "legacy") == {"cursors": {}, "archive": False}
 
 
 # ---- titles in batches --------------------------------------------------------------------
