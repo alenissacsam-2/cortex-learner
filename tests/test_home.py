@@ -144,6 +144,19 @@ def test_a_delta_after_one_added_note_has_only_that_node_added(brain_vault):
     assert hc.delta("unknown")["full"] is True
 
 
+def test_a_delta_carries_the_new_pages_added_stamp(brain_vault):
+    r = brain_vault
+    _sites(r, *_stem_sites())
+    hc = _cache(r)
+    before = hc.get()
+    assert before["brain"]["nodes"]["added"] == {}  # the first layout: nothing new
+    _note(r, "notes", "p-new", {"kind": "note", "related": ["[[hub-0]]"]})
+    d = hc.delta(before["v"])
+    added = d["brain"]["blob"]["nodes"]["added"]
+    assert list(added) == ["p-new"] and added["p-new"].endswith("Z")
+    assert hc.get(private=True)["brain"]["nodes"]["added"] == added  # sites never stamped
+
+
 def test_the_live_home_never_lays_the_brain_out_again_by_itself(brain_vault, tmp_path):
     r = brain_vault
     hc = _cache(r)

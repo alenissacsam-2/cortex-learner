@@ -166,6 +166,7 @@ setTimeout(() => {
     await load();
     out.stem.smallLegend = await ev("__T.go('brain').then(() => [document.getElementById('legend-toggle').getAttribute('aria-expanded'), document.getElementById('legend').hidden, localStorage.getItem('cortex.legend')])");
   }
+  if (cfg.probe) { await load(); cur = 'probe'; out.probe = await ev(cfg.probe); }  // a test's own script
   if (cfg.live) {  // the page as loaded: move the camera, let the test add a note, watch
     cur = 'live';
     const before = await ev('__L.before()');
@@ -372,9 +373,13 @@ window.__L = (() => {
       focused: mounts[mounts.length - 1].focused,
       fresh: [...document.querySelectorAll('.feed .brow.fresh')].map((e) => e.textContent),
       stale: document.getElementById('stale').hidden,
+      grown: growLabels(), seen: localStorage.getItem('cortex.brain.seenAt'),
       llm: !!document.querySelector('.quick-chat a[href="/manage#llm"]'),
       settings: !!document.querySelector('a[aria-label="Settings"][href="/manage"]') };
   }
+  // the growth moment's labels showing now ("+N · Lobe" plates in the brain's overlay)
+  const growLabels = () => [...document.querySelectorAll('.brain-host svg text')]
+    .filter((t) => /^\+\d/.test(t.textContent) && t.parentNode.style.display !== 'none').map((t) => t.textContent);
   async function leak(n) {  // n more mounts and destroys must not cost the page its WebGL context
     const cv = document.querySelector('.brain-host canvas'), gl = cv && cv.getContext('webgl2');
     const box = document.createElement('div');
@@ -448,7 +453,7 @@ window.__L = (() => {
     for (const s of c.sites) out.codes.push((await fetch('/api/home/site?site=' + encodeURIComponent(s), { headers: { 'X-Cortex-Token': key } })).status);
     return out;
   }
-  return { before, after, leak, ready, stem };
+  return { before, after, leak, ready, stem, growLabels, brain: () => mounts[mounts.length - 1], opts: () => opts };
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -463,7 +468,8 @@ def _run(tmp_path, page: Path | None, **cfg) -> dict:
     run = tmp_path / ("run-" + "-".join(sorted(cfg)))
     run.mkdir()
     (run / "driver.cjs").write_text(DRIVER, encoding="utf-8")
-    (run / "helpers.js").write_text(HELPERS + (LIVE if cfg.get("live") or cfg.get("stem") else ""),
+    (run / "helpers.js").write_text(HELPERS + (LIVE if cfg.get("live") or cfg.get("stem")
+                                               or cfg.get("probe") else ""),
                                     encoding="utf-8")
     (run / "cfg.json").write_text(json.dumps({
         "browser": BROWSER, "profile": str(run / "profile"), "page": str(page or ""),
@@ -478,9 +484,9 @@ def _run(tmp_path, page: Path | None, **cfg) -> dict:
 
 
 @pytest.fixture
-def demo_page(tmp_path, monkeypatch) -> Path:
-    """The dashboard of a throwaway demo vault (scripts/make_demo_vault.py: the packaged sample
-    plus made-up study history), so every board, list and brain view has rows."""
+def demo_vault(tmp_path, monkeypatch) -> Path:
+    """A throwaway demo vault (scripts/make_demo_vault.py: the packaged sample plus made-up study
+    history), so every board, list and brain view has rows."""
     spec = importlib.util.spec_from_file_location("make_demo_vault",
                                                   ROOT / "scripts" / "make_demo_vault.py")
     demo = importlib.util.module_from_spec(spec)
@@ -489,8 +495,14 @@ def demo_page(tmp_path, monkeypatch) -> Path:
     _init(root)
     monkeypatch.setattr(taint, "config", lambda: {})
     demo.main([str(root)])
+    return root
+
+
+@pytest.fixture
+def demo_page(tmp_path, demo_vault) -> Path:
+    """The dashboard of the demo vault."""
     page = tmp_path / "snapshot.html"
-    page.write_text(dashboard.snapshot(Vault(root), now=datetime.now(UTC)), encoding="utf-8")
+    page.write_text(dashboard.snapshot(Vault(demo_vault), now=datetime.now(UTC)), encoding="utf-8")
     return page
 
 
@@ -571,6 +583,119 @@ def test_reduced_motion_stops_transitions_and_spin(tmp_path, demo_page):
     assert out["checks"]["motion"] == ["0s", "none", "false"]
 
 
+# Today and the growth moment on Home, through the mounted brain and the page's Today controls
+TODAY_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await __L.ready();
+  const b = __L.brain(), o = __L.opts(), out = {};
+  const box = document.querySelector('.brain-host').firstElementChild;
+  const ui = document.querySelector('#home-brain-tools .today-group');
+  const tb = ui.querySelector('.tbtn'), cam = () => JSON.stringify(b.camera), state = () => ({ selected: b.selected, today: b.todayIds,
+    pressed: tb.getAttribute('aria-pressed'), at: ui.querySelector('.today-step').hidden ? null
+      : ui.querySelector('.today-at').textContent });
+  const vis = o.pages.map((p) => p.id).filter((id) => b.shows(id)), list = vis.slice(0, 4);
+  const until = async (f) => { for (let i = 0; i < 200 && !f(); i++) await sleep(50); };
+  const cam0 = cam(), other = vis.find((id) => !list.includes(id));
+  b.today(list);
+  await until(() => ui.querySelector('.today-at').textContent && !ui.querySelector('.today-step').hidden);
+  await sleep(1500);
+  out.list = list;
+  out.settled = state();
+  out.drawn = list.map((id) => b.drawn(id));
+  out.other = b.drawn(other);
+  out.framed = cam() !== cam0;
+  b.todayStep(1); out.step = [b.selected];
+  b.todayStep(1); b.todayStep(1); out.step.push(b.selected);
+  b.todayStep(-1); out.step.push(b.selected);
+  box.dispatchEvent(new KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true }));
+  out.step.push(b.selected);
+  ui.querySelectorAll('.today-step button')[1].click(); out.step.push(b.selected);
+  out.stepped = state();
+  box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  out.esc = state();
+  tb.click();
+  await until(() => b.todayIds);
+  out.button = state();
+  tb.click();
+  out.left = state();
+  await sleep(1200);
+  // the growth moment: labels while it holds, nothing for pages this view hides, input ends it
+  const g = b.grow(vis.slice(0, 2));
+  await sleep(700);
+  out.grow = { got: g, labels: __L.growLabels() };
+  box.dispatchEvent(new WheelEvent('wheel', { deltaY: 50, bubbles: true, cancelable: true }));
+  await sleep(300);
+  out.grow.afterWheel = __L.growLabels();
+  b.setFilter(() => false);
+  out.grow.hidden = b.grow(vis.slice(0, 2));
+  b.setFilter(null);
+  return out;
+})()
+"""  # noqa: E501  (JavaScript)
+
+
+def _today_checks(out: dict) -> None:
+    assert out["errors"] == []
+    p = out["probe"]
+    a, b, c, d = p["list"]
+    # Today frames all of today's pages and draws every one as chosen (none opened on its own)
+    assert p["settled"] == {"selected": None, "today": [a, b, c, d], "pressed": "true",
+                            "at": "4 today"}
+    assert p["drawn"] == [{"a": 255, "ring": 153}] * 4 and p["other"]["ring"] != 153
+    assert p["framed"]
+    assert p["step"] == [a, c, b, c, d]  # arrows and ] go round today's pages in order
+    assert p["stepped"]["today"] == [a, b, c, d] and p["stepped"]["at"] == "4 of 4"
+    assert p["esc"] == {"selected": None, "today": None, "pressed": "false", "at": None}
+    assert p["button"]["today"] and p["button"]["pressed"] == "true"
+    assert p["left"] == {"selected": None, "today": None, "pressed": "false", "at": None}
+    g = p["grow"]
+    assert g["got"]["n"] == 2 and g["labels"] == g["got"]["labels"] and g["labels"]
+    assert all(x.startswith(("+1 · ", "+2 · ")) for x in g["labels"])
+    assert g["afterWheel"] == [] and g["hidden"] is None
+
+
+def test_today_selects_and_steps_and_the_brain_grows(tmp_path, demo_page):
+    _today_checks(_run(tmp_path, demo_page, probe=TODAY_PROBE))
+
+
+def test_today_and_growth_under_reduced_motion(tmp_path, demo_page):
+    _today_checks(_run(tmp_path, demo_page, probe=TODAY_PROBE, reduced=True))
+
+
+TODAY_FEED_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await __L.ready();
+  const b = __L.brain();
+  document.querySelector('#home-brain-tools .tbtn').click();
+  for (let i = 0; i < 200 && !b.todayIds; i++) await sleep(50);
+  await sleep(2500);
+  const ids = b.todayIds || [];
+  return { today: ids, selected: b.selected, drawn: ids.map((id) => b.drawn(id)) };
+})()
+"""
+
+
+def test_today_selects_every_page_of_the_day(tmp_path, demo_vault):
+    """Today is all of the day's work: pages the feed saw today (taught, tested, asked; their files
+    untouched) and pages saved today, each drawn as chosen; yesterday's and older pages stay out."""
+    data = dashboard.build(Vault(demo_vault), now=datetime.now(UTC))
+    nodes = set(data["brain"]["nodes"]["ids"])
+    pages = [p for p in data["pages"] if p["id"] in nodes]
+    for p in data["pages"]:
+        p["updated"] = "2000-01-01"
+    taught, saved, week = [p["id"] for p in pages[:3]], pages[3], pages[4]["id"]
+    saved["updated"] = data["day"]
+    data["feed"] = {"today": [{"id": i, "day": data["day"]} for i in [*taught, taught[0], None]],
+                    "week": [{"id": week, "day": "2000-01-01"}]}
+    page = tmp_path / "today.html"
+    page.write_text(dashboard.render_html(data), encoding="utf-8")
+    p = _run(tmp_path, page, probe=TODAY_FEED_PROBE)["probe"]
+    assert p["today"] == [*taught, saved["id"]] and p["selected"] is None
+    assert p["drawn"] == [{"a": 255, "ring": 153}] * 4
+
+
 def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
     root = tmp_path / "empty"
     root.mkdir()
@@ -641,6 +766,9 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     assert before["focused"] and after["focused"] == before["focused"], (before, after)
     assert any(title in f for f in after["fresh"])
     assert after["stale"] and after["llm"] and after["settings"]
+    # the new note grew the Home brain: its lobe's label, and seenAt moved to its stamp
+    assert after["grown"] == ["+1 · Hub 0"], after["grown"]
+    assert after["seen"] and after["seen"].endswith("Z")
     assert leak["connected"] and leak["lost"] is not True, leak
 
 

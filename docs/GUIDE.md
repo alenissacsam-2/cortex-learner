@@ -189,6 +189,7 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - Bright fibres are your own links between pages. Faint fibres join pages with a similar meaning.
 - Big bright dots are pages with many connections.
 - A faint outline shows the shape of a brain.
+- When pages were added since you last looked (on Home), the brain dims for a moment and the regions that grew glow in their own colour, with a label such as "+3 · Graphs". The page count above counts up. Any click, drag or scroll ends it at once. Today's new pages keep a faint glow until midnight or until you click them.
 
 **The brain stem: your websites** (the app's home only)
 - Once your browsing is in Cortex, the stem below the brain holds one dot per website, the oldest you found at the top. It is a column inside a faint tube, and the overview shows the brain and the stem together. Your 5 most visited sites are named.
@@ -212,7 +213,7 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - **Activity / Mastery / Growth:** what the colours and halos show.
 - **Spin:** off by default. While on, it pauses when you move the mouse and resumes after 3 seconds.
 - **Alive:** neurons fire now and then. It sleeps after 2 minutes idle.
-- **Today:** replays the pages you saved today.
+- **Today:** shows everything from today (your day starts at 04:00): pages taught, tested or asked about, and pages added or saved. The camera frames them all, and every one is highlighted as chosen while the rest dims. `[` and `]`, or the arrows beside the button, open them one at a time ("2 of 7"). Press Today again, Esc or 0 to leave.
 - **Stem:** flies to the websites in the brain stem; press it again for the whole brain. It shows only once your browsing is in Cortex.
 - **Unsorted chats:** shows chats with no topic as a faint ring under the brain.
 - **Look:** opens the Look panel.
