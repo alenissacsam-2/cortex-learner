@@ -598,7 +598,8 @@ def test_the_home_stays_quick_with_5k_sites_in_the_stem(tmp_path, capsys):
               f"delta after one new visit {took[0]:.0f} ms, then {took[1]:.0f} ms, after a new "
               f"site {took[2]:.0f} ms")
     assert version_ms < 50
-    assert max(took) < 500
+    # ~370 ms alone; the full suite's load pushed it past 500 twice. A full recompute takes seconds
+    assert max(took) < 1000
 
 
 def test_the_site_route_needs_the_key_and_hides_private_sites_while_locked(brain_vault,
