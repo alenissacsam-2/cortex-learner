@@ -391,7 +391,8 @@ def test_saved_by_hand_excluded_folders_and_earlier_imports_are_left_alone(root_
 
 def _wait(app):
     end = time.monotonic() + 30
-    while app.jobs.running():
+    # the notifier runs just after the job stops running: wait for it too
+    while app.jobs.running() or getattr(app, "notified", app.jobs.cur) is not app.jobs.cur:
         assert time.monotonic() < end, "the job did not finish"
         time.sleep(0.02)
     return app.jobs.cur
@@ -399,8 +400,15 @@ def _wait(app):
 
 def _app(root):
     app = server.App(root)
+    app.notified = None  # the last job the notifier saw
     sent = []
-    app.jobs.on_end = desktop.Notifier(types.SimpleNamespace(), sent.append).job_ended
+    notify = desktop.Notifier(types.SimpleNamespace(), sent.append).job_ended
+
+    def on_end(job):
+        notify(job)
+        app.notified = job
+
+    app.jobs.on_end = on_end
     return app, sent
 
 
