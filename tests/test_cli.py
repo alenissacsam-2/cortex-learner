@@ -703,8 +703,13 @@ def test_ask_prints_the_answer_sources_and_model(vault, monkeypatch):
     out = run("ask", "how do I pair numbers?", "--vault", vault).output
     assert out.index("Use two pointers [1].") < out.index("[1] concepts/two-pointers.md")
     assert "ollama gemma3:2b" in out
+    # E3: CliRunner's streams are no terminal, so --private is refused before ask runs
+    r = run("ask", "x", "--private", "--vault", vault, ok=False)
+    assert r.exit_code == 1 and "only in a real terminal" in r.output and seen == [False]
+    from cortex import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "_tty", lambda: True)
     run("ask", "x", "--private", "--vault", vault)
-    assert seen == [False, True]  # private notes and browsing only with --private
+    assert seen == [False, True]  # private notes and browsing only with --private, at a TTY
     monkeypatch.setattr(ask, "ask", lambda v, q, private: {"error": "no_local_model",
                                                   "message": "Start Ollama (recommended)."})
     r = run("ask", "x", "--vault", vault, ok=False)

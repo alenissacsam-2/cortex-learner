@@ -23,6 +23,7 @@ from mcp.server.mcpserver import Context, Elicit, ElicitationResult, MCPServer, 
 from pydantic import BaseModel, Field
 
 from cortex import (
+    access,
     chats,
     claims,
     learning_eval,
@@ -672,8 +673,22 @@ class Cortex:
         e = self.catalog.entries.get(cid)
         return e.title if e else cid
 
-    def _concept(self, name: str) -> str:
-        return self.catalog.resolve(name)
+    def _hidden(self) -> set[str]:
+        """This client's scoped view (the access gate, viewer "mcp"): the ids it may not see.
+        Private subjects and what sits under them, private mistakes and mistakes about them
+        (planner.hidden), and the me/ pages this role withholds."""
+        return planner.hidden(self.vault, self.catalog) | self._withheld()
+
+    def _sees(self, id: str, hide: set[str] | None = None) -> bool:
+        """May this MCP client see the study item `id` (a concept, area, domain or mistake)?
+        `hide`: `_hidden()`, when the caller already has it."""
+        hide = self._hidden() if hide is None else hide
+        return access.may_see("mcp", access.audience_of_study([id], hide), "study")
+
+    def _concept(self, name: str, hide: set[str] | None = None) -> str:
+        """The concept id `name` names; one this client may not see fails exactly like an
+        unknown name (no existence oracle, no title echo)."""
+        return self.catalog.resolve(name, skip=self._hidden() if hide is None else hide)
 
     def _problem(self, id: str) -> str:
         self.vault.read("problem", id)  # unknown_id with a hint
@@ -682,7 +697,9 @@ class Cortex:
     def _ask_event(self, item_id: str) -> dict:
         evs = live(self.log.iter_events())
         for ev in evs:
-            if ev["id"] == item_id and ev.get("kind") == "ask":
+            # an ask on a concept this client may not see is answered as if it never existed
+            if ev["id"] == item_id and ev.get("kind") == "ask" and self._sees(
+                    str(ev.get("object", "")).partition(":")[2]):
                 if any(g.get("kind") == "grade" and g.get("ref") == item_id for g in evs):
                     raise invalid("That item is already graded; void it first to regrade.")
                 return ev
@@ -706,14 +723,15 @@ class Cortex:
         return f"{levels.GLYPH[state]} {render.esc(self._title(cid))}: {levels.LABEL[state]}"
 
     def _item_fields(self, *, concept, question, item_type=None, problem=None,
-                     also=None) -> dict:
-        fields = {"object": f"concept:{self._concept(concept)}", "question": question}
+                     also=None, hide=None) -> dict:
+        hide = self._hidden() if hide is None else hide
+        fields = {"object": f"concept:{self._concept(concept, hide)}", "question": question}
         if item_type is not None:
             fields["item_type"] = item_type
         if problem:
             fields["problem"] = self._problem(problem)
         if also:
-            fields["also"] = [f"concept:{self._concept(c)}" for c in also]
+            fields["also"] = [f"concept:{self._concept(c, hide)}" for c in also]
         return fields
 
     def _graded(self, fields: dict, answer: str, verdict: str | None,
@@ -759,7 +777,7 @@ class Cortex:
         notes = list(self.vault.iter_notes("mistake"))
         titles = {n.id: str(n.fields.get("title") or n.id) for n in notes}
         # D1: private mistakes and, OQ-22, those about a private subject
-        hush = planner.hidden_mistakes(mistakes, planner.hidden(self.vault, self.catalog))
+        hush = planner.hidden_mistakes(mistakes, hide := self._hidden())
         open_m = sorted((m for m in mistakes.values() if m.status == "open" and m.id not in hush),
                         key=lambda m: (-m.count, m.id))
         display = render.start_card(
@@ -773,8 +791,7 @@ class Cortex:
             display += (f"\n**This week:** {w['sessions']} sessions · {w['grades']} answers, "
                         f"{w['correct']} correct · {len(w['changed'])} concepts moved")
             # council item 6: display-only, over all answers so far, never fed to scheduling
-            w["confidence"] = learning_eval.confidence_mirror(
-                events, self._pc, planner.hidden(self.vault, self.catalog))
+            w["confidence"] = learning_eval.confidence_mirror(events, self._pc, hide)
             if lines := learning_eval.mirror_lines(w["confidence"]):
                 display += ("\n**How sure vs how often right** (all answers so far):\n"
                             + "\n".join(f"- {line}" for line in lines))
@@ -807,7 +824,8 @@ class Cortex:
     def _home(self, s, states: dict, mistakes: dict, today_s: str,
               events: list[dict]) -> dict[str, Any]:
         """The lean /cortex start: a map, the contract's core rules and the preferences."""
-        hide = planner.hidden(self.vault, self.catalog)
+        hide = self._hidden()
+        hush = planner.hidden_mistakes(mistakes, hide)
         by_domain: dict[str, list[int]] = {}  # domain -> [in progress, solid, not started]
         for cid, e in self.catalog.entries.items():
             if e.kind != "concept" or cid in hide:
@@ -829,7 +847,8 @@ class Cortex:
         display = render.home_card(
             domains=[(self._title(d), *n) for d, n in ranked],
             due=[self._title(cid) for cid, _ in due],
-            open_mistakes=sum(1 for m in mistakes.values() if m.status == "open"),
+            open_mistakes=sum(1 for m in mistakes.values() if m.status == "open"
+                              and m.id not in hush),
             projects=[str(n.fields.get("title") or n.id) for n in self.vault.iter_notes("project")
                       if n.fields.get("status") == "active" and not is_private(n)],
             loops=[r["title"] + (f" (due {r['due']})" if r["due"] and r["loop_type"] != "idea"
@@ -1121,10 +1140,12 @@ class Cortex:
                 self.index.find(topic, "concept", 3)
                 or self.index.find(topic, "concept", 3, any_word=True))
             lines = []
+            hide = self._hidden()
             for h in concepts:
                 st = self.index.states.get(h["id"])
                 due, note = getattr(st, "next_due", None), levels.gap_note(st)
-                mistakes = [str(m) for m in getattr(st, "open_mistakes", None) or []]
+                mistakes = [str(m) for m in getattr(st, "open_mistakes", None) or []
+                            if self._sees(str(m), hide)]
                 lines.append(f"- {GLYPHS[self.index._state(h['id'])]} "
                              f"{render.esc(h['title'])} ({h['id']})"
                              + (f" · next due {due}" if due else "")
@@ -1343,8 +1364,9 @@ class Cortex:
                    answer_key: str | None = None, problem: str | None = None,
                    also: list[str] | None = None, targets_mistakes: list[str] | None = None,
                    key: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+        hide = self._hidden()
         fields = self._item_fields(concept=concept, question=question, item_type=item_type,
-                                   problem=problem, also=also)
+                                   problem=problem, also=also, hide=hide)
         cid = fields["object"].split(":", 1)[1]
         if answer_key is not None:
             fields["answer_key"] = answer_key
@@ -1356,7 +1378,8 @@ class Cortex:
         hint = self.sessions.note("asked", cid)
         self.pending.add(ev["id"])
         nxt = ASK_NEXT + hint
-        open_m = getattr(self._fold(events).get(cid), "open_mistakes", [])
+        open_m = [m for m in getattr(self._fold(events).get(cid), "open_mistakes", None) or []
+                  if self._sees(m, hide)]
         if open_m and not targets_mistakes:
             nxt += f" Open mistakes here: {', '.join(open_m)}; target them in a later ask."
         if not targets_mistakes:  # v6 idea 9: imported mistake notes never opened by a grade
@@ -1471,6 +1494,7 @@ class Cortex:
         if not 1 <= len(items) <= QUIZ_MAX:
             raise invalid(f"Send 1 to {QUIZ_MAX} items.")
         batch = []
+        hide = self._hidden()
         for i, it in enumerate(items, 1):
             if not isinstance(it, dict):
                 raise invalid(f"Item {i} must be an object.")
@@ -1484,7 +1508,7 @@ class Cortex:
                     raise invalid(f"Item {i} has no concept; pass concept on the item or the "
                                "call.")
                 fields = self._item_fields(concept=name, question=str(it.get("question", "")),
-                                           item_type=it.get("item_type"))
+                                           item_type=it.get("item_type"), hide=hide)
                 answer_key = None
             answer = str(it.get("answer", ""))
             fields["learner_answer"] = answer
@@ -2082,7 +2106,8 @@ class Cortex:
     def _log_concept(self, p: dict, what: str) -> str:
         if not p.get("concept"):
             raise invalid(f"{what} needs payload.concept.")
-        return resolve_or_inbox(self.vault, self.catalog, str(p["concept"]), f"cortex_log {what}")
+        return resolve_or_inbox(self.vault, self.catalog, str(p["concept"]), f"cortex_log {what}",
+                                skip=self._hidden())
 
     def _log_assessment(self, p: dict, key: str | None) -> str:
         outcome = p.get("outcome")

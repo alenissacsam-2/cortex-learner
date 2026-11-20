@@ -8,8 +8,12 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+from conftest import note
+from typer.testing import CliRunner
+
 from cortex import backup, semantic
 from cortex.browse import store, vectors
+from cortex.cli import app
 from cortex.events import EventLog
 from cortex.vault import Vault
 
@@ -97,3 +101,50 @@ def test_keeps_durable_browse_stores_and_leaves_out_secrets(tmp_path):
     for rel in backup.DBS:
         with closing(sqlite3.connect(tmp_path / "out" / rel)) as con:
             assert con.execute("SELECT x FROM t").fetchall() == [("in the wal",)]
+
+
+def test_no_private_leaves_out_private_pages_and_stores(tmp_path, home):
+    """`cortex backup --no-private`: private pages, a mistake about a private concept (privacy
+    by inheritance), a private resource's raw source, browse/private, the browse store and
+    .git stay out; public pages, the events and the public vectors stay in."""
+    root = tmp_path / "vault"
+    shutil.copytree(FIXTURE, root)
+    note(root, "notes/diary.md", 'title: "Diary"\nkind: note\nprivate: true\n', "# Diary\n")
+    note(root, "notes/pasta.md", 'title: "Pasta"\nkind: note\n', "# Pasta\n")
+    note(root, "mistakes/dsa.diary-slip.md", 'id: "dsa.diary-slip"\ntitle: "Slip"\n'
+         'concepts: ["[[secret-diary]]"]\n', "# Slip\n")
+    note(root, "resources/letter.md", 'title: "Letter"\nkind: resource\nprivate: true\n'
+         'source: "raw/letter.txt"\n', "# Letter\n")
+    (root / "raw").mkdir()
+    (root / "raw" / "letter.txt").write_text("private letter", encoding="utf-8")
+    (root / "raw" / "public.txt").write_text("public text", encoding="utf-8")
+    note(root, "browse/private/browse-private-2026-11-01.md", "kind: browse\nprivate: true\n",
+         "# Browsing (private)\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    b = root / ".cortex" / "browse"
+    b.mkdir(parents=True)
+    (b / "sites.json").write_text("{}", encoding="utf-8")
+    for rel in (store.PATH, semantic.CACHE):
+        with closing(sqlite3.connect(root / rel)) as con:
+            con.execute("CREATE TABLE t(x)")
+            con.commit()
+    EventLog(Vault(root)).append(session="cli", kind="grade", source="external",
+                                 now=datetime(2026, 11, 13, 12, tzinfo=UTC),
+                                 fields={"object": "concept:two-pointers", "verdict": "correct"})
+    with zipfile.ZipFile(backup.backup(root, tmp_path / "full")) as z:  # the default: all
+        assert {"notes/diary.md", ".git/HEAD", ".cortex/browse/sites.json",
+                "browse/private/browse-private-2026-11-01.md"} <= set(z.namelist())
+    r = CliRunner().invoke(app, ["backup", "--no-private", "--to", str(tmp_path / "np"),
+                                 "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    (zp,) = (tmp_path / "np").glob("cortex-*.zip")
+    with zipfile.ZipFile(zp) as z:
+        names = set(z.namelist())
+    assert {"notes/pasta.md", "concepts/two-pointers.md", "mistakes/dsa.off-by-one.md",
+            "raw/public.txt", ".cortex/vectors.db"} <= names, names
+    assert any(n.startswith("events/") for n in names)
+    for gone in ("notes/diary.md", "concepts/secret-diary.md", "mistakes/dsa.diary-slip.md",
+                 "resources/letter.md", "raw/letter.txt"):
+        assert gone not in names, gone
+    assert not [n for n in names if n.startswith((".git/", ".cortex/browse/", "browse/private/"))]

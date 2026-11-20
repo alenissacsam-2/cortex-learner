@@ -80,7 +80,8 @@ def test_prompt_holds_only_wrapped_passages_and_the_question(root, ollama):
     assert page.index(FAR) > vectors.SNIPPET and len(page) > vectors.SNIPPET
 
 
-def test_cli_ask_uses_the_configured_local_model(root, ollama):
+def test_cli_ask_uses_the_configured_local_model(root, ollama, monkeypatch):
+    monkeypatch.setattr(cli, "_tty", lambda: True)  # E3: --private needs a real terminal
     r = CliRunner().invoke(cli.app, ["ask", QUESTION, "--vault", str(root)])
     assert r.exit_code == 0, r.output
     assert re.search(r"^\[1\] \S+\.md$", r.output, re.M), r.output

@@ -6,7 +6,13 @@ browsing store and the two vector stores, which take minutes to embed again) are
 SQLite's own backup, a consistent snapshot, never the live file and its WAL. Left out: old
 backups, the old extension's pairing token (a leftover file), the local chat history
 (.cortex/browse/chat), lock files, the rebuilt dashboard and stray *.tmp files. A zip holds
-private browsing: keep it as private as the vault. The last KEEP zips are kept."""
+private browsing: keep it as private as the vault. The last KEEP zips are kept.
+
+`private=False` (`cortex backup --no-private`) also leaves out what Claude and cloud apps may
+never see: private pages and pages under a private subject (`ask.private_pages`, the access
+gate's LOCAL audience), the raw sources of private resources, browse/private/, the browse
+store in .cortex/browse (its visits mix private browsing in), and .git, whose history holds
+every private page."""
 
 from __future__ import annotations
 
@@ -17,13 +23,31 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from cortex.vault import PRIVATE_BROWSE_DIR
+
 KEEP = 10  # owner's choice (verdict Q11 a)
 # store.PATH, vectors.CACHE and semantic.CACHE (not imported: numpy is slow to load)
 DBS = (".cortex/browse/store.db", ".cortex/browse/vectors-private.db", ".cortex/vectors.db")
 
 
-def backup(root: Path, dest_dir: Path | None = None) -> Path:
-    """Zip `root` into dest_dir (default <root>/.cortex/backups); returns the zip path."""
+def private_files(root: Path) -> set[Path]:
+    """The private pages of the vault at `root` (`ask.private_pages`: `vault.is_private`, or
+    under a private subject) and the raw files private resources name as their source."""
+    from cortex import ask
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+    from cortex.vault import Vault
+
+    v = Vault(root)
+    pages = ask.private_pages(v, Index(v, Catalog.load(v))).values()
+    return {(root / path).resolve() for path, _ in pages} | {
+        (root / str(n["fields"]["source"])).resolve() for _, n in pages
+        if n["fields"].get("source")}
+
+
+def backup(root: Path, dest_dir: Path | None = None, private: bool = True) -> Path:
+    """Zip `root` into dest_dir (default <root>/.cortex/backups); returns the zip path.
+    `private` False leaves out the private pages and stores (module docstring)."""
     root = Path(root).resolve()
     skip = root / ".cortex" / "backups"
     browse = root / ".cortex" / "browse"
@@ -31,11 +55,13 @@ def backup(root: Path, dest_dir: Path | None = None) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"cortex-{datetime.now():%Y%m%d-%H%M%S}.zip"
     tmp = dest.with_suffix(".zip.tmp")
-    skip_dirs = (skip, dest_dir, browse / "chat")
-    dbs = [root / d for d in DBS]
-    skip_files = (tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
+    skip_dirs = (skip, dest_dir, browse / "chat",
+                 *(() if private else (root / ".git", browse, root / PRIVATE_BROWSE_DIR)))
+    dbs = [root / d for d in DBS if private or not (root / d).is_relative_to(browse)]
+    skip_files = {tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
                   browse / "lock", browse / "token",
-                  *(Path(f"{db}{s}") for db in dbs for s in ("", "-wal", "-shm")))
+                  *(Path(f"{db}{s}") for db in dbs for s in ("", "-wal", "-shm")),
+                  *(() if private else private_files(root))}
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
             for dirpath, dirnames, filenames in os.walk(root):
