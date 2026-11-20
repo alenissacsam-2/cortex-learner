@@ -503,7 +503,8 @@ def _row(vault: Vault, n) -> tuple[dict, list[str], tuple]:
         "body": body,
         "links": None,
         "path": n.path.relative_to(vault.root).as_posix(),
-        "updated": date.fromtimestamp(n.path.stat().st_mtime).isoformat(),
+        # the 04:00 Cortex day, so a page saved at 1 a.m. counts as that night's Today
+        "updated": local_day(datetime.fromtimestamp(n.path.stat().st_mtime).astimezone()),
         "date": topics.page_date(n.id, f, n.body) or None,
         "source": plain(topics.page_source(n.body)) or None,
         "cluster": None}, list(dict.fromkeys(link_targets(text))), facts
