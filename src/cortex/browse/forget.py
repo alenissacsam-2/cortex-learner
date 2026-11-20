@@ -355,20 +355,8 @@ def prune_vectors(vault: Vault) -> Counter:
     browse vectors and the main index's cache (a changed page is embedded again later)."""
     from cortex import semantic
     from cortex.browse import vectors
-    from cortex.catalog import Catalog
-    from cortex.index import Index
 
-    c: Counter = Counter({"vectors": vectors.prune(vault)})
-    old = semantic._read(vault.root)
-    if old:
-        idx = Index(vault, Catalog.load(vault))
-        pages = semantic._pages(idx)
-        keep = semantic._merge(old, {}, pages)
-        if len(keep) < len(old):
-            dim = next(iter(old.values()))[3].shape[1]
-            semantic._save(idx, pages, keep, semantic._sig(vault.root), dim)
-            c["vectors"] += len(old) - len(keep)
-    return c
+    return Counter({"vectors": vectors.prune(vault) + semantic.prune(vault)})
 
 
 PRIVATE_IGNORE = PRIVATE_BROWSE_DIR + "/"

@@ -80,7 +80,9 @@ def indexed(root: Path) -> str | None:
     """When the notes were last indexed: the vector cache "Index my notes" writes. The one
     answer Setup, Status and Dashboard and vault all show."""
     from cortex import semantic
-    return when(root / semantic.CACHE)
+    p = root / semantic.CACHE  # a save lands in its -wal first
+    return max(filter(None, (when(p), when(Path(f"{p}-wal")) if p.is_file() else None)),
+               default=None)
 
 
 def embedding(root: Path | None = None) -> dict:

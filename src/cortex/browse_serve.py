@@ -268,7 +268,8 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     reads only what is new and makes the days it changed. The local model only when it is
     already loaded and the PC idle (`idle_runner`): then first the titles waiting for its
     verdict (`check_titles`); never a download or a model load. It rests build.PAUSE_S after
-    each chunk, so the machine stays quick. Then the private browse vectors."""
+    each chunk, so the machine stays quick. Then the private browse vectors, while the PC is
+    idle. Its embedding is background work (`semantic.background`)."""
     from cortex import semantic
     from cortex.browse import build, sites, sources
 
@@ -278,21 +279,22 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     srcs = sources.chosen(settings) if srcs is None else srcs
     checked = (check_titles(v, runner, settings, budget)
                if runner is not None and settings.visible_to_claude else {})
-    r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
-                  runner=runner, budget=budget, progress=progress, say=say,
-                  pause=build.PAUSE_S)
-    r.update(checked)
-    r["model"] = runner is not None
-    sites.update_vectors(v, say)
+    with semantic.background():
+        r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
+                      runner=runner, budget=budget, progress=progress, say=say,
+                      pause=build.PAUSE_S)
+        r.update(checked)
+        r["model"] = runner is not None
+        sites.update_vectors(v, say, background=True)
     return r
 
 
 def run_deepen(v: Vault, say=None, budget_s: float | None = None) -> dict | None:
     """The local LLM's pass over the site pages (cortex.browse.sites.deepen), each page's runner
     picked by `runner_for` (visible pages may go to the cloud runner when cloud processing is
-    on), then the private browse vectors; None when neither runner is available. The cloud
-    runner's run leaves one counts-only audit line."""
-    from cortex import cloudllm
+    on), then the private browse vectors while the PC is idle (background work); None when
+    neither runner is available. The cloud runner's run leaves one counts-only audit line."""
+    from cortex import cloudllm, semantic
     from cortex.browse import sites
 
     say = say or _say
@@ -307,7 +309,8 @@ def run_deepen(v: Vault, say=None, budget_s: float | None = None) -> dict | None
     finally:
         if cloud is not None:
             cloudllm.audit(v, cloud)
-    sites.update_vectors(v, say)
+    with semantic.background():
+        sites.update_vectors(v, say, background=True)
     return r
 
 

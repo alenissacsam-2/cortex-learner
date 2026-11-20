@@ -7,7 +7,6 @@ day pages and voids the browse touches (Q12)."""
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-import numpy as np
 import pytest
 from conftest import events, run
 from test_browse import Embed, hubbed
@@ -148,8 +147,7 @@ def test_private_vectors_hold_hidden_pages_the_main_ones_do_not(vault, local, mo
         await call("cortex_recall", {"query": "pasta recipe cooking"})
 
     run(vault, body)
-    with np.load(vault / semantic.CACHE, allow_pickle=False) as z:
-        stored = " ".join(str(z[k]) for k in z.files).lower()
+    stored = " ".join(f"{i} {e[0]}" for i, e in semantic._read(vault).items()).lower()
     assert "browse-" in stored  # the public browse pages were embedded
     assert "browse-private" not in stored and not grep({"v3": stored.encode()},
                                                         hidden_markers(PLAN))

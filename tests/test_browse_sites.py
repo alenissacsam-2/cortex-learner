@@ -260,14 +260,18 @@ def test_run_deepen_needs_a_runner_and_updates_the_vectors(vault, monkeypatch):
     called = []
     monkeypatch.setattr(bs, "local_runner", lambda budget_s=None: (None, None))
     assert bs.run_deepen(Vault(vault)) is None
-    from cortex.browse import vectors
+    from cortex.browse import titles, vectors
 
-    monkeypatch.setattr(vectors, "update", lambda v, progress=None: called.append(v) or {})
+    monkeypatch.setattr(vectors, "update", lambda v, progress=None, **kw: called.append(kw) or {})
     monkeypatch.setattr(bs, "local_runner",
                         lambda budget_s=None: (FakeLLM(), localllm.Budget(budget_s or 5)))
+    monkeypatch.setattr(titles, "idle", lambda: False)  # the owner is at the PC: no embedding
     lines = []
     r = bs.run_deepen(Vault(vault), say=lines.append, budget_s=3)
-    assert r is not None and called and lines
+    assert r is not None and not called and "private search: left for when the PC is idle" in lines
+    monkeypatch.setattr(titles, "idle", lambda: True)
+    r = bs.run_deepen(Vault(vault), say=lines.append, budget_s=3)
+    assert r is not None and called == [{"budget": sites.VECTOR_BUDGET_S, "gate": titles.idle}]
     assert all("://" not in ln for ln in lines)
 
 
@@ -433,7 +437,7 @@ class Router:
                             lambda budget_s=None: (self.local, localllm.Budget(100)))
         monkeypatch.setattr(cloudllm, "find", lambda *a, **k: self.cloud)
         monkeypatch.setattr(cloudllm, "audit", lambda *a, **k: None)
-        monkeypatch.setattr(sites, "update_vectors", lambda v, say=None: None)
+        monkeypatch.setattr(sites, "update_vectors", lambda v, say=None, **kw: None)
 
     def run(self, vault):
         return bs.run_deepen(Vault(vault), say=lambda s: None)

@@ -2,8 +2,9 @@
 cache only."""
 
 import base64
-import io
+import hashlib
 import json
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from cortex import brainmap, dashboard
+from cortex import brainmap, dashboard, vecstore
 from cortex.cli import app
 from cortex.semantic import CACHE
 from cortex.vault import Vault
@@ -35,14 +36,12 @@ def _note(root: Path, folder: str, id: str, fields: dict, body: str = "x\n") -> 
 
 
 def _write_vectors(root: Path, vecs: dict) -> None:
-    ids = list(vecs)
-    buf = io.BytesIO()
-    np.savez(buf, ids=np.array(ids, dtype=str), full=np.ones(len(ids), bool),
-             page=np.arange(len(ids), dtype=np.int32), start=np.zeros(len(ids), np.int32),
-             vecs=np.array([vecs[i] for i in ids], np.float16),
-             meta=np.array(json.dumps({"model": "fake", "pages": {}})))
-    (root / ".cortex").mkdir(exist_ok=True)
-    (root / CACHE).write_bytes(buf.getvalue())
+    with closing(vecstore.connect(root / CACHE)) as con:
+        vecstore.prepare(con, {"model": "fake", "dim": len(next(iter(vecs.values())))})
+        # the manifest names the vector, so a changed one replaces the stored row
+        vecstore.put(con, {i: (hashlib.md5(np.asarray(v).tobytes()).hexdigest(), True,
+                               np.zeros(1, np.int32), np.asarray(v)[None])
+                           for i, v in vecs.items()})
 
 
 @pytest.fixture

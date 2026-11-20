@@ -71,6 +71,7 @@ _IP = re.compile(r"^[0-9.]+$|:")
 LOCK = ".cortex/browse/lock"
 BUSY = "Browsing is being processed; try again in a minute."
 WAIT_S = 60.0  # an import or deepen pass waits this long for another to finish
+VECTOR_BUDGET_S = 120.0  # a background run's private-search embedding; the next run goes on
 
 
 def busy(vault: Vault, wait: float | None = None):
@@ -956,14 +957,21 @@ def deepen(vault: Vault, runner, budget, settings: Settings, *, tz=None, say=Non
             **{f"purged_{k}": n for k, n in gone.items()}}
 
 
-def update_vectors(vault: Vault, say=None) -> dict | None:
+def update_vectors(vault: Vault, say=None, background: bool = False) -> dict | None:
     """The private browse vectors (cortex.browse.vectors), brought up to date; a failure is
-    reported by type, never raised (the pages are already written)."""
+    reported by type, never raised (the pages are already written). `background` (the
+    receiver's and the app's runs): only while the PC is idle, for at most VECTOR_BUDGET_S,
+    stopping when the owner is back; the next run goes on."""
     say = say or (lambda s: None)
     try:
-        from cortex.browse import vectors
+        from cortex.browse import titles, vectors
 
-        return vectors.update(vault, progress=say)
+        if not background:
+            return vectors.update(vault, progress=say)
+        if not titles.idle():
+            say("private search: left for when the PC is idle")
+            return None
+        return vectors.update(vault, progress=say, budget=VECTOR_BUDGET_S, gate=titles.idle)
     except Exception as e:
         say("private browse search not updated: "
             + (str(e) if isinstance(e, VaultError) else type(e).__name__))

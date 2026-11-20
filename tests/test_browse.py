@@ -623,7 +623,8 @@ def test_default_hides_browsing_from_claude(vault, browsers):
     rep = run_import(vault, browsers, visible=False)
     after = files(vault)
     changed = {p for p in after.keys() | before.keys() if before.get(p) != after.get(p)}
-    changed.discard(".cortex/vectors-v3.npz")  # the notes' embedding cache, from the hubs only
+    changed -= {".cortex/vectors.db", ".cortex/vectors.db-wal",  # the notes' embedding cache,
+                ".cortex/vectors.db-shm"}                         # from the hubs only
     changed.discard(".gitignore")  # C3: the run adds the private-pages ignore line once
     assert changed and all(p.startswith(("browse/private/", ".cortex/browse/"))
                            for p in changed), changed
