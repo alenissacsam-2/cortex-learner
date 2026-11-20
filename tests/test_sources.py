@@ -41,7 +41,8 @@ def test_coordinates_are_rounded_to_a_city(root_plain):
     v = Vault(root_plain)
     sources.run(v, _src(sources.Item("Walk", "2026-11-02", "met at 12.971599, 77.594566 and "
                                      "maps @-33.86882,151.20929,15z; version 3.14159, 999.12345",
-                                     "https://maps.example/@12.971599,77.594566")))
+                                     "https://maps.example/@12.971599,77.594566"),
+                        coarse_place=True))
     page = _page(v, "test-walk")
     assert "13.0, 77.6" in page and "@-33.9,151.2,15z" in page and "@13.0,77.6" in page
     assert "12.971599" not in page and "151.20929" not in page
@@ -56,11 +57,24 @@ def test_quoted_mail_is_dropped(root_plain):
                      "secret plan\n"),
         sources.Item("Fwd", "2026-11-03", "FYI below.\n---------- Forwarded message "
                      "---------\nFrom: Ravi\nRavi's private words\n"),
-        sources.Item("Note", "2026-11-04", "> A quote I keep in my notes\n")))
+        sources.Item("Note", "2026-11-04", "> A quote I keep in my notes\n"), strips_quotes=True))
     reply, fwd = _page(v, "test-reply"), _page(v, "test-fwd")
     assert "Sounds good" in reply and "Can we meet" not in reply and "Asha" not in reply
     assert "FYI below." in fwd and "Ravi" not in fwd
     assert "> A quote I keep in my notes" in _page(v, "test-note")  # no "wrote:": kept
+
+
+def test_a_note_keeps_its_quoted_mail_and_coordinates(root_plain, tmp_path):
+    """The owner's own notes are their writing: only secrets are filtered from them."""
+    from cortex import importers
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    body = ("Kept this reply.\n\nOn Mon, 2 Nov 2026 at 09:30, Asha wrote:\n> Can we meet?\n"
+            "---------- Forwarded message ---------\nFrom: Ravi\n\n"
+            "Cafe at 12.971599, 77.594566\n```\nprint('x')\n```\n")
+    (notes / "Mail.md").write_bytes(body.encode("utf-8"))
+    importers.import_notes(Vault(root_plain), notes)
+    assert body.strip() in _page(Vault(root_plain), "notes-mail")
 
 
 def test_code_is_dropped_only_from_sources_that_say_so(root_plain):

@@ -15,7 +15,8 @@ Tiers reuse `access.Audience`: `--tier private|normal|skip` is LOCAL (pages `pri
 CLOUD (normal pages) or SKIP (nothing imported). The last choice per source is kept in TIERS_FILE.
 
 What Cortex never captures (docs/PRIVACY.md), and where each line is enforced:
-- secrets, keys, passwords: `scrub` here (chats.redact), and vault.scan_secrets on every write;
+- secrets, keys, passwords: `scrub` here for every source (chats.redact), and
+  vault.scan_secrets on every write;
 - sign-in, payment and bank pages: browse.privacy.drop_reason (browse.lists AUTH/PAY/BANK);
 - adult browsing: browse.privacy.Settings.adult defaults to "skip";
 - AI replies in chat imports: chat_import keeps the user's own turns only;
@@ -24,8 +25,10 @@ What Cortex never captures (docs/PRIVACY.md), and where each line is enforced:
   `drops_code` and `scrub` drops its fenced code; the owner's own notes keep their code;
 - image or audio content: an Item is text only; importers' notes source skips non-text files
   and drops embeds;
-- other people's quoted text in mail: `scrub` here;
-- location finer than a city: `scrub` here rounds coordinates to 0.1 degree (about 10 km);
+- other people's quoted text in mail: `scrub` here, for a source that sets `strips_quotes`
+  (mail); the owner's own notes and calendar keep what they quote;
+- location finer than a city: `scrub` here rounds coordinates to 0.1 degree (about 10 km), for
+  a source that sets `coarse_place` (location, photos); notes and calendar keep theirs;
 - inferred health, sexuality, religion or politics labels: no code infers labels about the
   person; browse.lists' categories with those names only keep such visits local.
 """
@@ -84,7 +87,10 @@ class Source:
     prefix: str = ""  # page ids; the id when empty
     noun: str = "items"  # a month page's heading and summary: "events"
     skips: tuple[str, ...] = ()  # the skip reasons, in the order the report lists them
+    # the never-capture filters past secrets, for text that is not the owner's own writing
     drops_code: bool = False  # AI or tool text: fenced code becomes CODE_LEFT_OUT
+    strips_quotes: bool = False  # mail: other people's quoted text is dropped
+    coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
 
 
 def tier(value: str | Audience) -> Audience:
@@ -134,11 +140,12 @@ def _coarse(m: re.Match) -> str:
     return f"{lat:.1f}{m.group(2)}{lon:.1f}"
 
 
-def scrub(text: str, drops_code: bool = False) -> str:
-    """The never-capture filter every imported text passes: quoted mail (the `>` lines after an
-    "On … wrote:" line, and everything from an "Original Message" or "Forwarded message" line
-    on) is dropped, precise coordinates are rounded to 0.1 degree, and secrets become
-    [redacted]. With `drops_code`, fenced code blocks become CODE_LEFT_OUT."""
+def scrub(text: str, src: Source | None = None) -> str:
+    """The never-capture filter every imported text passes: secrets become [redacted], always.
+    Per `src`: `drops_code` turns fenced code blocks into CODE_LEFT_OUT, `strips_quotes` drops
+    quoted mail (the `>` lines after an "On … wrote:" line, and everything from an "Original
+    Message" or "Forwarded message" line on), `coarse_place` rounds coordinates to 0.1 degree."""
+    drops_code = bool(src and src.drops_code)
     out, fence = [], ""
     for line in text.splitlines(keepends=True) if drops_code else ():
         if fence:
@@ -152,11 +159,14 @@ def scrub(text: str, drops_code: bool = False) -> str:
             continue
         out.append(line)
     text = "".join(out) if drops_code else text
-    if m := _ATTRIBUTION.search(text):
-        text = text[:m.start()] + _QUOTED.sub("", text[m.end():])
-    if m := _FORWARDED.search(text):
-        text = text[:m.start()]
-    return chats.redact(_COORDS.sub(_coarse, text))
+    if src and src.strips_quotes:
+        if m := _ATTRIBUTION.search(text):
+            text = text[:m.start()] + _QUOTED.sub("", text[m.end():])
+        if m := _FORWARDED.search(text):
+            text = text[:m.start()]
+    if src and src.coarse_place:
+        text = _COORDS.sub(_coarse, text)
+    return chats.redact(text)
 
 
 def _sha(text: str) -> str:
@@ -212,8 +222,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             continue
         known.add(h)
         # the id comes from the filtered title, so a key in a title never reaches a file name
-        nid = _free_id(vault, f"{src.prefix or src.id}-{slugify(scrub(it.title)) or 'untitled'}"
-                       [:81].rstrip("-."), taken)
+        slug = slugify(scrub(it.title, src)) or "untitled"
+        nid = _free_id(vault, f"{src.prefix or src.id}-{slug}"[:81].rstrip("-."), taken)
         todo.append((nid, it, h, private or it.private))
     r["imported"] = r["pages"] = len(todo)
     r["private"] = sum(t[3] for t in todo)
@@ -230,18 +240,18 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         return f"[[{to}|{text}]]" if to else text
 
     for nid, it, h, hidden in todo:
-        body = scrub(_WIKI.sub(link, it.text), src.drops_code).strip() \
+        body = scrub(_WIKI.sub(link, it.text), src).strip() \
             .removeprefix(f"# {it.title}\n")
         first = next((s.strip("# ").strip() for s in body.splitlines()
                       if s.strip("# ").strip()), it.title)
-        fields = {"title": scrub(it.title), "kind": "resource", "resource_type": "other",
+        fields = {"title": scrub(it.title, src), "kind": "resource", "resource_type": "other",
                   "status": "reference", "covers": [], "related": [], "date": it.date,
                   "summary": first[:160]}
         if it.tags:
             fields["tags"] = list(it.tags)
         if hidden:
             fields["private"] = True
-        origin = f" · From: {scrub(it.origin)}" if it.origin else ""
+        origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
         vault.create_note("resource", nid, fields, f"# {fields['title']}\n\nSource: {src.label} · "
                           f"Date: {it.date}{origin} · sha: {h}\n\n{body}\n")
 
@@ -249,7 +259,7 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
 def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
     months = defaultdict(set)
     for it in _read(src, r):
-        months[it.date[:7], private or it.private].add(f"- {scrub(it.text, src.drops_code)}")
+        months[it.date[:7], private or it.private].add(f"- {scrub(it.text, src)}")
     r["pages"] = len(months)
     for (month, hidden), lines in sorted(months.items()):
         prefix = src.prefix or src.id

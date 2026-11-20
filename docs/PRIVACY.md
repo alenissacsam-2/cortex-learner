@@ -113,14 +113,14 @@ While the app runs, it also saves those chats as chat pages in your vault every 
 
 Each line says where it holds.
 
-- **Secrets, keys and passwords.** They become `[redacted]` before anything is written. A write that still holds one is refused.
+- **Secrets, keys and passwords**, from every source. They become `[redacted]` before anything is written. A write that still holds one is refused.
 - **Sign-in, payment and bank pages.** Browsing visits to them are dropped and never stored.
 - **Adult browsing.** It is skipped by default. You can choose to keep it on private pages instead.
 - **AI replies in your vault's chat pages.** A saved chat page keeps only your own messages. The copy of an imported export in `~/.cortex/claude-chat`, which `cortex_chats` reads, keeps the whole conversation.
 - **Code, diffs and command output from AI chats and coding sessions.** A coding session keeps only the files touched and the commit messages. Your own notes keep the code you wrote in them.
 - **The content of images and audio.** Cortex imports text only. At most a date and a coarse place are kept from a photo or recording, never what it shows or says.
-- **Other people's quoted text in mail.** In imported files, the quoted lines after "On … wrote:" are dropped, and so is everything from an "Original Message" or "Forwarded message" line on.
-- **Location finer than a city, in imported files.** Coordinates in imported notes, calendars and other files are rounded to about 10 km. Browsing keeps the addresses you visit as they are, map links included.
+- **Other people's quoted text in mail**, from mail imports. The quoted lines after "On … wrote:" are dropped, and so is everything from an "Original Message" or "Forwarded message" line on. Your own notes and calendar keep what you quoted in them.
+- **Location finer than a city**, from location and photo imports. Their coordinates are rounded to about 10 km. Your own notes and calendar keep the places you wrote in them, and browsing keeps the addresses you visit as they are, map links included.
 - **Labels about your health, sexuality, religion or politics.** Cortex never guesses them. Browsing categories with those names exist only to keep those visits on this computer.
 
 ## Reporting a problem
