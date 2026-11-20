@@ -29,6 +29,9 @@
   // of its dust points; the sites named
   const TRAIL_CAP = 120, HISTORY = 20, STYLE_MS = 300, SEL_ORBIT = 0.02, DIM_NODE = 0.2, DIM_FIB = 0.15;
   const MODES = ['activity', 'mastery', 'growth'];
+  // the growth moment: dim in, hold, fade back (ms); a still highlight's time under reduced motion;
+  // what the rest of the brain dims to while Today or the moment holds the stage
+  const GROW_IN = 400, GROW_HOLD = 2500, GROW_OUT = 800, GROW_STILL = 4000, SPOT_DIM = 0.25;
   const STATE_PI = { solid: 2, learning: 3, needs_refresh: 4 };  // palette: node, grey, solid, learning, refresh
   const SVGNS = ['http:', '', 'www.w3.org', '2000', 'svg'].join('/');  // in parts: the page test bans URL text
 
@@ -1387,6 +1390,43 @@ void main() {
   }
 
   /* ---------------- mount ---------------- */
+  /* ---- the growth moment's rules (pure; the app and the tests call them) ---- */
+  const GROWTH = {
+    // the viewer's last seen `added` stamp, or null: storage may be missing, empty or throw
+    read(store, key) {
+      try { const v = store && store.getItem(key); return typeof v === 'string' && v ? v : null; } catch (e) { return null; }
+    },
+    write(store, key, v) {
+      try { if (store && v) store.setItem(key, v); } catch (e) { /* not kept: the page's memory still is */ }
+    },
+    // What to play: the ids stamped after `seen` that `shown(id)` allows (a node hidden in this view
+    // never counts), oldest first, and the newest stamp of all. No `seen` yet: nothing plays, and the
+    // newest is `now` (an ISO time) when no page has a stamp yet, so the next new page plays.
+    pending(added, seen, shown, now) {
+      let newest = seen || '';
+      const ids = [];
+      for (const id of Object.keys(added || {})) {
+        const v = added[id];
+        if (typeof v !== 'string') continue;
+        if (v > newest) newest = v;
+        if (seen && v > seen && (!shown || shown(id))) ids.push(id);
+      }
+      ids.sort((a, b) => (added[a] < added[b] ? -1 : added[a] > added[b] ? 1 : a < b ? -1 : a > b ? 1 : 0));
+      return { ids, newest: newest || (seen ? null : now || null) };
+    },
+    // the labels: "+N · Lobe" per lobe touched (most first, at most 3), else one "+N in K places"
+    labels(groups) {
+      const g = groups.filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.k - b.k);
+      const num = (n) => '+' + n.toLocaleString('en');
+      if (g.length <= 3) return g.map((x) => ({ k: x.k, text: `${num(x.n)} · ${x.title}` }));
+      return [{ k: -1, text: `${num(g.reduce((s, x) => s + x.n, 0))} in ${g.length} places` }];
+    },
+    // the ids stamped at or after `ms` (local midnight: today's faint glow), less `skip`
+    since(added, ms, skip) {
+      return Object.keys(added || {}).filter((id) => Date.parse(added[id]) >= ms && !(skip && skip.has(id)));
+    },
+  };
+
   function mount(container, opts) {
     opts = opts || {};
     const B = opts.brain || {}, ND = B.nodes || {};
@@ -1589,9 +1629,9 @@ void main() {
     // tube and its sites hang below and stay out of them (flights, fog and the glass fade keep the brain's).
     const shell = mesh.filter((m) => m.name !== 'stem');
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-    const grow = (arr) => { for (let k = 0; k < arr.length; k++) { const d = k % 3; if (arr[k] < lo[d]) lo[d] = arr[k]; if (arr[k] > hi[d]) hi[d] = arr[k]; } };
-    for (const m of shell) grow(m.pos);
-    if (!mesh.length) grow(P.subarray(0, N * 3));
+    const widen = (arr) => { for (let k = 0; k < arr.length; k++) { const d = k % 3; if (arr[k] < lo[d]) lo[d] = arr[k]; if (arr[k] > hi[d]) hi[d] = arr[k]; } };
+    for (const m of shell) widen(m.pos);
+    if (!mesh.length) widen(P.subarray(0, N * 3));
     if (lo[0] > hi[0]) { lo.fill(-1); hi.fill(1); }
     const ctr = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
     let Rb = 0.2;
@@ -1797,6 +1837,7 @@ void main() {
     topSites.sort((a, b) => PG[b].visits - PG[a].visits || a - b).splice(SITE_LABELS);
     const sitePl = topSites.map(() => plate(gPage, 11, false));
     const hoverPl = plate(gPage, 12.5, false);
+    const growPl = [0, 1, 2].map(() => plate(gMark, 13, false));
     const selRing = svgEl('circle', { r: '9', 'stroke-width': '1.2' }, gMark);
     const beaconRings = [0, 1, 2].map(() => svgEl('circle', { 'stroke-width': '1.5' }, gMark));
     const reticleG = svgEl('g', { 'stroke-width': '1.2' }, gMark);
@@ -1827,7 +1868,7 @@ void main() {
       if (V3) { colors.body = colors.rim = V3C.glass; colors.grey = V3C.neutral; }
       recolor();
       gLead.setAttribute('stroke', colors.label);
-      for (const pl of lobePl.concat(pagePl, [hoverPl])) {
+      for (const pl of lobePl.concat(pagePl, [hoverPl], growPl)) {
         pl.r.setAttribute('fill', colors.stage); pl.r.setAttribute('fill-opacity', V3 ? '0.9' : '0.82');
         pl.t.setAttribute('fill', colors.label);
         pl.fill = null;
@@ -1923,6 +1964,9 @@ void main() {
     let mode = MODES.includes(opts.mode) ? opts.mode : 'activity';
     let growthMonth = null, flashT0 = -1e9, archiveOn = !!opts.archive, spin = false;
     let hl = null, focus = -1, hover = -1, selected = -1, reticle = -1, todaySet = null, replay = null;
+    // Today: its pages in order (the stepping list); the growth moment: its new pages, whether their
+    // dim holds the stage, the timeline and labels; the pages that keep a faint glow until midnight
+    let todayList = [], grow = null, growSet = null, growOn = false, faintSet = null;
     let picked = false;  // a page or region was chosen once: `hover` labels stop showing every region name
     let beaconLobes = [], beaconT0 = 0, selOrbit = false, crumbKey = '', walk = null;
     const hist = [], userVis = new Uint8Array(N).fill(1);
@@ -1942,17 +1986,21 @@ void main() {
       return m;
     }
     const DIM = V3 ? DIM_NODE : 0.2;
+    // the chosen page always draws, whatever the filters, so a selection never shows an empty stage
+    // today's pages show in Today even in the archive ring Home hides
+    const visible = (i) => i === selected || (todaySet && todaySet[i] && userVis[i]) || (userVis[i] && (archiveOn || !ARCH[i])
+      && !(mode === 'growth' && growthMonth && MONTH[i] && MONTH[i] > growthMonth));
+    // the pages that hold the stage (the rest dims): Today's, or the growth moment's (not under reduced motion)
+    const spotSet = () => (growOn ? (grow && !grow.still ? growSet : null) : todaySet);
     function restyle() {
-      const nb = hood();
+      const nb = hood(), spot = spotSet(), lit = growOn ? growSet : todaySet;
       fade = null;
       visCount.fill(0);
       for (let i = 0; i < N; i++) {
         const p = PG[i], o = i * 4;
-        // the chosen page always draws, whatever the filters, so a selection never shows an empty stage
-        const v = i === selected || (userVis[i] && (archiveOn || !ARCH[i])
-          && !(mode === 'growth' && growthMonth && MONTH[i] && MONTH[i] > growthMonth));
+        const v = visible(i), sel = i === selected || (todaySet && todaySet[i]);  // Today: all of today drawn as chosen
         if (v && LOBE[i] < L) visCount[LOBE[i]]++;
-        const on = nb ? nb[i] : (!hl || hl[i]) && (focus < 0 || LOBE[i] === focus);
+        const on = spot ? spot[i] || (nb ? nb[i] : 0) : nb ? nb[i] : (!hl || hl[i]) && (focus < 0 || LOBE[i] === focus);
         const site = p.kind === 'site';
         let pi = V3 ? pcOf(i) : 0, ring = site && p.private ? 1 : 0;
         if (mode === 'mastery') {
@@ -1963,17 +2011,17 @@ void main() {
         }
         PI[i] = pi;
         // v3 Mastery: pages without a study state step back so the state colours carry the view
-        const a = !v ? 0 : (on ? 1 : DIM) * (ARCH[i] && i !== selected ? 0.25 : 1)
-          * (V3 && (pi === 1 || site) && mode === 'mastery' ? 0.45 : 1) * (i === selected ? 1 : GLOW[i]);
-        const c = V3 && i === selected ? whiten(pal[pi], 0.6) : pal[pi];  // v4: the chosen page is white-hot
+        const a = !v ? 0 : (on ? 1 : spot ? SPOT_DIM : DIM) * (ARCH[i] && !sel ? 0.25 : 1)
+          * (V3 && (pi === 1 || site) && mode === 'mastery' ? 0.45 : 1) * (sel ? 1 : GLOW[i]);
+        const c = V3 && sel ? whiten(pal[pi], 0.6) : pal[pi];  // v4: the chosen page is white-hot
         COL[o] = c[0]; COL[o + 1] = c[1]; COL[o + 2] = c[2]; COL[o + 3] = Math.round(a * 255);
         // v3: search matches keep a soft halo and pop once; the hovered page's neighbours breathe once
-        FX[o] = (mode === 'activity' && RECENT[i]) || (V3 && hl && hl[i]) ? 255 : 0;
+        FX[o] = (mode === 'activity' && RECENT[i]) || (V3 && hl && hl[i]) || (faintSet && faintSet[i]) || (growOn && growSet[i]) ? 255 : 0;
         FX[o + 1] = ring ? 255 : 0;
         let fz = mode === 'growth' && growthMonth && MONTH[i] === growthMonth ? 255 : 0;
         if (V3 && !fz) fz = mode !== 'growth' && hover >= 0 && nb && nb[i] && i !== hover ? 160 : hl && hl[i] ? 96 : 0;
         FX[o + 2] = fz;
-        FX[o + 3] = i === hover ? 255 : i === selected ? 153 : todaySet && todaySet[i] ? 128 : nb && nb[i] ? 90 : 0;
+        FX[o + 3] = i === hover ? 255 : sel ? 153 : lit && lit[i] ? 128 : nb && nb[i] ? 90 : 0;
       }
       R.setPoints();
       if (NF) refibre();
@@ -1985,7 +2033,7 @@ void main() {
     // 0.6 and thicken while the rest dim to 8 %; a focused lobe keeps its own; Mastery turns them neutral.
     const kindOn = (f) => (FK[f] ? style.similar : style.links);
     function refibre() {
-      const src = hover >= 0 ? hover : selected, neutral = mode === 'mastery';
+      const src = hover >= 0 ? hover : selected, neutral = mode === 'mastery', spot = spotSet();
       const still = V3 && reduced && src >= 0 && src === selected;  // reduced motion: white fibres at 0.8
       // a busy page's links show only while one of their ends is hovered or selected
       const on = (f) => {
@@ -2005,11 +2053,12 @@ void main() {
           a = (sim ? 0.05 : 0.22 * style.linkBrightness) * FD * (LOBE[i] === LOBE[j] ? 0.75 : 1.2) * OVK[f] * PAIRK[f];
           w = (sim ? 0.6 : style.linkWidth) * PAIRW[f];
           if (HUB[i] || HUB[j]) w *= 1.5;
-          if (src >= 0) {
-            if (own) { a = still ? 0.8 : 0.6; w = sim ? 0.6 : 1; } else a *= V3 ? DIM_FIB : DIM;  // round 2: thin, like v3's
-          } else if (todaySet && (todaySet[i] || todaySet[j])) {
-            a = sim ? 0.3 : 0.7; w *= 1.4;  // Today: the paths the pulses travel stay lit
-          } else if (focus >= 0) {
+          if (src >= 0 && own) { a = still ? 0.8 : 0.6; w = sim ? 0.6 : 1; }
+          else if (spot && (spot[i] || spot[j])) {
+            a = sim ? 0.3 : 0.7; w *= 1.4;  // Today or the growth moment: every fibre of its pages stays lit
+          } else if (src >= 0) a *= V3 ? DIM_FIB : DIM;  // round 2: thin, like v3's
+          else if (spot) a *= SPOT_DIM;
+          else if (focus >= 0) {
             if (LOBE[i] === focus || LOBE[j] === focus) a = Math.min(1, a * 1.6); else a *= DIM;
           } else if (hl && !hl[i] && !hl[j]) a *= DIM;
           if ((ARCH[i] || ARCH[j]) && i !== src && j !== src) a *= 0.25;
@@ -2324,6 +2373,7 @@ void main() {
       basis();
       const F = frameParams(t);
       if (replay) busy = stepReplay(t) || busy;
+      if (grow) busy = stepGrow(t) || busy;
       if (F.flash > 0 || F.breath > 0 || (F.pop > 0 && t - popT0 < POP_MS)) busy = true;
       if (beaconLobes.length && !reduced && t - beaconT0 < BEACON_MS) busy = true;
       if (fade) busy = stepFade(t) || busy;
@@ -2357,7 +2407,8 @@ void main() {
         fogNear: V3 ? Math.max(dc - Rb, cam.dist - 0.5) : dc - Rb,
         fogK: V3 ? SV.fog * Math.log(5) / Rb * (selected >= 0 ? 0.5 : 1) : Math.log(4) / (2 * Rb),
         // v3 glass: gone with the camera inside it, receding to a quarter as the camera closes in
-        shell: V3 ? 0.12 : small ? 0.45 : 0.28, shellK: V3 ? outside(eye) * (0.25 + 0.75 * Math.max(0, Math.min(1, (cam.dist - 1) / 1.6))) : 1,
+        shell: V3 ? 0.12 : small ? 0.45 : 0.28, shellK: (1 - (1 - SPOT_DIM) * growK(t))
+          * (V3 ? outside(eye) * (0.25 + 0.75 * Math.max(0, Math.min(1, (cam.dist - 1) / 1.6))) : 1),
         glassK: V3 ? SV.glass : 1, rimK: V3 ? SV.rim * 0.9 : 0, conK: V3 ? SV.contour * 0.5 : 0, dustK: V3 ? SV.dust : 0,
         tint: [SV.t0 / 255, SV.t1 / 255, SV.t2 / 255], deep: V3 ? SV.deep : 0, bloom: V3 ? SV.bloom : 1, vig: V3 ? SV.vig : 0,
         contours: small && !V3, look: V3 ? LOOK3 : LOOK2,
@@ -2542,6 +2593,13 @@ void main() {
         ring(c, q, 8 + 16 * ph);
         c.setAttribute('stroke-opacity', (1 - ph * 0.85).toFixed(2));
       });
+      // the growth moment's labels, beside the centre of their new pages, in the lobe label style
+      growPl.forEach((pl, n) => {
+        const lb = grow && grow.labels[n], c = lb && growCentre(lb.idx), q = c && proj(c[0], c[1], c[2]);
+        if (!q) { pl.g.style.display = 'none'; return; }
+        const w = textW(lb.text, 13), x = Math.max(10, Math.min(q[0] + 18, W - w - 10)), y = Math.max(14, Math.min(q[1] - 18, H - 14));
+        setPlate(pl, lb.text, x, y, false, 13, grow.still ? 1 : Math.min(1, growK(t) * 1.25), V3 && lb.k >= 0 ? LABC[lb.k] : colors.label);
+      });
     }
     function ring(c, q, r) {
       if (!q) { c.style.display = 'none'; return; }
@@ -2593,14 +2651,14 @@ void main() {
       else frameView();
     }
 
-    /* ---- Today: pulses travel from today's pages along their links, then a reticle ---- */
+    /* ---- Today: the camera frames all of today's pages, pulses travel along their links, and every
+       one of them stays drawn as chosen ---- */
     function stepReplay(t) {
       const r = replay, out = [];
-      if (r.v3) {  // v3: the pulses are effects; when they are done the focus page says hello
+      if (r.v3) {  // v3: the pulses are effects; when they are done the focus page is chosen (and says hello)
         if (t < r.end) return true;
         replay = null;
-        settleToday(r.focus);
-        fire(r.focus, performance.now());
+        settleToday();
         return false;
       }
       let live = false;
@@ -2625,15 +2683,87 @@ void main() {
       if (!live) {
         replay = null;
         R.setSprites([]);
-        settleToday(r.focus);
+        settleToday();
         return false;
       }
       return true;
     }
-    function settleToday(f) {
-      reticle = f;
-      if (f >= 0) fly(viewToward(TP[f * 3], TP[f * 3 + 1], TP[f * 3 + 2], V3 ? 1.0 : 0.6));
+    // Today settles with no one page chosen: all of today's pages are drawn as chosen, their links lit,
+    // the rest dim, until the view leaves Today; [ ] or a click then choose one of them
+    function settleToday() {
+      syncToday();
       invalidate();
+    }
+    // the camera on all of today's pages: their centre, far enough out that the farthest one fits
+    function todayView() {
+      if (todayList.length === 1) return pageView(todayList[0]);
+      const c = growCentre(todayList), x = c[0], y = c[1], z = c[2];
+      let r = 0;
+      for (const i of todayList) r = Math.max(r, Math.hypot(TP[i * 3] - x, TP[i * 3 + 1] - y, TP[i * 3 + 2] - z));
+      return viewToward(x, y, z, Math.max(V3 ? 0.9 : 0.45, (r + 0.15) * focal / (0.4 * Math.max(1, Math.min(W, H)))));
+    }
+    function syncToday() {
+      if (opts.onToday) opts.onToday(todaySet ? { n: todayList.length, at: todayList.indexOf(selected) } : null);
+    }
+    // [ and ] in Today, and the page's arrows: the next or previous page of today, round the list
+    function todayStep(dir) {
+      const n = todayList.length;
+      if (!todaySet || !n) return false;
+      const at = todayList.indexOf(selected);
+      choose(todayList[at < 0 ? (dir < 0 ? n - 1 : 0) : (at + (dir < 0 ? n - 1 : 1)) % n]);
+      return true;
+    }
+
+    /* ---- the growth moment: the brain dims, the regions that grew glow in their own hue, "+N · Lobe"
+       labels; then a faint glow on the new pages until midnight. Any input ends it at once. ---- */
+    const GC = new Float32Array(3);
+    function growCentre(idx) {  // the arranged centre of some pages, in the shared GC
+      GC[0] = GC[1] = GC[2] = 0;
+      for (const i of idx) for (let d = 0; d < 3; d++) GC[d] += TP[i * 3 + d] / idx.length;
+      return GC;
+    }
+    function growK(t) {  // 0 -> 1 -> 0: how far the dim has gone (always 0 for a still highlight)
+      if (!grow || grow.still) return 0;
+      const sm = (p) => { p = Math.min(1, Math.max(0, p)); return p * p * (3 - 2 * p); }, d = t - grow.t0;
+      return d < GROW_IN + GROW_HOLD ? sm(d / GROW_IN) : 1 - sm((d - GROW_IN - GROW_HOLD) / GROW_OUT);
+    }
+    function stepGrow(t) {
+      const g = grow, d = t - g.t0;
+      if (g.still) { if (d >= GROW_STILL) endGrow(); return !!grow; }
+      if (!g.out && d >= GROW_IN + GROW_HOLD) { g.out = true; crossFade(() => { growOn = false; restyle(); }, GROW_OUT); }
+      if (d >= GROW_IN + GROW_HOLD + GROW_OUT) { grow = null; return false; }
+      return true;
+    }
+    function endGrow() {
+      if (!grow && !growOn) return;
+      grow = null;
+      growOn = false;
+      restyle();
+    }
+    function startGrow(list) {
+      endGrow();
+      if (todaySet || replay) return null;  // Today holds the stage
+      const src = [];
+      for (const id of list || []) { const i = idIndex.get(String(id)); if (i !== undefined && i < SF && visible(i)) src.push(i); }
+      if (!src.length) return null;
+      growSet = new Uint8Array(N);
+      const by = new Map();
+      for (const i of src) {
+        growSet[i] = 1;
+        const k = LOBE[i] < L ? LOBE[i] : -1;
+        if (!by.has(k)) by.set(k, []);
+        by.get(k).push(i);
+      }
+      const groups = [...by].map(([k, idx]) => ({ k, n: idx.length, idx, title: k >= 0 ? trunc(lobes[k].title, 28) : 'Unfiled' }));
+      const labels = GROWTH.labels(groups).map((lb) => Object.assign(lb, { idx: lb.k === -1 && groups.length > 3 ? src : by.get(lb.k) }));
+      const t0 = performance.now(), still = reduced;
+      grow = { t0, still, out: false, labels, groups: groups.filter((g) => g.k >= 0) };
+      if (still || !V3 || R.kind !== 'webgl2') { growOn = true; restyle(); }
+      else crossFade(() => { growOn = true; restyle(); }, GROW_IN);
+      // one gentle pulse on each new page as the dim lands
+      if (!still && V3) for (const i of src.slice(0, 60)) sparks.push({ i, t0: t0 + GROW_IN, dur: 900, size: 11, e: 0.8, c: whiten(lobeRGB(i), 0.4) });
+      invalidate();
+      return { n: src.length, labels: labels.map((lb) => lb.text) };
     }
 
     /* ---- v4 effects: comets along fibres, the chosen page's glimmer, arrival blinks,
@@ -2792,6 +2922,7 @@ void main() {
       }
       if (gl) {
         if (SV.nebula > 0.003) nebulae(spr);
+        if (grow && !grow.still) growHalo(spr, t);
         if (selected >= 0 && !reduced) glimmer(spr, t);
         if (hello && !reduced) helloMotes(spr, t);
       }
@@ -2816,6 +2947,17 @@ void main() {
         const px = 2 * Math.max(0.06, spreadOf(k) * (1 - SV.tightness) * 2.2) * focal / q[2];
         spr.push({ x: a[0], y: a[1], z: a[2], size: -Math.min(px, 2 * Math.max(W, H)), kind: 0.5, c: LC[k],
           a: 0.035 * SV.nebula * dim * (focus >= 0 && k !== focus ? 0.4 : 1), e: 0 });
+      }
+    }
+    // The growth moment's halo: a soft additive cloud in the lobe's hue round each region's new pages
+    function growHalo(spr, t) {
+      const k0 = growK(t);
+      for (const g of grow.groups) {
+        const c = growCentre(g.idx), x = c[0], y = c[1], z = c[2], q = proj(x, y, z);
+        if (!q) continue;
+        let r = 0.05;
+        for (const i of g.idx) r = Math.max(r, Math.hypot(TP[i * 3] - x, TP[i * 3 + 1] - y, TP[i * 3 + 2] - z) + 0.04);
+        spr.push({ x, y, z, size: -Math.min(2 * r * focal / q[2], 2 * Math.max(W, H)), kind: 0.5, c: LC[g.k], a: 0.22 * k0, e: 0 });
       }
     }
     // The glimmer of the chosen page: a breathing halo ring (1.44x its radius, 2.4 s; round 2: -40 %), a
@@ -2879,6 +3021,7 @@ void main() {
     }
     // how: 'step' keeps the walk through the previous page's connections, 'back' adds no history
     function select(i, flyThere, how) {
+      if (i >= 0) { endGrow(); if (faintSet) faintSet[i] = 0; }
       if (i !== selected) {
         if (selected >= 0 && how !== 'back') { hist.push(selected); if (hist.length > HISTORY) hist.shift(); }
         if (how !== 'step') walk = null;
@@ -2893,6 +3036,7 @@ void main() {
       relines();
       startTrails(i);
       if (i >= 0 && flyThere) fly(pageView(i), SEL_FLY_MS, true);  // then a slow orbit round it until input
+      if (todaySet) syncToday();
       return i >= 0 ? infoFor(i) : null;
     }
     // A selection the user made: fly there, say hello, tell the page.
@@ -2926,6 +3070,7 @@ void main() {
       opts.onHover(PG[i], q ? { x: q[0], y: q[1] } : null, { links: lk.shown.length, hiddenLinks: lk.hidden });
     }
     function focusOn(k, close) {
+      endGrow();
       focus = k;
       restyle(); retint(); relines();
       if (k < 0 || !anchorOf(k)) { fly(home); return; }
@@ -2970,14 +3115,18 @@ void main() {
       }
     }
     function clearAll() {
+      const was = !!todaySet;
       if (selected >= 0) select(-1, false);
-      focus = -1; reticle = -1; beaconLobes = []; todaySet = null; walk = null;
+      focus = -1; reticle = -1; beaconLobes = []; todaySet = null; todayList = []; walk = null;
       if (replay) { replay = null; R.setSprites([]); }
+      grow = null; growOn = false;
       restyle(); retint(); relines();
+      if (was) syncToday();
     }
     function overview() { clearAll(); fly(home); }
     // Back one level: page -> its region -> the overview; false when already at the overview.
     function back() {
+      if (todaySet) { overview(); return true; }  // Esc leaves Today whole
       if (selected >= 0) {
         const k = LOBE[selected];
         if (k < L && anchorOf(k)) pickLobe(k); else overview();
@@ -3017,6 +3166,7 @@ void main() {
       return false;
     }
     function setMode(m) {
+      endGrow();
       if (!MODES.includes(m) || m === mode) return;
       mode = m;
       crossFade(() => { restyle(); retint(); });
@@ -3081,6 +3231,7 @@ void main() {
     const pinchMid = () => { const [a, b] = [...ptrs.values()]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; };
     const pickAt = (p) => { basis(); return R.kind === 'webgl2' ? R.pick(p[0], p[1], frameParams(performance.now())) : R.pick(p[0], p[1]); };
     const onDown = (e) => {
+      endGrow();
       const p = at(e);
       try { box.setPointerCapture(e.pointerId); } catch (err) { /* a synthetic pointer has nothing to capture */ }
       ptrs.set(e.pointerId, p);
@@ -3141,6 +3292,7 @@ void main() {
     };
     const onWheel = (e) => {
       e.preventDefault();
+      endGrow();
       const p = at(e);
       zoomBy(Math.exp(e.deltaY * (e.deltaMode === 1 ? 16 : 1) * 0.0012), p[0], p[1]);
     };
@@ -3149,6 +3301,7 @@ void main() {
     // previous page; [ ] the chosen page's connections; F frames the selection
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      endGrow();
       const k = e.key;
       const turn = (dx, dy) => {
         anim = null; goal = null; selOrbit = false;
@@ -3163,8 +3316,8 @@ void main() {
       else if (k === '0') overview();
       else if (k === 'Escape') { if (!back()) return; }
       else if (k === 'Backspace') historyBack();
-      else if (k === '[') step(-1);
-      else if (k === ']') step(1);
+      else if (k === '[') { if (!todayStep(-1)) step(-1); }
+      else if (k === ']') { if (!todayStep(1)) step(1); }
       else if (k === 'f' || k === 'F') frameView();
       else if (k === 'a' || k === 'A') setMode('activity');
       else if (k === 'm' || k === 'M') setMode('mastery');
@@ -3339,33 +3492,65 @@ void main() {
       get alive() { return alive; },
       // v3: a clause for the page's legend when busy pages' links are held back ('' when none are)
       get legendNote() { return nBusy ? 'Links of very busy pages (like journal days) show when you point at them.' : ''; },
-      // Replay today: a pulse from each page (max 30) along its links, then settle on `focusId`.
-      today(list, focusId) {
-        const src = [];
+      // Today: every page in `list` drawn as chosen and framed together, a pulse from each (max 30)
+      // along its links; they stay lit until the view leaves Today. `quiet` (a remount) restores it
+      // with `selectedId` still chosen, no pulse and no flight.
+      today(list, selectedId, quiet) {
+        const src = [], pul = [];
         for (const id of list || []) {
           const i = idIndex.get(String(id));
-          if (i !== undefined && userVis[i] && src.length < 30) src.push(i);
+          if (i !== undefined && i < SF && userVis[i] && !src.includes(i)) src.push(i);
         }
-        const f = idIndex.has(String(focusId)) ? idIndex.get(String(focusId)) : src.length ? src[0] : -1;
+        endGrow();
+        if (!quiet && selected >= 0) select(-1, false);
         todaySet = new Uint8Array(N);
+        todayList = src;
         for (const i of src) todaySet[i] = 1;
         reticle = -1;
         restyle();
-        if (reduced || !src.length) { settleToday(f); return; }
-        if (V3 && NF) {  // comets run along each page's link fibres in lobe colours, then the focus says hello
-          const t0 = performance.now(), stagger = Math.min(120, 1800 / src.length);
-          src.forEach((i, k) => {
+        if (quiet) {
+          const f = idIndex.get(String(selectedId));
+          if (f !== undefined) select(f, false);
+          syncToday();
+          return;
+        }
+        if (src.length) fly(todayView());
+        syncToday();  // the button reads pressed from the start, not when the pulses end
+        if (reduced || !src.length) { settleToday(); return; }
+        pul.push(...src.slice(0, 30));
+        if (V3 && NF) {  // comets run along each page's link fibres in lobe colours
+          const t0 = performance.now(), stagger = Math.min(120, 1800 / pul.length);
+          pul.forEach((i, k) => {
             const s = t0 + k * stagger;
             sparks.push({ i, t0: s, dur: 700, size: 11, e: 0.8, c: whiten(lobeRGB(i), 0.4) });
             for (const j of linksOf(i).shown.slice(0, 8)) { const fb = fibreOf(i, j); if (fb >= 0) addFx(fb, i, s, 900, 0.95, 2.4, {}); }
           });
-          replay = { v3: true, end: t0 + (src.length - 1) * stagger + 950, focus: f };
+          replay = { v3: true, end: t0 + (pul.length - 1) * stagger + 950 };
           invalidate();
           return;
         }
-        replay = { t0: performance.now(), src, focus: f, dur: 700, stagger: Math.min(120, 1800 / src.length),
-          links: src.map((i) => linksOf(i).shown.slice(0, 8)), arcs: new Map() };
+        replay = { t0: performance.now(), src: pul, dur: 700, stagger: Math.min(120, 1800 / pul.length),
+          links: pul.map((i) => linksOf(i).shown.slice(0, 8)), arcs: new Map() };
         invalidate();
+      },
+      // Today's pages in order while the view is in Today, else null; step through them
+      get todayIds() { return todaySet ? todayList.map((i) => PG[i].id) : null; },
+      todayStep,
+      // The growth moment for these new page ids (only those this view shows): {n, labels} or null.
+      grow: startGrow,
+      // whether this view draws a page (a filtered, archived or stem node does not)
+      shows(id) { const i = idIndex.get(String(id)); return i !== undefined && i < SF && visible(i); },
+      // how a page is drawn now: its alpha and its ring (153 is the chosen page's), for tests
+      drawn(id) { const i = idIndex.get(String(id)); return i === undefined ? null : { a: COL[i * 4 + 3], ring: FX[i * 4 + 3] }; },
+      // the pages that keep a faint glow (today's growth, until midnight; null clears)
+      faint(ids) {
+        if (!faintSet && !(ids && ids.length)) return;  // nothing glowed, nothing will: no restyle
+        faintSet = null;
+        for (const id of ids || []) {
+          const i = idIndex.get(String(id));
+          if (i !== undefined && i < SF) { faintSet = faintSet || new Uint8Array(N); faintSet[i] = 1; }
+        }
+        restyle();
       },
       // Board -> brain sync: light a page and its links as if hovered (no onHover callback).
       hoverId(id) {
@@ -3399,5 +3584,5 @@ void main() {
     };
   }
 
-  window.CortexBrain = { mount, STYLE_SCHEMA, PRESETS, DEFAULT_STYLE };
+  window.CortexBrain = { mount, STYLE_SCHEMA, PRESETS, DEFAULT_STYLE, GROWTH };
 })();

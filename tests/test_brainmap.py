@@ -172,6 +172,45 @@ def test_new_page_moves_nothing_and_lands_by_its_neighbour(made):
     assert "p-0-05" in [i for _, i in dist[:5]]
 
 
+
+def test_added_stamps_only_new_pages_and_keeps_them(made, monkeypatch):
+    root, vecs = made
+    layout = root / brainmap.LAYOUT
+    assert _brain(root)["nodes"]["added"] == {}  # a first layout: nothing is new
+    stamps = iter(["2026-11-20T09:00:00.000Z", "2026-11-20T10:00:00.000Z"])
+    monkeypatch.setattr(brainmap, "_now", lambda: next(stamps))
+    monkeypatch.setattr(brainmap, "_recent", dict)  # the fixed stamps above are kept
+    _note(root, "notes", "p-0-new", {"kind": "note", "related": '["[[hub-0]]"]'})
+    vecs["p-0-new"] = _unit(vecs["p-0-05"] + 0.01)
+    _write_vectors(root, vecs)
+    assert _brain(root)["nodes"]["added"] == {"p-0-new": "2026-11-20T09:00:00.000Z"}
+    _note(root, "notes", "p-1-new", {"kind": "note", "related": '["[[hub-1]]"]'})
+    b = _brain(root)
+    assert b["nodes"]["added"] == {"p-0-new": "2026-11-20T09:00:00.000Z",
+                                   "p-1-new": "2026-11-20T10:00:00.000Z"}
+    st = json.loads(layout.read_text(encoding="utf-8"))
+    assert st["added"] == b["nodes"]["added"]
+    assert _brain(root, relayout=True)["nodes"]["added"] == b["nodes"]["added"]  # survives
+    (root / "notes" / "p-1-new.md").unlink()
+    assert _brain(root)["nodes"]["added"] == {"p-0-new": "2026-11-20T09:00:00.000Z"}
+
+
+def test_an_old_layout_has_no_added_stamps(made):
+    root, _ = made
+    _brain(root)
+    layout = root / brainmap.LAYOUT
+    st = json.loads(layout.read_text(encoding="utf-8"))
+    del st["added"]  # a layout written before the stamps
+    layout.write_text(json.dumps(st), encoding="utf-8")
+    b = _brain(root)
+    assert b["nodes"]["added"] == {} and not b["stats"]["relayout"]
+    st["added"] = {"p-0-00": 5, "p-0-01": "2000-01-01T00:00:00.000Z"}  # odd values: ignored
+    layout.write_text(json.dumps(st), encoding="utf-8")
+    assert _brain(root)["nodes"]["added"] == {}  # too old for the blob
+    kept = json.loads(layout.read_text(encoding="utf-8"))["added"]
+    assert kept == {"p-0-01": "2000-01-01T00:00:00.000Z"}
+
+
 def test_related_lobes_lie_together(made):
     """By the 3-D distance between region centres, every lobe's nearest family is its own,
     its region touches a family member's, and a family lies together at under 0.7 of the mean

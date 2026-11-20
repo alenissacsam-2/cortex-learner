@@ -292,6 +292,8 @@ a.icon-btn { color: inherit; }
 .band-tools .seg button + button { border-left-color: var(--band-ink); }
 .band-tools .seg button[aria-pressed="true"] { background: var(--band-ink); color: var(--band); }
 .band-tools .band-btn { display: inline-flex; gap: 4px; align-items: center; }
+.today-group, .today-step { display: inline-flex; gap: 4px; align-items: center; }
+.today-at { font-size: 12.5px; white-space: nowrap; }
 .home-brain .band { flex-wrap: wrap; }
 .legend {
   position: absolute; left: 284px; bottom: 12px; z-index: 4; background: var(--panel);

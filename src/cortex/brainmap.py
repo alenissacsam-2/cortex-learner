@@ -32,6 +32,10 @@ Builder choices (measured on the real vault, see the report of 17 Nov 2026):
   sample nearest that centre, its normal the anchor's direction from the brain's centre;
 - a page new since the last layout goes to the similarity-weighted mean of its 3 nearest
   placed pages, so a near-duplicate lands by its twin;
+- the layout's `added` holds when each page first entered it (`_now`), kept through rewrites
+  and relayouts; a first layout and an old layout's pages have none, so an upgrade is never a
+  burst of new pages; the blob's `nodes.added` carries the last ADDED_DAYS days of them for
+  the app's growth moment;
 - touching regions are lobes whose samples share a voxel or two face-adjacent ones of a
   32-cube grid; each lobe wants the hue of its site's circular order around the vertical axis
   spread evenly over the wheel; touching lobes get hues 60 degrees apart by colouring the
@@ -53,7 +57,7 @@ import hashlib
 import json
 import logging
 import math
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 
 import numpy as np
@@ -101,6 +105,7 @@ RECENT = 30  # days: a node's weight for recency falls by e for each RECENT days
 PULL, JITTER = 0.35, 0.02  # fibre control points: toward the regions' centres, seeded jitter
 HUE_GAP, HUE_MIN = 60, 3  # degrees between touching regions' hues, and (where it fits) any two
 RELAYOUT_SHARE = 0.2
+ADDED_DAYS = 30  # the blob carries the `added` stamps of this many days (the app's growth moment)
 ROUTINES = {"journal", "you", "sessions", "placements", "browsing"}  # group lobes in the cerebellum
 FRONTAL = {"projects", "people"}  # group lobes pinned to the frontal pole
 ARCHIVE = {"chats"}  # group lobes on the basal ring (plus any lobe of kind "archive")
@@ -760,6 +765,17 @@ def _parse_layout(root) -> tuple[str, dict | None]:
     return text, st if ok else None
 
 
+def _now() -> str:
+    """An `added` stamp: UTC to the millisecond, as JavaScript's toISOString writes it."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _recent(added: dict) -> dict:
+    """The `added` stamps of the last ADDED_DAYS days, for the blob."""
+    cut = (datetime.now(UTC) - timedelta(days=ADDED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    return {i: v for i, v in added.items() if v >= cut}
+
+
 def _day(s) -> int:
     """A date string's day number; 0 when it has none."""
     try:
@@ -943,6 +959,12 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     aff = _affinity(cent, hasc, links, pl, clusters)
 
     old_text, st = _read_layout(root, memo)
+    # when each page first entered the layout: none for an old layout's pages or a first layout
+    had = set(st["pages"]) if st is not None else None
+    was_added = st.get("added") if st is not None else None
+    if not isinstance(was_added, dict):
+        was_added = {}
+    was_added = {i: v for i, v in was_added.items() if isinstance(v, str)}
     plid = [lid[k] for k in pl.tolist()]  # each page's lobe id
     hasl = has.tolist()
     changed = n if st is None else sum(
@@ -1073,6 +1095,9 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
     for k, i in enumerate(ids):
         if i not in st["pages"]:
             st["pages"][i] = [*(float(x) for x in pos[k]), lid[pl[k]], int(has[k])]
+    now = _now() if had is not None and any(i not in had for i in ids) else None
+    st["added"] = {i: v for i in ids if (v := was_added.get(i) or (
+        now if had is not None and i not in had else None))}
     text = json.dumps(st, sort_keys=True, separators=(",", ":"))
     if text != old_text:
         try:
@@ -1139,7 +1164,8 @@ def build(vault, pages: list[dict], clusters: list[dict], relayout: bool = False
         "legend": LEGEND,
         "nodes": {"ids": ids, "xyz": _b64(pos, "<f4"), "lobe": _b64(pl, "<u2"),
                   "depth": _b64(dep, "<f4"), "embedded": _b64(has, "u1"),
-                  "weight": _b64(np.clip(weight, 0, 1), "<f4")},
+                  "weight": _b64(np.clip(weight, 0, 1), "<f4"),
+                  "added": _recent(st["added"])},
         "lobes": [{"id": c["id"], "title": c["title"], "kind": c["kind"], "count": c["count"],
                    "anchor": _r(anchor[k]), "normal": _r(normal[k]), "centre": _r(centre[k]),
                    "color": color[k], "archive": bool(ring_k[k]),
@@ -1310,7 +1336,8 @@ def with_stem(brain: dict, sites: list[dict], placed: dict, total: int) -> dict:
              "depth": _b64(np.concatenate([col("depth", "<f4")[:, 0],
                                            np.maximum(-_field(xyz), 0) if m else []]), "<f4"),
              "embedded": _b64(np.concatenate([col("embedded", "u1")[:, 0], np.zeros(m)]), "u1"),
-             "weight": _b64(np.concatenate([col("weight", "<f4")[:, 0], weight]), "<f4")}
+             "weight": _b64(np.concatenate([col("weight", "<f4")[:, 0], weight]), "<f4"),
+             "added": nd.get("added", {})}  # pages only: a site is never a growth
     old_none, none = (0xFFFFFFFF if n0 >= 65535 else 65535), (0xFFFFFFFF if n >= 65535 else 65535)
     near = np.frombuffer(base64.b64decode(brain["near"]["ids"]),
                          "<u4" if n0 >= 65535 else "<u2").astype(np.int64).reshape(-1, N_NEAR)

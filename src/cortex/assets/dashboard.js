@@ -963,7 +963,11 @@
             el('span', 'k', n.kind === 'site' ? siteWords(n).join(' · ')
               : kindWord(n.kind) + (n.state ? ' · ' + LABEL[n.state] : '') + (c ? ' · ' + c.title : ''))]);
         },
-        onSelect(n, info) { if (info) { if (n.kind === 'site') inspectSite(n); else inspectPage(n.id, info); } },
+        onSelect(n, info) {
+          growClicked.add(n.id);  // a chosen page stops its faint growth glow
+          if (info) { if (n.kind === 'site') inspectSite(n); else inspectPage(n.id, info); }
+        },
+        onToday: syncToday,
         onCluster(c) { if (c) { markLobe(c.id); filterLibraryLobe(c.id); } },
         onLobe(c) { if (c) inspectLobe(c.id); },
         onMode: syncMode,
@@ -1001,6 +1005,8 @@
     syncMode(brain.mode);
     syncAlive(!!brain.alive);
     syncStem();
+    syncToday(null);
+    faintToday();
     return brain;
   }
   // No 3D brain: Home says so in one line, the Brain section opens on the 2D map.
@@ -1022,6 +1028,54 @@
     if (brainHost.parentNode !== slot) slot.append(brainHost);
     b.setArchive(slotId === 'brain-slot' && archiveOn);  // the unsorted-chat ring stays off on Home
     b.resize();
+    if (slotId === 'home-brain-slot') growCheck();
+  }
+  /* ---- the growth moment: the pages added since this viewer last saw the Home brain glow where it
+     grew (brain3d.js draws it). `cortex.brain.seenAt` keeps the newest `added` stamp shown; with
+     none yet, the first look only sets it. Storage may fail: the page's memory stands in. ---- */
+  const SEEN_KEY = 'cortex.brain.seenAt', GROWTH = (window.CortexBrain || {}).GROWTH;
+  const growClicked = new Set();
+  let seenMem = null, growWait = false, faintTimer = 0, countRaf = 0;
+  const store = () => { try { return window.localStorage; } catch (e) { return null; } };
+  function growCheck() {
+    if (!brain || !GROWTH || !D.brain || !D.brain.nodes) return null;
+    if (current !== 'home' || brainHost.parentNode !== $('home-brain-slot')) return null;  // the Home brain only
+    if (document.hidden) { growWait = true; return null; }  // played when the window shows again
+    growWait = false;
+    const added = D.brain.nodes.added || {}, kept = GROWTH.read(store(), SEEN_KEY);
+    const seen = kept && (!seenMem || kept > seenMem) ? kept : seenMem;
+    const p = GROWTH.pending(added, seen, (id) => brain.shows(id), new Date().toISOString());
+    if (p.newest && p.newest !== seen) { seenMem = p.newest; GROWTH.write(store(), SEEN_KEY, p.newest); }
+    const got = p.ids.length ? brain.grow(p.ids) : null;
+    if (got) {
+      countUp(got.n);
+      live(`The brain grew: ${got.labels.join(', ')}.`);
+    }
+    return got;
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && growWait) growCheck(); });
+  // today's new pages keep a faint glow until local midnight, or until chosen
+  function faintToday() {
+    if (!brain || !GROWTH || !D.brain || !D.brain.nodes) return;
+    const mid = new Date();
+    mid.setHours(0, 0, 0, 0);
+    brain.faint(GROWTH.since(D.brain.nodes.added, mid.getTime(), growClicked));
+    clearTimeout(faintTimer);
+    faintTimer = setTimeout(faintToday, Math.max(1000, mid.getTime() + 864e5 - Date.now() + 1000));
+  }
+  // the panel header's page count climbs from before the new pages to now (none under reduced motion)
+  function countUp(n) {
+    const line = $('lobe-line');
+    cancelAnimationFrame(countRaf);
+    if (REDUCED.matches || !line) return;
+    const to = D.pages.length, from = Math.max(0, to - n), t0 = performance.now();
+    const step = (t) => {
+      const p = Math.min(1, Math.max(0, (t - t0 - 400) / 1600)), e = p * p * (3 - 2 * p);
+      const k = p < 1 ? Math.round(from + (to - from) * e) : D.pages.length;
+      line.textContent = line.textContent.replace(/^[\d,]+/, k.toLocaleString('en'));
+      if (p < 1) countRaf = requestAnimationFrame(step);
+    };
+    step(t0);
   }
   // Live home: a new brain blob. brain3d.js has no incremental add, so the brain is mounted
   // again where it was (camera, selection, mode, Growth month, spin, style, filters) and the new
@@ -1037,7 +1091,7 @@
     const ids = remountIds, old = brain;
     remountIds = null;
     const keep = { camera: old.camera, mode: old.mode, style: old.style, selected: old.selected,
-      spin: old.spin, growth: old.growth, focused: old.focused, atStem: old.atStem };
+      spin: old.spin, growth: old.growth, focused: old.focused, atStem: old.atStem, today: old.todayIds };
     hideTip();
     old.destroy();
     brain = null;
@@ -1049,13 +1103,16 @@
     if (keep.selected) brain.reselect(keep.selected);
     if (keep.spin) brain.setSpin(true);
     if (keep.atStem) brain.atStem = true;
+    if (keep.today) brain.today(keep.today, keep.selected, true);
     syncStem();
     syncLook();
-    if (ids.length) {
+    findInBrain();
+    // new pages: the growth moment on Home; elsewhere (or nothing new to this viewer) they pop for 3 s
+    if (!growCheck() && ids.length) {
       brain.highlight(ids);
       clearTimeout(popTimer);
       popTimer = setTimeout(() => { if (brain) findInBrain(); }, 3000);
-    } else findInBrain();
+    }
   }
   function showInBrain(id) {
     show('brain');
@@ -1081,11 +1138,29 @@
     }
     return g;
   }
+  // Today, and while in it: the previous and next page of today with "k of n" between them
+  const todayUis = [];
   function todayBtn(cls) {
-    const b = button(cls, null, playToday);
-    b.title = 'Replay what you saved today, then settle on the first departure';
+    const b = button(cls + ' tbtn', null, playToday);
+    b.title = 'Show everything from today in the brain: pages taught, tested, asked about, added or saved; press again to leave Today';
     b.append(icon('target'), ' Today');
-    return b;
+    b.setAttribute('aria-pressed', 'false');
+    const at = el('span', 'today-at');
+    const stepper = el('span', 'today-step');
+    stepper.append(button(cls, '‹', () => { if (brain) brain.todayStep(-1); }, 'Previous page from today'), at,
+      button(cls, '›', () => { if (brain) brain.todayStep(1); }, 'Next page from today'));
+    stepper.hidden = true;
+    todayUis.push({ b, at, stepper });
+    const g = el('span', 'today-group');
+    g.append(b, stepper);
+    return g;
+  }
+  function syncToday(st) {
+    for (const u of todayUis) {
+      u.b.setAttribute('aria-pressed', String(!!st));
+      u.stepper.hidden = !st || st.n < 2;
+      u.at.textContent = st ? (st.at >= 0 ? `${st.at + 1} of ${st.n}` : `${st.n} today`) : '';
+    }
   }
   // Stem: fly to the browsing stem's websites; pressed again, back to the overview
   const stemBtns = [];
@@ -1104,12 +1179,16 @@
   }
   function playToday() {
     if (!brain) return;
+    if (brain.todayIds) { brain.overview(); live('Left Today.'); return; }
+    // all of today's work: the feed's today (taught, tested, asked, added, chats; events, which leave a
+    // concept's file alone) and every page saved today, newest first; the feed is already privacy-filtered
     const d = (p) => dateOf(p) || '';
-    const ids = D.pages.filter((p) => p.updated === TODAY && BRAIN_IDS.has(p.id))
-      .sort((a, b) => (d(b) > d(a) ? 1 : d(b) < d(a) ? -1 : 0)).slice(0, 30).map((p) => p.id);
-    const first = nextUp()[0], focusId = first && BRAIN_IDS.has(first.id) ? first.id : null;
-    brain.today(ids, focusId);
-    live(ids.length ? `Replaying ${plural(ids.length, 'page')} saved today.` : 'Nothing saved today.');
+    const saved = D.pages.filter((p) => p.updated === TODAY)
+      .sort((a, b) => (d(b) > d(a) ? 1 : d(b) < d(a) ? -1 : 0)).map((p) => p.id);
+    const ids = [...new Set([...((D.feed && D.feed.today) || []).map((i) => i.id), ...saved])]
+      .filter((id) => BRAIN_IDS.has(id));
+    brain.today(ids);
+    live(ids.length ? `Showing ${plural(ids.length, 'page')} from today.` : 'Nothing from today yet.');
   }
   function syncMode(m) {
     for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
