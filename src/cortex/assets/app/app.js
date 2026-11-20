@@ -949,14 +949,15 @@
   function profilesBoard(profiles, scopes) {
     const data = { profiles: profiles.profiles.map((p) => ({ ...p, scopes: [...p.scopes] })), unknown: [...profiles.unknown] };
     const checks = (list, label, key) => h('div', { class: 'sub' }, scopes.map((s) => {
-      const cb = h('input', { type: 'checkbox', id: `pf-${key}-${s}`, checked: list.includes(s), 'aria-label': `${label}: ${s}` });
+      const name = s === 'all' ? 'everything except private' : s;
+      const cb = h('input', { type: 'checkbox', id: `pf-${key}-${s}`, checked: list.includes(s), 'aria-label': `${label}: ${name}` });
       cb.addEventListener('change', () => {
         const i = list.indexOf(s);
         if (cb.checked && i < 0) list.push(s);
         if (!cb.checked && i >= 0) list.splice(i, 1);
         post('/api/profiles', data, () => savedMark(cb));
       });
-      return h('label', { class: 'check' }, cb, h('span', { text: s }));
+      return h('label', { class: 'check' }, cb, h('span', { text: name }));
     }));
     const prow = (title, sub, list, key) => h('div', { class: 'brow' },
       h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: title })),
@@ -964,7 +965,8 @@
     return board('Agent profiles', { note: 'what each AI app may read' },
       ...data.profiles.map((p, i) => prow(`Apps named “${p.match}”`, 'The first name that matches the app wins.', p.scopes, i)),
       prow('Any other app', 'Apps no name above matches.', data.unknown, 'other'),
-      h('div', { class: 'foot', text: 'all: everything, as before. core: your pinned lines. Each other scope: that section of your preferences. personal: your profile, goals, journal, people and past chats. Private pages are never shared.' }));
+      h('div', { class: 'foot', text: 'core: your pinned lines. projects: your project pages. learning: also the teaching contract. Each other scope: that section of your preferences. personal: your profile, goals, journal, people and past chats.' }),
+      h('div', { class: 'foot', text: 'Private pages never go to an AI app over MCP, under any profile.' }));
   }
   function confirmDialog(title, okText, body, ok) {  // the page's one confirm dialog
     const dlg = $('confirm');

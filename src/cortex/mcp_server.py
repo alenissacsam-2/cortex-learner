@@ -302,6 +302,7 @@ SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learnin
                   "personal": "Personal"}
 # SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
 CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core")
+SAID = 0.6  # R3-2: the share of a line's content words one logged user turn must hold
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
@@ -710,6 +711,32 @@ class Cortex:
         self._chat, self._chat_last[cid] = (cid, now), user
         return cid
 
+    def _unsaid(self, line: str) -> str | None:
+        """R3-2: why a relayed yes on `line` is not the user's: this chat read outside text, or
+        its live log (the prime prompt, chat_turn) holds user turns and none says the line (at
+        least SAID of its content words, review._bag). None: the yes stands (no log: as before)."""
+        if self.session.exposed:
+            return "this chat read outside text"
+        if not self._chat:
+            return None
+        try:
+            rows = (chats.export_root() / chats.LIVE / f"{self._chat[0]}.jsonl").read_text(
+                "utf-8").splitlines()
+        except OSError:
+            return None
+        turns = []
+        for x in rows:
+            try:
+                r = json.loads(x)
+                if r.get("type") == "user":
+                    turns.append(review._bag(str(r["message"]["content"])))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+        want = review._bag(line)
+        if not turns or not want or any(len(want & t) >= SAID * len(want) for t in turns):
+            return None
+        return "the user's messages in this chat do not say it"
+
     def _append(self, kind: str, fields: dict, key: str | None = None,
                 predicted_p: float | None = None, source: str = "tutor") -> dict:
         s = self.session
@@ -910,7 +937,8 @@ class Cortex:
             open_mistakes=sum(1 for m in mistakes.values() if m.status == "open"
                               and m.id not in hush),
             projects=[str(n.fields.get("title") or n.id) for n in self.vault.iter_notes("project")
-                      if n.fields.get("status") == "active" and not is_private(n)],
+                      if n.fields.get("status") == "active" and not is_private(n)
+                      and access.scope_kind(self._scopes(), "project")],
             loops=[r["title"] + (f" (due {r['due']})" if r["due"] and r["loop_type"] != "idea"
                                  else "") for r in open_loops],
             ideas=[r["title"] + (f" \u2014 {r['summary']}" if r["summary"] else "")
@@ -1226,7 +1254,7 @@ class Cortex:
                 put("Related", "\n".join(rel), "related", CONTEXT_CAPS["related"])
             ids = [h["id"] for h in hits]
             served["related"], trimmed["related"] = ids[:len(rel)], ids[len(rel):]
-        if scope in ("all", "projects"):
+        if scope in ("all", "projects") and access.scope_kind(self._scopes(), "project"):
             lines = [f"- {n.fields.get('title') or n.id}"
                      + (f" — {n.fields['summary']}" if n.fields.get("summary") else "")
                      for n in self.vault.iter_notes("project")
@@ -2327,6 +2355,23 @@ class Cortex:
                 "teaching-contract", "profile"):  # B3: no me/ page takes set_field
             raise VaultError("refused_exposed", "This chat has read outside text (a source, a raw "
                              f"file or a past chat), so it cannot change me/{nid}.md.")
+        # R3-2: a relayed yes counts only from a clean chat whose logged user turns say the line;
+        # the owner's clicks (the app, Cortex's own dialog) are never downgraded
+        if (user_confirmed and said != "yes" and not self.app_clicks and kind == "me"
+                and nid in claims.PAGES and op in ("append_to_section", "revise")
+                and (why := self._unsaid(text))):
+            if op == "revise" and nid in CONFIRM_PAGES:  # its unconfirmed path: a new line waits
+                cid = claims.resolve(self.vault, target, local_day(self._now()))
+                section = next((r["section"] for r in claims.rows(self.vault)
+                                if r["id"] == cid and r["page"] == nid), None)
+                if section is None:
+                    raise invalid(f"{target} is not a live claim on me/{nid}; read it first.")
+                op, until, target = "append_to_section", None, section
+            out = self.cortex_patch(id, op, target, text, key, False, until, ctx)
+            if out.get("queued") or out.get("changed"):  # changed: a goals line, served (ask)
+                out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "
+                               "in the Cortex app; say so in one line and go on.")
+            return out
         claim_page = kind == "me" and nid in claims.PAGES
         contract = kind == "me" and nid == "teaching-contract"
         if contract and not self.app_clicks:  # E2: only Approve in the Cortex app applies a rule

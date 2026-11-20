@@ -88,17 +88,20 @@ def test_fresh_marker_exposes(root, monkeypatch):
     async def body(call):
         await call("cortex_patch", {**PREF, "text": "- Before"})
         assert taint.run(hook("mcp__Claude_Browser__get_page_text"))
-        await call("cortex_patch", {**PREF, "text": "- After"})
+        out = await call("cortex_patch", {**PREF, "text": "- After"})
+        assert out["queued"] is True  # R3-2: a relayed yes after outside text waits in Review
         out = await call("cortex_patch", RULE)
         assert out["error"] == "refused_exposed"
         await call("cortex_end")  # v6 T2: the next session within 2 h is still exposed
         out = await call("cortex_patch", {**PREF, "text": "- Fresh"})
-        assert out["changed"] is True
+        assert out["queued"] is True and "outside text" in out["next"]
         assert (await call("cortex_patch", RULE))["error"] == "refused_exposed"
 
     run(root, body)
     got = tiers(root)
-    assert (got["Before"], got["After"], got["Fresh"]) == ("confirmed", "exposed", "exposed")
+    assert got["Before"] == "confirmed" and "After" not in got and "Fresh" not in got
+    inbox = (root / "inbox.md").read_text(encoding="utf-8")
+    assert "Coding: After" in inbox and "Coding: Fresh" in inbox
 
 
 def test_exposed_session_cannot_change_contract_or_profile(root, monkeypatch):

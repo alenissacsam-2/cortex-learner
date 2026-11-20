@@ -102,15 +102,15 @@ def audience_of_study(subjects: Iterable[str], hidden: Iterable[str], *,
 # A profile (cortex.profiles) names the context scopes an MCP client may get; None or "all" is
 # everything. A me/ page sits under one scope whole, except preferences and personality, whose
 # `## ` sections each sit under one (the cortex_context scopes: a preferences section is named
-# after its scope). Journal and people pages are personal.
+# after its scope). Journal and people pages are personal; project pages are projects.
 SCOPES = ("all", "core", "coding", "communication", "learning", "projects", "environment",
           "career", "personal")
 SECTIONED = ("preferences", "personality")
-# me/ pages outside SECTIONED: their scope, None for every client (rules for the AI, not facts
-# about the user); a page not listed is "personal"
-PAGE_SCOPE = {"core": "core", "teaching-contract": None}
+# me/ pages outside SECTIONED: their scope (the teaching contract is for tutors, not coding
+# agents); a page not listed is "personal"
+PAGE_SCOPE = {"core": "core", "teaching-contract": "learning"}
 PERSONALITY_SCOPE = {"communication": "communication", "how i think": "learning"}
-KIND_SCOPE = {"journal": "personal", "person": "personal"}
+KIND_SCOPE = {"journal": "personal", "person": "personal", "project": "projects"}
 
 
 def _all(scopes) -> bool:
@@ -138,5 +138,6 @@ def scope_section(scopes, page: str, heading: str) -> bool:
 
 
 def scope_kind(scopes, kind: str) -> bool:
-    """May a client with `scopes` get vault pages of `kind` (journal and people: personal)?"""
+    """May a client with `scopes` get vault pages of `kind` (journal and people: personal;
+    project: projects)?"""
     return _all(scopes) or KIND_SCOPE.get(kind) is None or KIND_SCOPE[kind] in scopes

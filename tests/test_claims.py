@@ -77,21 +77,23 @@ def test_ids_written_and_tiers(root):
     write(root, "raw/src.md", "outside text\n")
     pref = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
             "user_confirmed": True}
+    # R3-2: an exposed yes on preferences waits in Review, so exposure is seen on goals lines
+    goal = {"id": "me/goals", "op": "append_to_section", "target": "Now"}
 
     async def body(call):
         out = await call("cortex_patch", {**pref, "text": "- Vim ^c-zzzzz"})  # model id ignored
         assert ID.match(out["claim"]) and out["claim"] != "c-zzzzz"
-        await call("cortex_patch", {"id": "me/goals", "op": "append_to_section",
-                                    "target": "Now", "text": "Ship v5"})
+        await call("cortex_patch", {**goal, "text": "Ship v5"})
         await call("cortex_read", {"id": "raw/src.md"})
-        await call("cortex_patch", {**pref, "text": "- Tabs"})
+        await call("cortex_patch", {**goal, "text": "- Tabs"})
+        assert (await call("cortex_patch", {**pref, "text": "- Spaces"}))["queued"] is True
         await call("cortex_end")
         await call("cortex_read", {"id": "raw/src.md"})  # no session: marks the next ambient
-        await call("cortex_patch", {**pref, "text": "- Fish shell"})
+        await call("cortex_patch", {**goal, "text": "- Fish shell"})
         await call("cortex_end")
-        await call("cortex_patch", {**pref, "text": "- Dark mode"})  # v6 T2: a close keeps it
+        await call("cortex_patch", {**goal, "text": "- Dark mode"})  # v6 T2: a close keeps it
         await call("cortex_start", {"mode": "capture"})
-        await call("cortex_patch", {**pref, "text": "- Light mode"})
+        await call("cortex_patch", {**goal, "text": "- Light mode"})
 
     run(root, body)
     prefs = read(root, "me/preferences.md")
