@@ -35,7 +35,11 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ### The Cortex app
 
-`cortex app` opens a page on this computer (127.0.0.1, with a key that changes each launch). It walks a new user through setup and then manages everything else.
+Cortex is its own Windows app: a window and a tray icon. It starts with Windows, and closing the window keeps it running in the tray. Its first page is the live home: the 3D brain, a feed of what you did today and this week, Next up, your exams and deadlines, and a quick chat box. It stays current by itself; new pages join the brain next to their neighbours. The gear button opens Settings (Setup, Chat, Status, Connect AI apps, Local model, Browsing, Vault). The window shows a page served on this computer only (127.0.0.1, with a key that changes each launch); `cortex app` opens the same page in a browser.
+
+A **Private switch** in the header (Windows Hello) shows private notes and private browsing for 10 minutes; minimising the window locks it again. While it is off, private items are neither shown nor counted.
+
+**Every chat is logged.** Past and new Claude Code, Desktop Code and Cowork chats import themselves every 5 minutes, with no model; coding sessions become short project summaries, never code. In the Claude desktop app's Chat tab, Claude logs each chat through Cortex as it goes.
 
 **Setup** goes one step at a time, and every step can be skipped and done later.
 
@@ -49,7 +53,7 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ![Add your history with the ChatGPT guide open](docs/images/app-import.png)
 
-**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only. After your first import, new history comes in by itself every 6 hours (you can change it) while the app or the receiver runs, from the browsers you imported before, since browsers keep only about 90 days. **Status** warns when the last import gets old.
+**Browsing** sets who may read each category of your browsing: *Don't save*, *Local AI only* or *Cloud AI apps can read*. Adult is not saved by default, and every other sensitive category starts as local-only. After your first import, new history comes in by itself every 10 minutes while the app runs (every 6 hours with only the receiver; you can change it), from the browsers you imported before, since browsers keep only about 90 days. The local model checks new page titles only while the computer is idle and the model is already loaded; Cortex never loads a model for this. Browsing is kept in Cortex's own database, and each site is a dot in the brain's stem. **Status** warns when the last import gets old.
 
 ![Browsing privacy: the cloud switch is off and each sensitive category has its own three-way choice](docs/images/app-privacy.png)
 
@@ -63,9 +67,9 @@ Cortex keeps a model of you as a learner and a store of what you know, in a fold
 
 ![Local model: Ollama with two models, LM Studio not found, the chosen model, the on switch and the Download board with the size this computer suits](docs/images/app-local-model.png)
 
-### The dashboard
+### The home page
 
-`cortex dashboard` writes a single offline HTML page from your vault and opens it. It has no network access (its content security policy is `default-src 'none'`).
+The app's home (also opened by `cortex dashboard`) has the tabs below. **Export snapshot** saves a single offline copy of your non-private pages wherever you choose; that file has no network access (its content security policy is `default-src 'none'`). Cortex no longer writes a `dashboard.html` into your vault.
 
 The **Study** tab shows today's plan in order, the tests coming up with how ready you are, and your open mistakes.
 
@@ -79,7 +83,7 @@ The readiness forecast for a test stays hidden until Cortex has 30 checked revie
 
 ### The 3D brain
 
-The **Brain** tab draws your vault as a brain: each topic is a lobe with its own colour, bright fibres are your own links, faint fibres join pages with similar meaning, and a halo marks pages saved in the last 7 days. Drag to turn, scroll to zoom, click a page to see its connections. A 2D map and a list are one click away. It uses WebGL2 and falls back to a flat canvas.
+The **Brain** tab draws your vault as a brain: each topic is a lobe with its own colour, bright fibres are your own links, faint fibres join pages with similar meaning, and a halo marks pages saved in the last 7 days. Below the brain, the stem holds your browsing: one dot per site, sized by visits, glowing by how recently you went there and coloured by category; the **Stem** button flies to it, and clicking a site shows its days and searches. Drag to turn, scroll to zoom, click a page to see its connections. A 2D map and a list are one click away. It uses WebGL2 and falls back to a flat canvas.
 
 ![The 3D brain: lobes labelled Programming, Unfiled, About you and others, with filters on the left](docs/images/dashboard-brain.png)
 
@@ -242,7 +246,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 | `cortex digest` | Review chats imported since the last digest and confirm their topics |
 | `cortex ask "question"` | Answer from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex recall "query"` | Search your vault by meaning and keywords |
-| `cortex dashboard` | Build and open the offline dashboard |
+| `cortex dashboard` | Open the Cortex app's home (starts the app if needed) |
 | `cortex doctor` | Health check, with a fix for each problem |
 | `cortex backup` | Zip the whole vault, history included |
 | `cortex undo <session>` | Revert one chat's changes |
