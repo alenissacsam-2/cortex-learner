@@ -139,6 +139,18 @@ class Job:
         self.running, self.started, self.ended = True, time.time(), None
         self.cancelled = threading.Event()
         self.proc = None
+        self.steps: dict | None = None  # a stepped job's place (`progress`)
+
+    def progress(self, step: int, steps: int, done: int, total: int, label: str) -> None:
+        """Where a stepped job is: step `step` of `steps`, named `label`, `done` of `total` in
+        it. The overall share never goes back."""
+        frac = min(max(done / total, 0.0), 1.0) if total else 0.0
+        overall = ((step - 1) + frac) / steps if steps else 0.0
+        if self.steps is not None:
+            overall = max(overall, self.steps["overall"])
+        self.steps = {"step": step, "steps": steps, "label": label, "done": done,
+                      "total": total, "pct": round(frac * 100), "overall": overall,
+                      "at": time.time()}
 
     def say(self, line) -> None:
         self.lines.append(str(line)[:400])
@@ -153,10 +165,19 @@ class Job:
                 pass
 
     def view(self) -> dict:
-        return {"name": self.name, "section": self.section, "running": self.running,
-                "cancellable": self.cancellable, "line": self.lines[-1] if self.lines else "",
-                "seconds": round((self.ended or time.time()) - self.started, 1),
-                "result": self.result, "error": self.error}
+        out = {"name": self.name, "section": self.section, "running": self.running,
+               "cancellable": self.cancellable, "line": self.lines[-1] if self.lines else "",
+               "seconds": round((self.ended or time.time()) - self.started, 1),
+               "result": self.result, "error": self.error}
+        if (s := self.steps) is not None:
+            took, overall = s["at"] - self.started, s["overall"]
+            # time left from the pace so far, once there is a pace to go by
+            eta = took * (1 - overall) / overall if overall >= 0.02 and took >= 2 else None
+            out["progress"] = {**{k: s[k] for k in ("step", "steps", "label", "done", "total",
+                                                    "pct")},
+                               "overall": round(overall * 100),
+                               "eta_s": None if eta is None else round(eta)}
+        return out
 
 
 class Jobs:
@@ -631,28 +652,37 @@ class App:
         return {"ok": True}
 
     def auto_import(self) -> dict | None:
-        """Start the ordinary history import (only the browsers and profiles imported before,
-        incremental) when
-        `browse_serve.auto_import_due` says so and no job runs; None when it did not. The
-        in-app receiver's Processor does the same check, so the app leaves it to that."""
+        """The live import, every AUTO_EVERY_S (browse.auto_import_hours 0 turns it off): only
+        the new visits of the browsers and profiles imported before, quietly (no job: it takes
+        seconds), when no job runs and the browse-wide lock is free; never before the user's
+        first import. The site pages first move into the store (`store.migrate`), as a job
+        with its steps when there are pages to move. {"live": counts}, {"job": ...}, or None
+        when it did not run."""
         from cortex import browse_serve
+        from cortex.browse import load_settings, store
         from cortex.vault import Vault
-        if not self.entry() or self.receiver.srv is not None or self.jobs.running():
+        if not self.entry() or self.jobs.running():
             return None
-        if not status.embedding()["downloaded"]:  # the import job would stop at once, every
-            return None                            # 10 minutes: wait for the search model
+        if not status.embedding()["downloaded"]:  # every page would land under Other: wait
+            return None                            # for the search model
         root = self.root
-        if not browse_serve.auto_import_due(Vault(root)):
+        v = Vault(root)
+        if not browse_serve.auto_import_due(v, live=True):
             return None
-        keys = {s.key for s in browse_serve.auto_sources(Vault(root))}  # never an unticked one
-        if not keys:
+        srcs = browse_serve.auto_sources(v)  # never an unticked one
+        if not srcs:
             return None
-        try:
-            return self.jobs.start("Importing new history", "browse",
-                                   lambda job: actions.history_import(job, root, keys),
-                                   cancellable=True, quiet_errors=True)
-        except Busy:  # a job started meanwhile: the next check tries again
-            return None
+        if not store.migrated(v):
+            if store._site_page_files(v):
+                try:
+                    return self.jobs.start("Moving site pages into Cortex", "browse",
+                                           lambda job: actions.browse_migrate(job, root),
+                                           quiet_errors=True)
+                except Busy:
+                    return None
+            store.migrate(v, settings=load_settings())  # no page to move: only marks it done
+        return {"live": status.safe(browse_serve.run_import(v, srcs=srcs,
+                                                            say=lambda s: None))}
 
     def chat_import_auto(self) -> dict | None:
         """Start a chat import job (chat_import.run) when the setting is on, a vault is set up,
@@ -1495,7 +1525,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         app.stop.set()
         srv.shutdown()
 
-    def auto():  # browse.auto_import_hours: first check after a minute, then every 10
+    def auto():  # the live import: first after a minute, then every 10
         from cortex import browse_serve
         wait = browse_serve.AUTO_FIRST_S
         while not app.stop.wait(wait):
@@ -1503,7 +1533,8 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             try:
                 app.auto_import()
             except Exception as e:  # noqa: BLE001  (the next check tries again)
-                echo(f"cortex app: automatic import check failed ({type(e).__name__})")
+                echo(f"cortex app: live import failed ({type(e).__name__}); retried in "
+                     f"{browse_serve.AUTO_EVERY_S // 60} minutes")
 
     def chats():  # app.chat_import: the first pass a minute after start, then every 5 minutes
         from cortex import chat_import

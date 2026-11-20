@@ -1,6 +1,7 @@
 """Vault backup copies: one zip of the whole vault, .git included, and the durable browse stores
 in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, the
-receiver's not-yet-imported inbox-*.jsonl, filtered like the archive, and vectors-private.npz),
+receiver's not-yet-imported inbox-*.jsonl, filtered like the archive, vectors-private.npz and
+the browsing store, store.db, copied by SQLite's own backup, never the live file and its WAL),
 which hold browsing the browsers have already forgotten. Left out: old backups, the pairing
 token, the local chat history (.cortex/browse/chat), lock files, the rebuilt dashboard and
 stray *.tmp files.
@@ -9,7 +10,9 @@ A zip holds private browsing: keep it as private as the vault. The last KEEP zip
 from __future__ import annotations
 
 import os
+import sqlite3
 import zipfile
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -26,8 +29,10 @@ def backup(root: Path, dest_dir: Path | None = None) -> Path:
     dest = dest_dir / f"cortex-{datetime.now():%Y%m%d-%H%M%S}.zip"
     tmp = dest.with_suffix(".zip.tmp")
     skip_dirs = (skip, dest_dir, browse / "chat")
+    db = browse / "store.db"
     skip_files = (tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
-                  browse / "lock", browse / "token")
+                  browse / "lock", browse / "token", db, browse / "store.db-wal",
+                  browse / "store.db-shm")
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
             for dirpath, dirnames, filenames in os.walk(root):
@@ -38,6 +43,15 @@ def backup(root: Path, dest_dir: Path | None = None) -> Path:
                     if p in skip_files or p.suffix == ".tmp":
                         continue
                     z.write(p, p.relative_to(root).as_posix())
+            if db.is_file():
+                snap = tmp.with_suffix(".db.tmp")
+                try:
+                    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as src, \
+                            closing(sqlite3.connect(snap)) as dst:
+                        src.backup(dst)
+                    z.write(snap, db.relative_to(root).as_posix())
+                finally:
+                    snap.unlink(missing_ok=True)
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)

@@ -2506,7 +2506,12 @@ def browse_import(since: Annotated[str | None, typer.Option(
         typer.echo(NO_MODEL)
     from cortex import localllm
 
-    runner, budget = (_local_llm(background=True) if localllm.enabled() else None), None
+    runner, budget = None, None
+    if localllm.enabled():
+        try:  # the model only when it is already loaded: an import never loads one
+            runner = localllm.find_loaded()
+        except ValueError as e:  # a non-loopback localllm.url is refused
+            typer.echo(f"local LLM not used: {e}", err=True)
     if runner is not None:
         cfg = taint.config().get("localllm")
         secs = cfg.get("budget_s", 300) if isinstance(cfg, dict) else 300
@@ -2521,8 +2526,8 @@ def browse_import(since: Annotated[str | None, typer.Option(
                       since=since, dry_run=dry_run, progress=progress, say=typer.echo,
                       takeout=google)
     except KeyboardInterrupt:
-        typer.echo("stopped: every page on disk is whole and nothing was marked as imported; "
-                   "run the import again to finish", err=True)
+        typer.echo("stopped: every page on disk is whole and what was read is saved; run the "
+                   "import again to finish", err=True)
         raise typer.Exit(130) from None
     took = time.perf_counter() - t0
     if google is not None:

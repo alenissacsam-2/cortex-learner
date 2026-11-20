@@ -57,6 +57,10 @@ def fake_local(labels, summary=None):
         got = labels.get(text, "ordinary")
         return None if got is None else (got, 0.9)
     r.classify = classify
+
+    def classify_many(texts, labels_, *, timeout=60, budget=None):  # a batch: line by line
+        return {i: got[0] for i, t in enumerate(texts) if (got := classify(t, labels_))}
+    r.classify_many = classify_many
     r.summarise = lambda *a, **k: summary
     return r
 

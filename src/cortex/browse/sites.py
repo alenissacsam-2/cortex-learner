@@ -10,6 +10,9 @@ from the settings of that moment. `write` makes, through `cortex.vault` only:
 - `browse/sites/browse-sites.md`, `browse/sites.csv` and `browse/browse-profile.md` from the
   visible pages only, and their private twins from every page plus the hidden categories;
 - with `browse.visible_to_claude: false` every page is a hidden one.
+Once `cortex.browse.store.migrate` moved the site pages out of the vault, `write` saves them as
+rows in the browsing store instead (`store.site_rows` reads them) and makes only the CSVs and
+the profiles, whose site lines then carry no link.
 A visible file never holds a host, title, search term, count or link that came from a hidden
 item: led-by searches and co-visited sites are filtered by the same rule. Ids carry the
 `browse-` prefix (ids are unique across kinds). Unchanged pages are never rewritten (a content
@@ -241,8 +244,12 @@ def lean_days(vault: Vault) -> dict:
 
 def load_verdicts(vault: Vault) -> dict[str, str]:
     """{privacy.text_key(text): label}: the local model's verdicts on titles and search terms
-    (a sensitive category or "ordinary"); hashes only, never the text."""
-    return {k: v for k, v in _load(vault, VERDICTS).items() if isinstance(v, str)}
+    (a sensitive category or "ordinary"); hashes only, never the text. The older JSON file's
+    and the store's (`cortex.browse.store`), the store's winning."""
+    from cortex.browse import store
+
+    return {**{k: v for k, v in _load(vault, VERDICTS).items() if isinstance(v, str)},
+            **store.verdicts(vault)}
 
 
 def load_cache(vault: Vault) -> dict:
@@ -254,12 +261,12 @@ def load_cache(vault: Vault) -> dict:
 # ---- recording ----------------------------------------------------------------------------
 
 def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start: str,
-           held: set[str] | None, days: dict | None = None) -> dict:
+           held: set[str] | None, days: dict | None = None, save: bool = True) -> dict:
     """Replace the counts of every day from `start` on that a source still holds (`held`;
     None: every day) with those of `items`; a day no source holds (forgotten by the browser,
-    or from Takeout only) keeps its counts. Drop any key of a category now in
-    skip_categories, and save. `days`: the counts already loaded (`load_days`). Returns the
-    per-day counts."""
+    or from Takeout only) keeps its counts, and save (`save_days`; with `save` False the
+    caller does). `days`: the counts already loaded (`load_days`). Returns the per-day
+    counts."""
     days = load_days(vault)[0] if days is None else days
     for d in list(days):
         if not isinstance(days[d], dict) or (d >= start and (held is None or d in held)):
@@ -313,12 +320,18 @@ def record(vault: Vault, items: list, where: dict, settings: Settings, tz, start
                 for b in keys:
                     if _split(b)[0] != _split(a)[0]:
                         co[b] = co.get(b, 0) + 1
+    if save:
+        save_days(vault, days, settings)
+    return days
+
+
+def save_days(vault: Vault, days: dict, settings: Settings) -> None:
+    """Save the per-day counts, without any key of a category now in skip_categories."""
     skip = set(settings.skip_categories)
     for d in days.values():
         for key in [k for k in d if _split(k)[1] in skip]:
             del d[key]
     _save(vault, DAYS, days)
-    return days
 
 
 # ---- the pages ----------------------------------------------------------------------------
@@ -615,7 +628,8 @@ def _csv(shown: list[Page], tz, hidden_col: bool) -> str:
     return buf.getvalue()
 
 
-def _profile_text(shown: list[Page], hidden_profile: bool, settings: Settings) -> str:
+def _profile_text(shown: list[Page], hidden_profile: bool, settings: Settings,
+                  linked: bool = True) -> str:
     pid = HIDDEN_PROFILE_ID if hidden_profile else PROFILE_ID
     fields = {"id": pid, "title": "Browsing profile" + (" (private)" if hidden_profile else ""),
               "kind": "browse"}
@@ -636,8 +650,8 @@ def _profile_text(shown: list[Page], hidden_profile: bool, settings: Settings) -
         c[0], c[1], c[2] = c[0] + p.visits, c[1] + p.secs, c[2] + 1
     total = sum(p.visits for p in shown)
     out = [f"# {fields['title']}", "",
-           f"Up: [[{HIDDEN_INDEX_ID if hidden_profile else INDEX_ID}]]", "",
-           f"{total} visits to {len(shown)} sites."]
+           *([f"Up: [[{HIDDEN_INDEX_ID if hidden_profile else INDEX_ID}]]", ""] if linked
+             else []), f"{total} visits to {len(shown)} sites."]
     out += ["", "## When I browse", "", "### By hour",
             *[f"- {h:02d}:00 · {hours[h]} visits" for h in range(24) if hours[h]],
             "", "### By weekday", *[f"- {WEEKDAYS[d]} · {weekdays[d]} visits"
@@ -645,7 +659,8 @@ def _profile_text(shown: list[Page], hidden_profile: bool, settings: Settings) -
     out += ["", "## Top categories", *[
         f"- {c} · {v} visits · {_dur(s)} · {n} site{'s' if n != 1 else ''}"
         for c, (v, s, n) in sorted(cats.items(), key=lambda x: (-x[1][0], x[0]))]]
-    out += ["", "## Top sites", *[f"- [[{p.id}]] · {p.category} · {p.visits} visits · "
+    out += ["", "## Top sites", *[f"- {f'[[{p.id}]]' if linked else p.site} · {p.category} · "
+                                  f"{p.visits} visits · "
                                   f"{_dur(p.secs)}" for p in
                                   sorted(shown, key=lambda p: (-p.visits, p.site))[:TOP_SITES]]]
     if hubs:
@@ -716,6 +731,10 @@ def write(vault: Vault, settings: Settings, tz=None, *, say=None, days: dict | N
     no longer made (a site that moved category or side), never a file this module did not
     make. `bad`: the name an unreadable site-days.json was set aside as this run
     (`load_days`); then nothing is removed. Counts only."""
+    from contextlib import closing
+
+    from cortex.browse import store
+
     say = say or (lambda s: None)
     if days is None:
         days, bad = load_days(vault)
@@ -725,18 +744,24 @@ def write(vault: Vault, settings: Settings, tz=None, *, say=None, days: dict | N
     vis = [p for p in allp.values() if not p.hidden]
     files: dict[str, str] = {}
     ids = {p.id: p for p in allp.values()}
-    for p in allp.values():
+    md = not store.migrated(vault)  # else the site pages are the store's rows
+    for p in allp.values() if md else ():
         rel, text = _page_text(p, ids, cache["llm"], tz)
         files[rel] = text
     every = list(allp.values())
     if vis:
-        files[f"{SITES_DIR}/{INDEX_ID}.md"] = _index_text(vis, False)
+        if md:
+            files[f"{SITES_DIR}/{INDEX_ID}.md"] = _index_text(vis, False)
         files[CSV_PATH] = _csv(vis, tz, False)
-        files[f"{DIR}/{PROFILE_ID}.md"] = _profile_text(vis, False, settings)
+        files[f"{DIR}/{PROFILE_ID}.md"] = _profile_text(vis, False, settings, md)
     if every:
-        files[f"{HIDDEN_SITES_DIR}/{HIDDEN_INDEX_ID}.md"] = _index_text(every, True)
+        if md:
+            files[f"{HIDDEN_SITES_DIR}/{HIDDEN_INDEX_ID}.md"] = _index_text(every, True)
         files[HIDDEN_CSV] = _csv(every, tz, True)
-        files[f"{HIDDEN}/{HIDDEN_PROFILE_ID}.md"] = _profile_text(every, True, settings)
+        files[f"{HIDDEN}/{HIDDEN_PROFILE_ID}.md"] = _profile_text(every, True, settings, md)
+    if not md and not bad:  # with the counts set aside (a torn file) the rows stay as they are
+        with closing(store.connect(vault)) as con:
+            store.put_pages(con, allp, cache["llm"])
     old: dict = cache["hashes"]
     new: dict[str, str] = {}
     c: Counter = Counter()

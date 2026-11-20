@@ -6,6 +6,7 @@ while the browser runs), opened read-only and deleted again; a browser file is n
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -39,11 +40,15 @@ GAP_CAP = 600.0  # seconds: a visit lasts until the next one, at most this long
 TEMP_PREFIX, STALE_SECS = "cortex-browse-", 3600
 CHROMIUM_SQL = """
 SELECT v.visit_time, v.visit_duration, v.transition, u.url, u.title,
-       (SELECT k.term FROM keyword_search_terms k WHERE k.url_id = u.id LIMIT 1)
-FROM visits v JOIN urls u ON u.id = v.url ORDER BY v.visit_time"""
+       (SELECT k.term FROM keyword_search_terms k WHERE k.url_id = u.id LIMIT 1), v.rowid
+FROM visits v JOIN urls u ON u.id = v.url {where} ORDER BY v.visit_time"""
 FIREFOX_SQL = """
-SELECT v.visit_date, v.visit_type, p.url, p.title
-FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id ORDER BY v.visit_date"""
+SELECT v.visit_date, v.visit_type, p.url, p.title, v.rowid
+FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id {where} ORDER BY v.visit_date"""
+# rows past the cursor: a new visit id, or a time in the last GAP_CAP before the newest time
+# read (re-read, so the last visit's time on the page is measured to the visit after it)
+_SINCE = {"chromium": "WHERE v.rowid > ? OR v.visit_time >= ?",
+          "firefox": "WHERE v.rowid > ? OR v.visit_date >= ?"}
 
 
 class CopyFailed(OSError):
@@ -81,6 +86,9 @@ class Visit:
     source: str = ""
     excerpt: str = ""  # from the extension's inbox only
     channel: str = ""  # a video's channel, from the extension's inbox only
+    # "<raw time>:<URL hash>": the visit's key in cortex.browse.store, the same however the
+    # browser numbers its rows (a rebuilt History file, a reused id)
+    native: str = ""
 
 
 def _profiles(browser: str, folder: Path, name: str) -> list[Source]:
@@ -203,26 +211,92 @@ def read(src: Source) -> tuple[list[Visit], int | None]:
     A visit lasts until the next one (at most GAP_CAP), or its recorded duration if shorter.
     A row whose time is not an integer, negative or out of range is skipped (second review
     L1), so one bad row never aborts the source or moves the cursor into the future."""
-    sweep()
-    with _copy(src.path) as con:
-        if src.browser == "firefox":
-            rows = [(t, 0, u, ti, None) for t, ty, u, ti in con.execute(FIREFOX_SQL)
-                    if ty not in FF_SKIP]
-        else:
-            rows = [(t, d, u, ti, k) for t, d, tr, u, ti, k in con.execute(CHROMIUM_SQL)
-                    if not isinstance(tr, int) or tr & 0xFF not in SUBFRAME]
-    late = datetime.now(UTC) + timedelta(days=1)
-    rows = [r for r in rows if _sane(src.browser, r[0], late)]
-    rows = [(t, d if isinstance(d, int) else 0, *rest) for t, d, *rest in rows]
-    out = []
-    for n, (raw, dur, url, title, term) in enumerate(rows):
-        gap = (rows[n + 1][0] - raw) / 1e6 if n + 1 < len(rows) else GAP_CAP
-        secs = min(max(gap, 0.0), GAP_CAP)
+    visits, top, _ = read_since(src)
+    return visits, top
+
+
+def read_since(src: Source, after_id: int | None = None, after_time: int | None = None
+               ) -> tuple[list[Visit], int | None, int | None]:
+    """The visits of `src` past a cursor, all at once (`Since` reads them in chunks): the
+    visits, oldest first, then the newest raw time and visit id read (the next cursor)."""
+    with Since(src, after_id, after_time) as rd:
+        out = [v for chunk in rd.chunks() for v in chunk]
+    return out, rd.top_time, rd.top_id
+
+
+class Since:
+    """The visits of `src` past a cursor (`after_id`, `after_time`: the newest visit id and
+    raw time read before; None reads all), from a temp copy of its History file while open:
+    `total` rows to go through, `chunks(n)` yields them as Visits, oldest first, with their
+    `native` key, n at a time (memory stays bounded however long the history), then
+    `top_time` and `top_id` hold the next cursor (None when nothing was read). Visits of the
+    last GAP_CAP before `after_time` are read again, so their time on the page is measured to
+    the next visit. Only the rows past the cursor are fetched (the History file's indexes on
+    the visit id and time), so a run with nothing new reads next to nothing."""
+
+    def __init__(self, src: Source, after_id: int | None = None,
+                 after_time: int | None = None):
+        self.src, self.total = src, 0
+        self.top_time: int | None = None
+        self.top_id: int | None = None
+        since = after_id is not None and after_time is not None
+        self._where = _SINCE["firefox" if src.browser == "firefox" else "chromium"] \
+            if since else ""
+        self._args = (after_id, after_time - int(GAP_CAP * 1e6)) if since else ()
+
+    def __enter__(self) -> Since:
+        sweep()
+        self._copy = _copy(self.src.path)
+        self._con = self._copy.__enter__()
+        try:
+            table = "moz_historyvisits" if self.src.browser == "firefox" else "visits"
+            self.total = self._con.execute(
+                f"SELECT COUNT(*) FROM {table} v {self._where}", self._args).fetchone()[0]
+        except BaseException:
+            self._copy.__exit__(None, None, None)
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._copy.__exit__(*exc)
+
+    def chunks(self, n: int = 1000) -> Iterator[list[Visit]]:
+        ff = self.src.browser == "firefox"
+        sql = (FIREFOX_SQL if ff else CHROMIUM_SQL).format(where=self._where)
+        late = datetime.now(UTC) + timedelta(days=1)
+        out: list[Visit] = []
+        last = None  # the row before: its time on the page is measured to this one
+        for r in self._con.execute(sql, self._args):
+            if ff:
+                raw, ty, url, title, rid = r
+                dur, term, keep = 0, None, ty not in FF_SKIP
+            else:
+                raw, dur, tr, url, title, term, rid = r
+                keep = not isinstance(tr, int) or tr & 0xFF not in SUBFRAME
+            if isinstance(rid, int):  # a frame moves the cursor too
+                self.top_id = rid if self.top_id is None else max(self.top_id, rid)
+            if not keep or not _sane(self.src.browser, raw, late):
+                continue
+            if last is not None:
+                out.append(self._visit(last, raw))
+                if len(out) >= n:
+                    yield out
+                    out = []
+            last = (raw, dur if isinstance(dur, int) else 0, url, title, term)
+            self.top_time = raw if self.top_time is None else max(self.top_time, raw)
+        if last is not None:
+            out.append(self._visit(last, None))
+        if out:
+            yield out
+
+    def _visit(self, row: tuple, after: int | None) -> Visit:
+        raw, dur, url, title, term = row
+        secs = min(max((after - raw) / 1e6, 0.0), GAP_CAP) if after is not None else GAP_CAP
         if dur and dur > 0:
             secs = min(secs, dur / 1e6)
-        out.append(Visit(to_time(src.browser, raw), url or "", title or "", secs,
-                         term or None, src.key))
-    return out, (rows[-1][0] if rows else None)
+        return Visit(to_time(self.src.browser, raw), url or "", title or "", secs,
+                     term or None, self.src.key,
+                     native=f"{raw}:{hashlib.sha1((url or '').encode()).hexdigest()[:16]}")
 
 
 def scan(sources: list[Source], settings: privacy.Settings,
@@ -232,21 +306,24 @@ def scan(sources: list[Source], settings: privacy.Settings,
     import when a page sits under no topic hub). Counts only, never text."""
     rows = []
     for s in sources:
+        c: Counter = Counter()
+        first = last = None
         try:
-            visits, _ = read(s)
+            with Since(s) as rd:
+                for chunk in rd.chunks():
+                    for v in chunk:
+                        k = privacy.judge(v.url, v.title, settings=settings)
+                        out = privacy.apply(k, settings=settings)
+                        c["dropped" if out is None else "private" if out.private else "kept"] += 1
+                        c["searches"] += bool(v.term or (k and k.search))
+                        c["maybe"] += bool(k and k.maybe)
+                    first = first or local_day(chunk[0].start, tz)
+                    last = local_day(chunk[-1].start, tz)
         except Exception as e:  # one bad source never stops the others
             rows.append({"source": s.key, "error": type(e).__name__, "why": why(e)})
             continue
-        c: Counter = Counter()
-        for v in visits:
-            k = privacy.judge(v.url, v.title, settings=settings)
-            out = privacy.apply(k, settings=settings)
-            c["dropped" if out is None else "private" if out.private else "kept"] += 1
-            c["searches"] += bool(v.term or (k and k.search))
-            c["maybe"] += bool(k and k.maybe)
-        days = [local_day(v.start, tz) for v in visits[:1] + visits[-1:]]
-        rows.append({"source": s.key, "visits": len(visits), "searches": c["searches"],
-                     "first": days[0] if days else None, "last": days[-1] if days else None,
+        rows.append({"source": s.key, "visits": c["dropped"] + c["private"] + c["kept"],
+                     "searches": c["searches"], "first": first, "last": last,
                      "dropped": c["dropped"], "private": c["private"], "kept": c["kept"],
                      "maybe": c["maybe"]})
     return rows

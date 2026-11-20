@@ -6,7 +6,10 @@ store is filtered again: the private day pages on disk, the per-day site counts
 (`sites.json`) and the two vector caches. `purge` takes out what a `Rule` matches:
 `Rule.of(settings)` after a settings change (skip categories, deny and allow lists; run by
 `build.run` when the fingerprint changed) and `Rule(hosts=...)` / `Rule(cats=...)` for
-`cortex browse forget --site/--category`. Writes go through `cortex.vault`; counts only.
+`cortex browse forget --site/--category`. Writes go through `cortex.vault`; counts only. The
+browsing store (`cortex.browse.store`) loses the matching visits and site rows (its days are
+made again on the next import), and the browse-pages zips in `.cortex/backups` the matching
+site pages.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
 from cortex._proc import NO_WINDOW
-from cortex.browse import privacy, sites
+from cortex.browse import privacy, sites, store
 from cortex.browse.privacy import Settings
 from cortex.render import esc
 from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
@@ -481,9 +484,11 @@ def purge(vault: Vault, rule: Rule, *, settings: Settings | None = None,
         llm = sites.load_cache(vault)["llm"]
         rule = replace(rule, verdicts=sites.load_verdicts(vault), llm=llm)
         c = _days(vault, rule, llm, gone_titles, gone)
+        c.update(store.forget_rows(vault, rule, gone, _sig))
         c.update(_pages(vault, rule, gone))
         c.update(_inbox(vault, rule))
         c.update(_cache(vault, rule, gone_titles))
+        c.update(store.forget_zips(vault, rule))
         if write:
             from cortex.browse import build, load_settings
 

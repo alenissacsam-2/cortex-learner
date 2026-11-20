@@ -183,6 +183,7 @@ def test_e4_cloud_opt_in(world, monkeypatch):
     before = len(w.ollama.chats())
     out = w.cli("ask", "what pasta recipe did I read?")
     assert "answered by ollama" in out
+    w.ollama.loaded = list(w.ollama.models)  # an import uses the model only once it is loaded
     w.cli("browse", "import", "--since", "2026-11-09")
     assert len(w.ollama.chats()) > before + 1  # ask, then the day summaries
     assert not opener.reqs
