@@ -846,12 +846,25 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     state = load_state(vault)
     report: Counter = Counter()
     fp = fingerprint(settings)
-    fresh = not store.exists(vault)
     keep_local = local_only(runner) is not None or _local_set_up() if keep_local is None \
         else keep_local
     ask = vis and not dry_run if ask is None else ask and not dry_run
     con = store.connect(vault, memory=dry_run)
     try:
+        # a vault imported before the store (its state has no sites_stamp yet, or the store no
+        # visit: the app makes the store before the first import): the old cursors, taken
+        # once and kept in the store, so a stop never loses them (`_read_and_save`)
+        legacy = store.get_meta(con, "legacy")
+        if legacy is None:
+            before = bool(state.get("last_run")) and (
+                "sites_stamp" not in state
+                or con.execute("SELECT 1 FROM visits LIMIT 1").fetchone() is None)
+            rows = (state.get("sources") or {}) if before else {}
+            legacy = {"cursors": {k: r["cursor"] for k, r in rows.items()
+                                  if isinstance(r, dict) and isinstance(r.get("cursor"), int)},
+                      "archive": True} if before else {}
+            with con:
+                store.set_meta(con, "legacy", legacy)
         # who may see what changed (visibility, hidden or skipped categories, the domain
         # lists, the filter's own rules) since the stored rows were filtered (the store's
         # mark, else the state's: a vault imported before the store): everything stored is
@@ -868,7 +881,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
                 store.set_meta(con, "settings", fp)
         if not dry_run:
             forget.sync_private(vault)
-        cursors = _read_and_save(vault, con, srcs, settings, tz, now, reset, fresh, state,
+        cursors = _read_and_save(vault, con, srcs, settings, tz, now, reset, legacy,
                                  takeout, report, tell, phase, progress, pause)
         part = store.partial(con)
         # site-days.json read into the store (once): the name a torn one was set aside as
@@ -885,12 +898,16 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         with con:
             if reset:
                 store.mark(con, held)
+                # the days to redo are saved: a stop goes on from them, not from a new
+                # refilter; "refilter" keeps the full site pages and vector prune owed
+                store.set_meta(con, "settings", fp)
+                store.set_meta(con, "refilter", True)
             if since:
                 store.mark(con, {d for d in held if d >= since})
             if summaries and local_only(runner) is not None and not dry_run:
                 store.mark(con, store.unsummarised(con, RESUMMARISE))
         todo = store.dirty(con) - part
-        purged = reset
+        purged = reset or bool(store.get_meta(con, "refilter"))
         touched = None
         if todo:
             got = _render(vault, con, todo, settings, embed=embed, runner=runner, budget=budget,
@@ -905,7 +922,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         elif dry_run:
             return {**report, "visible_to_claude": vis, "dry_run": True}
         phase(5, 0, 1)
-        if todo or report["public_removed"] or reset:
+        if todo or report["public_removed"] or purged:
             report["index_changed"] = int(write_index(vault, visible=vis))
         stats = _archive_consumed(vault, inbox_stats(vault), settings)
         if not report["sources_failed"]:  # the store holds what the archive held
@@ -928,6 +945,7 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
             indent=1, sort_keys=True))
         with con:
             store.set_meta(con, "settings", fp)
+            store.set_meta(con, "refilter", False)
         phase(5, 1, 1)
         return {**report, "visible_to_claude": vis}
     finally:
@@ -954,15 +972,19 @@ def _state_row(cursor: int | None, ran: str, stat: str | None) -> dict:
 
 
 def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetime,
-                   reset: bool, fresh: bool, state: dict, takeout, report: Counter, tell,
+                   reset: bool, legacy: dict, takeout, report: Counter, tell,
                    phase, progress, pause: float = 0.0) -> dict:
     """Phases 1 and 2 of `run`: the new visits of every source, the inbox files and `takeout`
     into the store. A source is read and saved store.CHUNK visits at a time (memory stays
     bounded however long the history), its cursor moved with each chunk (a stop or crash
     loses at most one) and its History file's stat once the last is saved; a first import
     into an empty store makes the indexes after its rows (`store.bulk`). `pause` s between
-    chunks (the background import leaves the machine to its owner). The
-    state's cursor rows of the sources read (for `status`)."""
+    chunks (the background import leaves the machine to its owner). `legacy` (run's store
+    meta of that name, a vault imported before the store): until a source's first read into
+    the store is whole, its rows up to the old cursor mark no day (those days have pages),
+    and the archive is read in once the same way; then its partly expired oldest days are
+    kept as they are (`store.partial`) and its cursor leaves the meta. The state's cursor
+    rows of the sources read (for `status`)."""
     from cortex.browse import store
 
     cursors: dict = {}
@@ -987,14 +1009,11 @@ def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetim
             except Exception as e:  # one bad source never stops the others
                 _failed(s, e, report, progress)
         phase(1, len(srcs), len(srcs))
-        legacy = state.get("sources") or {}
-        total, done, fills, seen = sum(g[1].total for g in got), 0, {}, {}
+        olds = legacy.get("cursors") or {}
+        total, done, seen = sum(g[1].total for g in got), 0, {}
         for s, rd, stat in got:
-            old = (legacy.get(s.key) or {}).get("cursor")
-            # a vault imported before the store existed: the days up to the old cursor have
-            # pages
-            quiet = (sources.to_time(s.browser, old).timestamp()
-                     if fresh and isinstance(old, int) else None)
+            old = olds.get(s.key)
+            quiet = sources.to_time(s.browser, old).timestamp() if isinstance(old, int) else None
             tell(f"{s.key}: saving {rd.total} visits")
             read = new = 0
             try:
@@ -1007,9 +1026,6 @@ def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetim
                     read += len(chunk)
                     new += c["new"]
                     report["dropped"] += c["dropped"]
-                    if quiet is not None:
-                        fills.setdefault(s.key, set()).update(
-                            local_day(v.start, tz) for v in chunk)
                     phase(2, min(done + read, total), total)
                     if pause:
                         time.sleep(pause)
@@ -1025,16 +1041,25 @@ def _read_and_save(vault: Vault, con, srcs, settings: Settings, tz, now: datetim
             if progress:
                 progress(s.key, read, new, None)
             cursors[s.key] = _state_row(store.cursor(con, s.key)[1], ran, stat)
-    if fresh and state.get("last_run"):  # the archive's days were imported before
+    if legacy.get("archive"):  # the archive's days were imported before
         store.ingest_files(con, vault, settings, tz, [ARCHIVE], quiet_until=float("inf"))
+        legacy["archive"] = False
+        with con:
+            store.set_meta(con, "legacy", legacy)
     c = store.ingest_files(con, vault, settings, tz, [".cortex/browse", ARCHIVE])
     report["dropped"] += c["dropped"]
-    if fills:  # the first read of a vault imported before: its oldest days are partial
+    # read whole into the store (its stat saved): its oldest days, partly expired since the
+    # old import, keep their pages
+    whole = [k for k in olds if store.cursor(con, k)[2] is not None]
+    if whole:
+        oldest = {k: [d] for k in whole if (d := con.execute(
+            "SELECT MIN(day) FROM visits WHERE source = ?", (k,)).fetchone()[0])}
         expiring = local_day(now - timedelta(days=EXPIRING_DAYS), tz)
-        part = store.first_fill_partial(fills, sites.stored_days(vault), expiring)
-        if part:
-            with con:
-                store.set_meta(con, "partial", sorted(store.partial(con) | set(part)))
+        part = store.first_fill_partial(oldest, sites.stored_days(vault), expiring)
+        legacy["cursors"] = {k: v for k, v in olds.items() if k not in whole}
+        with con:
+            store.set_meta(con, "partial", sorted(store.partial(con) | set(part)))
+            store.set_meta(con, "legacy", legacy)
     if takeout:
         for v in takeout:
             v.native = store.native_of(v.start.isoformat(), v.url, v.title, v.source)
@@ -1100,6 +1125,8 @@ def _render(vault: Vault, con, todo: set[str], settings: Settings, *, embed, run
     if skip and not dry_run:
         report.update({f"refiltered_{k}": n for k, n in forget.purge(
             vault, forget.Rule(cats=skip), write=False).items()})
+        with con:  # the site pages and vectors it owes outlive a stop
+            store.set_meta(con, "refilter", True)
     phase(3, 1, 1)
     phase(4, 0, len(todo))
     if embed is not None:
