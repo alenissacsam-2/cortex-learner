@@ -32,6 +32,8 @@ from cortex.app import actions, news, status, targets, wizard
 
 HOST = "127.0.0.1"
 IDLE_S = 30 * 60
+PRIVATE_S = 10 * 60  # the Private switch relocks by itself after 10 minutes
+UPDATE_FIRST_S, UPDATE_EVERY_S = 60, 6 * 3600  # the quiet update check: a minute in, then 6 h
 WATCH_S = 5  # seconds between idle checks
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
@@ -56,6 +58,10 @@ EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This lin
            b"key. Open the link that <code>cortex app</code> printed, or run it again.</p>")
 EXPIRED_INSTALLED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link "
                      b"has no valid key. Open Cortex from the Start menu again.</p>")
+
+
+def snapshot_name() -> str:
+    return f"cortex-snapshot-{time.strftime('%Y-%m-%d')}.html"
 
 
 def reopen() -> str:
@@ -248,12 +254,13 @@ class App:
         self.last = time.monotonic()
         self.stop = threading.Event()
         self.desktop = None  # desktop.Desktop (window and tray) in the desktop app, else None
-        self.private_unlocked = False  # the Private switch: only then may ?private=1 apply
+        self.private_until = 0.0  # the Private switch: ?private=1 applies until this monotonic
+        self.update_ready: dict | None = None  # a newer release, prepared by the quiet check
         self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
-                    "/api/home/delta": self.home_delta,
+                    "/api/home/delta": self.home_delta, "/api/vault/snapshot": None,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
@@ -271,7 +278,8 @@ class App:
             "/api/browse/login": self.login, "/api/browse/pair": self.pair,
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
-            "/api/vault/dashboard": self.dashboard, "/api/vault/backup": self.backup,
+            "/api/vault/export": self.export, "/api/vault/backup": self.backup,
+            "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
@@ -385,19 +393,52 @@ class App:
                 homes[root] = HomeCache(Vault(root))
             return homes[root]
 
-    def _private(self, query: dict) -> bool:
-        return self.private_unlocked and (query.get("private") or [""])[0] == "1"
+    # ---- the Private switch: private items only after Windows Hello, for 10 minutes ----
+    @property
+    def private_unlocked(self) -> bool:
+        return time.monotonic() < self.private_until
+
+    def _private(self, query: dict) -> bool | None:
+        """True: the page asks for private items and may have them. None: it asks while the
+        switch is locked (it expired, or the window was minimised), so it relocks."""
+        if (query.get("private") or [""])[0] != "1":
+            return False
+        return True if self.private_unlocked else None
 
     def home(self, query: dict) -> dict:
         """The live home (cortex.home): the dashboard's data plus feed, next_up and exams.
-        Builds and keeps the brain layout (`.cortex/brain-layout.json`, a view cache)."""
-        return self._home().get(self._private(query))
+        Builds and keeps the brain layout (`.cortex/brain-layout.json`, a view cache). A page
+        that must relock gets the public home with `relock`."""
+        private = self._private(query)
+        home = self._home().get(private is True)
+        return home if private is not None else {**home, "relock": True}
 
     def home_version(self) -> dict:
-        return {"v": self._home().version()}
+        """The home's version, the Private switch and a prepared update (the page's 3 s poll)."""
+        r = self.update_ready
+        return {"v": self._home().version(), "private": self.private_unlocked,
+                "update": r and {"version": r["version"], "mode": r["mode"]}}
 
     def home_delta(self, query: dict) -> dict:
-        return self._home().delta((query.get("since") or [None])[0], self._private(query))
+        """Changes since `since`; a page that must relock gets the public home whole, so no
+        private item stays on it."""
+        private = self._private(query)
+        if private is None:
+            return {**self._home().get(False), "full": True, "relock": True}
+        return self._home().delta((query.get("since") or [None])[0], private)
+
+    def unlock(self, body: dict) -> dict:
+        """The Private switch: Windows asks the user to verify (Windows Hello); private items
+        then show for PRIVATE_S, until the switch is pressed again or the window minimised."""
+        from cortex.app import hello
+        ok, why = hello.verify()
+        if ok:
+            self.private_until = time.monotonic() + PRIVATE_S
+        return {"unlocked": ok, "message": why}
+
+    def lock(self, body: dict | None = None) -> dict:
+        self.private_until = 0.0
+        return {"ok": True}
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
@@ -742,10 +783,33 @@ class App:
             return {"browse": {**old, "skip_profiles": new}} if new != sorted(had) else {}
         taint.write_config(merge)
 
-    def dashboard(self, body: dict) -> dict:
-        root = self.need_root()
-        return self.jobs.start("Building the dashboard", "vault",
-                               lambda job: actions.dashboard(job, root))
+    def snapshot(self) -> bytes:
+        """The self-contained snapshot page (dashboard.snapshot: CSP default-src 'none', no
+        private item)."""
+        from datetime import UTC, datetime
+
+        from cortex import dashboard
+        return dashboard.snapshot(self._vault(), now=datetime.now(UTC)).encode()
+
+    def export(self, body: dict) -> dict:
+        """Export snapshot. The desktop app asks where to save it (a save dialog) and writes it
+        as a job; the browser downloads it from GET /api/vault/snapshot."""
+        self.need_root()
+        win = self.desktop.win if self.desktop is not None else None
+        if win is None:
+            return {"download": "/api/vault/snapshot"}
+        import webview
+        got = win.create_file_dialog(webview.FileDialog.SAVE, save_filename=snapshot_name(),
+                                     file_types=("Web page (*.html)",))
+        if not got:
+            return {"cancelled": True}
+        dest = Path(got if isinstance(got, str) else got[0])
+
+        def run(job):
+            job.say("building the snapshot")
+            dest.write_bytes(self.snapshot())  # the owner's chosen file, outside the vault
+            return {"ok": True, "path": str(dest)}
+        return self.jobs.start("Exporting a snapshot", "vault", run)
 
     def backup(self, body: dict) -> dict:
         root = self.need_root()
@@ -788,12 +852,7 @@ class App:
             _open_path(p)
             return {"ok": True}
         root = self.need_root()
-        if what == "dashboard":
-            p = root / ".cortex" / "dashboard.html"
-            if not p.is_file():
-                raise ValueError("Build the dashboard first.")
-            _open(p.as_uri())
-        elif what in ("vault", "private"):
+        if what in ("vault", "private"):
             from cortex.vault import PRIVATE_BROWSE_DIR
             p = root / PRIVATE_BROWSE_DIR / "browse-private-index.md" if what == "private" \
                 else root
@@ -960,9 +1019,34 @@ class App:
             self.jobs.cur.cancel()
         return {"ok": True}
 
-    # ---- updates: only on a click, never in the background ----
+    # ---- updates: checked and prepared quietly, applied only on a click ----
     def update_state(self) -> dict:
-        return {"current": update.current(), "mode": update.mode()}
+        return {"current": update.current(), "mode": update.mode(), "ready": self.update_ready}
+
+    def update_quietly(self) -> None:
+        """The background check (UPDATE_FIRST_S after start, then every UPDATE_EVERY_S): a
+        newer release is downloaded and checked (installer), or its command noted (dev), then
+        shown as Restart to update and notified once per version. Never applied here."""
+        info, cur = update.latest(), update.current()
+        if not update.newer(info["version"], update.parse_version(cur)):
+            return
+        version = ".".join(map(str, info["version"]))
+        if self.update_ready and self.update_ready["version"] == version:
+            return
+        ready = {"version": version, "mode": update.mode(), "notes_url": info["notes_url"]}
+        if ready["mode"] == "installer":
+            dest = update.dest_dir(info)
+            actions.sweep_updates(dest)
+            if update.download(info, dest, None, self.stop) is None:  # the app is stopping
+                return
+        else:
+            ready["command"] = update.command(info["tag"])
+        self.update_ready = ready
+        from cortex.app import desktop
+        if self.desktop is not None and desktop.notify_settings()["updates"] \
+                and desktop.load_state().get("update_notified") != version:
+            self.desktop.notify(f"Cortex {version} is ready: restart to update")
+            desktop.save_state("update_notified", version)
 
     def _check(self, job) -> tuple[dict, dict]:
         job.say("asking GitHub for the latest release")
@@ -985,7 +1069,8 @@ class App:
         return self.jobs.start("Checking for updates", "update", lambda job: self._check(job)[1])
 
     def update_apply(self, body: dict) -> dict:
-        """Download the new installer, check it, start it and quit; it reopens the app."""
+        """Download the new installer (unless the quiet check already did), check it, start it
+        and quit; it reopens the app. Restart to update and Update now both come here."""
         if update.mode() != "installer":
             info = update.latest()
             raise ValueError("This Cortex was not installed with CortexSetup.exe. Update it "
@@ -998,7 +1083,10 @@ class App:
 
             def said(got, total):
                 job.say(f"downloaded {got >> 20} of {total >> 20} MB")
-            exe = update.download(info, update.dest_dir(info), said, job.cancelled)
+            ready = self.update_ready
+            exe = update.dest_dir(info) / update.EXE  # checked when the quiet check fetched it
+            if not (ready and ready["version"] == out["latest"] and exe.is_file()):
+                exe = update.download(info, update.dest_dir(info), said, job.cancelled)
             if exe is None:
                 return {"cancelled": True}
             job.say("checked; starting the installer")
@@ -1050,7 +1138,7 @@ def _handler(app: App):
         def log_message(self, *a):  # nothing from requests is logged
             pass
 
-        def _send(self, code: int, body, ctype: str = "application/json"):
+        def _send(self, code: int, body, ctype: str = "application/json", extra=None):
             if self.command == "POST" and not getattr(self, "_drained", False):
                 self._drained = True  # Windows resets a socket closed with unread data
                 try:
@@ -1060,14 +1148,16 @@ def _handler(app: App):
                 except (ValueError, OSError):
                     pass
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
-            self._head(code, ctype, len(data))
+            self._head(code, ctype, len(data), extra)
             self.wfile.write(data)
 
-        def _head(self, code: int, ctype: str, length: int | None):
+        def _head(self, code: int, ctype: str, length: int | None, extra=None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             if length is not None:
                 self.send_header("Content-Length", str(length))
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Security-Policy", CSP)
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -1131,6 +1221,9 @@ def _handler(app: App):
                     data = data.replace(b"{{T}}", key.encode()) \
                         .replace(b"{{REOPEN}}", reopen().encode())
                 self._send(200, data, ctype)
+            elif url.path == "/api/vault/snapshot":  # Export snapshot in the browser: a download
+                self._run(app.snapshot, ctype="text/html; charset=utf-8", extra={
+                    "Content-Disposition": f'attachment; filename="{snapshot_name()}"'})
             elif url.path in app.get:
                 self._run(app.get[url.path],
                           *([parse_qs(url.query)] if url.path in QUERY_GETS else []))
@@ -1270,9 +1363,9 @@ def _handler(app: App):
             app.uploads[uid] = p
             self._send(200, {"upload": uid, "size": n})
 
-        def _run(self, fn, *args):
+        def _run(self, fn, *args, ctype: str = "application/json", extra=None):
             try:
-                self._send(200, fn(*args))
+                self._send(200, fn(*args), ctype, extra)
             except Busy as e:
                 self._send(409, {"error": str(e)})
             except ValueError as e:
@@ -1387,6 +1480,12 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         actions.migrate_login(app.root if app.entry() else None)
     except Exception:  # noqa: BLE001  (Start at login stays as it was; the app still opens)
         traceback.print_exc(limit=3)
+    if app.entry() is not None:
+        try:
+            from cortex import dashboard
+            dashboard.retire_old(app._vault())  # the old .cortex/dashboard.html, once
+        except Exception:  # noqa: BLE001  (it is moved at the next start; the app still opens)
+            traceback.print_exc(limit=3)
 
     def watch():
         while not app.stop.wait(WATCH_S):
@@ -1416,9 +1515,19 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: automatic chat import check failed ({type(e).__name__})")
 
+    def updates():  # the quiet update check: a minute after start, then every 6 hours
+        wait = UPDATE_FIRST_S
+        while not app.stop.wait(wait):
+            wait = UPDATE_EVERY_S
+            try:
+                app.update_quietly()
+            except Exception as e:  # noqa: BLE001  (offline, GitHub busy: the next check tries)
+                echo(f"cortex app: the update check failed ({type(e).__name__})")
+
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=auto, daemon=True, name="cortex-app-auto-import").start()
     threading.Thread(target=chats, daemon=True, name="cortex-app-chat-import").start()
+    threading.Thread(target=updates, daemon=True, name="cortex-app-updates").start()
     return srv, app, url
 
 

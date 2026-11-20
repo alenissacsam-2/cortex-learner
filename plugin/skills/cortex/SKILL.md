@@ -48,7 +48,7 @@ Before writing as the user, read `modes/as-me.md` and call `cortex_as_me`.
 - **`/cortex`** with no mode calls `cortex_start(mode="home")`. Open with one warm line greeting them by name and time of day. Show its card; follow its `contract` and `preferences`; record shown resurfaced ideas with `cortex_log(kind="resurfaced", payload={ids})`. Then **ask what they want; don't start a plan or quiz on your own.**
 - When they name a topic, call `cortex_context(topic=…)` (or `cortex_find`) to see what they know and don't know. Then teach by the contract and their preferences (§2).
 - A topic right after `/cortex` (e.g. `/cortex dijkstra`) means home with that topic: look it up at once.
-- **`/cortex map`**: run `cortex dashboard` (Bash, else ask them); Obsidian's graph is Ctrl+G.
+- **`/cortex map`**: `cortex dashboard` opens the app (Bash, else ask); Obsidian's graph: Ctrl+G.
 
 ## 1. Start
 1. Call `cortex_start(mode, topic, model=<your model name>, minutes=<if named>)`.

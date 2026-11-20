@@ -53,7 +53,7 @@ def test_setup_twice_seeds_sample_and_is_idempotent(tmp_path, home):
     states, _ = levels.fold(EventLog(v).iter_events(), local_day(datetime.now(UTC)))
     assert {"loops", "functions", "recursion"} <= set(states)
     assert lint_report(v)[0] == []
-    assert dashboard.write_dashboard(v, now=datetime.now(UTC)).is_file()
+    assert "default-src 'none'" in dashboard.snapshot(v, now=datetime.now(UTC))
 
 
 def test_sample_remove(tmp_path, home):

@@ -216,27 +216,60 @@ def test_private_notes_and_concepts_stay_out_unless_unlocked(root):
 # ---- the routes ----
 
 
-def test_the_routes_need_the_key_and_private_needs_the_switch(root):
+def test_the_routes_need_the_key_and_private_needs_the_switch(root, monkeypatch):
+    """Private items only after Windows Hello (mocked), and never after a relock, the
+    10-minute expiry (the server's own clock) or a restart: a page still asking for them gets
+    the public home whole and `relock`."""
+    from cortex.app import hello, server
     _grade(root, "secret-diary", "correct", datetime.now(UTC))
     srv, app = _serve(root)
+
+    def secret(path):
+        js = call(app, "GET", path)[1]
+        return any(i["id"] == "secret-diary" for i in js["feed"]["today"]), js
     try:
         for path in ("/api/home", "/api/home/version", "/api/home/delta?since=x"):
             assert call(app, "GET", path, token=False)[0] == 401, path
             assert call(app, "GET", path, token="wrong")[0] == 401, path
+        for path in ("/api/home/unlock", "/api/home/lock"):
+            assert call(app, "POST", path, {}, token=False)[0] == 401, path
         code, h, _, _ = call(app, "GET", "/api/home")  # the first lays the brain out
         code, v, _, _ = call(app, "GET", "/api/home/version")
-        assert code == 200 and v == {"v": h["v"]}
+        assert code == 200 and v == {"v": h["v"], "private": False, "update": None}
         assert {"feed", "next_up", "exams", "brain", "pages"} <= set(h)
         code, d, _, _ = call(app, "GET", f"/api/home/delta?since={h['v']}")
         assert code == 200 and d == {"v": h["v"], "full": False, "sections": {}}
         assert call(app, "GET", "/api/home/delta?since=nope")[1]["full"] is True
-        _, locked, _, _ = call(app, "GET", "/api/home?private=1")
-        assert "secret-diary" not in json.dumps(locked)
-        app.private_unlocked = True
-        _, opened, _, _ = call(app, "GET", "/api/home?private=1")
-        assert any(i["id"] == "secret-diary" for i in opened["feed"]["today"])
-        _, plain, _, _ = call(app, "GET", "/api/home")
-        assert "secret-diary" not in json.dumps(plain)
+        shown, locked = secret("/api/home?private=1")
+        assert not shown and "secret-diary" not in json.dumps(locked) and locked["relock"] is True
+        monkeypatch.setattr(hello, "verify", lambda: (False, "Cancelled; private items stay "
+                                                             "hidden."))
+        assert call(app, "POST", "/api/home/unlock", {})[1] == {
+            "unlocked": False, "message": "Cancelled; private items stay hidden."}
+        assert not secret("/api/home?private=1")[0]
+        monkeypatch.setattr(hello, "verify", lambda: (True, None))
+        assert call(app, "POST", "/api/home/unlock", {})[1] == {"unlocked": True, "message": None}
+        shown, opened = secret("/api/home?private=1")
+        assert shown and "relock" not in opened
+        assert call(app, "GET", "/api/home/version")[1]["private"] is True
+        assert call(app, "GET", f"/api/home/delta?since={h['v']}&private=1")[1]["full"] is False
+        assert "secret-diary" not in json.dumps(call(app, "GET", "/api/home")[1])  # not asked
+        # pressed again: relocked
+        assert call(app, "POST", "/api/home/lock", {})[1] == {"ok": True}
+        for path in ("/api/home?private=1", f"/api/home/delta?since={h['v']}&private=1"):
+            shown, js = secret(path)
+            assert not shown and js["relock"] is True and js.get("full", True) is True, path
+            assert "secret-diary" not in json.dumps(js), path
+        # 10 minutes on: the server relocks by itself
+        monkeypatch.setattr(server, "PRIVATE_S", 0.3)
+        call(app, "POST", "/api/home/unlock", {})
+        assert secret("/api/home?private=1")[0]
+        time.sleep(0.4)
+        assert call(app, "GET", "/api/home/version")[1]["private"] is False
+        for path in ("/api/home?private=1", f"/api/home/delta?since={h['v']}&private=1"):
+            shown, js = secret(path)
+            assert not shown and js["relock"] is True, path
+        assert server.App(root).private_unlocked is False  # a restart starts locked
     finally:
         app.receiver.stop()
         srv.shutdown()

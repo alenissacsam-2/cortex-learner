@@ -28,7 +28,7 @@ No session: do not call `cortex_start`. `/cortex help <word>` (for example `help
 | `/cortex capture` | Saves a source (article, PDF, video) and the ideas worth keeping |
 | `/cortex project <name>` | One project: status, decisions, next steps |
 | `/cortex reflect` | Weekly review: confirm or drop what's waiting about you, idea clusters, spot-checks of how a chat graded you |
-| `/cortex map` | The offline dashboard; Obsidian's graph is Ctrl+G |
+| `/cortex map` | Opens the brain and lists in the Cortex app; Obsidian's graph is Ctrl+G |
 
 ## Chats
 | Command | What it does |
@@ -51,7 +51,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | Command | What it does |
 |---|---|
 | `today` / `brief` | Today's plan / brief, teaching contract and Today |
-| `dashboard` | Opens the offline dashboard |
+| `dashboard` | Opens the Cortex app's home (starts the app if needed) |
 | `recall "query"` | Searches the vault by meaning and keywords |
 | `log assessment\|result\|solved\|taught` | Records results by hand |
 | `reflect` | The weekly review pack |

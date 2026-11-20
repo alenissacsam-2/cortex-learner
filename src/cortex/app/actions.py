@@ -122,11 +122,6 @@ def backup(job, root: Path) -> dict:
     return capture(job, cli.backup, vault=root)
 
 
-def dashboard(job, root: Path) -> dict:
-    from cortex import cli
-    return capture(job, cli.dashboard, no_open=True, vault=root)
-
-
 # ---- local model (adapter to cortex.localllm) ----------------------------------------------
 
 

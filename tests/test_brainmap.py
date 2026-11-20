@@ -356,15 +356,19 @@ def test_fibres_are_the_links_and_three_nearest(made):
 def test_cli_relayout(made, monkeypatch):
     root, _ = made
     monkeypatch.delenv("CORTEX_VAULT", raising=False)
+    v, now = Vault(root), datetime.now(UTC)
+    assert dashboard.build(v, now=now)["brain"]["stats"]["relayout"] is True  # the first lays out
+    plain = dashboard.build(v, now=now)["brain"]
+    assert plain["stats"]["relayout"] is False
+    seen, real = [], dashboard.build_data
 
-    def run(*flags):
+    def build_data(*a, **k):
+        out = real(*a, **k)
+        seen.append(out["brain"])
+        return out
+    monkeypatch.setattr(dashboard, "build_data", build_data)
+    for flags in ((), ("--relayout",)):  # only --relayout builds the brain
         r = CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(root), *flags])
         assert r.exit_code == 0, r.output
-        html = (root / ".cortex" / "dashboard.html").read_text(encoding="utf-8")
-        return json.loads(html.split('id="data">', 1)[1].split("</script>", 1)[0])["brain"]
-
-    assert run()["stats"]["relayout"] is True  # the first build lays it out
-    plain = run()
-    assert plain["stats"]["relayout"] is False
-    again = run("--relayout")
-    assert again["stats"]["relayout"] is True and again["nodes"] == plain["nodes"]
+    assert len(seen) == 1
+    assert seen[0]["stats"]["relayout"] is True and seen[0]["nodes"] == plain["nodes"]

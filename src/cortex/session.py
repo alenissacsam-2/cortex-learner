@@ -4,7 +4,7 @@ end pipeline.
 Pure Python; the MCP server and the CLI drive it. Closing runs the end pipeline: `close`
 event, tool props of touched concepts, then (unless the session is quiet) journal line, session
 note, Today.md and log.md line, then the session's git commit. No close rebuilds a whole-vault
-view: `cortex dashboard` writes the dashboard and index.md when the user opens it.
+view: `cortex dashboard` rewrites index.md, and the app's live home is the dashboard.
 """
 
 from __future__ import annotations

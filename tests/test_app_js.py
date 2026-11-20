@@ -930,7 +930,7 @@ SENDS = {
     "vault": {
         "Open vault in Obsidian": [["/api/open", {"what": "vault"}]],
         "Open folder: Vault": [["/api/open", {"what": "folder"}]],
-        "Build dashboard": [["/api/vault/dashboard", {}]],
+        "Export snapshot": [["/api/vault/export", {}]],
         "Back up vault": [["/api/vault/backup", {}]],
         "Run doctor": [["/api/vault/doctor", {}]],
         "Save: History": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},

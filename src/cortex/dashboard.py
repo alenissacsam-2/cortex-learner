@@ -1,8 +1,9 @@
-"""The offline dashboard.
+"""The dashboard: the app's live home (`render_live`) and the offline snapshot.
 
-One self-contained `.cortex/dashboard.html`: the data blob, d3 v7 and the page script are
-inlined, and the CSP allows only those scripts by hash. Note text reaches the page as plain
-strings (links, images and tags stripped) and the page script inserts it with `textContent`.
+The snapshot (Export snapshot) is one self-contained page: the data blob, d3 v7 and the page
+script are inlined, and the CSP allows only those scripts by hash. Note text reaches the page as
+plain strings (links, images and tags stripped) and the page script inserts it with
+`textContent`.
 """
 
 from __future__ import annotations
@@ -580,16 +581,34 @@ def _snapshot_parses(vault: Vault):
                 del vault_mod._PARSED[path]
 
 
-def write_dashboard(vault: Vault, *, now: datetime, relayout: bool = False) -> Path:
-    """Regenerate `<vault>/.cortex/dashboard.html`."""
+def build(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
+    """build_data, reading unchanged notes from the search index's snapshot."""
     with _snapshot_parses(vault):
-        data = build_data(vault, now=now, relayout=relayout)
-    return vault.write_text(vault.root / ".cortex" / "dashboard.html", render_html(data))
+        return build_data(vault, now=now, relayout=relayout)
+
+
+def snapshot(vault: Vault, *, now: datetime) -> str:
+    """The self-contained page Export snapshot saves where the owner chooses (never in the
+    vault): non-private items only, CSP default-src 'none'."""
+    return render_html(build(vault, now=now))
+
+
+def retire_old(vault: Vault) -> Path | None:
+    """`.cortex/dashboard.html`, which Cortex no longer writes, moves to `.cortex/backups/`
+    once (copied, then removed; never deleted outright). The new path, or None."""
+    old = vault.root / ".cortex" / "dashboard.html"
+    if not old.is_file():
+        return None
+    day = datetime.fromtimestamp(old.stat().st_mtime).strftime("%Y-%m-%d")
+    new = vault.write_text(vault.root / ".cortex" / "backups" / f"dashboard-{day}.html",
+                           old.read_bytes().decode("utf-8", "replace"))
+    vault.remove(old)
+    return new
 
 
 def write_index(vault: Vault, *, now: datetime) -> Path:
-    """Regenerate `<vault>/index.md`, the one-file text map of every non-private page. Like
-    the dashboard it is built on demand (`cortex dashboard`), never at session close."""
+    """Regenerate `<vault>/index.md`, the one-file text map of every non-private page. Built
+    on demand (`cortex dashboard`), never at session close."""
     catalog = Catalog.load(vault)
     with _snapshot_parses(vault):
         after, _ = planner.current_states(vault, local_day(now), catalog)
