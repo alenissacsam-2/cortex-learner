@@ -298,7 +298,7 @@ SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learnin
                   "projects": "Projects", "environment": "Environment", "career": "Career",
                   "personal": "Personal"}
 # SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
-CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract")
+CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core")
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
