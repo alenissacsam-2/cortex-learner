@@ -506,3 +506,121 @@ def _try(v):
         return chat_import.run(v)
     except Exception as e:  # noqa: BLE001
         return e
+
+
+# ---- a live-logged chat and its claude.ai export: one page -------------------------------------
+
+LIVE_ID = "01JCZ8Q0000000000000000000"
+OPEN = "How do B-trees   split when a node is full?"  # spaced unlike the live copy
+LIVE_KEY = (chats.LIVE, f"{chats.LIVE}/{LIVE_ID}")
+
+
+def _line(role, ts, text):
+    return {"type": role, "message": {"content": text}, "timestamp": ts}
+
+
+def _live(exp, extra=()):
+    """A Chat-tab log as cortex_prime and chat_turn write it, stamped when the model called
+    (seconds after each message); the model forgot the chat_turn for "and deletion?"."""
+    return write(exp / chats.LIVE / f"{LIVE_ID}.jsonl", [
+        _line("user", "2026-11-10T10:00:04Z", " ".join(OPEN.split())),
+        _line("assistant", "2026-11-10T10:10:03Z", "gist of answer"),
+        _line("user", "2026-11-10T10:10:03Z", "thanks, that helps"), *extra])
+
+
+def _export(tmp_path, uid="aaaa-bbbb-1", hour=10):
+    """A claude.ai conversations.json, imported with chats.import_export."""
+    msgs = [("human", "00:00", OPEN), ("assistant", "00:30", "EXPORT-ANSWER-1"),
+            ("human", "05:00", "and deletion?"), ("assistant", "05:30", "EXPORT-ANSWER-2"),
+            ("human", "10:00", "thanks, that helps")]
+    day = f"2026-11-10T{hour:02}:"
+    conv = {"uuid": uid, "name": "t", "updated_at": f"{day}11:00Z", "chat_messages": [
+        {"sender": s, "created_at": f"{day}{t}Z", "content": [{"type": "text", "text": x}]}
+        for s, t, x in msgs]}
+    f = tmp_path / f"{uid}.json"
+    f.write_text(json.dumps([conv]), "utf-8")
+    assert chats.import_export(f) == ("claude", 1)
+
+
+def _pages(root):
+    return sorted(p.stem for p in (root / "resources").glob("chat-*.md"))
+
+
+def _keys(root):
+    return {(x["source"], x["chat_id"]): x["pages"] for x in saved(root)}
+
+
+def _turns(root, pid):
+    body = (root / "resources" / f"{pid}.md").read_text("utf-8")
+    assert "EXPORT-ANSWER" not in body and "gist" not in body
+    return harvest.user_turns(body.split("---\n", 2)[2])
+
+
+def test_a_live_chat_then_its_export_is_one_page_with_the_full_transcript(root_committed, dirs,
+                                                                         tmp_path):
+    _, exp = dirs
+    _live(exp)
+    assert chat_import.run(Vault(root_committed)) == {"saved": 1}
+    [pid] = _pages(root_committed)
+    _export(tmp_path)
+    assert chat_import.run(Vault(root_committed)) == {"updated": 1}
+    assert _pages(root_committed) == [pid]  # the same page, now from the export
+    assert _turns(root_committed, pid) == [OPEN, "and deletion?", "thanks, that helps"]
+    assert _keys(root_committed) == {LIVE_KEY: [pid], ("claude-chat", "claude-ai/aaaa-bbbb-1"):
+                                     [pid]}
+    n = len(saved(root_committed))
+    assert chat_import.run(Vault(root_committed)) == {}
+    st = root_committed / chat_import.STATE  # with the state forgotten, still nothing new
+    for f in st.parent.glob(st.name + "*"):
+        f.unlink()
+    assert chat_import.run(Vault(root_committed)) == {"unchanged": 2}
+    _export(tmp_path)  # the same export imported again
+    assert chat_import.run(Vault(root_committed)) in ({}, {"unchanged": 1})
+    assert len(saved(root_committed)) == n and _pages(root_committed) == [pid]
+
+
+def test_live_turns_after_the_export_are_kept_once(root_committed, dirs, tmp_path):
+    _, exp = dirs
+    p = _live(exp)
+    _export(tmp_path)
+    assert chat_import.run(Vault(root_committed)) == {"saved": 1, "unchanged": 1}
+    [pid] = _pages(root_committed)
+    _append(p, _line("assistant", "2026-11-10T11:00:02Z", "gist"),
+            _line("user", "2026-11-10T11:00:02Z", "one more: B+ trees?"),
+            _line("assistant", "2026-11-10T11:02:00Z", "gist"),
+            _line("user", "2026-11-10T11:02:00Z", "thanks, that helps"))  # said again, later
+    assert chat_import.run(Vault(root_committed)) == {"updated": 1}
+    assert _pages(root_committed) == [pid]
+    assert _turns(root_committed, pid) == [
+        OPEN, "and deletion?", "thanks, that helps", "one more: B+ trees?", "thanks, that helps"]
+
+
+def test_an_export_then_its_live_log_is_one_page(root_committed, dirs, tmp_path):
+    _, exp = dirs
+    _export(tmp_path)
+    assert chat_import.run(Vault(root_committed)) == {"saved": 1}
+    [pid] = _pages(root_committed)
+    before = (root_committed / "resources" / f"{pid}.md").read_text("utf-8")
+    _live(exp)
+    assert chat_import.run(Vault(root_committed)) == {"unchanged": 1}
+    assert _pages(root_committed) == [pid]
+    assert (root_committed / "resources" / f"{pid}.md").read_text("utf-8") == before
+    assert _keys(root_committed) == {LIVE_KEY: [pid], ("claude-chat", "claude-ai/aaaa-bbbb-1"):
+                                     [pid]}
+
+
+def test_an_ambiguous_match_keeps_every_page(root_committed, dirs, tmp_path):
+    _, exp = dirs
+    _live(exp)
+    _export(tmp_path, "aaaa-bbbb-1")
+    _export(tmp_path, "aaaa-bbbb-2")  # the same opening at the same time: which one?
+    assert chat_import.run(Vault(root_committed)) == {"saved": 3}
+    assert len(_pages(root_committed)) == 3
+
+
+def test_a_start_time_too_far_apart_keeps_both_pages(root_committed, dirs, tmp_path):
+    _, exp = dirs
+    _live(exp)
+    _export(tmp_path, hour=11)  # an hour later: another chat that opened the same way
+    assert chat_import.run(Vault(root_committed)) == {"saved": 2}
+    assert len(_pages(root_committed)) == 2

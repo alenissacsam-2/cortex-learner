@@ -25,6 +25,11 @@ stats files, a grown transcript is read from its offset only, and one that shran
 line changed is read again from the start. Newest transcripts go first; work runs in short
 slices (SLICE_S) with a rest between them so the app stays responsive. Nothing here embeds:
 pages are bounded and the index embeds them later.
+
+A Chat-tab chat logged live and the same conversation in a claude.ai export are one chat
+(Ctx.partner: the same first message, started within SAME_CHAT, and no other candidate either
+way). They share one page and both ledger keys: the export's turns (complete; a model can forget
+a chat_turn) plus the live turns after its last message (_merged), whichever came first.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from cortex import chats, render, taint, topics
@@ -83,6 +88,11 @@ _ABS = re.compile(r"^(?:/|~|[A-Za-z]:/)")
 _ME = re.compile(r"^\*\*Me:\*\*(.*)$", re.M)
 _SOURCE = re.compile(r"Source: ([^·\r\n]+?)\s*(?:·|$)")
 _DATE = re.compile(r"Date: (\d{4}-\d{2}-\d{2})")
+EXPORT = chats.EXPORT_DIRS["claude"]  # (folder, source) of claude.ai export conversations
+# the live log starts at cortex_prime, seconds after the first message; 15 minutes allows a slow
+# first call or a skewed clock, while two chats opening alike that close are rare (and ambiguous)
+SAME_CHAT = timedelta(minutes=15)
+OPENING = 200  # characters of the first message compared
 
 
 def enabled() -> bool:
@@ -458,6 +468,8 @@ class Ctx:
         self._projects: dict[str, str] | None = None
         self._pages: dict | None = None
         self._excluded: dict[str, bool] = {}
+        self._heads: dict | None = None  # path -> (source, opening, start)
+        self._openings: dict = {}  # opening -> [(source, start, path)]
 
     def audience(self, text: str) -> str:
         return privacy.audience(privacy.category("", "/", text)[0], self.settings)
@@ -505,6 +517,67 @@ class Ctx:
             if near:
                 return pid
         return None
+
+    def partner(self, path: Path) -> Path | None:
+        """For a claude.ai export conversation its live Chat-tab log, for a live log its export
+        conversation: the one other-kind chat with the same opening started within SAME_CHAT,
+        and `path` the only such chat for it; None when none or several match."""
+        if self._heads is None:
+            self._heads = {}
+            for folder, s in (EXPORT, (chats.LIVE, chats.LIVE)):
+                for p in (chats.export_root() / folder).glob("*.jsonl"):
+                    if h := _opening(p):
+                        self._heads[p] = (s, *h)
+                        self._openings.setdefault(h[0], []).append((s, h[1], p))
+
+        def near(p: Path) -> list:
+            s, k, t = self._heads[p]
+            return [q for s2, t2, q in self._openings[k] if s2 != s and abs(t2 - t) <= SAME_CHAT]
+        m = near(path) if path in self._heads else []
+        return m[0] if len(m) == 1 and near(m[0]) == [path] else None
+
+
+def _said(text: str) -> str:
+    return " ".join(chats.redact(text).split())[:OPENING]
+
+
+def _opening(p: Path) -> tuple[str, datetime] | None:
+    """A chat's first message as compared (_said) and its time; None without one."""
+    try:
+        with closing(chats._turns(p)) as ts:
+            first = next(((t0, t) for r, t0, t in ts if r == "user"), None)
+    except OSError:
+        return None
+    w = _when(first[0]) if first else None
+    return (_said(first[1]), w) if w else None
+
+
+def _merged(export: Path, live: Path, pace: Callable[[], None]) -> Chat:
+    """One chat from both: the export's turns, then the live log's turns after the export's
+    last message that follow the last live turn the export holds (each turn once)."""
+    c, _ = read(export, None, pace)
+    ex = chats.turns(export)
+    said = [_said(t) for r, _, t in ex if r == "user"]
+    end = max((w for _, ts, _ in ex if (w := _when(ts))), default=None)
+    j, new = 0, []
+    for r, ts, t in chats.turns(live):
+        if r != "user":
+            continue
+        if (k := _said(t)) in said[j:]:  # in order, so a repeated "go on" later is still new
+            j += said[j:].index(k) + 1
+            new.clear()
+        elif end is not None and (w := _when(ts)) is not None and w > end:
+            new.append((ts, t))
+    for ts, t in new:
+        c.turn(ts, t)
+        c.last = ts
+    return c
+
+
+def _pid(e) -> str | None:
+    """The page of a ledger entry."""
+    pages = e.get("pages") if isinstance(e, dict) else None
+    return pages[0] if isinstance(pages, list) and pages and isinstance(pages[0], str) else None
 
 
 def _match(line: str) -> str:
@@ -579,17 +652,32 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
         return "empty", rec
     if source == "claude-code" and ctx.excluded(c.cwd):
         return "excluded_folder", rec
+    keys = [(source, cid)]  # the ledger keys this page is written for
+    if source in (EXPORT[1], chats.LIVE) and (other := ctx.partner(path)) is not None:
+        okey = (EXPORT[1] if source == chats.LIVE else chats.LIVE, chats._cid(other))
+        o = ledger.get(okey)
+        mine, theirs = _pid(had), _pid(o)
+        # a hand-saved partner, or two pages already (written before this rule), stay apart
+        if (o is None or o.get("auto")) and not (mine and theirs and mine != theirs):
+            c = _merged(*((path, other) if source == EXPORT[1] else (other, path)), pace)
+            keys.append(okey)
+            had = had if mine else o
     page = build(source, path, c, ctx)
     audience = ctx.audience(page.text)
     if audience == "skip":
         return "skipped_category", rec
-    pages = had.get("pages") if had is not None else None
-    pid = pages[0] if isinstance(pages, list) and pages and isinstance(pages[0], str) else None
+    pid = _pid(had)
     if pid is None and source != "claude-code" and (old := ctx.duplicate(source, c, page.day)):
         # kept in STATE only, not the event log: thousands of these would each cost an append
         return "earlier_import", {"adopted": old}
     pid = pid or page_id(source, path, page)
     h, md = _hash(page.body), vault.path_for("resource", pid)
+
+    def mark() -> None:
+        for s, i in keys:
+            e = ledger.get((s, i))
+            if e is None or e.get("hash") != h or _pid(e) != pid:
+                _event(evlog, ledger, s, i, page.title, pid, h)
     if not md.is_file():
         if had is not None:
             return "deleted_by_you", rec  # never brought back
@@ -597,12 +685,11 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
                   "status": "reference", "covers": [], "related": page.related,
                   "date": page.day, **({"private": True} if audience == "local" else {})}
         vault.create_note("resource", pid, fields, page.body)
-        _event(evlog, ledger, source, cid, page.title, pid, h)
+        mark()
         return "saved", rec
     now = _hash(vault.read("resource", pid).body)
     if now == h:
-        if had is None or had.get("hash") != h:
-            _event(evlog, ledger, source, cid, page.title, pid, h)
+        mark()
         return "unchanged", rec
     if had is None or had.get("hash") != now:
         return "edited_by_you", rec
@@ -610,7 +697,7 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
         _rewrite(vault, md, page, now, audience == "local")
     except _Edited:
         return "edited_by_you", rec
-    _event(evlog, ledger, source, cid, page.title, pid, h)
+    mark()
     return "updated", rec
 
 
