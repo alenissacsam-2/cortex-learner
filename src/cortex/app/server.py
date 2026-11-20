@@ -290,7 +290,7 @@ class App:
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
                     "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view,
-                    "/api/review": self.review}
+                    "/api/review": self.review, "/api/xray": self.xray}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
@@ -323,7 +323,8 @@ class App:
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
             "/api/review/rule/approve": self.review_rule_approve,
-            "/api/review/rule/dismiss": self.review_rule_dismiss}
+            "/api/review/rule/dismiss": self.review_rule_dismiss,
+            "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -636,6 +637,30 @@ class App:
         x = self._rule(body)
         return self._click("cortex_patch", "_dismiss", {
             "page": "corrections", "section": "Core", "text": x["text"], "waiting": False})
+
+    # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
+    def xray(self) -> dict:
+        from cortex import xray
+        return xray.view(self._vault())
+
+    def _xray_set(self, which: str, body: dict) -> dict:
+        """Pin or Mute (`on`, default true) one id, or a private one by its view `token`. The
+        app's click is the only way in: no MCP tool sets these (cortex.xray)."""
+        from cortex import xray
+        v, on = self._vault(), body.get("on", True)
+        id = xray.resolve_token(v, body["token"]) if isinstance(body.get("token"), str) \
+            else body.get("id")
+        if not isinstance(on, bool) or id is None:
+            raise ValueError("Pin or mute takes one page or claim id.")
+        with self.reviewing:
+            xray.set_flag(v, which, id, on)
+        return self.xray()
+
+    def xray_pin(self, body: dict) -> dict:
+        return self._xray_set("pin", body)
+
+    def xray_mute(self, body: dict) -> dict:
+        return self._xray_set("mute", body)
 
     def chat_settings_get(self) -> dict:
         from cortex import chat

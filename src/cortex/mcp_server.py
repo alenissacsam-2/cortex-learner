@@ -37,6 +37,7 @@ from cortex import (
     review,
     share,
     voice,
+    xray,
 )
 from cortex import lint as lint_mod
 from cortex import session as session_mod
@@ -61,6 +62,7 @@ from cortex.index import (
     TRUNCATED,
     Index,
     _edge_targets,
+    _neutralise,
     _target,
     _wrap,
     link_targets,
@@ -1144,6 +1146,9 @@ class Cortex:
         put("Profile", summary or (WITHHELD.format(n=1) if hide
                                    else f"me/profile.md: {NOT_RECORDED}"),
             "me/profile" if summary else None, CONTEXT_CAPS["profile"])
+        mute = xray.settings(self.vault)["mute"]
+        served: dict = {"profile": ["me/profile"] if summary else []}
+        trimmed: dict = {}
         if topic:
             self._refresh_index()
             from cortex import semantic  # numpy and the model load only when a topic is asked
@@ -1152,10 +1157,12 @@ class Cortex:
             hits = semantic.recall(self.index, topic, embed, 5, 1, semantic.load_reranker(),
                                    quiet=self._quiet()) if embed else self.index.related(topic, 5)
             self._note_recall("cortex_context", topic, [h["id"] for h in hits])
+            hits = [h for h in hits if h["id"] not in mute]  # the owner's X-ray mutes
             # Topic concepts come from the recall hits; an all-words match misses phrases
-            concepts = [h for h in hits if h["kind"] == "concept"][:3] if embed else (
-                self.index.find(topic, "concept", 3)
-                or self.index.find(topic, "concept", 3, any_word=True))
+            concepts = [h for h in hits if h["kind"] == "concept"][:3] if embed else [
+                h for h in self.index.find(topic, "concept", 3)
+                or self.index.find(topic, "concept", 3, any_word=True) if h["id"] not in mute]
+            served["topic"] = [h["id"] for h in concepts]
             lines = []
             hide = self._hidden()
             for h in concepts:
@@ -1176,6 +1183,8 @@ class Cortex:
                 rel.pop()  # trim whole lines, last (least relevant) first
             if rel:
                 put("Related", "\n".join(rel), "related", CONTEXT_CAPS["related"])
+            ids = [h["id"] for h in hits]
+            served["related"], trimmed["related"] = ids[:len(rel)], ids[len(rel):]
         if scope in ("all", "projects"):
             lines = [f"- {n.fields.get('title') or n.id}"
                      + (f" — {n.fields['summary']}" if n.fields.get("summary") else "")
@@ -1183,8 +1192,16 @@ class Cortex:
                      if n.fields.get("status") == "active" and not is_private(n)]
             put("Active projects", "\n".join(lines) or "none", "projects" if lines else None,
                 CONTEXT_CAPS["projects"])
-        self._personality_prefs(scope, put, served=claims_served, asks=" (ask)" in summary)
-        return {"context": "\n\n".join(parts), "next": self._next(
+        got: list = []
+        self._personality_prefs(scope, put, served=claims_served, asks=" (ask)" in summary,
+                                lines=got)
+        context = "\n\n".join(parts)
+        for cid, line in got:  # a claim line is served if it survived the char budget whole
+            (served if _neutralise(line) + "\n" in context else trimmed).setdefault(
+                "claims", []).append(cid)
+        xray.record(self.vault, "cortex_context", self.sessions.client, served, trimmed,
+                    len(context))
+        return {"context": context, "next": self._next(
             "Use this to tailor your answer; save durable new facts with cortex_patch."
             + (self._offer([h["id"] for h in concepts]) if topic else ""))}
 
@@ -1206,7 +1223,8 @@ class Cortex:
         `related_only` (a chat the hook primed) skips the light blocks. A full prime (a new
         chat) closes this owner process's open ambient session first and, in a Claude app
         Cortex has no transcript of, starts the chat's live log with the prompt (_chat_log,
-        returned as `chat`). Nothing else is written: not even a recall-log row."""
+        returned as `chat`). Nothing else is written but the X-ray's row of served ids (no
+        text, cortex.xray), never a recall-log row. X-ray pins lead Related, mutes are left out."""
         from cortex import semantic, topics  # numpy and the model load on first use
 
         if not isinstance(prompt, str) or not prompt.strip():
@@ -1219,36 +1237,51 @@ class Cortex:
             self.sessions.close(summary="auto-closed: new chat")
             self.session = None
             self._reset()
+        xs, xr = xray.settings(self.vault), {"served": {}, "trimmed": {}}
         parts, left = ([], [PRIME_MAX]) if related_only else prime.core(
-            self.vault, prompt, list(self.log.iter_events()), self._now(), self._withheld())
+            self.vault, prompt, list(self.log.iter_events()), self._now(), self._withheld(),
+            xr)
         put = prime.putter(parts, left)
         self._refresh_index()
         hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet())[0]
         hub = topics.prompt_hub(self.index, semantic.load_embedder(), prompt, hits)
-        rel = [f"- [[{h['id']}]] — {h.get('summary') or h['title']}"
-               for h in hits if (n := self.index._notes.get(h["id"])) and not topics.is_hub(n)
-               ][:PRIME_RECALLS]
-        if rel := prime.fit(rel, "related", PRIME_CAPS["related"], left[0]):
-            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"])
-        # open mistakes on the hit concepts, as cortex_context lists them; _notes holds no
-        # private or hidden page, so those never show
+        hub = None if hub in xs["mute"] else hub
+        # _notes holds no private or hidden page, so neither a pin nor a hit can serve one
         notes = self.index._notes
-        mis = list(dict.fromkeys(
+        said = {h["id"]: h.get("summary") or h["title"] for h in hits}
+        ids = list(dict.fromkeys(  # X-ray pins first, then the ranked hits
+            [i for i in sorted(xs["pin"]) if i in notes and not topics.is_hub(notes[i])]
+            + [h["id"] for h in hits if (n := notes.get(h["id"])) and not topics.is_hub(n)
+               and h["id"] not in xs["mute"]][:PRIME_RECALLS]))
+        rel = prime.fit([f"- [[{i}]] — " + (said.get(i) or notes[i]["fields"].get("summary")
+                                            or notes[i]["title"]) for i in ids],
+                        "related", PRIME_CAPS["related"], left[0])
+        if rel:
+            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"])
+        xr["served"]["related"], xr["trimmed"]["related"] = ids[:len(rel)], ids[len(rel):]
+        # open mistakes on the hit concepts, as cortex_context lists them
+        ids = list(dict.fromkeys(
             m for h in hits if h.get("kind") == "concept" and h.get("match") != "linked"
             for m in getattr(self.index.states.get(h["id"]), "open_mistakes", None) or []
-            if notes.get(m, {}).get("kind") == "mistake"))[:PRIME_MISTAKES]
-        mis = [f"- [[{m}]] — {notes[m]['fields'].get('summary') or notes[m]['title']}"
-               for m in mis]
-        if mis := prime.fit(mis, "mistakes", PRIME_CAPS["mistakes"], left[0]):
+            if notes.get(m, {}).get("kind") == "mistake" and m not in xs["mute"]
+        ))[:PRIME_MISTAKES]
+        mis = prime.fit([f"- [[{m}]] — {notes[m]['fields'].get('summary') or notes[m]['title']}"
+                         for m in ids], "mistakes", PRIME_CAPS["mistakes"], left[0])
+        if mis:
             put("Open mistakes", "\n".join(mis), "mistakes", PRIME_CAPS["mistakes"])
+        xr["served"]["mistakes"], xr["trimmed"]["mistakes"] = ids[:len(mis)], ids[len(mis):]
         touch = [hub] if hub and hub not in self.touched else []
+        xr["served"]["hub"] = touch
+        context = "\n\n".join(parts)
+        xray.record(self.vault, "cortex_prime", self.sessions.client, xr["served"],
+                    xr["trimmed"], len(context))
         # one ask per chat: a named problem's Attempt first line (prime.core, or the hook's
         # copy of it) wins over a due concept's offer
         attempt = (prime.named_problem(self.vault, prompt) is not None if related_only
                    else any(b.startswith(f"## {prime.ATTEMPT_HEAD}\n") for b in parts))
         offer = "" if attempt else self._offer(
             [h["id"] for h in hits if h.get("kind") == "concept" and h.get("match") != "linked"])
-        return {"context": "\n\n".join(parts), "touch": touch, **({"chat": chat} if chat else {}),
+        return {"context": context, "touch": touch, **({"chat": chat} if chat else {}),
                 "next": self._next(
             "Answer with this in mind; cite at most 2 pages as [[id]], only if they fit. "
             + (f"If the message is substantive, record cortex_log(kind='touch', "
@@ -1259,10 +1292,11 @@ class Cortex:
             + (CHAT_NEXT.format(chat=chat) if chat else "")}
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
-                           asks: bool = False) -> None:
+                           asks: bool = False, lines: list | None = None) -> None:
         """The Personality, Goals (scope all) and Preferences blocks of cortex_context; `nag`
         (only /cortex home) says when the preferences are not recorded. `served`: a
-        `_served_claims()` result to reuse; `asks`: an (ask) line was served already (B3)."""
+        `_served_claims()` result to reuse; `asks`: an (ask) line was served already (B3);
+        `lines` gets each offered claim's (`^c-…`, line) for the X-ray. Muted claims are out."""
         heads = PERSONALITY_HEADINGS.get(scope, ())
         served = self._served_claims() if served is None else served
         want = None if scope == "all" else SCOPE_HEADINGS[scope]
@@ -1270,8 +1304,9 @@ class Cortex:
                  "goals": (lambda h: h == "now") if scope == "all" else None,
                  "preferences": lambda h: want is None or h == want.lower()}
         withheld = self._withheld()
-        got = {p: self._claim_sections(p, k, served) if k and p not in withheld else ("", False)
-               for p, k in keeps.items()}
+        xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"], lines)
+        got = {p: self._claim_sections(p, k, served, xr) if k and p not in withheld
+               else ("", False) for p, k in keeps.items()}
         # server text, so outside the untrusted wrap; first, so caps never trim it
         if asks or any(lab for _, lab in got.values()):
             put("How to read the claims", LEGEND)
@@ -1294,15 +1329,21 @@ class Cortex:
         return prime.served_claims(self.vault, list(self.log.iter_events())
                                    if events is None else events)
 
-    def _claim_sections(self, page: str, keep, served: dict) -> tuple[str, bool]:
+    def _claim_sections(self, page: str, keep, served: dict,
+                        xr: tuple = (None, frozenset(), None)) -> tuple[str, bool]:
         """The non-empty `## ` sections of me/<page> whose lowercased heading passes `keep`,
         never `## Past` or `## Not me`, and whether any line got a label. List lines come
         after any other lines, labelled and ranked by `served` score (so a cap trims the
-        weakest; ties newest first), with claim ids stripped (v4 MEMSYS-1)."""
-        secs = prime.claim_items(self.vault, page, keep, served, local_day(self._now()))
-        return ("\n\n".join("\n".join([head, *other, *(s for _, s, _ in items)])
+        weakest; ties newest first), with claim ids stripped (v4 MEMSYS-1). `xr`: (claim ids,
+        muted ids, a list that gets each line's (`^c-…`, line)), see _personality_prefs."""
+        ids, mute, lines = xr
+        secs = prime.claim_items(self.vault, page, keep, served, local_day(self._now()), ids,
+                                 mute)
+        if lines is not None:
+            lines += [(c, s) for *_, items in secs for _, s, _, c in items if c]
+        return ("\n\n".join("\n".join([head, *other, *(s for _, s, _, _ in items)])
                             for head, other, items in secs),
-                any(lab for _, _, items in secs for *_, lab in items))
+                any(lab for _, _, items in secs for _, _, lab, _ in items))
 
     def _home_preferences(self) -> str:
         """Personality + preferences as cortex_context(scope="all") builds them, capped alike."""

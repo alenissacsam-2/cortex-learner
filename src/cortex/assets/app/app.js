@@ -11,7 +11,7 @@
   history.replaceState(null, '', '/manage' + location.hash);
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const SECTIONS = ['setup', 'chat', 'status', 'review', 'connect', 'llm', 'browse', 'vault'];
+  const SECTIONS = ['setup', 'chat', 'status', 'review', 'xray', 'connect', 'llm', 'browse', 'vault'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---- DOM helpers ---- */
@@ -1338,6 +1338,43 @@
       'No repeated corrections found.')));
   }
 
+  /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come
+     back resolved to titles by the server; a private page is only "a private page". Pin: prime
+     always serves it; Mute: prime and context never do. Every text is set with textContent. */
+  const BLOCK = { core: 'Core lines', profile: 'Profile', preferences: 'Lines about you', contract: 'Teaching contract',
+    related: 'Related pages', mistakes: 'Open mistakes', hub: 'Topic', topic: 'Topic concepts', claims: 'Lines about you' };
+  const xrayOpen = new Set();  // the calls left open survive a redraw after a click
+  function renderXray(d) {
+    const act = (path, body, said) => post(path, body, (r) => { renderXray(r); toast.ok(said); });
+    const ref = (x) => (x.id ? { id: x.id } : { token: x.token });
+    const pin = (x) => btn(x.pinned ? 'Unpin' : 'Pin', () => act('/api/xray/pin', { ...ref(x), on: !x.pinned },
+      x.pinned ? 'Unpinned.' : 'Pinned. Cortex now serves it in every first call.'), null, { 'aria-label': `${x.pinned ? 'Unpin' : 'Pin'}: ${x.title}` });
+    const mute = (x) => btn(x.muted ? 'Unmute' : 'Mute', () => act('/api/xray/mute', { ...ref(x), on: !x.muted },
+      x.muted ? 'Unmuted.' : 'Muted. Cortex will not serve it again.'), null, { 'aria-label': `${x.muted ? 'Unmute' : 'Mute'}: ${x.title}` });
+    const item = (x, block, extra) => row(x.title, BLOCK[block] || block, x.where || null,
+      x.id && x.kind !== 'me' ? [pin(x), mute(x)] : [], extra);
+    const call = (c, client) => {
+      const key = `${client}|${c.ts}|${c.tool}`, when = c.ts ? daysAgo(c.ts, true) : '';
+      const n = (bs) => bs.reduce((k, b) => k + b.items.length, 0);
+      const det = h('details', { class: 'pad xray-call', open: xrayOpen.has(key) },
+        h('summary', { text: `${c.tool} · ${when} · ${c.chars} characters · ${n(c.served)} served${c.trimmed.length ? `, ${n(c.trimmed)} cut for space` : ''}` }),
+        ...c.served.flatMap((b) => b.items.map((x) => item(x, b.block))),
+        ...c.trimmed.flatMap((b) => b.items.map((x) => item({ ...x, where: 'cut for space' }, b.block, 'cut'))),
+        c.served.length || c.trimmed.length ? null : note('Nothing was served.'));
+      det.addEventListener('toggle', () => { if (det.open) xrayOpen.add(key); else xrayOpen.delete(key); });
+      return det;
+    };
+    const flags = (list, which) => list.map((x) => row(x.title, x.kind === 'claim' ? 'Line about you' : 'Page', x.where || null,
+      [which === 'pin' ? pin(x) : mute(x)]));
+    put('xray',
+      board('Pinned and muted', { note: String(d.pinned.length + d.muted.length) },
+        ...(d.pinned.length || d.muted.length ? [...flags(d.pinned, 'pin'), ...flags(d.muted, 'mute')]
+          : [note('Nothing pinned or muted. Pin or mute a page or line from a call below.')])),
+      ...(d.clients.length ? d.clients.map((g) => board(g.client, { note: `${g.total} call${g.total === 1 ? '' : 's'}` },
+        ...g.calls.map((c) => call(c, g.client))))
+        : [board('No calls yet', {}, note('When an AI app asks Cortex about you, each call shows here.'))]));
+  }
+
   /* Setup */
   const skipped = new Set(), opened = new Set();
   const pick = { model: null, runner: null };
@@ -1459,7 +1496,7 @@
     put('setup', ...d.order.map((k) => steps[k]), sFinish);
   }
 
-  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
+  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 
   /* ---- header: wordmark, theme, quit, nav ---- */
   $('wordmark').append(dm('CORTEX', 3, 'Cortex'));

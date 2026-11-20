@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import datetime
 
-from cortex import claims
+from cortex import claims, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import local_day
@@ -172,10 +172,16 @@ def served_claims(vault: Vault, events: list[dict]) -> dict:
     return out
 
 
-def claim_items(vault: Vault, page: str, keep, served: dict, today: str) -> list[tuple]:
+def claim_ids(vault: Vault) -> dict:
+    """{(page, section, text): `^c-…`} for every claim line (xray's claim id form)."""
+    return {(r["page"], r["section"], r["text"]): xray.claim(r["id"]) for r in claims.rows(vault)}
+
+
+def claim_items(vault: Vault, page: str, keep, served: dict, today: str, ids: dict | None = None,
+                mute: set[str] = frozenset()) -> list[tuple]:
     """Per kept `## ` section of me/<page> (heading line, other lines, [(score, labelled list
-    line, labelled?)] best first); never `## Past`, `## Not me` or a line whose own
-    `(until …)` day is before `today` (agenda 4)."""
+    line, labelled?, `^c-…` id or None)] best first); never `## Past`, `## Not me`, a line
+    whose own `(until …)` day is before `today` (agenda 4) or one whose id (`ids`) is muted."""
     note = me(vault, page)
     out = []
     for sec in _sections(note.body if note else ""):
@@ -186,9 +192,12 @@ def claim_items(vault: Vault, page: str, keep, served: dict, today: str) -> list
             items = []
             for ln in reversed([ln for ln in lines if ln.startswith("- ")
                                 and not claims.expired(claims.strip_id(ln), today)]):
-                label, score = served.get(
-                    (page, head[3:].strip(), claims.strip_id(ln)[2:].strip()), ("", 0.5))
-                items.append((score, claims.strip_id(ln) + label, bool(label)))
+                key = (page, head[3:].strip(), claims.strip_id(ln)[2:].strip())
+                cid = (ids or {}).get(key)
+                if cid in mute:
+                    continue
+                label, score = served.get(key, ("", 0.5))
+                items.append((score, claims.strip_id(ln) + label, bool(label), cid))
             items.sort(key=lambda x: -x[0])  # stable: ties stay newest first
             out.append((head, [ln for ln in lines if not ln.startswith("- ")], items))
     return out
@@ -257,17 +266,20 @@ def attempt_line(note) -> str:
 
 
 def core_lines(vault: Vault, served: dict, today: str,
-               withheld: set[str] = frozenset()) -> list[str]:
+               withheld: set[str] = frozenset(), ids: dict | None = None,
+               mute: set[str] = frozenset()) -> list[str]:
     """me/core.md's live lines the user wrote or confirmed (the ones `served` labels plain),
     verbatim (claim id stripped) in page order, as many whole lines as fit CORE_MAX; [] with no
-    page, a withheld or private page. Agent, exposed or relayed lines are never pinned."""
+    page, a withheld or private page. Agent, exposed or relayed lines are never pinned, and a
+    line whose id (`ids`) is muted in the X-ray is left out."""
     note = None if "core" in withheld else me(vault, "core")
     if note is None or is_private(note):
         return []
     out, size = [], 0
-    for (page, _, text), (label, _) in served.items():
+    for (page, sec, text), (label, _) in served.items():
         line = f"- {text}"
-        if page != "core" or label or claims.expired(text, today):
+        if page != "core" or label or claims.expired(text, today) or (
+                ids or {}).get((page, sec, text)) in mute:
             continue
         if size + bool(out) + len(line) <= CORE_MAX:  # a line that does not fit is dropped whole
             size += bool(out) + len(line)
@@ -300,15 +312,19 @@ def similarity(prompt: str, texts: list[str]) -> list[float] | None:
 
 
 def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
-         withheld: set[str] = frozenset()) -> tuple[list[str], list[int]]:
+         withheld: set[str] = frozenset(), xr: dict | None = None
+         ) -> tuple[list[str], list[int]]:
     """cortex_prime's blocks before Related, and the budget left: (parts, [chars left]).
-    `withheld`: bare ids of me/ pages left out (a non-owner server)."""
+    `withheld`: bare ids of me/ pages left out (a non-owner server). The X-ray's pinned claims
+    lead Preferences and muted ones are left out; `xr`, if given, gets the `served` and
+    `trimmed` ids by block (cortex.xray)."""
     prompt = prompt[:PRIME_PROMPT]
     parts: list[str] = []
     left = [PRIME_MAX]
     put = putter(parts, left)
     served = served_claims(vault, events)
-    if pinned := core_lines(vault, served, local_day(now), withheld):
+    xs, ids = xray.settings(vault), claim_ids(vault)
+    if pinned := core_lines(vault, served, local_day(now), withheld, ids, xs["mute"]):
         put(CORE_HEAD, "\n".join(pinned), "me/core", PRIME_MAX)  # first and whole, never shrunk
     # the core is the user's own pick of preferences, so it comes out of their cap
     pref_cap = max(0, PRIME_CAPS["preferences"] - (PRIME_MAX - left[0]))
@@ -318,28 +334,32 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     words = re.findall(r"\w+", prompt.lower())
     terms = {t for t in words if len(t) > 2 and t not in STOPWORDS and t not in TASK_WORDS}
     terms |= {x for w in words for x in ABBREVIATIONS.get(w, ())}
-    rows = []  # [-prompt match, situational?, -served score, line, labelled, text]; stable
+    rows = []  # [-prompt match, situational?, -served score, line, labelled, text, id]; stable
     seen = {claims.norm(ln) for ln in pinned}  # a pinned line is not repeated
     for page, keep in (("preferences", lambda h: True),
                        ("personality", lambda h: h in PERSONALITY_HEADINGS["all"])):
         if page in withheld:
             continue
-        for head, _, items in claim_items(vault, page, keep, served, local_day(now)):
+        for head, _, items in claim_items(vault, page, keep, served, local_day(now), ids,
+                                          xs["mute"]):
             name = head[3:].strip()
-            for score, line, lab in items:  # a section name match counts (my presentation)
+            for score, line, lab, cid in items:  # a section name match counts (my presentation)
                 bare = line[2:].removesuffix(" (ask)")
                 if claims.norm(bare) in seen:
                     continue
                 text = f"{name} {line}".lower()
                 rows.append([-sum(t in text for t in terms),
                              name.lower() not in GENERAL_SECTIONS, -score,
-                             f"- [{name}] {line[2:]}", lab, f"{name}: {bare}"])
+                             f"- [{name}] {line[2:]}", lab, f"{name}: {bare}", cid])
     # by meaning when this process's embedder is warm: cosine times the tier weight, a line
     # under semantic.MIN_COS counting as no match; else by the prompt words a line shares
     if rows and (sims := similarity(prompt, [r[5] for r in rows])) is not None:
         floor = sys.modules["cortex.semantic"].MIN_COS
         for r, s in zip(rows, sims, strict=True):
             r[0] = s * r[2] / 0.5 if s >= floor else 0  # r[2] / 0.5: -1, or -ASK_WEIGHT
+    for r in rows:  # the owner's X-ray pins lead, still within the preferences cap
+        if r[6] in xs["pin"]:
+            r[0] = float("-inf")
     rows.sort(key=lambda r: r[:3])
     # the legend only when an (ask) line can be served: the Preferences fit below has no more
     # room than this one, so it serves a prefix of these lines
@@ -351,8 +371,8 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     if problem := named_problem(vault, prompt):
         put(ATTEMPT_HEAD, attempt_line(problem))
         cap -= before - left[0]  # budget-neutral: the line comes out of the preferences cap
-    if lines := fit([r[3] for r in rows], "me", cap, left[0]):
-        put("Preferences", "\n".join(lines), "me", cap)
+    if prefs := fit([r[3] for r in rows], "me", cap, left[0]):
+        put("Preferences", "\n".join(prefs), "me", cap)
     elif n := len(withheld & {"preferences", "personality"}):
         put("Preferences", WITHHELD.format(n=n))  # no "not recorded" nag: /cortex home asks
     if "teaching-contract" not in withheld and (rules := contract_core(contract(vault, set()))):
@@ -360,4 +380,13 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
         lines = fit(rules, "me/teaching-contract", PRIME_CAPS["contract"], left[0]) or rules[:1]
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
             PRIME_CAPS["contract"])
+    if xr is not None:
+        heads = {b.split("\n", 1)[0][3:] for b in parts}
+        xr["served"] = {"core": [c for (p, _, t), c in ids.items()
+                                 if p == "core" and f"- {t}" in pinned],
+                        "profile": ["me/profile"] * ("Profile" in heads),
+                        "preferences": [r[6] for r in rows[:len(prefs)] if r[6]],
+                        "contract": ["me/teaching-contract"] * (
+                            "Teaching contract (core)" in heads)}
+        xr["trimmed"] = {"preferences": [r[6] for r in rows[len(prefs):] if r[6]]}
     return parts, left
