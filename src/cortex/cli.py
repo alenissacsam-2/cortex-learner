@@ -35,7 +35,7 @@ from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 EPILOG = ("About you: claims [--unasked|--summary], needs, voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
           "Import: import [--dry-run|--private], import-chats, digest · "
-          "Chats: chats, harvest status · "
+          "Chats: chats, harvest status, safety-net · "
           "Vault: lint, relink, concept duplicates, topics, replay, undo, backup · "
           "Setup: app, setup [--print-mcp-config], init, doctor, model download, exclude")
 app = typer.Typer(no_args_is_help=True, epilog=EPILOG)
@@ -853,6 +853,40 @@ def import_chats_cmd(export: Annotated[Path | None, typer.Argument(
     typer.echo(f"Imported {n} {chats.GUIDES[source]['name']} conversation{'s' * (n != 1)} "
                f"into {chats.export_root()}. Run /cortex to learn from them.")
     typer.echo(importers.report_line(chats.GUIDES[source]["name"], got.report()))
+
+
+@app.command("safety-net")
+@_errors
+def safety_net_cmd(
+        dry_run: Annotated[bool, typer.Option(
+            "--dry-run", help="Print what would be recorded; write nothing.")] = False,
+        undo: Annotated[bool, typer.Option(
+            "--undo", help="Instead: void every event the safety net recorded (with --chat, "
+                           "only that chat's).")] = False,
+        chat: Annotated[str | None, typer.Option(
+            help="With --undo: the chat page id whose events to void.")] = None,
+        vault: VaultOpt = None) -> None:
+    """Record what the chat model forgot: topic touches for concepts and topics named in your
+    recent chat pages, and (with a local model already loaded) the concepts a chat explained,
+    as taught. Chats with recorded learning, private chats and hidden subjects are skipped.
+    The app runs it after each chat import."""
+    from cortex import safety_net
+
+    v = _vault(vault)
+    if undo:
+        n = safety_net.undo(v, chat)
+        typer.echo(f"voided {n} safety-net event{'s' * (n != 1)}")
+        return
+    runner, embed = safety_net.cli_tools()
+    out = safety_net.run(v, runner, embed, dry_run=dry_run)
+    if runner is None:
+        typer.echo("No local model is loaded: only topic touches (load the small model to "
+                   "also record taught concepts).")
+    said = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(out.items())
+                     if isinstance(n, int))
+    dry = " [dry run: nothing written]" if dry_run else ""
+    typer.echo((out.get("line") or "Safety net: nothing new to record")
+               + (f" ({said})" if said else "") + dry)
 
 
 @app.command("digest")

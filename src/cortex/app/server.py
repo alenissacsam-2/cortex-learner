@@ -734,6 +734,23 @@ class App:
         except Busy:  # a job started meanwhile: the next pass tries again
             return None
 
+    def safety_net_auto(self) -> dict | None:
+        """One safety_net pass over the chat pages earlier imports wrote, in this thread, when
+        the chat import is on, a vault is set up and no job runs; committed like an import.
+        Its counts, or None when it did not run."""
+        from cortex import chat_import, safety_net
+        from cortex.vault import Vault
+        if not chat_import.enabled() or not self.entry() or self.jobs.running():
+            return None
+        v = Vault(self.root)
+        if not safety_net.pending(v):  # stats only: no model probe when nothing changed
+            return None
+        runner, embed = safety_net.background_tools()
+        try:
+            return safety_net.run(v, runner, embed)
+        finally:
+            actions._commit(v, "safety net")
+
     def chat_import_set(self, body: dict) -> dict:
         """Turn the automatic chat import on or off (`app.chat_import`)."""
         from cortex import chat_import
@@ -1588,6 +1605,13 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         wait = chat_import.FIRST_S
         while not app.stop.wait(wait):
             wait = chat_import.EVERY_S
+            # the safety net reads the pages the last import wrote; first, since the import
+            # below starts a job and the net waits while any job runs
+            try:
+                app.safety_net_auto()
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: the chat safety net failed ({type(e).__name__}); retried in "
+                     f"{chat_import.EVERY_S // 60} minutes")
             try:
                 app.chat_import_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)

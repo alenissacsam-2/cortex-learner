@@ -59,6 +59,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `chats` / `import-chats` | Past chats / import a claude.ai export |
 | `digest` | Review chats imported since the last digest; each topic you confirm is a touch, never a grade |
 | `harvest status` | Harvest progress and undo commands |
+| `safety-net` (`--dry-run`, `--undo`) | Record the topics and concepts your recent chats covered that the chat forgot to log |
 | `export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
 | `undo <session>` / `void` | Revert one chat's changes / cancel one record |
 | `backup` | Zip the whole vault |

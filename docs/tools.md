@@ -380,7 +380,7 @@ The 16th tool, registered only by `cortex mcp --private`, which the CLI refuses 
 | object | server (resolved) | `concept:<id>`, `problem:<id>`, `assessment:<id>`, `inbox:<slug>` |
 | problem, also, item_type, question, answer_key, learner_answer, verdict, model_verdict, confidence, hints, mistakes, targets_mistakes | client (validated) | as in the tools |
 | ref | server | for `void` and `remap`: the target event id or concept id |
-| source | server | `tutor` (MCP), `external` (CLI), `self` (self_report), `imported` (import handoff), `run` (M4) |
+| source | server | `tutor` (MCP), `external` (CLI), `self` (self_report), `imported` (import handoff), `run` (M4), `safety_net` (the chat safety net, `cortex.safety_net`) |
 | predicted_p | server | FSRS shadow retrievability at write time, on ask, grade and self_report (concept objects); 0.5 for a new concept |
 | grader | server | `{client: MCP clientInfo.name (the handshake's, or a request's `_meta` envelope; `"unknown"` when none or empty), model: self-reported}` |
 | payload | client (validated) | for `log` kinds |
