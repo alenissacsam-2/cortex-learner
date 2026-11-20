@@ -250,6 +250,24 @@ def test_the_facts_event_comes_before_the_models_words(vault, fake):
     assert saved["facts"]["total"] == 9 and saved["model"] == "gemma3:2b"
 
 
+def test_the_facts_piece_carries_titles_without_links_or_markup(vault, fake):
+    note(vault.root, "notes/evil.md", "title: '![i](http://evil.example/x.png) [Kubernetes]"
+         "(http://evil.example) <script>x</script>'\ndate: 2026-11-15\n", "# Evil\n\nkubernetes")
+    with store.connect(vault) as con:
+        _visit(con, "2026-11-15", "https://evil.example/k", "[Kubernetes](javascript:x) <img>",
+               "evil.example", "evil.example")
+    con.close()
+    for q in ("timeline of last week", "tell me everything about kubernetes",
+              "when did I last look at kubernetes?"):
+        _, ev = _turn(vault, q, fake.runner())
+        facts = next(e for e in ev if e["t"] == "facts")["facts"]
+        blob = json.dumps(facts)
+        assert "Kubernetes" in blob or "kubernetes" in blob
+        for bad in ("http://", "javascript:", "](", "<script", "<img", "!["):
+            assert bad not in blob, (q, bad)
+        assert facts["coverage"]["read"] >= facts["coverage"]["matched"] > 0
+
+
 def test_empty_facts_answer_without_the_model(vault, fake):
     _, ev = _turn(vault, "how many times did I visit zebrafish.org?", fake.runner())
     assert [e["t"] for e in ev] == ["start", "step", "facts", "tok", "src", "done"]

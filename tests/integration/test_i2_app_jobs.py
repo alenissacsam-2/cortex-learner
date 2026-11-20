@@ -109,8 +109,9 @@ def test_auth_and_get_changes_nothing(app, vault, home):
     assert c.call("POST", "/api/quit", {}, headers={"Origin": "http://evil.example"})[0] == 403
     assert not app.stop.is_set()
     before = _tree(vault, home)
-    for path in app.get:  # a stem site's details with no site named: not found
-        assert c.call("GET", path)[0] == (404 if path == "/api/home/site" else 200), path
+    for path in app.get:  # a site's details or a passage with none named: not found
+        assert c.call("GET", path)[0] == (
+            404 if path in ("/api/home/site", "/api/chat/passage") else 200), path
     for path in set(app.post) - set(app.get):  # a GET on a change route is refused, not run
         assert c.call("GET", path)[0] == 405, path
     after = _tree(vault, home)

@@ -53,8 +53,8 @@ STATIC = {"/": (None, "text/html; charset=utf-8"),
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
-QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta",  # GETs that read the query
-              "/api/home/site", "/api/status"}
+QUERY_GETS = {"/api/chat/get", "/api/chat/passage", "/api/home",  # GETs that read the query
+              "/api/home/delta", "/api/home/site", "/api/status"}
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -288,6 +288,7 @@ class App:
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
+                    "/api/chat/passage": self.chat_passage,
                     "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view,
                     "/api/review": self.review}
@@ -430,6 +431,19 @@ class App:
         if cid is None:
             return {"id": None, "messages": []}
         return {"id": cid, "messages": chat.load(self._vault(), cid)}  # load checks the id
+
+    def chat_passage(self, query: dict) -> dict:
+        """The passage an answer cited (?path=&at=&len=), under Chat's source switches of now
+        (`chat.passage`): a page under a switch that is off is refused, never shown."""
+        from cortex import chat
+        q = {k: (query.get(k) or [""])[0] for k in ("path", "at", "len")}
+        if not q["path"]:  # no page named: not found, as /api/home/site
+            raise NotFound
+        try:
+            return chat.passage(self._vault(), q["path"], q["at"] or 0, q["len"] or 0,
+                                chat.get_settings()["sources"])
+        except PermissionError as e:
+            raise ValueError(str(e)) from None
 
     def _home(self):
         from cortex.home import HomeCache

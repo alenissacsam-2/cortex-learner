@@ -315,7 +315,8 @@ def search(vault: Vault, query: str, k: int = 8) -> list[dict]:
         except OSError:
             continue
         snippet = " ".join(body[at:at + SNIPPET * 2].split())[:SNIPPET]
+        text = body[at:at + CHUNK_CHARS]
         out.append({"path": p, "title": title or p.rsplit("/", 1)[-1][:-3],
-                    "score": round(score, 3), "snippet": snippet,
-                    "text": body[at:at + CHUNK_CHARS].strip()})
+                    "score": round(score, 3), "snippet": snippet, "text": text.strip(),
+                    "at": at + len(text) - len(text.lstrip())})  # where `text` starts in body
     return out

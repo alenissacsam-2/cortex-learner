@@ -17,10 +17,10 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
-from cortex import ask, chat_facts, chat_study, events, localllm, semantic, taint
+from cortex import ask, chat_facts, chat_study, events, localllm, render, semantic, taint
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
 from cortex.index import STOPWORDS
-from cortex.vault import Vault
+from cortex.vault import Vault, VaultError
 
 DIR = ".cortex/browse/chat"
 ID_RE = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")  # a ULID, so a path can never leave DIR
@@ -29,7 +29,7 @@ TITLE = 60
 TURNS = 6  # earlier messages the model sees
 HISTORY_BUDGET = 3000  # their characters, on top of ask.BUDGET of passages: a 2B model's context
 LENGTH = {"short": 300, "normal": 700, "long": 1500}  # answer length -> max_tokens
-DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 8,
+DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PASSAGE characters
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
@@ -489,23 +489,30 @@ def _capped(head: str, items: list, more: str = "more") -> list:
             *([f"- and {len(items) - DIGEST_SHOWN} {more}"] if len(items) > DIGEST_SHOWN else [])]
 
 
+def _index(vault: Vault):
+    """The kept Index of `vault` (the pages ask._passages searches), refreshed, not rebuilt
+    (~3 s a build). Call it under _INDEX_LOCK."""
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+
+    catalog = Catalog.load(vault)
+    idx = _INDEX.get(vault.root)
+    if idx is None:
+        idx = _INDEX[vault.root] = Index(vault, catalog)
+    else:
+        idx.catalog = catalog
+        idx.refresh()
+    return idx
+
+
 def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     """[(day, kind, id, title, body, is_chat, is_private)] of notes, saved AI chats and journal
     pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's
     `notes` and `chats` switches. Private pages (`ask.private_pages`: their own `private: true`,
     or under a private subject) come under the `private` switch instead: the local model may
     read them (owner's decision, 19 Nov 2026)."""
-    from cortex.catalog import Catalog
-    from cortex.index import Index
-
-    catalog = Catalog.load(vault)
-    with _INDEX_LOCK:  # the pages ask._passages searches; refreshed, not rebuilt (~3 s a build)
-        idx = _INDEX.get(vault.root)
-        if idx is None:
-            idx = _INDEX[vault.root] = Index(vault, catalog)
-        else:
-            idx.catalog = catalog
-            idx.refresh()
+    with _INDEX_LOCK:
+        idx = _index(vault)
         paths = {i: p for p, i in idx._ids.items()}
         stats = dict(idx._stats)
         private = {i: n for i, (_, n) in ask.private_pages(vault, idx).items()} \
@@ -685,6 +692,59 @@ def history(msgs: list, sources: dict | None = None) -> list:
     return out
 
 
+_HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
+
+
+def _clean(text: str) -> str:
+    """Untrusted page text, line by line, without links, images, URLs or HTML."""
+    return "\n".join(render.plain(ln, 10_000) for ln in text.splitlines()).strip()
+
+
+def passage(vault: Vault, path, at, size, sources: dict) -> dict:
+    """The passage an answer cited (`ask._passages`' path, at and len): {path, title, kind,
+    heading (the last heading above it, "" at the top), text}, at most ask.PASSAGE characters
+    from `at` of the page's body, links and images stripped. Under Chat's switches of now, as an
+    answer reads (`ask._switch`): a page whose switch is off, a private one with `private` off,
+    raises PermissionError, never shows. A path outside the vault or not a page: ValueError."""
+    from cortex.browse import vectors
+
+    if not isinstance(path, str) or not path.endswith(".md") or "\\" in path \
+            or path.startswith("/") or ".." in path.split("/"):
+        raise ValueError("Not a page of this vault.")
+    try:
+        at, size = max(0, int(at)), int(size)
+    except (TypeError, ValueError):
+        raise ValueError("at and len must be whole numbers.") from None
+    size = min(size, ask.PASSAGE) if size > 0 else ask.PASSAGE
+    try:
+        full = vault._contained(path)
+    except VaultError as e:
+        raise ValueError(str(e)) from None
+    with _INDEX_LOCK:
+        idx = _index(vault)
+        id_ = idx._ids.get(full)
+        private = id_ in idx._private
+        n = idx._notes.get(id_) if id_ is not None and not private else None
+    if id_ is not None and n is None:
+        n = ask._page(vault, full, id_)
+    if path.startswith("browse/") and n is None:  # a browse page the private search reads
+        try:
+            title, body = vectors._body(full.read_bytes().decode("utf-8", "replace"))
+        except OSError:
+            raise ValueError("That page is gone.") from None
+        n = {"title": title or full.stem, "body": body, "kind": "browse"}
+    if n is None:
+        raise ValueError("That page is gone.")
+    kind = "browse" if path.startswith("browse/") else "chat" if semantic.is_chat(n) else "note"
+    if not sources.get(ask._switch({"path": path, "kind": kind, "private": private})):
+        raise PermissionError("That page is under a source switch that is off in Chat now.")
+    body = n["body"]
+    heads = [m for m in _HEADING.finditer(body) if m.start() <= at]
+    return {"path": path, "title": chat_study._title(n["title"]), "kind": kind,
+            "heading": chat_study._title(heads[-1][1]) if heads else "",
+            "text": _clean(body[at:at + size])}
+
+
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None) -> str:
     """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
@@ -693,9 +753,11 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     reasoning model only thinks, {"t": "facts", facts} before any words of a typed data answer
     (`chat_facts`: count, first, last, timeline, about; the model then only words them, or
     `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
-    per piece, {"t": "src", sources: [{n, path, title, kind}]} (the passages cited),
-    {"t": "done", id, model, seconds, stopped}; or {"t": "err", code (not_set_up,
-    no_local_model, no_answer), message}. A set `cancel` stops the stream;
+    per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
+    `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
+    matched} when passages were searched (how many the model read of how many the search found;
+    saved on the answer too)}, {"t": "done", id, model, seconds, stopped}; or {"t": "err",
+    code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
     the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
     `localllm.Runner` or None; never a cloud one."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
@@ -759,6 +821,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})
     found: list = []
+    stats: dict = {}  # ask._passages' match count, for the coverage line
     parts: list = []
     messages = facts = None
     max_tokens = LENGTH[s["length"]]
@@ -780,7 +843,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         else:
             emit({"t": "facts", "facts": facts})
             if fq["kind"] == "about" and semantic.load_embedder() is not None:
-                found = ask._passages(vault, fq["term"], 4, sources=s["sources"])
+                found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats)
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})
@@ -796,7 +859,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         found = ask._passages(vault, query, s["passages"],
                               between=(got[0].isoformat(), min(got[1], today).isoformat())
                               if past else None,
-                              sources=s["sources"], topic=topic(said, got[2]) if got else "")
+                              sources=s["sources"], topic=topic(said, got[2]) if got else "",
+                              stats=stats)
     if listed is not None or fq is not None:
         pass
     elif not found:
@@ -838,18 +902,23 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
               "message": f"{runner.describe()} did not answer; try again."})
         return convo_id
     cited = ask.cites(answer)
-    sources = [{"n": n, "path": p["path"], "title": p["title"], "kind": p["kind"]}
-               for n, p in enumerate(found, 1) if n in cited]
+
+    def pill(p):  # titles are untrusted page text: no links, images or markup
+        return {"path": p["path"], "title": chat_study._title(p["title"]) or p["path"],
+                "kind": p["kind"], "at": p.get("at", 0), "len": p.get("len", 0)}
+    sources = [{"n": n, **pill(p)} for n, p in enumerate(found, 1) if n in cited]
     # a small model often cites nothing: then show what it read, marked as not cited
-    searched = [] if sources else [{"path": p["path"], "title": p["title"], "kind": p["kind"]}
-                                   for p in found[:SEARCHED]]
+    searched = [] if sources else [pill(p) for p in found[:SEARCHED]]
+    coverage = {"read": len(found), "matched": stats["matched"]} if "matched" in stats else None
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
                  **({"facts": facts} if facts is not None else {}),
+                 **({"coverage": coverage} if coverage else {}),
                  "model": model, "switches": dict(s["sources"]),
                  **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
-    emit({"t": "src", "sources": sources, "searched": searched})
+    emit({"t": "src", "sources": sources, "searched": searched,
+          **({"coverage": coverage} if coverage else {})})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1)})
     return convo_id

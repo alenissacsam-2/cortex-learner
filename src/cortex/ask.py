@@ -22,7 +22,7 @@ from cortex.topics import page_date
 from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 BUDGET = 6000  # passage characters, so a 2B model's context is not overrun
-PASSAGE = 1500
+PASSAGE = 700  # owner B4 (v9): 4 to 6 short passages; Chat reads 5 by default
 TIMEOUT = 120  # a small model on a CPU reads 6,000 characters slowly
 NO_MODEL = "Start Ollama (recommended) or LM Studio: cortex app → Setup."
 SYSTEM = (
@@ -95,11 +95,12 @@ def _dated(vault: Vault, idx: Index, between: tuple[str, str], topic: str) -> li
             title, body = vectors._body((vault.root / p).read_bytes().decode("utf-8", "replace"))
         except OSError:
             continue
-        out.append({"path": p, "title": title, "text": body.strip(), "kind": "browse", "day": d})
+        out.append({"path": p, "title": title, "text": body.strip(), "kind": "browse", "day": d,
+                    "at": len(body) - len(body.lstrip())})
     for i, d in notes.items():
         n = idx._notes[i]
-        out.append({"path": paths[i], "title": n["title"], "text": semantic._chunk_text(n, 0),
-                    "kind": "chat" if semantic.is_chat(n) else "note", "day": d})
+        out.append(_note(vault, i, n, paths[i], semantic._chunk_text(n, 0),
+                         "chat" if semantic.is_chat(n) else "note", day=d))
     if score:
         return sorted(out, key=lambda p: (-score.get(p["path"], -1.0), p["path"]))
     return sorted(out, key=lambda p: (p["day"], p["path"]), reverse=True)
@@ -172,25 +173,51 @@ def _private_hits(vault: Vault, idx: Index, question: str, k: int) -> list[dict]
     out = []
     for _, rel, p, at in sorted(scored)[:k]:
         if (n := _page(vault, p, i := idx._ids[p])) is not None:
-            out.append({"path": rel, "title": n["title"], "text": semantic._chunk_text(n, at),
-                        "kind": "chat" if semantic.is_chat(n) else "note",
-                        "day": _note_day(vault, i, n, rel), "private": True})
+            out.append(_note(vault, i, n, rel, semantic._chunk_text(n, at),
+                             "chat" if semantic.is_chat(n) else "note", private=True))
     return out
 
 
+def _span(body: str, text: str, title: str) -> tuple[int, int]:
+    """(start, length) of passage `text` in its page's `body`. A chunk is cut from the body
+    without empty headings and with its line ends made \\n (`semantic._filled`), after a title
+    line (and chunk 0's summary), so both ends are looked up: the first line of 12+ characters
+    after the title line, then the last line of 12+ characters (any last line when none is that
+    long) from there; (0, len(text)) when the start is not found."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = lines[1:] if lines and lines[0] == title.strip() else lines
+    at = next((a for s in lines if len(s) >= 12 and (a := body.find(s)) >= 0), -1)
+    if at < 0:
+        return 0, len(text)
+    tail = [s for s in lines if s]
+    last = next((s for s in reversed(tail) if len(s) >= 12), tail[-1])
+    end = body.find(last, at)
+    return at, (end + len(last) - at) if end >= 0 else len(text)
+
+
+def _note(vault: Vault, id: str, n: dict, path: str, text: str, kind: str, **extra) -> dict:
+    """A passage of a page the index reads; `_body` is for its span (`_span`) once cut."""
+    return {"path": path, "title": n["title"], "text": text, "kind": kind,
+            "day": _note_day(vault, id, n, path), "_body": n["body"], **extra}
+
+
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
-              sources: dict | None = None, topic: str = "") -> list[dict]:
-    """[{path, title, text, kind (note|chat|browse), day}]: browse pages, recalled notes and
-    private notes (`_private_hits`, under the `private` switch) taken in turn, deduped by path,
-    at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off one by one;
-    `private` is off unless the caller turns it on (Chat's switch, ask's `private`). With
-    `between` (first and last ISO day) only pages dated inside it, then the pages of those days
-    by `topic` (`_dated`); undated pages drop out. shortcut: `_dated` lists no private note (only
-    a search hit dated in range comes back); add them there if dated questions miss them."""
+              sources: dict | None = None, topic: str = "",
+              stats: dict | None = None) -> list[dict]:
+    """[{path, title, text, kind (note|chat|browse), day, at, len}]: browse pages, recalled
+    notes and private notes (`_private_hits`, under the `private` switch) taken in turn,
+    deduped by path, at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off
+    one by one; `private` is off unless the caller turns it on (Chat's switch, ask's
+    `private`). With `between` (first and last ISO day) only pages dated inside it, then the
+    pages of those days by `topic` (`_dated`); undated pages drop out. `at` and `len`: the
+    passage's span in its page's body, for Chat's passage view (`chat.passage`). `stats` gets
+    {"matched"}: how many pages the search found under the switches (and in the range), of
+    which at most `k` are read (Chat's coverage line). shortcut: `_dated` lists no private note
+    (only a search hit dated in range comes back); add them there if dated questions miss them."""
     src = {**SOURCES, "private": False, **(sources or {})}
     want = k if between is None else vectors.MAX_K  # the range filters after the search
     browse = [{"path": h["path"], "title": h["title"], "text": h["text"], "kind": "browse",
-               "day": _browse_day(h["path"])}
+               "day": _browse_day(h["path"]), "at": h.get("at", 0)}
               for h in (vectors.search(vault, question, want)
                         if src["browsing"] or src["private"] else [])]
     idx = Index(vault, Catalog.load(vault))
@@ -202,28 +229,33 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         if h["id"] not in paths:
             continue
         n, p = idx._notes[h["id"]], paths[h["id"]]
-        notes.append({"path": p, "title": h["title"],
-                      "text": semantic._chunk_text(n, h.get("at", 0)),
-                      "kind": "browse" if p.startswith("browse/") else
-                      "chat" if semantic.is_chat(n) else "note",
-                      "day": _note_day(vault, h["id"], n, p)})
+        notes.append(_note(vault, h["id"], n, p, semantic._chunk_text(n, h.get("at", 0)),
+                           "browse" if p.startswith("browse/") else
+                           "chat" if semantic.is_chat(n) else "note", title=h["title"]))
     private = _private_hits(vault, idx, question, want) if src["private"] else []
-    found = chain.from_iterable(zip_longest(browse, notes, private))
+    searched = [p for p in chain.from_iterable(zip_longest(browse, notes, private))
+                if p and (between is None or between[0] <= p["day"] <= between[1])]
+    found = iter(searched)
     if between is not None:
         def listed():  # read only when the search left room
             yield from _dated(vault, idx, between, topic)
-        found = chain((p for p in found if p and between[0] <= p["day"] <= between[1]),
-                      listed())
+        found = chain(searched, listed())
     out, seen, left = [], set(), BUDGET
     for p in found:
-        if p is None or p["path"] in seen or not src[_switch(p)]:
+        if p["path"] in seen or not src[_switch(p)]:
             continue
         if len(out) >= k or left < 200:
             break
         seen.add(p["path"])
         p["text"] = p["text"][:min(PASSAGE, left)]
+        if "_body" in p:  # a browse page's text is its body's own slice: at holds, len is it
+            p["at"], p["len"] = _span(p.pop("_body"), p["text"], p["title"])
+        else:
+            p["len"] = len(p["text"])
         left -= len(p["text"])
         out.append(p)
+    if stats is not None:
+        stats["matched"] = len(seen | {p["path"] for p in searched if src[_switch(p)]})
     return out
 
 
