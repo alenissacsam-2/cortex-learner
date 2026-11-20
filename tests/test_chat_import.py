@@ -412,8 +412,9 @@ def test_the_app_job_shows_progress_and_notifies_once(vault, dirs):  # noqa: F81
     assert app.chat_import_auto() is not None
     job = _wait(app)
     assert job.result["counts"] == {"saved": 8} and job.result["quiet"] is False
-    assert "8 of 8 chats (100%), about 0 s left" in job.lines and job.lines[-1] == \
-        "8 chat pages written"
+    # the time left depends on the machine's pace; only the count is fixed
+    assert any(x.startswith("8 of 8 chats (100%)") for x in job.lines)
+    assert job.lines[-1] == "8 chat pages written"
     assert sent == ["Chat import finished"]
     assert "cortex: app import chats" in git(vault, "log", "-1", "--format=%s")
     assert app.chat_import_auto() is None  # nothing new: no job at all
