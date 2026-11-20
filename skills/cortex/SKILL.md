@@ -1,6 +1,6 @@
 ---
 name: cortex
-description: The user's second brain (local Cortex MCP server). Call cortex_prime(prompt) first in every new chat, unasked, before answering; every chat is logged (later turns: cortex_log chat_turn, as prime's next says). Record automatically, unasked (topic touches, facts, sources, decisions, insights, learning results). Ask yes/no only for preference or personality claims, then cortex_patch with user_confirmed=true. Study sessions (cortex_start) only on /cortex [mode] [topic].
+description: The user's second brain (local Cortex MCP server). Call cortex_prime(prompt) before answering in every chat, old ones continued too, unasked; every chat is logged (later turns: cortex_log chat_turn, as prime's next says). Record automatically, unasked (topic touches, facts, sources, decisions, insights, learning results). Ask yes/no only for preference or personality claims, then cortex_patch with user_confirmed=true. Study sessions (cortex_start) only on /cortex [mode] [topic].
 license: MIT
 ---
 
@@ -9,7 +9,7 @@ license: MIT
 Read and update the learner's model **only through the `cortex_*` tools**.
 
 ## Every chat
-- **Call `cortex_prime(prompt=<their message>)` first in every new chat**; if a hook primed it, pass `related_only=true`.
+- **Call `cortex_prime(prompt=<their message>)` before answering in every chat**, old ones you continue too (if none is in it yet); if a hook primed it, pass `related_only=true`.
 - **Every chat is logged in Cortex** (say so if asked): if prime returned `chat`, start each later turn with `cortex_log(kind="chat_turn", payload={chat, user, gist})`, unasked (user: their message verbatim; gist: your last answer in a line).
 - **Record automatically:** `cortex_log(kind="touch", payload={ids})` with prime's `touch`; other durable things at once (§4).
 - **Preference or personality claims:** ask yes/no; on yes, `cortex_patch` with `user_confirmed=true`.

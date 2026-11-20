@@ -307,7 +307,8 @@ AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach
               "instead of guessing.")
 INSTRUCTIONS = (
     "Cortex is the user's second brain and learner model.\n"
-    "- Call cortex_prime(prompt=<their message>) first in every new chat, before answering "
+    "- Call cortex_prime(prompt=<their message>) before answering in every chat: a new one, or "
+    "an old chat continued with no prime call in it yet "
     "(related_only=true if a hook primed it).\n"
     "- Every chat is logged in Cortex; say so if asked. If prime returned `chat`, start each "
     "later turn with cortex_log(kind='chat_turn', payload={'chat': <it>, 'user': <their "
@@ -2626,7 +2627,8 @@ DESCRIPTIONS = {
     "cortex_context": "What Cortex knows about the user: profile summary, preferences (by "
                       "scope), active projects and, for a topic, its concepts' state, next due "
                       "date and open mistakes. Read-only; needs no session.",
-    "cortex_prime": "Call first in every new chat with the user's message, before answering: "
+    "cortex_prime": "Call with the user's message before answering, in every new chat and in "
+                    "an old chat continued with no prime call in it yet: "
                     "their profile, the preferences matching it, the teaching contract core and "
                     "2-3 relevant pages (about 500 tokens), plus `touch`: topic hubs to record "
                     "with cortex_log(kind=touch). Needs no session. In a Claude app Cortex has "

@@ -107,7 +107,8 @@ def test_server_instructions(root):
         async with Client(server) as client:
             text = client.instructions
             assert "cortex_context" in text and "Never store secrets" in text
-            assert "cortex_prime(prompt=<their message>) first in every new chat" in text
+            assert "cortex_prime(prompt=<their message>) before answering in every chat" in text
+            assert "old chat continued" in text
             assert "Record automatically" in text and "user_confirmed=true" in text
             assert "only inside /cortex" not in text and len(text) < 1550
 
