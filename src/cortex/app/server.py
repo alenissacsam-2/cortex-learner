@@ -24,6 +24,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -1262,7 +1263,10 @@ class App:
         return self._import(body, "Checking the file", actions.import_preview, keep=True)
 
     def import_run(self, body: dict) -> dict:
-        return self._import(body, "Importing", actions.import_run, keep=False)
+        # C2: the tier the page's choice sent; only the notes and calendar cards send one
+        fn = actions.import_run if body.get("tier") is None else \
+            partial(actions.import_run, tier=body["tier"])
+        return self._import(body, "Importing", fn, keep=False)
 
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:

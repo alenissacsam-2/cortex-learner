@@ -6,23 +6,21 @@ Imported notes and calendar months become `resource` pages in `resources/`, the 
 15 Nov import left (CORTEX-DESIGN §10.25): `raw/` is never indexed or embedded (§10.2), so a
 note kept only there could not be found by find or recall. A `Source: <app> · Date: …` line
 marks the page as imported (lint skips covers); it is not a `Timeline:` line, so recall does
-not down-rank it as a chat page. Text is secret-redacted, every write goes through the vault.
+not down-rank it as a chat page. Notes and calendars are `sources.Source`s: `sources.run`
+filters, redacts, dedupes and writes them through the vault, at the tier the user chose.
 """
 
 from __future__ import annotations
 
 import codecs
-import hashlib
 import json
 import re
 import zipfile
-from collections import defaultdict
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
 
-from cortex import chats, render
-from cortex.catalog import slugify
+from cortex import chats, render, sources
 from cortex.vault import Vault, VaultError, truthy
 
 MAX_BYTES = 5 * 1024 * 1024  # bigger files are attachments or dumps, not notes
@@ -31,6 +29,7 @@ MAX_STREAM = 2 * 1024**3  # C11: one JSON list read element by element (conversa
 MAX_TOTAL = 2 * 1024**3  # everything one import decompresses, so a zip bomb fails early
 STREAM_CHUNK = 1 << 20
 NOTE_SUFFIXES = (".md", ".txt")
+REPORT = ("read", "imported", "private", "duplicate", "reasons")  # report_line's keys
 LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
@@ -71,9 +70,7 @@ _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
 # a lone activity file is Gemini's when a row's product (JSON header, HTML title) in its head names
 # Gemini in any language, so a search for "gemini" does not count
 _GEMINI_HEAD = re.compile(rb'(?:"header"\s*:\s*"|--title">)[^"<]*Gemini')
-_HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
 _FRONT = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
-_WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _ESC = re.compile(r"\\([\\;,nN])")
 
@@ -282,88 +279,54 @@ def _clean(name: str) -> str:
     return "/".join(_NOTION_ID.sub("", p) for p in name.replace("\\", "/").split("/"))
 
 
-def _free_id(vault: Vault, base: str, taken: set[str]) -> str:
-    """`base`, or `base-2`, `-3`… when a page of any kind (ids are unique across kinds) or this
-    import already has it."""
-    nid, n = base, 2
-    while nid in taken or any((vault.root / d / f"{nid}.md").exists()
-                              for d in vault.KIND_DIRS.values()):
-        nid = f"{base[:78].rstrip('-.')}-{n}"
-        n += 1
-    taken.add(nid)
-    return nid
-
-
-def _known_hashes(vault: Vault) -> set[str]:
-    return {h for p in (vault.root / "resources").glob("*.md")
-            for h in _HASH.findall(p.read_text("utf-8", errors="replace"))}
-
-
-def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: bool = False,
-                 private: bool = False) -> dict:
-    """One resource page per .md/.txt note (≤ MAX_BYTES, UTF-8 text, outside hidden folders
-    such as .obsidian). A note whose frontmatter marks it private (any truthy `private`, a
-    `private` tag, or frontmatter that does not parse; every note, with
-    `private`) is a private page. A note whose text was imported before (same sha256) is
-    skipped, so re-importing is safe; an edited note comes in as a new page."""
+def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
+    """One item per .md/.txt note (≤ MAX_BYTES, UTF-8 text, outside hidden folders such as
+    .obsidian); anything else is skipped with its reason. A note whose frontmatter marks it
+    private (any truthy `private`, a `private` tag, or frontmatter that does not parse) is a
+    private item. Dedupe hashes the whole text, frontmatter too, so an edited note comes in as a
+    new page."""
     files = _files(path)
     names = [n.replace("\\", "/") for n, *_ in files]
     flavor = flavor or ("obsidian" if any(".obsidian" in n.split("/") for n in names) or
                         (Path(path).is_dir() and (Path(path) / ".obsidian").is_dir())
                         else "notion" if any(_NOTION_ID.search(p) for n in names
                                              for p in n.split("/")) else "notes")
-    known, taken, notes, skipped, same = _known_hashes(vault), set(), [], 0, 0
-    why = dict.fromkeys(("not a note", "over 5 MB", "not UTF-8 text"), 0)
-    for name, size, mtime, read in files:
-        data = read() if _is_note(name) and size <= MAX_BYTES else b"\0"
-        try:
-            text = data.decode("utf-8-sig") if b"\0" not in data else None
-        except UnicodeDecodeError:
-            text = None
-        if text is None:
-            skipped += 1
-            why["not a note" if not _is_note(name) else "over 5 MB" if size > MAX_BYTES
-                else "not UTF-8 text"] += 1
-            continue
-        h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-        if h in known:
-            same += 1
-            continue
-        known.add(h)
-        rel = _clean(name)
-        title = PurePosixPath(rel).stem
-        fm = _FRONT.match(text)
-        hidden = private or bool(fm and _is_private(fm.group(1)))
-        nid = _free_id(vault, f"{flavor}-{slugify(title) or 'untitled'}"[:81].rstrip("-."),
-                       taken)
-        notes.append((nid, title, rel, mtime, h, hidden, text[fm.end():] if fm else text))
-    if not dry_run:
-        # [[Note]] links between imported public notes keep working; others become plain text
-        ids = {slugify(t): nid for nid, t, *_, hidden, _ in notes if not hidden}
 
-        def link(m):
-            if m.group(1):  # an embedded image or file
-                return ""
-            to = ids.get(slugify(PurePosixPath(m.group(2)).stem))
-            text = m.group(3) or m.group(2)
-            return f"[[{to}|{text}]]" if to else text
+    def items():
+        for name, size, mtime, read in files:
+            data = read() if _is_note(name) and size <= MAX_BYTES else b"\0"
+            try:
+                text = data.decode("utf-8-sig") if b"\0" not in data else None
+            except UnicodeDecodeError:
+                text = None
+            if text is None:
+                yield ("not a note" if not _is_note(name) else "over 5 MB" if size > MAX_BYTES
+                       else "not UTF-8 text")
+                continue
+            rel = _clean(name)
+            fm = _FRONT.match(text)
+            yield sources.Item(PurePosixPath(rel).stem,
+                               datetime.fromtimestamp(mtime, UTC).date().isoformat(),
+                               text[fm.end():] if fm else text, rel,
+                               private=bool(fm and _is_private(fm.group(1))), key=text)
 
-        for nid, title, rel, mtime, h, hidden, body in notes:
-            day = datetime.fromtimestamp(mtime, UTC).date().isoformat()
-            body = chats.redact(_WIKI.sub(link, body)).strip().removeprefix(f"# {title}\n")
-            first = next((s.strip("# ").strip() for s in body.splitlines()
-                          if s.strip("# ").strip()), title)
-            fields = {"title": chats.redact(title), "kind": "resource",
-                      "resource_type": "other", "status": "reference", "covers": [],
-                      "related": [], "date": day, "summary": first[:160]}
-            if hidden:
-                fields["private"] = True
-            vault.create_note("resource", nid, fields,
-                              f"# {fields['title']}\n\nSource: {LABELS[flavor]} · Date: {day} · "
-                              f"From: {chats.redact(rel)} · sha: {h}\n\n{body}\n")
-    return {"source": flavor, "new": len(notes), "same": same, "skipped": skipped,
-            "read": len(files), "imported": len(notes),
-            "private": sum(n[5] for n in notes), "duplicate": same, "reasons": why}
+    return sources.Source("notes", LABELS[flavor], "folder", items, prefix=flavor,
+                          skips=("not a note", "over 5 MB", "not UTF-8 text"))
+
+
+def _tier(private: bool, tier: str | None) -> sources.Audience:
+    return sources.tier(tier or ("private" if private else "normal"))
+
+
+def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: bool = False,
+                 private: bool = False, tier: str | None = None) -> dict:
+    """`notes_source` through `sources.run`: one resource page per new note, every one private
+    with `private` (or `tier` "private"). A note whose text was imported before is skipped, so
+    re-importing is safe."""
+    src = notes_source(path, flavor)
+    r = sources.run(vault, src, _tier(private, tier), dry_run)
+    return {"source": src.prefix, "new": r["imported"], "same": r["duplicate"],
+            "skipped": sum(r["reasons"].values()), **{k: r[k] for k in REPORT}}
 
 
 def _events(text: str):
@@ -402,50 +365,35 @@ def _when(prop) -> tuple[str, str]:
     return t.date().isoformat(), t.strftime("%H:%M") + (f" ({tz})" if tz else "")
 
 
-def import_calendar(vault: Vault, path: Path, dry_run: bool = False,
-                    private: bool = False) -> dict:
-    """One resource page per month (`calendar-YYYY-MM`, or a private `calendar-private-YYYY-MM`
-    with `private`, so a private calendar never joins a public month page) with a line per
-    event: date, time, title, location and the RRULE as text (not expanded). Attendees,
-    organizers and descriptions are never read. Lines already on a page are skipped, so
-    re-importing is safe."""
+def calendar_source(path: Path) -> sources.Source:
+    """One month-page line per event: date, time, title, location and the RRULE as text (not
+    expanded). Attendees, organizers and descriptions are never read."""
     texts = [read().decode("utf-8-sig", errors="replace") for n, _, _, read in _files(path)
              if n.lower().endswith(".ics")]
     if not texts:
         raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
-    months, events, undated = defaultdict(set), 0, 0
-    for ev in (e for t in texts for e in _events(t)):
-        try:
-            day, time = _when(ev["DTSTART"])
-        except (KeyError, ValueError):
-            undated += 1
-            continue
-        rule = ev.get("RRULE")
-        line = " · ".join(x for x in (f"{day} {time}", _text(ev.get("SUMMARY")) or "(no title)",
-                                      _text(ev.get("LOCATION")),
-                                      f"repeats {rule[1].strip()}" if rule else "") if x)
-        months[day[:7]].add(f"- {chats.redact(line)}")
-        events += 1
-    new = 0
-    for month, lines in sorted(months.items()):
-        nid = f"calendar-private-{month}" if private else f"calendar-{month}"
-        p = vault.path_for("resource", nid)
-        have = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
-        add = sorted(lines - have)
-        new += len(add)
-        if dry_run or not add:
-            continue
-        if have:
-            # shortcut: later imports append, so a month is sorted within each import only
-            vault.append_to_section("resource", nid, "Events", "\n".join(add))
-            continue
-        fields = {"title": f"Calendar {month}", "kind": "resource", "resource_type": "other",
-                  "status": "reference", "covers": [], "related": [], "date": f"{month}-01",
-                  "summary": f"Calendar events in {month}"}
-        if private:
-            fields["private"] = True
-        vault.create_note("resource", nid, fields, f"# Calendar {month}\n\nSource: Calendar · "
-                          f"Date: {month}-01\n\n## Events\n" + "\n".join(add) + "\n")
-    return {"events": events, "months": len(months), "new": new, "read": events + undated,
-            "imported": new, "private": new if private else 0, "duplicate": events - new,
-            "reasons": {"no readable start date": undated}}
+
+    def items():
+        for ev in (e for t in texts for e in _events(t)):
+            try:
+                day, time = _when(ev["DTSTART"])
+            except (KeyError, ValueError):
+                yield "no readable start date"
+                continue
+            rule, title = ev.get("RRULE"), _text(ev.get("SUMMARY")) or "(no title)"
+            yield sources.Item(title, day, " · ".join(x for x in (
+                f"{day} {time}", title, _text(ev.get("LOCATION")),
+                f"repeats {rule[1].strip()}" if rule else "") if x))
+
+    return sources.Source("calendar", "Calendar", "file", items, page="month", noun="events",
+                          skips=("no readable start date",))
+
+
+def import_calendar(vault: Vault, path: Path, dry_run: bool = False,
+                    private: bool = False, tier: str | None = None) -> dict:
+    """`calendar_source` through `sources.run`: one resource page per month (`calendar-YYYY-MM`,
+    or a private `calendar-private-YYYY-MM` with `private`, so a private calendar never joins a
+    public month page). Lines already on a page are skipped, so re-importing is safe."""
+    r = sources.run(vault, calendar_source(path), _tier(private, tier), dry_run)
+    return {"events": r["items"], "months": r["pages"], "new": r["imported"],
+            **{k: r[k] for k in REPORT}}

@@ -1002,24 +1002,34 @@ def import_cmd(path: Annotated[Path, typer.Argument(
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
-            "--private", help="Make the imported notes or calendar pages private (refused "
-            "for chats and Google activity).")] = False,
+            "--private", help="The same as --tier private.")] = False,
+        tier: Annotated[str | None, typer.Option(
+            help="Who may read the imported notes or calendar pages: private (local models "
+                 "only), normal (the AI apps you connect too) or skip (import nothing). "
+                 "Without it a terminal asks once per source; the choice is remembered. "
+                 "Refused for chats and Google activity.")] = None,
         vault: VaultOpt = None) -> None:
     """Import anything about you; the kind is detected from the file. Re-importing skips notes
     and events already in and updates chats. `import-chats` still imports chat exports only."""
-    from cortex import chats, importers
+    from cortex import chats, importers, sources
 
     if source is not None and source not in importers.SOURCES:
         raise VaultError("invalid_argument",
                          f"--source must be one of {', '.join(importers.SOURCES)}.")
+    if tier is not None and tier not in sources.WORDS:
+        raise VaultError("invalid_argument", f"--tier must be one of {', '.join(sources.WORDS)}.")
+    if private and tier not in (None, "private"):
+        raise VaultError("invalid_argument", "--private is --tier private; give only one.")
+    given = tier or ("private" if private else None)
     kinds = [importers.SOURCES[source]] if source else importers.detect(path)
     if not kinds:
         raise VaultError("invalid_argument", f"Cannot tell what {path.name} is; add --source "
                          f"{'|'.join(importers.SOURCES)}.")
-    if private and {"chats", "takeout"} & set(kinds):  # G5: these have no private mode
-        raise VaultError("invalid_argument", "--private applies to notes and calendars only. "
+    if given and {"chats", "takeout"} & set(kinds):  # G5: these have no private mode
+        flag = "--private" if private else "--tier"
+        raise VaultError("invalid_argument", f"{flag} applies to notes and calendars only. "
                          "Chats are always readable by /cortex; Google activity follows your "
-                         "Browsing settings. Run again without --private.")
+                         f"Browsing settings. Run again without {flag}.")
     dry = " (dry run: nothing written)" if dry_run else ""
     for kind in kinds:
         if kind == "chats":
@@ -1030,21 +1040,45 @@ def import_cmd(path: Annotated[Path, typer.Argument(
                        if dry_run else f"{name}: {got[1]} conversations imported into "
                        f"{chats.export_root()}. Run /cortex to learn from them.")
             typer.echo(importers.report_line(name, got.report()))
-        elif kind == "takeout":  # also reads the browsers, as `browse import --takeout` does
+            continue
+        if kind == "takeout":  # also reads the browsers, as `browse import --takeout` does
             browse_import(since=None, browser=None, profile=None, dry_run=dry_run,
                           takeout=path, vault=vault)
+            continue
+        v, flavor = _vault(vault), source if source in importers.LABELS else None
+        src = importers.notes_source(path, flavor) if kind == "notes" else \
+            importers.calendar_source(path)
+        # C2: asked once per source in a real terminal, then remembered (sources.TIERS_FILE)
+        ask = _ask_tier if given is None and sys.stdin.isatty() else None
+        t, how = sources.pick_tier(v, src, given, ask, save=not dry_run)
+        typer.echo(f"{src.label}: tier {sources.word(t)} (" + (
+            "--tier" if given else "your answer" if how == "chosen"
+            else f"{how}; change it with --tier") + ")")
+        if t is sources.Audience.SKIP:
+            typer.echo(f"{src.label}: skip, so nothing was imported.")
         elif kind == "notes":
-            r = importers.import_notes(_vault(vault), path, source
-                                       if source in importers.LABELS else None, dry_run, private)
+            r = importers.import_notes(v, path, flavor, dry_run, tier=t)
             typer.echo(f"{importers.LABELS[r['source']]}: {r['new']} new notes, {r['same']} "
                        f"already imported, {r['skipped']} skipped (hidden, not text or over "
                        f"5 MB){dry}")
             typer.echo(importers.report_line(importers.LABELS[r["source"]], r))
         else:
-            r = importers.import_calendar(_vault(vault), path, dry_run, private)
+            r = importers.import_calendar(v, path, dry_run, tier=t)
             typer.echo(f"calendar: {r['events']} events in {r['months']} months, {r['new']} "
                        f"new events{dry}")
             typer.echo(importers.report_line("calendar", r))
+
+
+def _ask_tier(src) -> str:
+    """`cortex import`'s tier question, with the source's default; asked again until the
+    answer is one of the three words."""
+    from cortex import sources
+    while (a := typer.prompt(f"{src.label}: who may read these pages? private (local models "
+                             "only), normal (the AI apps you connect too) or skip (import "
+                             "nothing)", default=sources.word(src.default_tier))
+           .strip().lower()) not in sources.WORDS:
+        typer.echo("Type private, normal or skip.")
+    return a
 
 
 @app.command("claims")

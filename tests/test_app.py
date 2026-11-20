@@ -1796,6 +1796,28 @@ def test_notes_and_calendar_cards_go_through_importers(app, home, vault):
     assert wait_job(app)["result"]["found"] == 0  # every event is already in
 
 
+def test_notes_and_calendar_import_asks_the_tier_and_remembers_it(app, home, vault):
+    """C2: the preview names the tier to preselect (last choice, else the default); Import
+    sends the page's choice, which is remembered."""
+    from cortex import sources
+    from cortex.vault import Vault
+    ics = {"source": "calendar", "path": str(EXPORTS / "calendar.ics")}
+    call(app, "POST", "/api/import/preview", ics)
+    assert wait_job(app)["result"]["tier"] == "cloud"
+    call(app, "POST", "/api/import/run", {**ics, "tier": "skip"})
+    r = wait_job(app)["result"]
+    assert r["counts"] == {"events": 0} and not list((vault / "resources").glob("calendar-*"))
+    call(app, "POST", "/api/import/preview", ics)
+    r = wait_job(app)["result"]
+    assert r["tier"] == "skip" and r["found"] == 3  # counted as if imported, so Import is on
+    call(app, "POST", "/api/import/run", {**ics, "tier": "local"})
+    assert wait_job(app)["result"]["counts"] == {"events": 3}
+    assert (vault / "resources" / "calendar-private-2026-11.md").is_file()
+    assert sources.remembered(Vault(vault)) == {"calendar": sources.Audience.LOCAL}
+    call(app, "POST", "/api/import/run", {**ics, "tier": "public"})
+    assert "tier must be one of" in wait_job(app)["error"]
+
+
 def test_notes_and_calendar_imports_count_and_mark_history(app, home, vault, tmp_path):
     """QA 5 and 8: notes and calendar imports show on their cards like chat imports do (the
     page marks Add your history done from any count); a plain folder is "notes", once."""

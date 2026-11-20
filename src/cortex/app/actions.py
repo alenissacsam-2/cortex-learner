@@ -412,7 +412,7 @@ def _readable(fn, *args):
 
 def import_preview(job, source: str, path: Path, root: Path | None = None) -> dict:
     """A dry run: what an import of `path` would bring, counts and dates only."""
-    from cortex import chats, importers
+    from cortex import chats, importers, sources
     job.say("reading the file (nothing is imported yet)")
     kind = _kind(source, path)
     if kind == "takeout":
@@ -435,19 +435,24 @@ def import_preview(job, source: str, path: Path, root: Path | None = None) -> di
                 f"Download the search model first ({wizard.EMBED['size']}): it sorts each page "
                 "into a topic, and without it every page lands under Other.")])
         return out
+    if kind in ("notes", "calendar"):
+        # C2: the page asks the tier before Import, starting from the last choice or default
+        v = _vault(root)
+        t = _tier(v, kind, path)[0]
+        counted = sources.Audience.CLOUD if t is sources.Audience.SKIP else t
     if kind == "notes":
-        r = _readable(importers.import_notes, _vault(root), path, None, True)
+        r = _readable(importers.import_notes, v, path, None, True, False, counted)
         new, same, skipped = r["new"], r["same"], r["skipped"]
-        return {"ok": True, "kind": "import-preview", "found": new, "lines": [
+        return {"ok": True, "kind": "import-preview", "found": new, "tier": t.value, "lines": [
             f"Found {new:,} new {_notes(r['source'], new)}"
             + (f", {same:,} already imported" if same else "")
             + (f"; {skipped:,} file{_s(skipped)} skipped (hidden, not text or over 5 MB)"
                if skipped else "") + "."]}
     if kind == "calendar":
-        r = _readable(importers.import_calendar, _vault(root), path, True)
-        return {"ok": True, "kind": "import-preview", "found": r["new"], "lines": [
-            f"Found {r['events']:,} event{_s(r['events'])} in {r['months']:,} "
-            f"month{_s(r['months'])}, {r['new']:,} of them new."]}
+        r = _readable(importers.import_calendar, v, path, True, False, counted)
+        return {"ok": True, "kind": "import-preview", "found": r["new"], "tier": t.value,
+                "lines": [f"Found {r['events']:,} event{_s(r['events'])} in {r['months']:,} "
+                          f"month{_s(r['months'])}, {r['new']:,} of them new."]}
     got, new, old = _readable(chats.import_export, path, None, True)
     n = new + old
     name = chats.GUIDES[got]["name"]
@@ -468,14 +473,32 @@ def _cortex_hint() -> str:
             "from them.")
 
 
-def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
-    from cortex import chats, importers
+def _tier(v, kind: str, path: Path, given: str | None = None):
+    """(tier, how) for a notes or calendar import: the page's choice (remembered), else the
+    last choice, else the source's default (sources.pick_tier)."""
+    from cortex import importers, sources
+    src = _readable(importers.notes_source if kind == "notes" else importers.calendar_source,
+                    path)
+    return sources.pick_tier(v, src, given)
+
+
+def import_run(job, source: str, path: Path, root: Path | None = None,
+               tier: str | None = None) -> dict:
+    """Import `path`; `tier` (skip, local or cloud) is the page's choice for notes and
+    calendars, the user's click."""
+    from cortex import chats, importers, sources
     job.say("reading the file")
     kind = _kind(source, path)
+    if kind in ("notes", "calendar"):
+        v = _vault(root)
+        t = _tier(v, kind, path, tier)[0]
+        if t is sources.Audience.SKIP:
+            return {"ok": True, "kind": "import", "counts": {
+                "notes" if kind == "notes" else "events": 0},
+                "lines": ["Nothing was imported: you chose Don't save."]}
     if kind == "notes":
         job.say("importing the notes")
-        v = _vault(root)
-        r = _readable(importers.import_notes, v, path)
+        r = _readable(importers.import_notes, v, path, None, False, False, t)
         _commit(v, "notes")
         return {"ok": True, "kind": "import", "counts": {"notes": r["new"]}, "lines": [
             f"Imported {r['new']:,} {_notes(r['source'], r['new'])} into "
@@ -484,8 +507,7 @@ def import_run(job, source: str, path: Path, root: Path | None = None) -> dict:
             importers.report_line(importers.LABELS[r["source"]], r)]}
     if kind == "calendar":
         job.say("importing the calendar")
-        v = _vault(root)
-        r = _readable(importers.import_calendar, v, path)
+        r = _readable(importers.import_calendar, v, path, False, False, t)
         _commit(v, "calendar")
         return {"ok": True, "kind": "import", "counts": {"events": r["new"]}, "lines": [
             f"Imported {r['new']:,} new event{_s(r['new'])} into the calendar-YYYY-MM month "
