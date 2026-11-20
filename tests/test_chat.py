@@ -614,9 +614,9 @@ def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
     real = ask._passages
     monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
                                                                                       **kw))
-    _turn(vault, cid, "what do I know about Dijkstra's algorithm?", s.runner())
+    _turn(vault, cid, "what is Dijkstra's algorithm?", s.runner())
     _turn(vault, cid, "what did I browse yesterday?", s.runner())
-    assert asked == ["what do I know about Dijkstra's algorithm?",
+    assert asked == ["what is Dijkstra's algorithm?",
                      "what did I browse yesterday?"]
 
 
@@ -650,7 +650,7 @@ def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
     ("what did I learn this month?", False),
     ("what are the sorting algorithms that I know?", False),
     ("is that one faster?", True), ("what did that note say last week?", True),
-    ("what do I know about Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
+    ("what is Dijkstra's algorithm?", False), ("summarize my notes on heaps", False),
     ("which sites did I visit yesterday?", False),
 ])
 def test_follow_up(text, want):

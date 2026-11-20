@@ -17,7 +17,7 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
-from cortex import ask, chat_study, events, localllm, semantic, taint
+from cortex import ask, chat_facts, chat_study, events, localllm, semantic, taint
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
 from cortex.index import STOPWORDS
 from cortex.vault import Vault
@@ -633,6 +633,17 @@ def _local(runner) -> bool:
     return True
 
 
+def _facts_runner(runner):
+    """The local runner to word a typed answer's facts, or None (then `chat_facts.say` words
+    them): the app passes localllm.find, looked up only now that facts were found."""
+    if callable(runner) and not isinstance(runner, localllm.Runner):
+        try:
+            runner = runner()
+        except ValueError:  # a refused localllm setting: the facts in plain words instead
+            return None
+    return runner if _local(runner) else None
+
+
 def _made_with_off(m: dict, sources: dict) -> bool:
     """Was answer `m` made with a source switch on that `sources` now has off? An answer saved
     before switches were recorded counts as made with every switch on."""
@@ -679,9 +690,12 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
     the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
     as the model starts reading (the app shows each with a live count), {"t": "think"} while a
-    reasoning model only thinks, {"t": "tok", "s"} per piece, {"t": "src", sources: [{n, path,
-    title, kind}]} (the passages cited), {"t": "done", id, model, seconds, stopped}; or {"t": "err",
-    code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
+    reasoning model only thinks, {"t": "facts", facts} before any words of a typed data answer
+    (`chat_facts`: count, first, last, timeline, about; the model then only words them, or
+    `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
+    per piece, {"t": "src", sources: [{n, path, title, kind}]} (the passages cited),
+    {"t": "done", id, model, seconds, stopped}; or {"t": "err", code (not_set_up,
+    no_local_model, no_answer), message}. A set `cancel` stops the stream;
     the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
     `localllm.Runner` or None; never a cloud one."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
@@ -703,7 +717,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     span = f" from {_span(own[0], own[1], today)}" if own else ""
     # which data answer, if any, is decided first and cheaply; it is read after `start` and its
     # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
-    step = data = None
+    step = data = fq = None
     if asks_sites(text, today):
         step = "Counting the sites you visited" + span
 
@@ -724,31 +738,55 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             return chat_study.study_answer(vault, text, own, today, not prev,
                                            bool(s["sources"].get("private"))) \
                 if s["sources"].get("notes") else NOTES_OFF
+    elif not leans and (fq := chat_facts.route(text, own, today)) is not None:
+        step = chat_facts.step(fq, today)  # counted by code; a model, if any, only words it
     listed = None if data is None else ""  # a data answer: filled in after its step
-    if listed is None and semantic.load_embedder() is None:
+    passages = listed is None and fq is None  # the search model and a runner are needed
+    if passages and semantic.load_embedder() is None:
         emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
         return convo_id
-    if listed is None and callable(runner) and not isinstance(runner, localllm.Runner):
+    if passages and callable(runner) and not isinstance(runner, localllm.Runner):
         try:  # the app passes localllm.find: it may start LM Studio, so only when needed
             runner = runner()
         except ValueError as e:  # a refused localllm setting (cloud model, non-loopback url)
             emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
             return convo_id
-    if listed is None and not _local(runner):
+    if passages and not _local(runner):
         emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
         return convo_id
-    model = "Cortex" if listed is not None else runner.model
+    model = runner.model if passages else "Cortex"
     msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})
     found: list = []
     parts: list = []
+    messages = facts = None
+    max_tokens = LENGTH[s["length"]]
     if listed is not None:
         emit({"t": "step", "s": step})
         listed = data()
         if not (cancel is not None and cancel.is_set()):  # Stop while counting: nothing shown
             parts.append(listed)
             emit({"t": "tok", "s": listed})
+    elif fq is not None:
+        emit({"t": "step", "s": step})
+        facts = chat_facts.facts(vault, fq, s["sources"])
+        if cancel is not None and cancel.is_set():
+            pass
+        elif chat_facts.empty(facts) or (runner := _facts_runner(runner)) is None:
+            emit({"t": "facts", "facts": facts})  # before the words, for the facts box
+            parts.append(chat_facts.say(facts, today))
+            emit({"t": "tok", "s": parts[0]})
+        else:
+            emit({"t": "facts", "facts": facts})
+            if fq["kind"] == "about" and semantic.load_embedder() is not None:
+                found = ask._passages(vault, fq["term"], 4, sources=s["sources"])
+            model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
+            emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
+                f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})
+            messages = [{"role": "system", "content": chat_facts.SYSTEM.format(
+                today=f"{today:%A}, {today.isoformat()}")},
+                        {"role": "user", "content": chat_facts.prompt(facts, found, text, today)}]
     else:
         # pages are dated by when they were written: a future range ("tomorrow's exam") keeps
         # no page, so it does not narrow the search; a range running past today stops at today
@@ -759,7 +797,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                               between=(got[0].isoformat(), min(got[1], today).isoformat())
                               if past else None,
                               sources=s["sources"], topic=topic(said, got[2]) if got else "")
-    if listed is not None:
+    if listed is not None or fq is not None:
         pass
     elif not found:
         parts.append(NO_ANSWER)
@@ -771,6 +809,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                      "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}")},
                     *history(msgs[:-1], s["sources"]),
                     {"role": "user", "content": ask.prompt(found, text) + CITE}]
+    if messages:
         thought = []
 
         def thinking():
@@ -779,7 +818,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 emit({"t": "think"})
         try:
             for piece in runner.stream(messages, temperature=s["temperature"],
-                                       max_tokens=LENGTH[s["length"]], cancel=cancel,
+                                       max_tokens=max_tokens, cancel=cancel,
                                        on_thinking=thinking):
                 parts.append(piece)
                 emit({"t": "tok", "s": piece})
@@ -791,6 +830,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             pass
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
+    if not answer and not stopped and facts is not None:  # the model said nothing: plain words
+        answer = chat_facts.say(facts, today)
+        emit({"t": "tok", "s": answer})
     if not answer and not stopped:
         emit({"t": "err", "code": "no_answer", "id": convo_id,
               "message": f"{runner.describe()} did not answer; try again."})
@@ -803,6 +845,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                    for p in found[:SEARCHED]]
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
+                 **({"facts": facts} if facts is not None else {}),
                  "model": model, "switches": dict(s["sources"]),
                  **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
