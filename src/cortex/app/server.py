@@ -568,6 +568,12 @@ class App:
                     core.sessions.close(summary="Review in the Cortex app")
         if "error" in out:
             raise ValueError(out.get("message") or out["error"])
+        if kwargs.get("id") == "me/core":  # R3-7: the rules-file block follows the core at once
+            try:
+                targets.refresh_rules(self.entry())
+            except Exception as e:  # noqa: BLE001  (the periodic pass tries again)
+                print(f"cortex app: rules block refresh failed ({type(e).__name__})",
+                      file=sys.stderr)
         return self.review()
 
     def _waiting(self, body: dict) -> dict:

@@ -193,6 +193,19 @@ def test_layer2_caps_per_chat_and_per_pass(root, monkeypatch):
     assert out["chats"] == sn.MAX_CHATS and out["left"] > 0  # the chat cap
 
 
+def test_layer2_taught_is_capped_per_cortex_day_across_chats_and_passes(root):
+    chat(root, "c1", "Explain heap sort and two pointers")
+    out = go(root, Runner({"concepts": ["Heap sort"]}))
+    assert out["taught"] == 1
+    chat(root, "c2", "merge sort and quick sort and radix sort please")
+    chat(root, "c3", "bubble sort and two pointers")
+    run = Runner({"concepts": ["Merge sort", "Quick sort", "Radix sort", "Bubble sort"]})
+    out = go(root, run)  # the next pass: one taught left today, then no model call at all
+    assert out["taught"] == 1 and len(run.calls) == 1 and out["touches"] >= 1
+    taught = [e for e in mine(root) if e["kind"] == "taught"]
+    assert len(taught) == sn.TAUGHT_PER_DAY and {e["day"] for e in taught} == {local_day(NOW)}
+
+
 def test_junk_names_are_refused():
     text = "binary search on a sorted list and the heap"
     assert sn.clean_name("Binary search", text) == "Binary search"

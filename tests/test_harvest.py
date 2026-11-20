@@ -503,8 +503,9 @@ def test_reading_a_chat_page_exposes_the_session(core, vault):
     assert core.sessions.current.exposed is False
     call(core, "cortex_read", id="chat-car-1")
     assert core.sessions.current.exposed is True
-    patch(core, "me/preferences", "Learning", f"likes diagrams{CITE}", user_confirmed=True)
-    assert tiers(vault)["likes diagrams"] == "exposed"
+    out = patch(core, "me/preferences", "Learning", f"likes diagrams{CITE}", user_confirmed=True)
+    assert out["queued"] is True  # R3-2: exposed, so the relayed yes waits in Review
+    assert "likes diagrams" not in tiers(vault)
 
 
 def test_reading_a_browse_page_exposes_the_session(core, vault):

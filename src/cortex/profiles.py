@@ -16,7 +16,7 @@ from cortex.access import SCOPES
 from cortex.vault import Vault
 
 PATH = ".cortex/profiles.json"
-CODING = ["core", "coding"]
+CODING = ["core", "coding", "projects", "environment"]  # SCOPES order, as check() stores it
 DEFAULT = {
     "profiles": [
         {"match": "claude", "scopes": ["all"]},  # Claude Desktop, Claude Code: as before
@@ -26,7 +26,7 @@ DEFAULT = {
         {"match": "copilot", "scopes": CODING},
         {"match": "codex", "scopes": CODING},
     ],
-    "unknown": ["core", "coding", "learning"],
+    "unknown": ["core"],  # fail closed: an app no profile names gets the pinned core only
 }
 MAX_PROFILES = 30
 

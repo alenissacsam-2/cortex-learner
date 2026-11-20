@@ -31,7 +31,9 @@ the chat). Each resolves to an existing concept (catalog id, title, alias or slu
 embedding cosine >= MATCH_COS to a concept page; then the catalog's near-duplicate "did you
 mean") or is created like cortex_add (Catalog.add) under the area most of the chat's matched
 concepts share, else under DOMAIN > AREA, and linked (`related`) to the hub `topics.attach`
-picks for its name. Each gets one `taught` event per chat.
+picks for its name. Each gets one `taught` event per chat, at most TAUGHT_PER_DAY a Cortex
+day across chats (counted from the day's live events); a chat a pass reaches after the cap
+gets layer 1 only (no model call, no new concept; its touches are not capped by it).
 
 Every event this writes has source SOURCE (server-stamped, never model output), session
 `import` and payload {"auto": SOURCE, "chat": <page id>}. Caps: MAX_CHATS chats and MAX_EVENTS
@@ -62,6 +64,7 @@ STATE, LOCK = ".cortex/safety-net.json", ".cortex/safety-net.lock"
 BUSY = "A safety-net pass is already running."
 SOURCE = "safety_net"
 MAX_CHATS, MAX_EVENTS, PER_CHAT = 10, 15, 3  # per pass, per pass, model concepts per chat
+TAUGHT_PER_DAY = 2  # layer-2 `taught` events per Cortex day (04:00), across chats and passes
 TOUCHES = 5  # ids in one touch event, as cortex_log's TOUCH_MAX
 RECENT_DAYS = 7
 BEFORE, AFTER = timedelta(minutes=2), timedelta(minutes=30)  # around the chat's turn times
@@ -225,7 +228,11 @@ class _Pass:
         self.catalog = Catalog.load(vault)
         self.index = Index(vault, self.catalog)
         self.hide = planner.hidden(vault, self.catalog)
-        self.learning = _learning(self.evlog.iter_events())
+        evs = live(self.evlog.iter_events())
+        self.learning = _learning(evs)
+        today = local_day(now)
+        self.taught_today = sum(1 for e in evs if e.get("kind") == "taught"
+                                and e.get("source") == SOURCE and e.get("day") == today)
         self.ctx = chat_import.Ctx(vault)
         self.counts: Counter = Counter()
         self.new_ids: list[str] = []
@@ -357,7 +364,11 @@ class _Pass:
         return cid, True
 
     def layer2(self, chat: Chat, matched: list[str], rec: dict) -> None:
+        if self.taught_today >= TAUGHT_PER_DAY:
+            return  # the day's cap: no model call, no new concept
         for name in ask_model(self.runner, chat):
+            if self.taught_today >= TAUGHT_PER_DAY:
+                break
             what, cid = self.resolve(name)
             if what == "drop":
                 continue
@@ -382,6 +393,7 @@ class _Pass:
                 f"safety-net:{chat.id}:taught:{cid}")
             rec["taught"].append(cid)
             self.counts["taught"] += 1
+            self.taught_today += 1
             self.taught_ids.append(cid)
 
     def one(self, note, chat: Chat, h: str, rec: dict) -> dict:

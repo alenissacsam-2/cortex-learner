@@ -56,6 +56,10 @@ def vroot(tmp_path):
          "# Profile")
     note(r, "journal/2026-11-20.md", "id: 2026-11-20\ntitle: Day\n",
          "- CANARY-JRNL-4Q saw the zebracorn today.")
+    note(r, "me/teaching-contract.md", "id: teaching-contract\n",
+         "# Teaching contract\n\n## Core rules\n- CANARY-TCON-4Q quiz me first.\n")
+    note(r, "projects/quokka.md", "id: quokka\ntitle: Quokka app\nstatus: active\n"
+         "summary: CANARY-PROJ-4Q a quokka tracker.\n", "# Quokka app\n\nquokka tracker")
     return r
 
 
@@ -100,6 +104,34 @@ def test_codex_agents_md_block_add_refresh_remove(home, vroot):
 
     t.remove()
     assert md.read_text(encoding="utf-8") == "# My rules\n\nEdited by me.\n"
+
+
+def test_an_approve_into_the_core_refreshes_the_block_at_once(home, vroot, monkeypatch):
+    from cortex.app import server
+    (home / ".codex").mkdir()
+    md = home / ".codex" / "AGENTS.md"
+    targets.by_id()["codex"].apply(entry(vroot))
+    assert "Call me Sam." in md.read_text(encoding="utf-8")
+    core = mcp_server.Cortex(Vault(vroot))
+    out = core._call("cortex_patch", core.cortex_patch, {
+        "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use metric units."})
+    assert out["queued"] is True  # no yes: it waits for the app's Approve
+    core.sessions.close(summary="test")
+    a = server.App(vroot)
+    monkeypatch.setattr(a, "entry", lambda: entry(vroot))
+    p = next(x for x in a.review()["pending"] if x["page"] == "core")
+    a.review_approve({"key": p["key"]})
+    assert "Use metric units." in md.read_text(encoding="utf-8")  # no periodic pass needed
+
+    def boom(base):
+        raise RuntimeError("rules file locked")
+
+    monkeypatch.setattr(targets, "refresh_rules", boom)  # logged, never raised
+    core._call("cortex_patch", core.cortex_patch, {
+        "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use 24 h time."})
+    core.sessions.close(summary="test")
+    p = next(x for x in a.review()["pending"] if x["page"] == "core")
+    assert a.review_approve({"key": p["key"]})["count"] == 0
 
 
 def test_cursor_and_vscode_rules_files(home, vroot):
@@ -242,6 +274,9 @@ async def _sweep(call):
            await call("cortex_context", {"scope": "personal"}),
            await call("cortex_find", {"query": "zebracorn"}),
            await call("cortex_find", {"query": "walks"}),
+           await call("cortex_find", {"query": "quokka"}),
+           await call("cortex_read", {"id": "quokka"}),
+           await call("cortex_read", {"id": "teaching-contract"}),
            await call("cortex_read", {"id": "2026-11-20"}),
            await call("cortex_read", {"id": "profile"}),
            await call("cortex_read", {"id": "personality"}),
@@ -250,13 +285,15 @@ async def _sweep(call):
 
 
 @pytest.mark.parametrize("client, seen", [
-    ("cursor-vscode", set()), ("Visual Studio Code", set()), ("codex-mcp-client", set()),
-    ("mcp", {"THNK"}),  # unknown: core, coding and learning ("How I think")
-    ("claude-ai", {"THNK", "PERS", "PROF", "JRNL"})])
+    ("cursor-vscode", {"CODE", "PROJ"}), ("Visual Studio Code", {"CODE", "PROJ"}),
+    ("codex-mcp-client", {"CODE", "PROJ"}),  # core, coding, projects, environment
+    ("mcp", set()),  # an unknown app: the core only (fail closed)
+    ("claude-ai", {"CODE", "PROJ", "TCON", "THNK", "PERS", "PROF", "JRNL"})])
 def test_profiles_scope_what_a_client_gets(vroot, client, seen):
     out = serve(vroot, client, _sweep)
-    assert "Call me Sam." in out and "Python first" in out  # core and coding: everyone
-    for canary in ("THNK", "PERS", "PROF", "JRNL"):
+    assert "Call me Sam." in out  # the core: everyone
+    assert ("Python first" in out) == ("CODE" in seen)
+    for canary in ("PROJ", "TCON", "THNK", "PERS", "PROF", "JRNL"):
         assert (f"CANARY-{canary}-4Q" in out) == (canary in seen), (client, canary)
     assert ("does not share personal pages" in out) == (client != "claude-ai")
 
@@ -267,8 +304,10 @@ def test_owner_profiles_change_it_and_bad_files_fall_back(vroot):
     assert data == profiles.DEFAULT and profiles.scopes_for(data, "claude-code") is None
     data["profiles"].insert(0, {"match": "Cursor", "scopes": ["core", "personal"]})
     profiles.save(v, data)
+    saved = (vroot / profiles.PATH).read_bytes()
     out = serve(vroot, "cursor-vscode", _sweep)
     assert "CANARY-JRNL-4Q" in out and "CANARY-PROF-4Q" in out and "Python first" not in out
+    assert (vroot / profiles.PATH).read_bytes() == saved  # the owner's file is never rewritten
     (vroot / profiles.PATH).write_text("{broken", encoding="utf-8")
     assert profiles.load(v) == profiles.DEFAULT
     with pytest.raises(ValueError):
@@ -297,8 +336,10 @@ def test_in_process_callers_see_everything(vroot):
 
 def test_scope_rules():
     s = frozenset(("core", "coding"))
-    assert access.scope_page(s, "core") and access.scope_page(s, "teaching-contract")
+    assert access.scope_page(s, "core") and not access.scope_page(s, "teaching-contract")
+    assert access.scope_page({"learning"}, "teaching-contract")
     assert not access.scope_page(s, "profile") and not access.scope_page(s, "voice")
+    assert not access.scope_kind(s, "project") and access.scope_kind({"projects"}, "project")
     assert access.scope_section(s, "preferences", "Coding")
     assert not access.scope_section(s, "preferences", "Personal")
     assert not access.scope_section(s, "personality", "How I think")
