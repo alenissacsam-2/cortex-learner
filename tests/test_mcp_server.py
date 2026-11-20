@@ -264,6 +264,39 @@ def test_grade_without_ask_and_new_mistake(root):
     assert grades[2]["mistakes"] == ["dsa.off-by-one-at-the-end"]
 
 
+def test_grade_targets_mistakes_without_an_ask(root):
+    """G1: targets_mistakes on cortex_grade gives the exposure an ask-carried one gives; with
+    both, the fold takes the union."""
+    from cortex import levels
+
+    async def body(call):
+        await call("cortex_start")
+        bad = await call("cortex_grade", {"concept": "two-pointers", "question": "Q?",
+                                          "learner_answer": "a", "verdict": "correct",
+                                          "targets_mistakes": ["Not an id!"]})
+        assert bad["error"] == "invalid_argument", bad
+        for q in ("Q1?", "Q2?"):  # open two mistakes
+            await call("cortex_grade", {"concept": "two-pointers", "question": q,
+                                        "learner_answer": "a", "verdict": "wrong",
+                                        "new_mistake": {"title": f"slip {q[1]}"}})
+        await call("cortex_grade", {"concept": "two-pointers", "question": "Q3?",
+                                    "learner_answer": "a", "verdict": "correct",
+                                    "targets_mistakes": ["dsa.slip-1"]})
+        ask = await call("cortex_ask", {"concept": "two-pointers", "item_type": "recall",
+                                        "question": "Q4?", "targets_mistakes": ["dsa.slip-1"]})
+        await call("cortex_grade", {"item_id": ask["item_id"], "learner_answer": "a",
+                                    "verdict": "correct", "targets_mistakes": ["dsa.slip-2"]})
+
+    run(root, body)
+    evs = events(root)
+    assert [e.get("targets_mistakes") for e in evs if e["kind"] == "grade"][-2:] == [
+        ["dsa.slip-1"], ["dsa.slip-2"]]
+    _, mistakes = levels.fold(evs, evs[-1]["day"])
+    day = evs[-1]["day"]
+    assert mistakes["dsa.slip-1"].exposures == [day, day]  # the plain grade and the ask
+    assert mistakes["dsa.slip-2"].exposures == [day]  # the grade's own, unioned with the ask's
+
+
 def test_confident_miss_without_mistake_is_recorded(root):
     async def body(call):
         await call("cortex_start")

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from datetime import datetime
 
 from cortex import events as _events
 from cortex import levels
@@ -158,18 +157,16 @@ def report(events: Iterable[dict], problem_concepts: dict | None = None,
     keys = {e["id"]: e.get("answer_key") for e in _events.live(events) if e.get("kind") == "ask"}
     splits: dict[str, dict[str, list]] = {s: {} for s in SPLITS}
     pairs, skipped, disagree = [], 0, {}
-    run: dict[tuple, datetime | None] = {}  # (concept, day) -> ts of the cold run's last item
+    run: dict[tuple, bool] = {}  # (concept, day) -> the cold block is still running
     seen: set[str] = set()  # concepts with a graded item (or `also` credit) so far
     for it in levels._items(events, problem_concepts):
         ev = it.ev
         if it.verdict is None or it.concept is None or ev.get("kind") == "ask":
             continue
-        # cold as the fold rates a day (`levels._day_rating`): the first graded item with
-        # nothing on the concept earlier that day, plus its batch (items <= BATCH_SECONDS apart)
-        k, ts = (it.concept, ev.get("day")), levels._when(ev)
-        cold = (not it.warm if k not in run else run[k] is not None
-                and (ts - run[k]).total_seconds() <= levels.BATCH_SECONDS)
-        run[k] = ts if cold else None
+        # cold as the fold rates a day (`levels._cold_block`): the first graded item with
+        # nothing on the concept earlier that day, and every one after it until a teaching
+        k = (it.concept, ev.get("day"))
+        cold = run[k] = run.get(k, not it.warm) and not it.primed
         prior = "history" if it.concept in seen else "first review"  # first: the 0.5 default
         seen.add(it.concept)
         if it.verdict == "correct":
