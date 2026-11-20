@@ -1675,6 +1675,13 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next check tries again)
                 echo(f"cortex app: live import failed ({type(e).__name__}); retried in "
                      f"{browse_serve.AUTO_EVERY_S // 60} minutes")
+            try:  # the rollup pages after the import; a stamp check when nothing changed
+                if app.root is not None and (app.root / ".cortex").is_dir() \
+                        and not app.jobs.running():
+                    from cortex import rollups
+                    rollups.run(app._vault())
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: rollup pages failed ({type(e).__name__})")
 
     def chats():  # app.chat_import: the first pass a minute after start, then every 5 minutes
         from cortex import chat_import
