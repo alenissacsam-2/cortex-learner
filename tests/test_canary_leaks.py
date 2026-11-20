@@ -16,8 +16,9 @@ got), Today.md, index.md, the export snapshot, `cortex export context`, the reca
 home endpoints while the Private switch is locked. A positive control shows the local model's
 Chat still reads the private canaries when its Private switch is on.
 
-A leak the central access gate will fix is listed in LEAKS and asserted in a strict xfail of
-its own; every other surface must be clean now.
+The owner also studies the private subjects outside MCP (a terminal session, as the local
+Chat can): the session page that close writes, and so the app home and the export snapshot,
+must leave them out with one neutral line. Every surface must be clean.
 
 Not swept, by documented design (docs/PRIVACY.md, SPEC-privacy-gate §1): `cortex_read` of a
 people page by its exact id, and `cortex_as_me` for the voice sample's own recipient. The sweep
@@ -53,6 +54,7 @@ from cortex import (
 from cortex.app import server as app_server
 from cortex.cli import app
 from cortex.events import EventLog
+from cortex.session import SessionManager
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -113,20 +115,6 @@ domains:
 
 PLANTED_IDS = ("zq7f3a-note", "zq7f3a-conc", "zq7f3a-inhr", "dsa.zq7f3a-area",
                "zq7f3a-mist", "zq7f3a-imis", "zq7f3a-ppag")
-
-# Known leaks the access gate task fixes: (surface, record) -> why. Each is a strict xfail in
-# test_known_leak and left out of the clean sweep, so any other leak still fails.
-_SESSION = "the session page cortex_end writes names the private concepts studied in it"
-LEAKS: dict[tuple[str, str], str] = {
-    ("mcp cortex_ask probe", "mistake about a private concept"):
-        "cortex_ask on a private concept's id is accepted and names its open mistakes",
-    ("mcp cortex_grade probe", "concept under a private area"):
-        "cortex_grade on a hidden concept's id is accepted and echoes its title",
-    **{(s, r): _SESSION for s in ("app /api/home", "app /api/home/delta",
-                                  "app /api/home?private=1 (locked)", "export snapshot")
-       for r in ("private concept", "concept under a private area")},
-}
-
 
 def history_rows() -> list[tuple]:
     """Cooking on three days (a visible hub), a local-only health site and search, and an
@@ -443,10 +431,26 @@ def app_outputs(root) -> dict[str, str]:
     return out
 
 
+def owner_session(root) -> dict[str, str]:
+    """The owner studies both private subjects and a public one outside MCP; the session page
+    close writes (it then shows in the app home and the export snapshot) and close's result."""
+    sm = SessionManager(Vault(root))
+    sm.start("learn")
+    for c in ("zq7f3a-conc", "zq7f3a-inhr", "two-pointers"):
+        sm.note("graded", c)
+    res = sm.close("Studied pointers.")
+    pages = list((root / "sessions").glob("*-learn-*.md"))
+    page = max(pages, key=lambda p: p.stat().st_mtime_ns).read_text(encoding="utf-8")
+    assert "Two pointers" in page, page
+    return {"session page (owner studied private topics)": page,
+            "session close result": json.dumps(res, default=str, ensure_ascii=False)}
+
+
 def everything(world, monkeypatch, capsys, caplog) -> dict[str, str]:
     root, opener = world
     caplog.set_level(logging.DEBUG)  # the app log is the process's stderr and its log records
     out = mcp_outputs(root)
+    out.update(owner_session(root))
     out.update(cli_outputs(root, monkeypatch))
     out.update(file_outputs(root, opener))
     out.update(app_outputs(root))
@@ -470,17 +474,20 @@ def outputs(request, monkeypatch, capsys, caplog) -> dict[str, str]:
 
 
 def test_no_canary_reaches_claude_or_the_cloud(outputs):
-    assert {s for s, _ in LEAKS} <= set(outputs), {s for s, _ in LEAKS} - set(outputs)
-    found = [x for x in leaks(outputs) if x[:2] not in LEAKS]
+    found = leaks(outputs)
     assert not found, "\n".join(map(repr, found))
 
 
-@pytest.mark.parametrize("surface,record", [
-    pytest.param(s, r, marks=pytest.mark.xfail(
-        strict=True, reason=f"leak: {s} shows the {r} ({why}), fixed by the access gate task"))
-    for (s, r), why in LEAKS.items()])
-def test_known_leak(outputs, surface, record):
-    assert not [x for x in leaks({surface: outputs[surface]}) if x[1] == record]
+def test_the_session_page_says_private_topics_were_left_out(outputs):
+    assert "2 private topics not listed." in outputs[
+        "session page (owner studied private topics)"]
+
+
+def test_a_hidden_id_is_refused_like_an_unknown_one(outputs):
+    """No existence oracle: cortex_ask and cortex_grade on a private or hidden concept give
+    the error an unknown id gives (the sweep cut the call's own arguments out)."""
+    for name in ("mcp cortex_ask probe", "mcp cortex_grade probe"):
+        assert "unknown_concept" in outputs[name], outputs[name]
 
 
 def test_a_skipped_site_is_stored_nowhere(world, home):

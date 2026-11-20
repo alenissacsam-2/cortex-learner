@@ -26,7 +26,7 @@ from cortex._proc import NO_WINDOW
 from cortex.catalog import Catalog
 from cortex.events import MODES, SESSION_RE, EventLog, local_day, parse_ts
 from cortex.taint import MARKER as TAINT_MARKER
-from cortex.vault import Vault, VaultError, _pid_alive, secret_pattern
+from cortex.vault import Vault, VaultError, _pid_alive, is_private, secret_pattern
 
 log = logging.getLogger(__name__)
 
@@ -273,7 +273,8 @@ def _minutes(started: datetime, ended: datetime) -> int:
 
 
 def _session_md(sid, mode, started, ended, counts, rows, unchecked, summary,
-                changes=()) -> str:
+                changes=(), left_out: int = 0) -> str:
+    """`left_out`: how many private or hidden topics `_end` kept off the page."""
     mins = _minutes(started, ended)
     lines = [f"# Session {sid}", "",
              f"- Mode: {mode}",
@@ -282,7 +283,9 @@ def _session_md(sid, mode, started, ended, counts, rows, unchecked, summary,
              "- Counts: " + ", ".join(f"{k} {counts.get(k, 0)}" for k in COUNT_KINDS),
              "", "## Concepts"]
     lines += [f"- {render.esc(r['title'])} ({r['id']}): {_state_word(r['before'])} → "
-              f"{_state_word(r['after'])}" for r in rows] or ["- none"]
+              f"{_state_word(r['after'])}" for r in rows] or ([] if left_out else ["- none"])
+    if left_out:
+        lines.append(f"- {left_out} private topic{'s' if left_out > 1 else ''} not listed.")
     lines += ["", "## Taught, not yet checked"]
     lines += [f"- {render.esc(u['title'])} ({u['id']})" for u in unchecked] or ["- none"]
     if changes:
@@ -615,14 +618,22 @@ def _end(vault: Vault, evlog: EventLog, *, sid: str, mode: str, started: datetim
         except VaultError as e:
             if e.code not in ("unknown_id", "invalid_id"):
                 raise
-    moved = [r for r in rows if r["before"] != r["after"]]
     today = planner.today(vault, catalog, after, now=now)
     quiet = not changes and counts.get("logged", 0) == ledger and not any(
         counts.get(k) for k in COUNT_KINDS if k != "logged")
+    # the page, Today/home and the end card never name a private or hidden topic (E1 privacy
+    # gate); events, levels and tool props above still cover every touched concept
+    hide = _private_ids(vault, catalog, changes)
+    left = {r["id"] for r in rows if r["id"] in hide} | {
+        c["id"] for c in changes if c.get("id") in hide}
+    rows = [r for r in rows if r["id"] not in hide]
+    unchecked = [u for u in unchecked if u["id"] not in hide]
+    changes = [c for c in changes if c.get("id") not in hide]
+    moved = [r for r in rows if r["before"] != r["after"]]
     if not quiet:
         _record(vault, sid=sid, mode=mode, started=started, ended=ended, counts=counts,
                 rows=rows, unchecked=unchecked, summary=summary, changes=changes, today=today,
-                as_of=local_day(now))
+                as_of=local_day(now), left_out=len(left))
     withheld: list[str] = []
     commit = _commit_session(vault, evlog, sid, mode, mark, withheld)
     return {"session": sid, "mode": mode, "counts": dict(counts), "moved": moved,
@@ -635,8 +646,25 @@ SESSION_LINE = "session {mode}: {changes} changes, {graded} graded"
 AUTO_JOURNAL = re.compile(r"session \w+: \d+ changes, \d+ graded")
 
 
+def _private_ids(vault: Vault, catalog: Catalog, changes) -> set[str]:
+    """The ids a session page may not name: planner.hidden (private subjects, what sits under
+    them, their mistakes) and the changed pages that are private themselves. People pages are
+    left to render._change, which never names one."""
+    hide = planner.hidden(vault, catalog)
+    for c in changes:
+        kind, id = c.get("kind"), c.get("id")
+        if kind in Vault.KIND_DIRS and kind != "person" and isinstance(id, str) \
+                and id not in hide:
+            try:
+                if is_private(vault.read(kind, id)):
+                    hide.add(id)
+            except VaultError:  # gone or unreadable: nothing to hide
+                pass
+    return hide
+
+
 def _record(vault: Vault, *, sid, mode, started, ended, counts, rows, unchecked, summary,
-            changes, today, as_of) -> None:
+            changes, today, as_of, left_out: int = 0) -> None:
     """What a non-quiet close writes besides its event and commit: journal line, session
     note, Today.md (one planner pass, ~10 ms at 5k pages) and the log.md line."""
     try:
@@ -646,7 +674,8 @@ def _record(vault: Vault, *, sid, mode, started, ended, counts, rows, unchecked,
     except Exception:  # the journal is a view of the day; it must never break close
         log.exception("journal line failed")
     name = f"{local_day(started)}-{mode}-{sid[-8:].lower()}"
-    text = _session_md(sid, mode, started, ended, counts, rows, unchecked, summary, changes)
+    text = _session_md(sid, mode, started, ended, counts, rows, unchecked, summary, changes,
+                       left_out)
     day = next((d for d in (local_day(started), local_day(ended))
                 if vault.path_for("journal", d).is_file()), None)
     vault.write_text(vault.path_for("session", name),

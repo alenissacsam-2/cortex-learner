@@ -1455,10 +1455,13 @@ def replay(dry_run: Annotated[bool, typer.Option(
 @_errors
 def backup(to: Annotated[Path | None, typer.Option(
                help="Folder for the zip; default .cortex/backups in the vault.")] = None,
+           no_private: bool = typer.Option(False, "--no-private", help=(
+               "Leave out private pages, pages under a private subject, their raw sources, "
+               "browse/private, the browse store and .git (its history holds private pages).")),
            vault: VaultOpt = None) -> None:
     """Zip the whole vault (with .git) to .cortex/backups or --to DIR."""
     v = _vault(vault)
-    dest = backup_mod.backup(v.root, to)
+    dest = backup_mod.backup(v.root, to, private=not no_private)
     typer.echo(f"{dest} ({dest.stat().st_size:,} bytes)")
     if to is not None and backup_mod.same_drive(dest, v.root):
         typer.echo("WARN: the backup is on the same drive as the vault; copy it elsewhere.",
@@ -1916,8 +1919,15 @@ def ask_cmd(question: str, vault: VaultOpt = None,
     """Answer a question from your notes, saved AI chats and browsing with the local model
     only (Ollama or LM Studio); never a cloud model. Prints the cited sources. Private notes
     and private browsing only with --private: a terminal an AI app runs must never print them."""
-    from cortex import ask
+    from cortex import access, ask
 
+    if private and not access.may_see("terminal", access.Audience.LOCAL, "note",
+                                      private_flag=True, tty=_tty()):
+        typer.echo("Refused: private answers print only in a real terminal, never in one an AI "
+                   "app reads (stdin and stdout must both be a terminal). Run `cortex ask "
+                   "--private` yourself in a terminal window, or ask without --private.",
+                   err=True)
+        raise typer.Exit(1)
     try:
         out = ask.ask(_vault(vault), question, private=private)
     except ValueError as e:  # localllm refuses a cloud model or a non-loopback url in config
@@ -1931,6 +1941,14 @@ def ask_cmd(question: str, vault: VaultOpt = None,
     for s in out["sources"]:
         typer.echo(render.term(f"[{s['n']}] {s['path']}"))
     typer.echo(f"answered by {out['model']}")
+
+
+def _tty() -> bool:
+    """stdin and stdout are both a real terminal (E3: a pipe or an AI app's runner is not)."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):  # no stream, or a closed one
+        return False
 
 
 def _parts(p: dict) -> str:

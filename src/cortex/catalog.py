@@ -144,20 +144,23 @@ class Catalog:
 
     # ---- queries --------------------------------------------------------------
 
-    def _names(self, kinds) -> list[tuple[str, str]]:
-        """(casefolded name, id) for every id, title and alias of the given kinds."""
+    def _names(self, kinds, skip=()) -> list[tuple[str, str]]:
+        """(casefolded name, id) for every id, title and alias of the given kinds, but none of
+        the ids in `skip`."""
         out = []
         for e in self.entries.values():
-            if e.kind in kinds:
+            if e.kind in kinds and e.id not in skip:
                 out += [(n.casefold(), e.id) for n in (e.id, e.title, *e.aliases)]
         return out
 
-    def resolve(self, name: str, kinds=("concept",)) -> str:
+    def resolve(self, name: str, kinds=("concept",), skip=()) -> str:
+        """The id `name` names. `skip`: ids treated as absent (an access-gated caller's hidden
+        ids), so a hidden id fails exactly like an unknown one and is never suggested."""
         name = str(name).strip()
         e = self.entries.get(name)
-        if e and e.kind in kinds:
+        if e and e.kind in kinds and name not in skip:
             return name
-        names = self._names(kinds)
+        names = self._names(kinds, skip)
         key = name.casefold()
         # shortcut: a name shared by two entries resolves to the first in catalog order.
         for n, id in names:
@@ -169,13 +172,13 @@ class Catalog:
                 if slugify(n) == slug:
                     return id
         code = "unknown_concept" if "concept" in kinds else "unknown_id"
-        suggestions = self.suggest(name, kinds)
+        suggestions = self.suggest(name, kinds, skip=skip)
         hint = f"did you mean {', '.join(suggestions)}?" if suggestions else \
             "add it with cortex_add or check the spelling."
         raise VaultError(code, f"No {'/'.join(kinds)} named '{name}'; {hint}", suggestions)
 
-    def suggest(self, name: str, kinds=("concept",), n: int = 3) -> list[str]:
-        names = self._names(kinds)
+    def suggest(self, name: str, kinds=("concept",), n: int = 3, skip=()) -> list[str]:
+        names = self._names(kinds, skip)
         out: list[str] = []
         for hit in difflib.get_close_matches(str(name).casefold(), [m for m, _ in names], n=n * 4):
             for m, id in names:
@@ -534,10 +537,12 @@ def inbox_add(vault: Vault, name: str, context: str = "") -> str:
     return f"inbox:{slug}"
 
 
-def resolve_or_inbox(vault: Vault, catalog: Catalog, name: str, context: str = "") -> str:
-    """'concept:<id>' for a known name; otherwise park it in inbox.md and return 'inbox:<slug>'."""
+def resolve_or_inbox(vault: Vault, catalog: Catalog, name: str, context: str = "",
+                     skip=()) -> str:
+    """'concept:<id>' for a known name; otherwise park it in inbox.md and return 'inbox:<slug>'.
+    `skip` as in Catalog.resolve: a hidden name is parked like an unknown one."""
     try:
-        return f"concept:{catalog.resolve(name)}"
+        return f"concept:{catalog.resolve(name, skip=skip)}"
     except VaultError as e:
         if e.code != "unknown_concept":
             raise
