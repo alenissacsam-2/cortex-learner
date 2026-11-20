@@ -104,13 +104,13 @@ def test_splits_sum_to_total_and_grader_kinds():
 def test_cold_and_prior_splits():
     day2 = 24 * 60
     log = [grade(0, "correct", 0.5, "x"), grade(0, "correct", 0.6, "x", sec=1),  # one batch
-           grade(1, "wrong", 0.6, "x"),  # after feedback
+           grade(1, "wrong", 0.6, "x"),  # no teaching yet: still the cold block (G1)
            ev(2, kind="taught", object="concept:y"), grade(3, "correct", 0.5, "y"),
            grade(4, "correct", 0.5, "w", also=["concept:z"]),
            grade(day2, "correct", 0.7, "x"), grade(day2 + 1, "correct", 0.6, "z")]
     r = learning_eval.report(log)
     s = {k: {v: h["n"] for v, h in rows.items()} for k, rows in r["splits"].items()}
-    assert s["first"] == {"cold": 5, "later same day": 2}
+    assert s["first"] == {"cold": 6, "later same day": 1}
     assert s["prior"] == {"first review": 3, "history": 4}  # z has also-credit history
     for split, rows in r["splits"].items():
         assert sum(h["n"] for h in rows.values()) == r["n"] == 7, split

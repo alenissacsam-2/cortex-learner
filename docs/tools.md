@@ -142,6 +142,7 @@ Privacy: a note with `private: true`, and every catalog entry under a private do
 | confidence | int 1–4? | |
 | hints | int 0–3 | default 0 |
 | mistakes | string[]? | existing mistake ids |
+| targets_mistakes | string[]? | mistake ids this item tests, as in `ask`, for a grade with no ask; with an `item_id` the fold uses the union with the ask's |
 | new_mistake | {title, why≤200}? | the server mints `<domain>.<slug>`; it reuses a note only when that exact id exists, otherwise creates it and lists up to 3 look-alikes in `similar_mistakes` |
 | key | string? | with `items`, each item is keyed `<key>:<n>` |
 | items | [{question, answer, verdict or correct:bool, confidence?, concept?, item_type?, item_id?, hints?, mistakes?}]? | a finished quiz at once, 1–20 items; only `concept` (the default concept for items) and `key` may go with it, any other single-item field is `invalid_argument` |

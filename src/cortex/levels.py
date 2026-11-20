@@ -25,7 +25,6 @@ RESOLVE_EXPOSURES, RESOLVE_DAYS = 3, 2
 SOLID_STABILITY, SOLID_PASS_DAYS = 10.0, 2  # Solid needs FSRS stability ≥ 10 d and 2 pass days
 SOLID_GAP_DAYS = 7  # (default) Solid also needs a pass day ≥ 7 days after the first pass day
 SOLID_REST_DAYS = 3  # (default) ... and ≥ 3 days after the previous graded day
-BATCH_SECONDS = 2  # items stamped this close together (an import row, a quiz batch) form a batch
 REMEDIATION_MAX_STABILITY = 10.0  # wrong-then-fixed is Hard only below this stability
 JITTER = 0.05  # deterministic ± spread of due dates for intervals ≥ 3 d
 DEPTH = ("application", "transfer")
@@ -86,6 +85,7 @@ class _Item:
     also: list[str] = field(default_factory=list)  # secondary concepts a correct credits
     credit: bool = False  # an `also` copy on a secondary concept: one Hard review, nothing else
     warm: bool = False  # the concept was already taught or exercised earlier this local day
+    primed: bool = False  # ... taught or `also`-credited, not just graded (ends the cold block)
 
 
 def _prefixed(value, prefix: str) -> str | None:
@@ -121,6 +121,7 @@ def _items(events: Iterable[dict], problem_concepts: dict[str, str | list[str]] 
     asks = {e["id"]: e for e in evs if e.get("kind") == "ask"}
     problems = problem_concepts or {}
     touched: set[tuple[str | None, str | None]] = set()  # (concept, day) taught or graded
+    primed: set[tuple[str | None, str | None]] = set()  # (concept, day) taught or also-credited
     solved: dict[str, str] = {}  # problem id -> first day it had a correct item
     graded: set[tuple[str | None, str | None]] = set()  # (problem id, day) with a grade
 
@@ -148,6 +149,9 @@ def _items(events: Iterable[dict], problem_concepts: dict[str, str | list[str]] 
             ask = asks[ev["ref"]]
             ev = {**{k: ask[k] for k in ("object", "problem", "also", "targets_mistakes",
                                          "item_type") if k in ask}, **ev}
+            if ask.get("targets_mistakes"):  # a grade may name its own too: take the union
+                ev["targets_mistakes"] = list(dict.fromkeys(
+                    [*ask["targets_mistakes"], *(ev.get("targets_mistakes") or [])]))
         payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
         pkind = payload.get("kind") if kind == "log" else None
         if pkind is not None and pkind not in EVIDENCE_LOG_KINDS:
@@ -189,10 +193,14 @@ def _items(events: Iterable[dict], problem_concepts: dict[str, str | list[str]] 
                               else "application")
         if kind != "ask":
             item.warm = (concept, day) in touched
+            item.primed = (concept, day) in primed
             if item.taught or item.verdict is not None:
                 touched.add((concept, day))
+            if item.taught:
+                primed.add((concept, day))
             if item.verdict == "correct":
                 touched.update((a, day) for a in item.also)
+                primed.update((a, day) for a in item.also)
                 if pid:
                     solved.setdefault(pid, day)
         yield item
@@ -221,64 +229,65 @@ def _pass_day(primary: list[_Item]) -> bool:
             and not any(i.verdict == "wrong" and i.confidence == 4 for i in primary))
 
 
-def _when(ev: dict) -> datetime:
-    return _events.parse_ts(ev["ts"])
-
-
 def _review_at(day: str) -> datetime:
     """One FSRS review per local day at 12:00 UTC of that day, so consecutive days are exactly
     1 d apart (py-fsrs floors elapsed days; under 24 h is a same-day review)."""
     return datetime.combine(date.fromisoformat(day), time(12), UTC)
 
 
-def _first_batch(primary: list[_Item]) -> list[_Item]:
-    """The leading run of items each stamped within BATCH_SECONDS of the one before."""
+def _cold_block(primary: list[_Item]) -> list[_Item]:
+    """The leading primary items before the first teaching (a `taught` or `also` credit on
+    the concept that day); empty when the day starts warm."""
+    if primary[0].warm:
+        return []
     n = 1
-    while n < len(primary) and (_when(primary[n].ev) - _when(primary[n - 1].ev)
-                                ).total_seconds() <= BATCH_SECONDS:
+    while n < len(primary) and not primary[n].primed:
         n += 1
     return primary[:n]
 
 
 def _day_rating(items: list[_Item], card: Card) -> Rating:
-    """Rate the day by its cold retrieval (LEARN-2): the first primary item, when nothing on
-    the concept (a `taught`, a graded item, `also` credit) came earlier that local day. Later
-    items follow feedback or teaching, so they do not measure retention across the gap. Hints
-    on that first item do not disqualify it: `_rating` already makes hints ≥ 2 Hard, and
-    skipping it would rate the day by a warmer item. A Good/Easy cold item on a day that is not
-    a pass day is capped at Hard. When the cold start is a batch (≥ 2 items stamped together:
-    an import row, a quiz batch) their order means nothing, so the batch is rated by its pass
-    share: all Easy → Easy, ≥ 0.8 → Good, ≥ 0.5 → Hard, else Again; later items on the day do
-    not cap it. With no cold item (taught first) the worst primary rating
+    """Rate the day by its cold retrieval (LEARN-2, G1): the cold block is every primary item
+    before the first teaching that day (a `taught` or `also` credit on the concept), starting
+    only when nothing on the concept came earlier that local day. Later quiz questions are
+    usually different questions, not retries, so the block is rated by its pass share: all Easy
+    → Easy, ≥ 0.8 → Good, ≥ 0.5 → Hard, else Again; items after the teaching do not cap it.
+    Items after teaching follow it, so they do not measure retention across the gap. A single
+    cold item is rated alone (hints ≥ 2 already make it Hard), and Good/Easy on a day that is
+    not a pass day is capped at Hard. With no cold item (taught first) the worst primary rating
     is used, as before. A day of `also` credit only is Hard. A day with a confidence-4 wrong is
     Again: a confident miss is never softened, so it never lengthens the interval. A wrong
-    fixed later the same day (last primary correct at hints ≤ 1, after the cold batch) is Hard
+    fixed later the same day (last primary correct at hints ≤ 1, after the cold block) is Hard
     while the card is new or below REMEDIATION_MAX_STABILITY and the last review is under
     SOLID_GAP_DAYS old: Hard after a long gap is read by FSRS as a hard-won recall at low R and
-    inflates stability, so a lapse across a gap or on a mature card stays Again."""
+    inflates stability, so a lapse across a gap or on a mature card stays Again. The same guards
+    hold inside the block: a Hard share that includes a wrong is Again across a gap or on a
+    mature card (a cold right-then-wrong pair is still a lapse there)."""
     primary = [i for i in items if not i.credit]
     if not primary:
         return Rating.Hard
     if any(i.verdict == "wrong" and i.confidence == 4 for i in primary):
         return Rating.Again
-    batch = [] if primary[0].warm else _first_batch(primary)
+    after_gap = card.last_review is not None and (  # last_review is `_review_at` its day
+        date.fromisoformat(primary[0].ev["day"]) - card.last_review.date()).days >= SOLID_GAP_DAYS
+    guarded = after_gap or (card.stability or 0) >= REMEDIATION_MAX_STABILITY
+    batch = _cold_block(primary)
     if len(batch) >= 2:
         share = sum(map(_score, batch)) / len(batch)
         rating = (Rating.Easy if all(_rating(i) == Rating.Easy for i in batch)
                   else Rating.Good if share >= 0.8
                   else Rating.Hard if share >= 0.5 else Rating.Again)
+        if rating == Rating.Hard and guarded and any(i.verdict == "wrong" for i in batch):
+            rating = Rating.Again  # a lapse in the block: the same guards as remediation
     elif primary[0].warm:
         rating = min(map(_rating, primary))
     else:
         rating = _rating(primary[0])
         if rating > Rating.Hard and not _pass_day(primary):
             rating = Rating.Hard
-    after_gap = card.last_review is not None and (  # last_review is `_review_at` its day
-        date.fromisoformat(primary[0].ev["day"]) - card.last_review.date()).days >= SOLID_GAP_DAYS
-    if (rating == Rating.Again and len(primary) > len(batch)  # the fix came after the batch
+    if (rating == Rating.Again and len(primary) > len(batch)  # the fix came after the block
             and primary[-1].verdict == "correct" and primary[-1].hints <= 1
-            and (card.stability is None or card.stability < REMEDIATION_MAX_STABILITY)
-            and not after_gap):
+            and not guarded):
         return Rating.Hard
     return rating
 

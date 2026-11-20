@@ -39,6 +39,13 @@ def grades(log, concept, day, verdicts, **extra):
         add(log, day, minute=n, object=f"concept:{concept}", verdict=v, **extra)
 
 
+def taught(log, concept, day, minute=0, second=30):
+    """A `taught` between two graded items (minute n and n+1): it ends the cold block."""
+    log.append(session="cli", kind="taught", source="tutor",
+               now=at(day, minute) + timedelta(seconds=second),
+               fields={"object": f"concept:{concept}"})
+
+
 def states(log, today):
     return fold(log.iter_events(), today)
 
@@ -214,6 +221,9 @@ def test_item_rating():
 
 
 def test_remediation_hard_on_new_card_not_on_mature_lapse(log):
+    # each fix follows teaching, so the cold block is the wrong alone (G1)
+    for c in ("fixed-new", "fixed-hinted", "lapse-fixed"):
+        taught(log, c, 6 if c == "lapse-fixed" else 1)
     grades(log, "fixed-new", 1, ["wrong", "correct"])
     grades(log, "hard-new", 1, ["partial"])
     grades(log, "fixed-hinted", 1, ["wrong", "correct"], hints=2)
@@ -296,8 +306,9 @@ def test_day_is_rated_by_its_first_cold_item(log):
         grades(log, c, 1, ["correct"])
         grades(log, c, 8, ["correct"])  # stability ≥ 10: no remediation
     grades(log, "quiz", 20, ["correct", "correct", "wrong", "correct", "correct", "correct"])
-    grades(log, "slip", 20, ["correct", "wrong"])  # cold correct, later slip, not a pass day
+    grades(log, "slip", 20, ["correct", "wrong"])  # 1/2 cold, a lapse after a 12-day gap
     grades(log, "cold-miss", 20, ["wrong", "correct"])
+    taught(log, "cold-miss", 20)  # the fix follows teaching: the cold block is the miss
     log.append(session="cli", kind="taught", source="tutor", now=at(20) - timedelta(hours=1),
                fields={"object": "concept:taught"})  # taught first: no cold item, worst rating
     grades(log, "taught", 20, ["correct", "wrong", "correct", "correct", "correct"])
@@ -306,10 +317,33 @@ def test_day_is_rated_by_its_first_cold_item(log):
     concepts, _ = states(log, "2026-11-20")
     s = {c: st.stability for c, st in concepts.items()}
     assert s["quiz"] == s["right"] and concepts["quiz"].last_pass_day == "2026-11-20"
-    assert s["slip"] == s["hard"] and concepts["slip"].last_pass_day == "2026-11-08"
+    assert s["slip"] == s["wrong"] and concepts["slip"].last_pass_day == "2026-11-08"
     assert s["cold-miss"] == s["wrong"] < 10  # a mature lapse stays Again
     assert concepts["cold-miss"].last_pass_day == "2026-11-08"  # cold miss + fix: no pass
     assert s["taught"] == s["wrong"] and concepts["taught"].last_pass_day == "2026-11-20"
+
+
+def test_the_cold_block_runs_until_teaching_and_is_rated_by_share(log):
+    """G1: every primary item before the first teaching that day is cold (later questions are
+    different questions, not retries), so the block is rated by its pass share."""
+    grades(log, "one-of-three", 1, ["correct", "wrong", "wrong"])  # 1/3 -> Again
+    grades(log, "two-of-three", 1, ["correct", "correct", "wrong"])  # 2/3 -> Hard
+    for c in ("taught-1", "taught-2"):  # the same items, a `taught` after the first
+        taught(log, c, 1)
+    grades(log, "taught-1", 1, ["correct", "wrong", "wrong"])
+    grades(log, "taught-2", 1, ["correct", "correct", "wrong"])
+    grades(log, "sure-miss", 1, ["correct", "correct"])
+    add(log, 1, minute=2, object="concept:sure-miss", verdict="wrong", confidence=4)
+    for c, v in (("again", "wrong"), ("hard", "partial"), ("good", "correct")):
+        grades(log, c, 1, [v])
+    concepts, _ = states(log, "2026-11-01")
+    s = {c: st.stability for c, st in concepts.items()}
+    assert s["one-of-three"] == s["again"] and s["two-of-three"] == s["hard"]
+    # with teaching after the first item the old rule holds: the cold correct alone, capped
+    # at Hard on a day that is not a pass day
+    assert s["taught-1"] == s["taught-2"] == s["hard"]
+    assert s["sure-miss"] == s["again"]  # a confidence-4 wrong still wins
+    assert len({s["again"], s["hard"], s["good"]}) == 3
 
 
 def test_a_miss_after_a_long_gap_never_lengthens_the_interval(log):
@@ -392,8 +426,10 @@ def test_same_timestamp_batch_is_rated_by_pass_share():
     evs = []
     for c, (rows, ref) in batches.items():
         evs += _raw(1, c, rows) + _raw(1, f"{c}-ref", [ref])
-    # a Good batch stands even when later items (after feedback) spoil the pass day
+    # a Good batch stands even when later items (after teaching) spoil the pass day
     evs += _raw(1, "later", [ok, ok, ok, ok, bad]) + _raw(1, "later-ref", [ok])
+    evs.append({"id": "later-t", "ts": "2026-11-01T12:15:00Z", "day": "2026-11-01",
+                "kind": "taught", "object": "concept:later"})
     evs += [{**e, "id": f"later-x{n}", "ts": "2026-11-01T12:30:00Z"}
             for n, e in enumerate(_raw(1, "later", [bad, bad]))]
     s = {c: st.stability for c, st in fold(evs, "2026-11-01")[0].items()}

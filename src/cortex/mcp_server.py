@@ -1502,12 +1502,13 @@ class Cortex:
                      also: list[str] | None = None, verdict: Verdict | None = None,
                      confidence: int | None = None, hints: int = 0,
                      mistakes: list[str] | None = None, new_mistake: dict | None = None,
+                     targets_mistakes: list[str] | None = None,
                      key: str | None = None, items: list[dict[str, Any]] | None = None,
                      ctx: Context | None = None) -> dict[str, Any]:
         if items is not None:  # a batch: concept and key apply to the call, the rest per item
             if hints or any(x is not None for x in (
                     learner_answer, item_id, question, item_type, problem, also, verdict,
-                    confidence, mistakes, new_mistake)):
+                    confidence, mistakes, new_mistake, targets_mistakes)):
                 raise invalid("With items (a batch), put answers and verdicts on each item; "
                            "only concept and key go on the call.")
             return self._quiz_result(items, concept, key)
@@ -1529,6 +1530,8 @@ class Cortex:
         fields["hints"] = hints
         if confidence is not None:
             fields["confidence"] = confidence
+        if targets_mistakes:  # G1: a grade with no ask; the fold unions it with an ask's
+            fields["targets_mistakes"] = targets_mistakes
         mistakes = list(mistakes or [])
         # never lose evidence: a confident miss without a named mistake is recorded, then nudged
         unnamed_miss = (fields["verdict"] == "wrong" and confidence == 4 and not mistakes
@@ -1995,6 +1998,9 @@ class Cortex:
                 same = {k: v for k in ("item_type", "confidence", "question", "problem",
                                        "also", "targets_mistakes", "ref")
                         if (v := target.get(k, ask.get(k))) is not None}
+                if t := list(dict.fromkeys([*(ask.get("targets_mistakes") or []),
+                                            *(target.get("targets_mistakes") or [])])):
+                    same["targets_mistakes"] = t  # G1: the grade's and its ask's, as the fold
                 self._append("log", {"object": target["object"], **same, "payload": pl},
                              source="self")
             self._append("log", {"payload": {"kind": "spot_check", "event": eid,
