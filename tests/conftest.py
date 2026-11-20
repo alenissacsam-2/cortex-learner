@@ -84,10 +84,12 @@ def _no_real_chat_export(tmp_path_factory, monkeypatch):
 @pytest.fixture(autouse=True)
 def _status_probes_fresh(monkeypatch):
     """Status's kept probes are asked every time in tests (a test changes a fake runner and
-    reads Status again); test_app's cache test puts `status.kept` back."""
-    from cortex.app import status
+    reads Status again); test_app's cache test puts `status.kept` back. No warm-up thread at
+    `start` either: one that outlived its test could run the real probes."""
+    from cortex.app import server, status
 
     monkeypatch.setattr(status, "kept", lambda key, fn: fn())
+    monkeypatch.setattr(server, "WARM_STATUS", False)
 
 
 @pytest.fixture(autouse=True)

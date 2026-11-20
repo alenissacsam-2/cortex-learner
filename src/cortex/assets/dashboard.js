@@ -1826,11 +1826,12 @@
 
   const LEGEND_KEY = 'cortex.legend';
   function legendToggle() {
-    let open = true;  // the first visit: open; after it, closed unless the viewer opened it
+    // the first visit: open where it clears the stem (at 1024x768 it covers it); after it, closed unless opened
+    let open = innerWidth >= 1300 && innerHeight >= 900;
     try {
       const v = localStorage.getItem(LEGEND_KEY);
       if (v === null) localStorage.setItem(LEGEND_KEY, 'closed'); else open = v === 'open';
-    } catch (e) { /* storage off: open */ }
+    } catch (e) { /* storage off: the first-visit default */ }
     const t = $('legend-toggle'), set = (on) => { t.setAttribute('aria-expanded', String(on)); $('legend').hidden = !on; };
     t.prepend(icon('chevron'));
     set(open);
