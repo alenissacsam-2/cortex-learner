@@ -8,6 +8,8 @@ between requests by one HomeCache per app server and sent to the page as deltas.
   site pages);
 - catalog.yaml, inbox.md, .cortex/brain-layout.json, .cortex/vectors-v3.npz and
   .cortex/recall-log.jsonl: size and mtime;
+- the browsing store, .cortex/browse/store.db and its -wal: size and mtime (the brain's stem of
+  websites; `store.version`);
 - the Cortex day (04:00 local), so Today rolls over.
 Left out: the time of day (an exam forecast moves with it and is refreshed with any other
 change), the search index snapshot (a parse shortcut with the same content) and the shipped
@@ -21,6 +23,7 @@ import base64
 import logging
 import os
 import re
+import sqlite3
 import threading
 from collections import OrderedDict
 from datetime import UTC, date, datetime, time, timedelta
@@ -30,9 +33,10 @@ import numpy as np
 
 from cortex import brainmap, dashboard, planner, recall_log, topics
 from cortex.access import Audience, audience_of_note, audience_of_study, may_see
+from cortex.browse import store
 from cortex.catalog import CATALOG
 from cortex.events import DAY_ROLLOVER, STUDY_MODES, live, local_day
-from cortex.render import plain
+from cortex.render import plain, term
 from cortex.vault import ID_RE, PRIVATE_BROWSE_DIR, Vault, VaultError, is_private
 
 log = logging.getLogger(__name__)
@@ -44,6 +48,10 @@ FEED_CAP = 200  # items in each of Today and This week
 PER_GROUP = 20  # items of one kind for one subject on one day (an import adds hundreds)
 NEXT_SUBJECTS, NEXT_ITEMS = 8, 5
 KEEP = 5  # homes kept per Private setting, for deltas
+# the brain stem's websites: the STEM_TOP most visited, then up to STEM_RECENT more visited in
+# the last STEM_DAYS days (the rest stay in the browsing store; the legend says how many)
+STEM_TOP, STEM_RECENT, STEM_DAYS = 1500, 1000, 30
+SITE_LIST = 50  # searches of each kind a site's details carry
 _JOURNAL = re.compile(r"^- (\d\d:\d\d|—) (.+)$")  # as vault.append_journal writes them
 _NOT_ADDED = {"journal", "browse", "session"}  # their own items say more than "added"
 
@@ -126,8 +134,10 @@ def _scan(root: Path, day: str) -> dict:
     r = str(root)
     notes = {kind: tuple(_browse(r) if kind == "browse" else _md(os.path.join(r, d)))
              for kind, d in Vault.KIND_DIRS.items()}
+    db = os.path.join(r, *store.PATH.split("/"))
     return {"events": tuple(_events(r)), "notes": notes,
-            **{k: _stat(os.path.join(r, *f.split("/"))) for k, f in FILES.items()}, "day": day}
+            **{k: _stat(os.path.join(r, *f.split("/"))) for k, f in FILES.items()},
+            "browse": (_stat(db), _stat(db + "-wal")), "day": day}
 
 
 def _hash(scan: dict) -> str:
@@ -176,6 +186,10 @@ class HomeCache:
         self._data: dict | None = None
         self._items: list[dict] = []  # the feed, every audience
         self._homes = {False: OrderedDict(), True: OrderedDict()}
+        # the stem's placement, in memory only (no file holds a site name): {site: (first,
+        # share of the axis)}; and per Private setting (stamp, page brain, brain with the stem)
+        self._placed: dict = {}
+        self._stems: dict = {}
 
     def version(self) -> str:
         return version(self.vault, self._clock())
@@ -210,7 +224,70 @@ class HomeCache:
                 out["brain"] = {"blob": new["brain"], **_brain_diff(old["brain"], new["brain"])}
             return out
 
+    def site(self, site: str, private: bool = False) -> dict | None:
+        """One website's details for the brain's side panel, from the browsing store (never a
+        vault page): None when the store has no such site for this Private setting, so a
+        private site is unknown while the switch is locked. Its topic hubs only as pages the
+        home shows."""
+        try:
+            rows = store.site_rows(self.vault, include_private=private)
+            r = next((x for x in rows if x["site"] == site), None)
+            if r is None:
+                return None
+            open_ = not private or any(x["site"] == site for x in store.site_rows(self.vault))
+        except sqlite3.Error as e:
+            log.warning("browsing store not read: %s", type(e).__name__)
+            return None
+        with self._lock:
+            titles = {p["id"]: p["title"] for p in (self._data or {}).get("pages", [])}
+
+        def text(x):
+            return " ".join(term(x).split())[:300]
+        return {"site": r["site"], "category": r["category"] or "other", "private": not open_,
+                "visits": r["visits"], "secs": r["secs"], "days": r["days"],
+                "titles": [text(t) for t in r["titles"]],
+                "searches": [[text(t), n] for t, n in r["searches"][:SITE_LIST]],
+                "led": [[text(t), n] for t, n in r["led"][:SITE_LIST]],
+                "hubs": [{"id": h, "title": titles[h], "visits": n} for h, n in r["hubs"]
+                         if h in titles],
+                "related": list(r["related"]), "description": text(r["description"])}
+
     # ---- building ----
+
+    def _stem(self, scan: dict, private: bool) -> dict:
+        """The page brain with the browsing store's websites as its stem (`brainmap.with_stem`)
+        for one Private setting: locked, only the visible side of the store is read
+        (`include_private=False`); unlocked, every site, those with no visible side marked
+        private. The same object while nothing it shows changed; the page brain itself when
+        the store holds no site."""
+        brain = self._data["brain"]
+        key = (scan["browse"], scan["day"])
+        hit = self._stems.get(private)
+        if hit is not None and hit[0] == key and hit[1] is brain:
+            return hit[2]
+        try:
+            pub = store.site_rows(self.vault)
+            rows = store.site_rows(self.vault, include_private=True) if private else pub
+        except sqlite3.Error as e:  # the home goes on without the stem
+            log.warning("browsing store not read: %s", type(e).__name__)
+            pub = rows = []
+        out = brain
+        if rows:
+            cut = (date.fromisoformat(scan["day"]) - timedelta(days=STEM_DAYS)).isoformat()
+            shown = rows[:STEM_TOP] + sorted(
+                (r for r in rows[STEM_TOP:] if r["days"] and r["days"][-1] >= cut),
+                key=lambda r: (r["days"][-1], r["site"]), reverse=True)[:STEM_RECENT]
+            brainmap.stem_order(pub, self._placed)  # the visible sites first: never placed by
+            brainmap.stem_order(shown, self._placed)  # where private ones are
+            open_ = {r["site"] for r in pub}
+            sites = sorted(({**r, "first_day": (r["days"] or [""])[0],
+                             "last_day": (r["days"] or [""])[-1], "private": r["site"] not in open_}
+                            for r in shown), key=lambda r: (self._placed[r["site"]][1], r["site"]))
+            out = brainmap.with_stem(brain, sites, self._placed, len(rows))
+            if hit is not None and hit[1] is brain and hit[2] == out:
+                out = hit[2]  # only the store's file moved: no brain change to send
+        self._stems[private] = (key, brain, out)
+        return out
 
     def _current(self, private: bool) -> dict:
         now = self._clock()
@@ -230,7 +307,8 @@ class HomeCache:
                 scan = {**scan, "layout": wrote[0]}
                 v = _hash(scan)
             self._scan = scan
-        home = {**self._data, "feed": _split(self._items, scan["day"], private), "v": v}
+        home = {**self._data, "brain": self._stem(scan, private),
+                "feed": _split(self._items, scan["day"], private), "v": v}
         homes[v] = home
         while len(homes) > KEEP:
             homes.popitem(last=False)
@@ -527,8 +605,9 @@ def _brain_diff(old: dict, new: dict) -> dict:
         arr = {k: np.frombuffer(base64.b64decode(n[k]), t).reshape(-1, w)
                for k, t, w in (("xyz", "<f4", 3), ("depth", "<f4", 1), ("embedded", "u1", 1),
                                ("weight", "<f4", 1))}
-        lobe = np.frombuffer(base64.b64decode(n["lobe"]), "<u2")
-        return {i: k for k, i in enumerate(n["ids"])}, arr, [lobes[k] for k in lobe.tolist()]
+        lobe = np.frombuffer(base64.b64decode(n["lobe"]), "<u2")  # 65535: a stem site, no lobe
+        return ({i: k for k, i in enumerate(n["ids"])}, arr,
+                [lobes[k] if k < len(lobes) else None for k in lobe.tolist()])
     (oi, oa, ol), (ni, na, nl) = cols(old), cols(new)
     both = [i for i in ni if i in oi]
     a = np.array([oi[i] for i in both], np.int64)

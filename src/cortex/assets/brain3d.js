@@ -1407,6 +1407,22 @@ void main() {
       idIndex.set(id, i);
       PG[i] = byId.get(id) || { id, title: id };
     }
+    // The brain stem (the app's live home): the browsing store's websites, after the pages (SF on),
+    // outside every lobe. Each is its own node record: colour by category, size by visits,
+    // brightness by the last visit, a hollow ring when private.
+    const STEM = B.stem && Array.isArray(B.stem.sites) ? B.stem : null;
+    const SF = STEM ? Math.max(0, Math.min(N, STEM.first | 0)) : N;
+    const SCATS = STEM && STEM.colors && typeof STEM.colors === 'object' ? Object.keys(STEM.colors).sort() : [];
+    const SCAT = new Int16Array(N).fill(-1), GLOW = new Float32Array(N).fill(1);
+    for (let i = SF; i < N; i++) {
+      const s = STEM.sites[i - SF];
+      if (!Array.isArray(s)) continue;
+      PG[i] = { id: PG[i].id, title: String(s[0]), kind: 'site', group: 'site', site: String(s[0]), category: String(s[1]),
+        visits: +s[2] || 0, date: String(s[3] || ''), updated: String(s[4] || ''), private: s[5] === 1 };
+      SCAT[i] = SCATS.indexOf(PG[i].category);
+    }
+    // the node's palette entry: its lobe's colour, a site's category colour, else grey
+    const pcOf = (i) => (LOBE[i] < L ? 5 + LOBE[i] : SCAT[i] >= 0 ? 5 + L + SCAT[i] : 1);
     // Links: the pages' own wikilinks, undirected and deduplicated, as a CSR adjacency.
     const la = [], lb = [], seen = new Set();
     for (let i = 0; i < N; i++) {
@@ -1428,12 +1444,12 @@ void main() {
     // it as a percentile (Q), so the top 2 % of pages are the big hubs whatever the vault's shape
     const WT = view(bytes(ND.weight), Float32Array), IMP = new Float32Array(N), Q = new Float32Array(N);
     for (let i = 0; i < N; i++) IMP[i] = WT.length >= N && Number.isFinite(WT[i]) ? WT[i] : Math.log1p(deg(i));
-    {
-      const ord = Array.from({ length: N }, (_, i) => i).sort((a, b) => IMP[a] - IMP[b] || a - b);
-      for (let s = 0; s < N;) {  // ties share their mean rank
+    for (const [s0, n] of [[0, SF], [SF, N - SF]]) {  // pages and stem sites rank apart: a site never resizes a page
+      const ord = Array.from({ length: n }, (_, k) => s0 + k).sort((a, b) => IMP[a] - IMP[b] || a - b);
+      for (let s = 0; s < n;) {  // ties share their mean rank
         let e = s;
-        while (e + 1 < N && IMP[ord[e + 1]] === IMP[ord[s]]) e++;
-        for (let k = s; k <= e; k++) Q[ord[k]] = N > 1 ? (s + e) / 2 / (N - 1) : 0;
+        while (e + 1 < n && IMP[ord[e + 1]] === IMP[ord[s]]) e++;
+        for (let k = s; k <= e; k++) Q[ord[k]] = n > 1 ? (s + e) / 2 / (n - 1) : 0;
         s = e + 1;
       }
     }
@@ -1563,6 +1579,9 @@ void main() {
       const p = PG[i];
       MONTH[i] = String(p.date || p.updated || '').slice(0, 7);
       RECENT[i] = String(p.updated || '') >= weekAgo ? 1 : 0;
+      if (p.kind !== 'site') continue;  // a site dims with the days since its last visit, never below 0.3
+      const age = (Date.parse(todayIso) - Date.parse(p.updated)) / 864e5;
+      GLOW[i] = Number.isFinite(age) ? 0.3 + 0.7 * Math.exp(-Math.max(0, age) / 30) : 0.3;
     }
 
     // Bounds: the centre of the shell (else of the points) and the radius that holds both.
@@ -1674,7 +1693,7 @@ void main() {
     const COL = new Uint8Array(N * 4), FX = new Uint8Array(N * 4), PI = new Uint16Array(N);
     const FCOL = new Uint8Array(NF * 8), FCI = new Uint16Array(NF);  // per fibre: rgb a, rgb width*40; colour index
     const TP = P.slice(0, N * 3), TFC = FC.slice(0, NF * 3);
-    const S = { N, P, TP, TFC, Q, SZ, COL, FX, PI, mesh, ctr, Rb, V3, HUB, NP: 5 + (V3 ? L : 0), NF, FA, FB, FC, FK, FCOL, FCI,
+    const S = { N, P, TP, TFC, Q, SZ, COL, FX, PI, mesh, ctr, Rb, V3, HUB, NP: 5 + (V3 ? L + SCATS.length : 0), NF, FA, FB, FC, FK, FCOL, FCI,
       FATT, LOBE, L, lobeC, dust, arrange: V3, slice: [lo[1], 10 / Math.max(0.1, hi[1] - lo[1])] };
 
     /* ---- DOM: a focusable box holding the canvas, the SVG label overlay and the breadcrumb ---- */
@@ -1690,7 +1709,8 @@ void main() {
     box.tabIndex = 0;
     box.setAttribute('role', 'application');
     box.setAttribute('aria-roledescription', '3D brain');
-    box.setAttribute('aria-label', `Brain of ${N.toLocaleString('en')} pages in ${L} lobes`);
+    box.setAttribute('aria-label', `Brain of ${SF.toLocaleString('en')} pages in ${L} lobes`
+      + (N > SF ? `, with ${(N - SF).toLocaleString('en')} websites in its stem` : ''));
     box.setAttribute('aria-describedby', keysId);
     box.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown + - 0 Escape Backspace [ ] F A M G S');
     box.appendChild(keys);
@@ -1796,7 +1816,8 @@ void main() {
     // palette: node, grey, three states, then (v3) one colour per lobe; Canvas cores are whiter in v3
     function recolor() {
       const st = colors.state;
-      pal = [rgb(colors.node), rgb(colors.grey), rgb(st.solid), rgb(st.learning), rgb(st.needs_refresh)].concat(V3 ? LC : []);
+      pal = [rgb(colors.node), rgb(colors.grey), rgb(st.solid), rgb(st.learning), rgb(st.needs_refresh)]
+        .concat(V3 ? LC : [], V3 ? SCATS.map((c) => rgb(STEM.colors[c], V3C.neutral)) : []);
       palCore = V3 ? pal.map((p) => p.map((v) => Math.round(v + (255 - v) * 0.15))) : pal;
       C3 = { stage: f3(rgb(colors.stage)), body: f3(rgb(colors.body)), rim: f3(rgb(colors.rim)),
         node: f3(rgb(colors.node)), glow: colors.glow !== false };
@@ -1907,16 +1928,18 @@ void main() {
           && !(mode === 'growth' && growthMonth && MONTH[i] && MONTH[i] > growthMonth));
         if (v && LOBE[i] < L) visCount[LOBE[i]]++;
         const on = nb ? nb[i] : (!hl || hl[i]) && (focus < 0 || LOBE[i] === focus);
-        let pi = V3 ? (LOBE[i] < L ? 5 + LOBE[i] : 1) : 0, ring = 0;
+        const site = p.kind === 'site';
+        let pi = V3 ? pcOf(i) : 0, ring = site && p.private ? 1 : 0;
         if (mode === 'mastery') {
           if (p.kind === 'concept') {
             pi = STATE_PI[p.state] || 0;
             ring = p.state === 'unverified' || p.state === 'not_started' ? 1 : 0;
-          } else pi = 1;
+          } else if (!site) pi = 1;  // a site keeps its category's colour
         }
         PI[i] = pi;
         // v3 Mastery: pages without a study state step back so the state colours carry the view
-        const a = !v ? 0 : (on ? 1 : DIM) * (ARCH[i] && i !== selected ? 0.25 : 1) * (V3 && pi === 1 && mode === 'mastery' ? 0.45 : 1);
+        const a = !v ? 0 : (on ? 1 : DIM) * (ARCH[i] && i !== selected ? 0.25 : 1)
+          * (V3 && (pi === 1 || site) && mode === 'mastery' ? 0.45 : 1) * (i === selected ? 1 : GLOW[i]);
         const c = V3 && i === selected ? whiten(pal[pi], 0.6) : pal[pi];  // v4: the chosen page is white-hot
         COL[o] = c[0]; COL[o + 1] = c[1]; COL[o + 2] = c[2]; COL[o + 3] = Math.round(a * 255);
         // v3: search matches keep a soft halo and pop once; the hovered page's neighbours breathe once
@@ -1946,8 +1969,8 @@ void main() {
       };
       // shortcut: alpha scales down with the visible fibre count so a dense vault reads as fibres, not
       // fog, and a sparse view (Growth, filters) keeps its glow; tune on real use
-      let nv = 0;
-      for (let f = 0; f < NF; f++) if (!BUSYF[f] && OVK[f] > 0 && kindOn(f) && COL[FA[f] * 4 + 3] && COL[FB[f] * 4 + 3]) nv++;
+      let nv = 0;  // the stem's fibres are not counted: websites never dim the pages' fibres
+      for (let f = 0; f < NF; f++) if (!BUSYF[f] && OVK[f] > 0 && kindOn(f) && FA[f] < SF && FB[f] < SF && COL[FA[f] * 4 + 3] && COL[FB[f] * 4 + 3]) nv++;
       const FD = Math.min(1, Math.sqrt(7000 / Math.max(1, nv)));
       for (let f = 0; f < NF; f++) {
         const i = FA[f], j = FB[f], o = f * 8, sim = FK[f] === 1, own = src >= 0 && (i === src || j === src);
@@ -1967,8 +1990,8 @@ void main() {
           if ((ARCH[i] || ARCH[j]) && i !== src && j !== src) a *= 0.25;
           if (neutral && src < 0) a *= 0.35;
         }
-        const ci = neutral ? 1 : LOBE[i] < L ? 5 + LOBE[i] : 1;
-        const ca = still && own ? [255, 255, 255] : pal[ci], cb = still && own ? ca : neutral ? ca : pal[LOBE[j] < L ? 5 + LOBE[j] : 1];
+        const ci = neutral ? 1 : pcOf(i);
+        const ca = still && own ? [255, 255, 255] : pal[ci], cb = still && own ? ca : neutral ? ca : pal[pcOf(j)];
         FCOL[o] = ca[0]; FCOL[o + 1] = ca[1]; FCOL[o + 2] = ca[2]; FCOL[o + 3] = Math.round(a * 255);
         FCOL[o + 4] = cb[0]; FCOL[o + 5] = cb[1]; FCOL[o + 6] = cb[2]; FCOL[o + 7] = Math.min(255, Math.round(w * 40));
         FCI[f] = ci;
@@ -2582,7 +2605,7 @@ void main() {
     const WHITE = [255, 255, 255], WARM = [255, 243, 220];
     const trailC = () => (style.trailTint === 'warm' ? WARM : WHITE);
     const MOTES = [[3.2, 20, 3100], [3.7, 35, 4300], [4.2, 50, 5700], [4.6, 65, 7900]];  // orbit radius, tilt in degrees, period in ms
-    const lobeRGB = (i) => (LOBE[i] < L ? LC[LOBE[i]] : pal[1]);
+    const lobeRGB = (i) => (LOBE[i] < L ? LC[LOBE[i]] : pal[V3 ? pcOf(i) : 1]);
     const whiten = (c, k) => [c[0] + (255 - c[0]) * k, c[1] + (255 - c[1]) * k, c[2] + (255 - c[2]) * k];
     const shown = (i) => COL[i * 4 + 3] > 0;
     const fibW = (f) => FCOL[f * 8 + 7] / 40 * SV.fibW;
@@ -3183,6 +3206,8 @@ void main() {
       // pointer is down or the camera still moving (a flight, a zoom, a flick: a remount waits)
       get camera() { const o = {}; for (const k of CAM) o[k] = cam[k]; return o; },
       get selected() { return selected >= 0 ? PG[selected].id : null; },
+      // a node's record by id (a page, or a stem site's {site, category, visits, private, ...})
+      node(id) { const i = idIndex.get(String(id)); return i === undefined ? null : PG[i]; },
       get spin() { return spin; },
       get growth() { return growthMonth; },
       get focused() { return focus >= 0 ? String(lobes[focus].id) : null; },

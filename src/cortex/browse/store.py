@@ -515,18 +515,18 @@ def site_rows(vault: Vault, since: str | None = None, include_private: bool = Fa
     Built from the site pages `sites.write` saves (after `migrate`); [] before."""
     if not exists(vault):
         return []
-    key = (str(vault.root), version(vault), since, include_private)
-    if (hit := _SITES_CACHE.get("k")) == key:
-        return _SITES_CACHE["v"]
-    with closing(connect(vault)) as con:
-        rows = con.execute("SELECT site, hidden, category, visits, secs, first, last, days, "
-                           "titles, searches, led, hubs, related, description FROM site_pages"
+    key = (str(vault.root), version(vault), since)
+    # one entry per side, swapped whole: the app reads both while unlocked, from two threads
+    if (hit := _SITES_CACHE.get(include_private)) is not None and hit[0] == key:
+        return hit[1]
+    with closing(connect(vault)) as con:  # the JSON columns as one array: one parse a row
+        rows = con.execute("SELECT site, hidden, category, visits, secs, first, last, '[' || "
+                           "days || ',' || titles || ',' || searches || ',' || led || ',' || "
+                           "hubs || ',' || related || ']', description FROM site_pages"
                            + ("" if include_private else " WHERE hidden = 0")).fetchall()
-    del hit
     by: dict[str, dict] = {}
-    for (site, hidden, cat, visits, secs, first, last, days_, titles, here, led, hubs, rel,
-         desc) in rows:
-        days_ = json.loads(days_)
+    for site, hidden, cat, visits, secs, first, last, lists, desc in rows:
+        days_, titles, here, led, hubs, rel = json.loads(lists)
         if since and (not days_ or days_[-1] < since):
             continue
         r = by.get(site)
@@ -534,9 +534,8 @@ def site_rows(vault: Vault, since: str | None = None, include_private: bool = Fa
             by[site] = {"site": site, "category": cat, "hidden": bool(hidden),
                         "audience": "local" if hidden else "cloud", "visits": visits,
                         "secs": secs, "first": first, "last": last, "days": days_,
-                        "titles": json.loads(titles), "searches": json.loads(here),
-                        "led": json.loads(led), "hubs": json.loads(hubs),
-                        "related": json.loads(rel), "description": desc or ""}
+                        "titles": titles, "searches": here, "led": led, "hubs": hubs,
+                        "related": rel, "description": desc or ""}
             continue
         # both sides of one site (include_private): one record, hidden when any part is
         r["hidden"] = r["hidden"] or bool(hidden)
@@ -548,17 +547,17 @@ def site_rows(vault: Vault, since: str | None = None, include_private: bool = Fa
         r["first"] = min(r["first"] or first, first)
         r["last"] = max(r["last"], last)
         r["days"] = sorted(set(r["days"]) | set(days_))
-        r["titles"] = list(dict.fromkeys(r["titles"] + json.loads(titles)))
+        r["titles"] = list(dict.fromkeys(r["titles"] + titles))
         for f, extra in (("searches", here), ("led", led), ("hubs", hubs)):
             c = Counter(dict(map(tuple, r[f])))
-            c.update(dict(map(tuple, json.loads(extra))))
+            c.update(dict(map(tuple, extra)))
             r[f] = [list(x) for x in sorted(c.items(), key=lambda x: (-x[1], x[0]))]
-        r["related"] = list(dict.fromkeys(r["related"] + json.loads(rel)))
+        r["related"] = list(dict.fromkeys(r["related"] + rel))
         r["description"] = r["description"] or desc or ""
     out = sorted(by.values(), key=lambda r: (-r["visits"], r["site"]))
     for r in out:
         r["related"] = [s for s in r["related"] if s != r["site"]][:sites.TOP_RELATED]
-    _SITES_CACHE.update(k=key, v=out)
+    _SITES_CACHE[include_private] = (key, out)
     return out
 
 

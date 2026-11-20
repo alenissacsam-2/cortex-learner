@@ -51,7 +51,8 @@ STATIC = {"/": (None, "text/html; charset=utf-8"),
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
-QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta"}  # GETs that read the query
+QUERY_GETS = {"/api/chat/get", "/api/home", "/api/home/delta",  # GETs that read the query
+              "/api/home/site"}
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -128,6 +129,10 @@ def _open_note(p: Path) -> dict:
 KEEPALIVE_S = 3  # seconds between {"t": "wait"} lines while a chat answer is quiet
 
 class Busy(Exception):
+    pass
+
+
+class NotFound(Exception):  # a 404: the item does not exist, or may not be shown now
     pass
 
 
@@ -281,7 +286,8 @@ class App:
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
-                    "/api/home/delta": self.home_delta, "/api/vault/snapshot": None,
+                    "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
+                    "/api/vault/snapshot": None,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
@@ -447,6 +453,14 @@ class App:
         if private is None:
             return {**self._home().get(False), "full": True, "relock": True}
         return self._home().delta((query.get("since") or [None])[0], private)
+
+    def home_site(self, query: dict) -> dict:
+        """One website of the brain's stem, read from the browsing store (never the vault's
+        Markdown). A private site while the switch is locked is a 404, as if it did not exist."""
+        got = self._home().site((query.get("site") or [""])[0], self._private(query) is True)
+        if got is None:
+            raise NotFound
+        return got
 
     def unlock(self, body: dict) -> dict:
         """The Private switch: Windows asks the user to verify (Windows Hello); private items
@@ -1398,6 +1412,8 @@ def _handler(app: App):
                 self._send(200, fn(*args), ctype, extra)
             except Busy as e:
                 self._send(409, {"error": str(e)})
+            except NotFound:
+                self._send(404, {"error": "not found"})
             except ValueError as e:
                 self._send(400, {"error": str(e)[:500]})
             except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)

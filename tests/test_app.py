@@ -223,9 +223,9 @@ def test_writes_need_post_with_json(app):
 def test_get_never_changes_anything(app, vault, home, fakes):
     (home / ".cursor").mkdir()
     before = snapshot(home, vault)
-    for path in [*app.get, *app.post]:
+    for path in [*app.get, *app.post]:  # a stem site's details with no site named: not found
         code = call(app, "GET", path)[0]
-        assert code in (200, 405), path
+        assert code in ((404,) if path == "/api/home/site" else (200, 405)), path
     after = snapshot(home, vault)
     # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
     after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
