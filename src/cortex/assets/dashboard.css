@@ -164,7 +164,7 @@ section:focus { outline: none; }
 
 /* departures */
 .dep-head, .dep-row {
-  display: grid; grid-template-columns: 68px minmax(0, 1fr) 64px 132px 64px; gap: 0 10px;
+  display: grid; grid-template-columns: 68px minmax(0, 1fr) 64px 112px 64px; gap: 0 10px;
   align-items: center; padding: 0 12px;
 }
 .dep-head {
@@ -173,6 +173,8 @@ section:focus { outline: none; }
 }
 .dep-row { min-height: 52px; border-bottom: 1px solid var(--rule); }
 .dep-row:last-of-type { border-bottom: 0; }
+/* the item column is narrow on the half-width board: its line wraps instead of cutting off */
+.dep-row .sub { white-space: normal; text-wrap: balance; }
 .dep-row .acts { opacity: 0; }
 .dep-row:hover .acts, .dep-row:focus-within .acts { opacity: 1; }
 @media (hover: none) { .dep-row .acts { opacity: 1; } }

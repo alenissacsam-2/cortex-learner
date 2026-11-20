@@ -2583,7 +2583,8 @@ void main() {
       });
       const had = crumbNav.contains(document.activeElement);
       crumbNav.replaceChildren(...kids);
-      if (had) kids[kids.length - 1].focus();  // a keyboard user stays on the crumbs
+      crumbNav.hidden = cr.length < 2;  // a lone "Brain" only repeats the panel's own title
+      if (had) (crumbNav.hidden ? box : kids[kids.length - 1]).focus();  // a keyboard user stays put
       if (opts.onCrumbs) opts.onCrumbs(cr.map((c) => Object.assign({}, c)));
     }
     function goCrumb(c) {
