@@ -127,10 +127,12 @@ def remembered(vault: Vault) -> dict[str, Audience]:
 
 def pick_tier(vault: Vault, src: Source, given: str | None = None,
               ask: Callable[[Source], str] | None = None,
-              save: bool = True) -> tuple[Audience, str]:
+              save: bool = True, said: Callable[[str], object] | None = None
+              ) -> tuple[Audience, str]:
     """(tier, how it was chosen): `given` (the --tier flag or the app's click), else the last
     choice for this source, else `ask` (a real terminal), else the source's default. A given or
-    asked choice is remembered when `save` (not in a dry run)."""
+    asked choice is remembered when `save` (not in a dry run), and a stricter one reaches the
+    pages already imported (`tighten`); its one line goes to `said`."""
     last = remembered(vault)
     if given is None and src.id in last:
         return last[src.id], "your last choice"
@@ -141,7 +143,62 @@ def pick_tier(vault: Vault, src: Source, given: str | None = None,
         vault.write_text(vault.root / TIERS_FILE, json.dumps(
             {k: v.value for k, v in {**last, src.id: t}.items()}, indent=1, sort_keys=True)
             + "\n")
+        if (line := tighten(vault, src, last.get(src.id, src.default_tier), t)) and said:
+            said(line)
     return t, "chosen"
+
+
+_STRICT = (Audience.CLOUD, Audience.LOCAL, Audience.SKIP)  # loosest first
+
+
+def _labels(src: Source) -> set[str]:
+    """Every `Source:` label a tier key's pages carry: notes import as Obsidian, Notion or
+    Notes, highlights as Highlights or Pocket."""
+    from cortex import importers  # it imports this module
+    return {src.label, *{"notes": importers.LABELS.values(),
+                         "highlights": ("Highlights", "Pocket")}.get(src.id, ())}
+
+
+def source_pages(vault: Vault, src: Source) -> list[Path]:
+    """The pages earlier imports of `src`'s tier key wrote: resources/ pages whose header line
+    (just under the title) is `Source: <one of its labels> · Date: …`."""
+    labels, out = _labels(src), []
+    for p in sorted((vault.root / "resources").glob("*.md")):
+        try:  # an import page's frontmatter is short: its first 8 KB hold the header line
+            with p.open("rb") as f:
+                head = f.read(8192).decode("utf-8", "replace").split("\n---\n", 1)[-1]
+        except OSError:
+            continue
+        m = re.search(r"^Source: (.+?) · Date: ", "\n".join(head.split("\n")[:6]), re.M)
+        if m and m.group(1) in labels:
+            out.append(p)
+    return out
+
+
+def tighten(vault: Vault, src: Source, old: Audience, new: Audience) -> str | None:
+    """RR-29: a stricter tier reaches the pages already imported. To private: each of
+    `source_pages` not private yet gets `private: true` (through the vault). To skip: nothing
+    is deleted; the line says how many pages are still there and how to forget them. A looser
+    or the same tier changes nothing (never un-privates). The line to show, or None."""
+    if _STRICT.index(new) <= _STRICT.index(old):
+        return None
+    pages = source_pages(vault, src)
+    if new is Audience.SKIP:
+        n = len(pages)
+        return (f"{n:,} page{'s' * (n != 1)} from {src.label} {'are' if n != 1 else 'is'} "
+                f"still in your vault; to forget them, delete the pages in resources/ that say "
+                f"\"Source: {src.label}\" under their title.") if n else None
+    made = 0
+    for p in pages:
+        try:
+            if is_private(vault.read_path(p)):
+                continue
+            vault._edit_fields("resource", p.stem, {"private": True})
+        except VaultError:  # a page with broken frontmatter is left as it is
+            continue
+        made += 1
+    return f"Made {made:,} earlier page{'s' * (made != 1)} from {src.label} private." \
+        if made else None
 
 
 def _coarse(m: re.Match) -> str:

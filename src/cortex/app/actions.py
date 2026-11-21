@@ -504,11 +504,11 @@ def _found(r: dict) -> str:
             + (f", {r['duplicate']:,} already in" if r["duplicate"] else "") + ".")
 
 
-def _tier(v, kind: str, path: Path, given: str | None = None):
+def _tier(v, kind: str, path: Path, given: str | None = None, said=None):
     """(tier, how) for a tiered import: the page's choice (remembered), else the last choice,
-    else the source's default (sources.pick_tier)."""
+    else the source's default (sources.pick_tier; a stricter choice's line goes to `said`)."""
     from cortex import sources
-    return sources.pick_tier(v, _source(kind, path), given)
+    return sources.pick_tier(v, _source(kind, path), given, said=said)
 
 
 def import_run(job, source: str, path: Path, root: Path | None = None,
@@ -517,14 +517,14 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
     calendars, the user's click."""
     from cortex import chats, importers, more_sources, sources
     job.say("reading the file")
-    kind = _kind(source, path)
+    kind, told = _kind(source, path), []  # told: RR-29's line when the tier got stricter
     if kind in TIERED:
         v = _vault(root)
-        t = _tier(v, kind, path, tier)[0]
+        t = _tier(v, kind, path, tier, told.append)[0]
         if t is sources.Audience.SKIP:
             return {"ok": True, "kind": "import", "counts": {
                 "notes" if kind == "notes" else "events" if kind == "calendar" else kind: 0},
-                "lines": ["Nothing was imported: you chose Don't save."]}
+                "lines": ["Nothing was imported: you chose Don't save.", *told]}
     if kind in more_sources.SOURCE_OF:
         job.say("importing")
         src = _source(kind, path)
@@ -532,7 +532,7 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
         _commit(v, kind)
         return {"ok": True, "kind": "import", "counts": {kind: r["imported"] + r["updated"]},
                 "lines": [f"{_found(r).replace('Found', 'Imported', 1)} Pages are in "
-                          f"{root / 'resources'}.", importers.report_line(src.label, r)]}
+                          f"{root / 'resources'}.", importers.report_line(src.label, r), *told]}
     if kind == "notes":
         job.say("importing the notes")
         r = _readable(importers.import_notes, v, path, None, False, False, t)
@@ -541,14 +541,14 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
             f"Imported {r['new']:,} {_notes(r['source'], r['new'])} into "
             f"{root / 'resources'}" + (f"; {r['same']:,} were already in." if r["same"]
                                        else "."),
-            importers.report_line(importers.LABELS[r["source"]], r)]}
+            importers.report_line(importers.LABELS[r["source"]], r), *told]}
     if kind == "calendar":
         job.say("importing the calendar")
         r = _readable(importers.import_calendar, v, path, False, False, t)
         _commit(v, "calendar")
         return {"ok": True, "kind": "import", "counts": {"events": r["new"]}, "lines": [
             f"Imported {r['new']:,} new event{_s(r['new'])} into the calendar-YYYY-MM month "
-            f"pages in {root / 'resources'}.", importers.report_line("Calendar", r)]}
+            f"pages in {root / 'resources'}.", importers.report_line("Calendar", r), *told]}
     if kind == "takeout":
         from cortex.browse import load_settings, sources, takeout
         from cortex.vault import PRIVATE_BROWSE_DIR

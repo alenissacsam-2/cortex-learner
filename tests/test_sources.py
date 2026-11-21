@@ -197,3 +197,64 @@ def test_garbage_items_are_skipped_and_counted_in_the_report(root_plain):
         "skipped 0. Skipped 3 as unreadable (2 garbled, 1 link list)")
     clean = sources.run(v, _src(sources.Item("Fine", "2026-11-03", PROSE + "more")))
     assert "unreadable" not in importers.report_line("Test", clean)
+
+
+# ---- RR-29: a stricter tier reaches the pages already imported ---------------------------
+
+def _private(v: Vault, nid: str) -> bool:
+    return "private: true" in _page(v, nid)
+
+
+def test_a_private_tier_makes_earlier_pages_private(root_plain):
+    v, told = Vault(root_plain), []
+    src = _src(sources.Item("One", "2026-11-02", "first"), sources.Item("Two", "2026-11-03", "x"),
+               id="notes")
+    sources.run(v, src, C)
+    sources.run(v, sources.Source("o", "Other", "file", lambda: [
+        sources.Item("Other", "2026-11-02", "theirs")]), C)
+    (root_plain / "resources" / "notes-two.md").write_bytes(
+        _page(v, "notes-two").replace("Source: Test", "Source: Obsidian").encode())  # same key
+    assert sources.pick_tier(v, src, "private", save=False, said=told.append)[0] is L
+    assert told == [] and not _private(v, "notes-one")  # a dry run changes nothing
+    assert sources.pick_tier(v, src, "private", said=told.append) == (L, "chosen")
+    assert told == ["Made 2 earlier pages from Test private."]
+    assert _private(v, "notes-one") and _private(v, "notes-two") and not _private(v, "o-other")
+    assert sources.pick_tier(v, src, "private", said=told.append)[0] is L
+    assert len(told) == 1  # the same tier again: nothing to do
+
+
+def test_loosening_never_unprivates_and_skip_only_says(root_plain):
+    v, told = Vault(root_plain), []
+    src = _src(sources.Item("One", "2026-11-02", "first"), sources.Item("Day", "2026-11-02",
+                                                                         "line"))
+    sources.run(v, src, C)
+    sources.run(v, _src(sources.Item("Day", "2026-11-02", "line"), page="month"), C)
+    sources.pick_tier(v, src, "private", said=told.append)
+    assert told == ["Made 3 earlier pages from Test private."]  # month pages too
+    sources.pick_tier(v, src, "normal", said=told.append)
+    assert len(told) == 1 and _private(v, "test-one") and _private(v, "test-2026-11")
+    sources.pick_tier(v, src, "skip", said=told.append)
+    assert told[1].startswith("3 pages from Test are still in your vault; to forget them, "
+                              'delete the pages in resources/ that say "Source: Test"')
+    assert (root_plain / "resources" / "test-one.md").is_file()  # nothing deleted
+
+
+def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "One.md").write_bytes(b"# One\n\nfirst\n")
+    _cli(root_plain, notes, "--tier", "normal")
+    assert not _private(Vault(root_plain), "notes-one")
+    out = _cli(root_plain, notes, "--tier", "private").output
+    assert "Notes: tier private (--tier)\nMade 1 earlier page from Notes private." in out
+    assert _private(Vault(root_plain), "notes-one")
+    from cortex.app import actions
+
+    class Job:
+        def say(self, _):
+            pass
+
+    out = actions.import_run(Job(), "notes", notes, root_plain, "skip")
+    assert out["lines"] == ["Nothing was imported: you chose Don't save.",
+                            '1 page from Notes is still in your vault; to forget them, delete '
+                            'the pages in resources/ that say "Source: Notes" under their title.']
