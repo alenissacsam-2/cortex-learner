@@ -22,6 +22,7 @@ An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) r
 
 from __future__ import annotations
 
+import bisect
 import io
 import json
 import logging
@@ -413,7 +414,9 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     if len(body) <= BODY_CHARS:
         return out
     day = page_date("", n["fields"], n["body"])
-    heads = _HEAD_LINE.finditer(body)
+    fences = [m.start() for m in _FENCE.finditer(body)]  # inside one: an odd count before
+    heads = (h for h in _HEAD_LINE.finditer(body)
+             if bisect.bisect(fences, h.start()) % 2 == 0)  # "# comment" in code: no heading
     h, stack = next(heads, None), []  # [(level, "## heading")] open above the window start
 
     def header(s: int) -> str:
@@ -454,6 +457,7 @@ def _cut(seg: str) -> int:
 
 _SENTENCE = re.compile(r"[.!?][\"')\]]*(?=\s)")
 _HEAD_LINE = re.compile(r"^(#{1,6})[ \t][^\n]*", re.M)
+_FENCE = re.compile(r"^[ \t]*(?:```|~~~)", re.M)
 # a turn starts at its `### <time>` line when it has one, else at `**Me:**`
 _TURN = re.compile(r"\n(?:### [^\n]*\n)?\*\*Me:\*\*|\n### ")
 

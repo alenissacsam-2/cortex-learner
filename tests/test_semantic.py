@@ -258,6 +258,15 @@ def test_chunks_are_headed_overlapping_windows_cut_at_turns():
     assert [len(t.split("\n", 1)[1]) for _, t in tail] == [1000] * 4 + [500]
 
 
+def test_a_chunk_header_skips_comment_lines_in_code_blocks():
+    """Audit 21 Nov C13: `# comment` inside a fenced block is not a heading."""
+    body = ("## Setup\n\nInstall it.\n\n```bash\n# install deps\npip-tool sync\n```\n\n"
+            + "More words here. " * 200)
+    n = {"title": "Guide", "kind": "note", "fields": {}, "body": body}
+    head = semantic._chunks(n)[1][1].split("\n", 1)[0]
+    assert head.startswith("Guide › ## Setup") and "install deps" not in head
+
+
 def test_a_window_without_turns_or_paragraphs_cuts_at_a_line_sentence_or_space():
     """RR-32: the cut ladder never splits a word when the window has any whitespace."""
     assert semantic._cut("a\n\nb\nc. d e") == 1  # paragraph first
