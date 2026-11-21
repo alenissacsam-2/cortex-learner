@@ -740,7 +740,10 @@ def sample_remove(vault: VaultOpt = None) -> None:
 
 @app.command("lint")
 @_errors
-def lint_cmd(vault: VaultOpt = None) -> None:
+def lint_cmd(findability: Annotated[bool, typer.Option(
+        "--findability", help="Also check that each long page's own deep text finds it "
+        "(top 3, no rerank; keyword only without the model). Report only.")] = False,
+        vault: VaultOpt = None) -> None:
     """List vault problems to fix and add a line to log.md."""
     from cortex import lint as lint_mod
 
@@ -750,7 +753,35 @@ def lint_cmd(vault: VaultOpt = None) -> None:
         typer.echo(render.term(f"{f['kind']}: {f['id']} - {f['detail']}"))
     more = lint_mod.not_shown(findings, totals)
     typer.echo(f"{len(findings)} findings" + (f" (not shown: {more})" if more else ""))
+    if findability:
+        from cortex import semantic
+
+        embed = semantic.load_embedder()  # never downloads; None: keyword only
+        lost = lint_mod.findability(v, embed)
+        for f in lost:
+            typer.echo(render.term(f"{f['kind']}: {f['id']} - {f['detail']}"))
+        typer.echo(f"{len(lost)} pages not findable by their own text"
+                   + ("" if embed else " (keyword only: no model)"))
     v.append_log(local_day(datetime.now(UTC)), "lint", f"{len(findings)} findings")
+
+
+@app.command("agent-text")
+@_errors
+def agent_text_cmd(vault: VaultOpt = None) -> None:
+    """Print every fixed string an agent can see (server instructions, tool descriptions, next
+    hints, SKILL.md, hook templates, the rule-file block), then its size per app profile."""
+    from cortex import agent_text, profiles
+
+    srcs = agent_text.sources()
+    for label, channel, text in srcs:
+        typer.echo(f"== {label} [{channel}] ({len(text)} chars) ==\n{text}\n")
+    try:  # the owner's profiles when a vault is set; DEFAULT otherwise (no vault text is read)
+        data = profiles.load(_vault(vault))
+    except VaultError:
+        data = profiles.DEFAULT
+    typer.echo("== chars per app profile ==")
+    for name, n in agent_text.sizes(data, srcs):
+        typer.echo(f"{name}: {n} ({', '.join(sorted(agent_text.channels(name)))})")
 
 
 @app.command("relink")

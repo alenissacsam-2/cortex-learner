@@ -722,3 +722,32 @@ def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
     for text in seen:
         assert "SECRET-" not in text
     assert [p["id"] for p in planner.plans(v, catalog)] == ["sprint-test"]
+
+
+def test_a_shaky_prerequisite_leads_with_one_reason(v):
+    """RR-19: a lapsed concept's weak `requires` ancestor is refreshed first, one line a plan."""
+    no_exam(v)
+    catalog = cat(v, ("Hash maps", ["arrays-basics"]), ("Sorting", []),
+                  ("Tries", ["hash-maps"]))
+    states = {"hash-maps": due("hash-maps", 0.6), "sorting": due("sorting", 0.1),
+              "arrays-basics": ConceptState("arrays-basics", "learning"),
+              "two-pointers": ConceptState("two-pointers", "solid")}
+
+    def refresh(states, cap=15):
+        return [(i["id"], i["why"]) for i in plan(v, states, catalog, cap=cap)
+                if i["kind"] == "refresh"]
+
+    title = catalog.entries["arrays-basics"].title
+    got = refresh(states)
+    assert got[0] == ("arrays-basics", f"{title} first: Hash maps builds on it")
+    assert [i for i, _ in got] == ["arrays-basics", "sorting", "hash-maps"]
+    assert sum("builds on it" in w for _, w in got) == 1
+    # transitive: a due Tries reaches arrays-basics through hash-maps (solid here)
+    states2 = {**states, "hash-maps": ConceptState("hash-maps", "solid"),
+               "tries": due("tries", 0.5)}
+    assert refresh(states2)[0] == ("arrays-basics", f"{title} first: Tries builds on it")
+    # inside the cap: the ancestor takes the last slot's place, the lapsed concept stays
+    assert [i for i, _ in refresh(states, cap=3)] == ["arrays-basics", "hash-maps"]
+    # a solid ancestor gives no line
+    calm = {**states, "arrays-basics": ConceptState("arrays-basics", "solid")}
+    assert not any("builds on it" in w for _, w in refresh(calm))

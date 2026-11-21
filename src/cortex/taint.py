@@ -132,10 +132,20 @@ def write_config(data: dict | Callable[[dict], dict]) -> Path:
     return path
 
 
+def _same_dir(a, b) -> bool:
+    def norm(p):
+        return os.path.normcase(str(Path(p).expanduser().resolve()))
+    return norm(a) == norm(b)
+
+
 def _vault_root() -> Path | None:
-    if env := os.environ.get("CORTEX_VAULT"):
-        return Path(env)
+    """The vault the hooks write to: the configured one. CORTEX_VAULT counts only when it names
+    that vault or none is configured, so a project's env cannot point the hooks at its own
+    folder (review RR-16)."""
     v = config().get("vault")
+    env = os.environ.get("CORTEX_VAULT")
+    if env and (not v or _same_dir(env, v)):
+        return Path(env)
     return Path(v) if v else None
 
 

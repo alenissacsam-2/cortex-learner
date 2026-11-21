@@ -1472,8 +1472,8 @@
           btn('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, { 'aria-label': `Keep only: ${c.right.text}` })])),
       'No lines seem to conflict.')),
       board('Corrections you repeat', { note: String((d.rules || []).length) }, ...list((d.rules || []).map((x) =>
-        row(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [
-          btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
+        row(`You told ${x.chats} chats: ${x.text}`, x.page === 'core' ? 'Core' : 'Preferences', null, [
+          btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, x.page === 'core' ? 'Added to your core lines.' : 'Added to your preferences.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
           btn('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.text}` })])),
       'No repeated corrections found.')),
       board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) =>

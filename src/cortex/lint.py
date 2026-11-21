@@ -14,7 +14,7 @@ from collections.abc import Mapping
 
 from cortex.catalog import slugify
 from cortex.events import DAY_ROLLOVER
-from cortex.index import EDGE_KEYS, _edge_targets
+from cortex.index import EDGE_KEYS, STOPWORDS, _edge_targets
 from cortex.people import PREFIX
 from cortex.relink import TOKEN_RE, _tgt
 from cortex.render import plain
@@ -23,9 +23,14 @@ from cortex.vault import Vault, is_private
 MAX_FINDINGS = 30
 # Order before the cut: broken links first, unlinked mentions (the noisiest) last.
 SEVERITY = ("id_clash", "missing_link", "expired_claim", "merged_related", "orphan", "no_summary",
-            "links_no_reason", "resource_no_covers", "stale_project", "long_note", "old_fleeting",
-            "unlinked_mention")
-KIND_CAP = {"unlinked_mention": 10}
+            "weak_summary", "links_no_reason", "resource_no_covers", "stale_project", "long_note",
+            "old_fleeting", "unlinked_mention")
+KIND_CAP = {"unlinked_mention": 10, "weak_summary": 10}
+# RR-26: a summary is what search and prime show; one that only restates the title, or is a
+# few words, adds no words to be found by
+SUMMARY_MIN_CHARS, SUMMARY_TITLE_OVERLAP = 30, 0.7
+# `cortex lint --findability`: words of a page's second chunk that must find it in the top N
+PROBE_WORDS, FINDABLE_TOP = 20, 3
 LONG_NOTE_WORDS = 350
 STALE_PROJECT_DAYS = 30
 FLEETING_DAYS = 7
@@ -106,6 +111,8 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
                 add("links_no_reason", n.id, "## Links is empty")
             elif any(_BARE_LINK_RE.match(ln) for ln in links):
                 add("links_no_reason", n.id, "a ## Links bullet has no reason")
+        if why := weak_summary(n.fields):
+            add("weak_summary", n.id, why)
         for t in sorted(_edge_targets(n.fields.get("related") or [])):
             if t in merged:
                 add("merged_related", n.id, f"related points at [[{t}]], which was merged")
@@ -137,6 +144,48 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
             shown[f["kind"]] += 1
             kept.append(f)
     return kept[:MAX_FINDINGS], dict(totals)
+
+
+def _words(text) -> set[str]:
+    return {w for w in re.findall(r"\w+", str(text or "").lower()) if w not in STOPWORDS}
+
+
+def weak_summary(fields: Mapping) -> str:
+    """Why a set `summary` helps findability little ('' when it is fine): under
+    SUMMARY_MIN_CHARS, or its words and the title's overlap by more than SUMMARY_TITLE_OVERLAP
+    (Jaccard, stopwords out), so it says little the title does not."""
+    summary = " ".join(str(fields.get("summary") or "").split())
+    if not summary:
+        return ""
+    if len(summary) < SUMMARY_MIN_CHARS:
+        return f"summary is under {SUMMARY_MIN_CHARS} characters"
+    t, w = _words(fields.get("title")), _words(summary)
+    if t and len(t & w) / len(t | w) > SUMMARY_TITLE_OVERLAP:
+        return "summary mostly repeats the title"
+    return ""
+
+
+def findability(vault: Vault, embed=None) -> list[dict]:
+    """RR-26, report only: `{kind: not_findable, id, detail}` per page (not private or hidden;
+    an imported chat ranks as any page here) with a second chunk whose first PROBE_WORDS
+    words, as a recall query, do not put it in the top FINDABLE_TOP. No reranker and no graph
+    hops; keyword only when `embed` is None. Never writes a page."""
+    from cortex import semantic
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+
+    idx = Index(vault, Catalog.load(vault))
+    out = []
+    for id, n in sorted(idx._notes.items()):
+        chunks = semantic._chunks(n)
+        if len(chunks) < 2:
+            continue
+        probe = " ".join(chunks[1][1].split("\n", 1)[-1].split()[:PROBE_WORDS])  # no header
+        hits = semantic.recall(idx, probe, embed, FINDABLE_TOP, hops=0, chats=True)
+        if id not in [h["id"] for h in hits[:FINDABLE_TOP]]:
+            out.append({"kind": "not_findable", "id": id, "detail": f"'{plain(probe, 60)}' "
+                        f"from its second chunk does not find it in the top {FINDABLE_TOP}"})
+    return out
 
 
 def not_shown(findings: list[dict], totals: Mapping[str, int]) -> str:

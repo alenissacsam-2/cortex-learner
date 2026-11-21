@@ -229,6 +229,23 @@ def test_ask_then_grade_with_answer_key(root):
     assert grades[1]["verdict"] == "wrong" and "model_verdict" not in grades[1]
 
 
+def test_a_long_or_two_part_ask_gets_a_soft_focus_hint(root):
+    """RR-20: the ask is still recorded; only `next` nudges toward one focused question."""
+    from cortex.mcp_server import ASK_FOCUS
+
+    async def body(call):
+        await call("cortex_start")
+        q = {"concept": "two-pointers", "item_type": "recall"}
+        assert ASK_FOCUS not in (await call("cortex_ask", {**q, "question": "Why?"}))["next"]
+        two = await call("cortex_ask", {**q, "question": "What is it? When is it used?"})
+        assert ASK_FOCUS in two["next"] and two["item_id"]
+        long = await call("cortex_ask", {**q, "question": "Explain " + "x " * 150})
+        assert ASK_FOCUS in long["next"]
+
+    run(root, body)
+    assert len([e for e in events(root) if e["kind"] == "ask"]) == 3
+
+
 def test_grade_without_ask_and_new_mistake(root):
     async def body(call):
         await call("cortex_start")

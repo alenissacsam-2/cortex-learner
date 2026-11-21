@@ -161,11 +161,20 @@ def test_non_loopback_refused(url):
 
 
 @pytest.mark.parametrize("url", [
-    "http://127.0.0.1", "http://127.0.0.1:11434", "http://localhost:8080", "http://LOCALHOST",
+    "http://127.0.0.1", "http://127.0.0.1:11434",
     "http://[::1]:1234", "https://127.0.0.1:1", "http://127.5.5.5", "http://[::ffff:127.0.0.1]",
 ])
 def test_loopback_allowed(url):
     assert localllm._check_url(url) == url
+
+
+@pytest.mark.parametrize("url, want", [
+    ("http://localhost:8080", "http://127.0.0.1:8080"), ("http://LOCALHOST", "http://127.0.0.1"),
+    ("http://localhost:11434/api/chat", "http://127.0.0.1:11434/api/chat"),
+])
+def test_localhost_becomes_127(url, want):
+    """RR-16: a hosts file can point `localhost` elsewhere; every request goes to 127.0.0.1."""
+    assert localllm._check_url(url) == want
 
 
 def test_proxy_env_is_ignored(serve, monkeypatch):

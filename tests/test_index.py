@@ -77,6 +77,32 @@ def test_fts_injection_safe(idx, q):
     assert re.fullmatch(r'("\w+"\*)?( "\w+"\*)*', fts_query(q))
 
 
+@pytest.mark.parametrize("q", ['"', 'NEAR(', '*', 'title:x', 'a OR', '(two', 'two"pointers',
+                               '^two', 'NOT', 'AND OR NOT', '-', '--', '-"x"', '"-x"', '- -a',
+                               '"" -', '"NOT" "OR"', "'; DROP TABLE nodes;--", ''])
+def test_fts_syntax_injection_safe(idx, q):
+    """RR-33: phrases and exclusions never raise; refused shapes fall back to the literal."""
+    idx.find(q, syntax=True)
+    idx.find(q, kind="ready", syntax=True)
+    idx.problems(q, syntax=True)
+
+
+def test_fts_phrases_and_exclusions(vault):
+    vault.create_note("problem", "walk", {"title": "Graph walk"}, "# x\nbreadth first search\n")
+    vault.create_note("problem", "colour", {"title": "Graph colouring"},
+                      "# x\nfirst a breadth search\n")
+    idx = Index(vault, Catalog.load(vault))
+    assert fts_query('"two  pointers" -sum', syntax=True) == '("two pointers") NOT ("sum")'
+    assert fts_query("-sum", syntax=True) == fts_query("-sum") == '"sum"*'  # nothing positive
+    assert fts_query('"a" b', any_word=True, syntax=True) == '"a" OR "b"*'
+    assert fts_query('"two pointers"') == '"two"* "pointers"*'  # off without syntax
+    assert set(ids(idx.find("breadth first", syntax=True))) == {"walk", "colour"}
+    assert ids(idx.find('"breadth first"', syntax=True)) == ["walk"]
+    assert ids(idx.find("graph -colouring", syntax=True)) == ["walk"]
+    assert ids(idx.find("graph-colouring", syntax=True)) == ["colour"]  # a hyphen inside a word
+    assert ids(idx.problems('graph -walk', syntax=True)) == ["colour"]
+
+
 def test_operator_words_are_plain_terms(idx):
     assert ids(idx.find("title:two")) == ids(idx.find("title two"))
 

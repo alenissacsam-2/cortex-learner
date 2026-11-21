@@ -294,3 +294,17 @@ def test_write_config_gives_up_when_the_lock_cannot_be_created(monkeypatch):
     t.join(5)
     assert not t.is_alive()
     assert out and out[0].code == "vault_locked" and "config.lock" in str(out[0])
+
+
+def test_env_vault_only_when_it_is_the_configured_one(tmp_path, monkeypatch):
+    """RR-16: a project's CORTEX_VAULT cannot point the hooks at its own folder."""
+    real, other = tmp_path / "real", tmp_path / "project"
+    real.mkdir(), other.mkdir()
+    monkeypatch.setenv("CORTEX_VAULT", str(other))
+    assert taint._vault_root() == other  # no vault configured: the env is all there is
+    taint.write_config({"vault": str(real)})
+    assert taint._vault_root() == real
+    monkeypatch.setenv("CORTEX_VAULT", str(real / "."))
+    assert taint._vault_root().resolve() == real.resolve()
+    assert taint.run(hook("WebFetch")) is True
+    assert (real / taint.MARKER).exists() and not (other / taint.MARKER).exists()
