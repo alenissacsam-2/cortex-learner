@@ -26,6 +26,7 @@ from cortex import (
     access,
     chats,
     claims,
+    delta,
     learning_eval,
     levels,
     loops,
@@ -529,6 +530,7 @@ class Cortex:
         self._recalls: list[tuple[float, str, list[str]]] = []  # (monotonic, rid, ids) recent
         self._chat: tuple[str, float] | None = None  # the live chat log: (id, monotonic last)
         self._chat_last: dict[str, str] = {}  # live chat id -> its last user turn logged
+        self._chat_served: dict[str, set[str]] = {}  # G3: live chat id -> claim ids served
         self._seen_at: dict[str, float] = {}  # client -> monotonic time of its SEEN write
         self._reset()
 
@@ -1533,6 +1535,8 @@ class Cortex:
         tagged = self._tags(prompt, hooked=related_only)
         parts, xr, hits = self._prime_select(prompt, related_only)
         context = "\n\n".join(parts)
+        if chat and not related_only:  # G3: a later turn's delta never repeats these
+            self._served(chat).update(c for c, _ in delta.claim_lines(self.vault, parts))
         xray.record(self.vault, "cortex_prime", self.sessions.client, xr["served"],
                     xr["trimmed"], len(context))
         touch = xr["served"]["hub"]
@@ -2443,8 +2447,57 @@ class Cortex:
                     "this app's chats from its own transcripts (or this server is not the "
                     "owner's).", "next": "Continue; no chat_turn calls are needed in this app."
                     + more}
-        return {"recorded": 1, "chat": cid, **tagged, "display_line": "Chat logged",
-                "next": f"Continue; log the next turn the same way (chat '{cid}')." + more}
+        ctx = self._turn_delta(cid, user)
+        nudge = delta.nudge(self._chat_turns(cid))
+        return {"recorded": 1, "chat": cid, **tagged, **({"context": ctx} if ctx else {}),
+                "display_line": "Chat logged",
+                "next": ("Answer with `context` in mind; log" if ctx else "Continue; log")
+                + f" the next turn the same way (chat '{cid}')." + (f" {nudge}" if nudge else "")
+                + more}
+
+    def _served(self, cid: str) -> set[str]:
+        """G3: the claim ids chat `cid` was served (this process only; the last 200 chats)."""
+        if cid not in self._chat_served:
+            for old in list(self._chat_served)[:-199]:
+                del self._chat_served[old]
+            self._chat_served[cid] = set()
+        return self._chat_served[cid]
+
+    def _turn_delta(self, cid: str, user: str) -> str:
+        """G3: the Profile and Preferences lines a turn brings that its chat was not served
+        (cortex.delta, from prime.core with this client's scopes and withheld pages), recorded
+        in the X-ray; "" for a greeting, an ack, a slash command, none or an error."""
+        if delta.trivial(user):
+            return ""
+        try:
+            parts, _ = prime.core(self.vault, user, list(self.log.iter_events()), self._now(),
+                                  self._withheld(), {}, self._allow())
+            seen = self._served(cid)
+            text, ids = delta.lines(self.vault, user, parts, seen)
+        except Exception:  # noqa: BLE001  (the turn is logged either way)
+            logging.getLogger(__name__).warning("chat_turn delta skipped", exc_info=True)
+            return ""
+        seen.update(ids)
+        if ids:
+            xray.record(self.vault, "chat_turn", self.sessions.client, {"preferences": ids}, {},
+                        len(text))
+        return text
+
+    @staticmethod
+    def _chat_turns(cid: str) -> int:
+        """G5: the user turns in chat `cid`'s live log; 0 when it cannot be read."""
+        try:
+            rows = (chats.export_root() / chats.LIVE / f"{cid}.jsonl").read_text(
+                "utf-8").splitlines()
+        except OSError:
+            return 0
+        n = 0
+        for x in rows:
+            try:
+                n += json.loads(x).get("type") == "user"
+            except (ValueError, AttributeError):
+                continue
+        return n
 
     def _tags(self, user: str, hooked: bool = False) -> list[str]:
         """R3-5: act on the //tags in a user turn (cortex.tags); the display lines. `hooked`

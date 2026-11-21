@@ -2,8 +2,10 @@
 first prompt of each Claude Code chat it prints the light part of cortex_prime
 (cortex.prime.core: profile, preferences, contract core) as `additionalContext`, and tells the
 model to fetch the Related block from the running server with
-cortex_prime(related_only=true). Later prompts of the same chat print nothing, unless the
-prompt holds a //pref, //fact or //forget line (R3-5, cortex.tags): every prompt's tags are
+cortex_prime(related_only=true). A later prompt of the same chat prints only what is new: the
+Profile and Preferences lines it matches that the chat was not served yet (G3, cortex.delta;
+not for a greeting, an ack or a slash command), the save nudge every 8th prompt (G5), and its
+//pref, //fact or //forget lines (R3-5, cortex.tags): every prompt's tags are
 the owner's own typed words, saved at once (then, and only then, the `mcp` SDK is imported)
 and named in the context. RR-6: when a chat is compacted, resumed or cleared (SessionStart,
 matcher `compact|resume|clear`) it serves the same light prime again, since the first one is
@@ -22,6 +24,8 @@ import threading
 from cortex.taint import _vault_root, excluded, session_dirs
 
 STATE = ".cortex/primed"  # session ids already primed, newest last
+# G3/G5: {session id: {"n": prompts seen, "ids": [served `^c-…` ids]}}, newest last, KEEP of them
+SERVED = ".cortex/primed-served.json"
 KEEP = 200
 BUDGET = 3.0  # seconds: a safety net; the light prime takes well under 1 s
 SID_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")
@@ -73,7 +77,8 @@ def run(raw: str) -> str:
             source = hook.get("source")
             if source not in AGAIN_SOURCES:
                 return ""
-            out = _light(root, "")
+            got = _light(root, "")
+            out = got[0] if got else None
             return _out("SessionStart", "\n\n".join([AGAIN.format(source=source), out,
                                                      AGAIN_NEXT])
                         if out is not None else AGAIN_NUDGE.format(source=source))
@@ -87,12 +92,26 @@ def run(raw: str) -> str:
         except OSError:
             seen = []
         if sid in seen:
-            return _out("UserPromptSubmit", note[0]) if note else ""
+            extra = [*_later(root, sid, prompt), *note]
+            return _out("UserPromptSubmit", "\n\n".join(extra)) if extra else ""
         from cortex.vault import Vault
 
         # marked before priming, so a slow or failing prime is never retried on every prompt
         Vault(root).write_text(root / STATE, "\n".join([*seen[-(KEEP - 1):], sid]) + "\n")
-        out = _light(root, prompt)
+        got = _light(root, prompt)
+        out = got[0] if got else None
+        try:  # G3: the delta never repeats what this prime served
+            vault = Vault(root)
+            with vault.lock(1.0):
+                try:
+                    sessions = _sessions(root)
+                except ValueError:  # a corrupt sidecar starts over
+                    sessions = {}
+                sessions.pop(sid, None)
+                sessions[sid] = {"n": 1, "ids": got[1] if got else []}
+                _save(vault, sessions)
+        except Exception:  # noqa: BLE001  (a busy vault: the delta may repeat a line)
+            pass
         return _out("UserPromptSubmit",
                     "\n\n".join([HEAD, out, NEXT, *note]) if out is not None
                     else "\n\n".join([NUDGE, *note]))
@@ -117,13 +136,55 @@ def _tags(root, prompt: str) -> list[str]:
         return []
 
 
-def _light(root, prompt: str) -> str | None:
-    """prime.core's context for `prompt` within BUDGET seconds, else None (left running in
-    `pending`, so the caller can exit without waiting)."""
+def _sessions(root) -> dict:
+    """The SERVED sidecar ({} when absent); ValueError when it is not that shape."""
+    p = root / SERVED
+    if not p.is_file():
+        return {}
+    d = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(d, dict) or not all(
+            isinstance(v, dict) and type(v.get("n")) is int and isinstance(v.get("ids"), list)
+            for v in d.values()):
+        raise ValueError("not a primed-served sidecar")
+    return d
+
+
+def _save(vault, sessions: dict) -> None:
+    vault.write_text(vault.root / SERVED, json.dumps(dict(list(sessions.items())[-KEEP:])))
+
+
+def _later(root, sid: str, prompt: str) -> list[str]:
+    """G3 and G5 for a later prompt of a primed chat: the new matching lines (delta.lines,
+    within BUDGET, not for a trivial prompt) and, every delta.EVERY-th prompt, the save nudge;
+    SERVED counts the prompt and keeps the ids. [] on any error or a corrupt sidecar."""
+    try:
+        from cortex import delta
+        from cortex.vault import Vault
+
+        mine = _sessions(root).get(sid) or {"ids": []}
+        got = None if delta.trivial(prompt) else _light(root, prompt, set(mine["ids"]))
+        text, ids = got or ("", [])
+        vault = Vault(root)
+        with vault.lock(1.0):  # read again: another chat may have written meanwhile
+            sessions = _sessions(root)
+            mine = sessions.pop(sid, None) or {"n": 1, "ids": []}
+            mine = {"n": mine["n"] + 1, "ids": [*mine["ids"], *ids]}
+            sessions[sid] = mine
+            _save(vault, sessions)
+        return [x for x in (text, delta.nudge(mine["n"])) if x]
+    except Exception:  # noqa: BLE001  (the prompt goes on as before)
+        return []
+
+
+def _light(root, prompt: str, seen: set[str] | None = None) -> tuple[str, list[str]] | None:
+    """prime.core's context for `prompt` and the `^c-…` ids of the claim lines it serves,
+    within BUDGET seconds, else None (left running in `pending`, so the caller can exit without
+    waiting). With `seen` (a primed chat's served ids, G3) the context is only delta.lines:
+    "" when nothing new matches."""
     global pending
     from datetime import UTC, datetime
 
-    from cortex import access, prime, profiles, xray
+    from cortex import access, delta, prime, profiles, xray
     from cortex.events import EventLog
     from cortex.vault import Vault
 
@@ -139,11 +200,16 @@ def _light(root, prompt: str) -> str | None:
                 lambda p, h: access.scope_section(scopes, p, h))
             parts, _ = prime.core(vault, prompt, list(EventLog(vault).iter_events()),
                                   datetime.now(UTC), profiles.withheld(vault, scopes), xr, allow)
-            out = "\n\n".join(parts)
+            if seen is None:
+                out, ids = "\n\n".join(parts), [c for c, _ in delta.claim_lines(vault, parts)]
+                served, trimmed = xr["served"], xr["trimmed"]
+            else:
+                out, ids = delta.lines(vault, prompt, parts, seen)
+                served, trimmed = {"preferences": ids}, {}
             # before `out` is handed over: the process may exit as soon as it is
-            xray.record(vault, "prime-hook", "claude-code", xr["served"], xr["trimmed"],
-                        len(out))
-            box["out"] = out
+            if seen is None or ids:
+                xray.record(vault, "prime-hook", "claude-code", served, trimmed, len(out))
+            box["out"] = out, ids
         except Exception:  # noqa: BLE001  (no traceback on the hook's stderr; nudge instead)
             pass
 
