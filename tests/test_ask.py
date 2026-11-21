@@ -76,7 +76,7 @@ def test_passages_fit_the_budget(vault, monkeypatch):
              f"# Car {k}\n\n" + "car motor vehicle " * 300)
     r = Fake()
     ask.ask(vault, "car motor", private=True, runner=r)
-    assert len(r.asked[0][1]) < ask.BUDGET + 300  # tags, titles and the question
+    assert len(r.asked[0][1]) < ask.BUDGET + 400  # tags, titles, From lines and the question
 
 
 def test_browse_pages_reach_the_prompt_as_a_chunk_not_a_snippet(vault, monkeypatch):
@@ -142,3 +142,23 @@ def test_relative_dates_in_a_passage_follow_its_date_line(vault):
     system = r.asked[0][0]
     assert "relative to that passage's Date line, not to today" in system
     assert '"tomorrow"' in system and '"next week"' in system
+
+
+def test_each_passage_says_whose_words_it_holds(vault):
+    note(vault.root, "resources/car-video.md", "title: Car video\nkind: resource\n",
+         "# Car video\n\nSource: YouTube · Date: 2026-11-02\n\nThe host says a car motor is "
+         "best rebuilt.")
+    note(vault.root, "resources/car-article.md", "title: Car article\nkind: resource\n",
+         "# Car article\n\nAn article on car motor oil.")
+    r = Fake()
+    ask.ask(vault, "car motor", private=True, runner=r)
+    system, user = r.asked[0]
+    assert "From line" in system and "never as the user's own view" in system
+
+    def block(title):
+        return user.split(f"{title}\nFrom: ", 1)[1].split("\n", 1)[0]
+    assert block("Engines") == "your note"
+    assert block("Car video") == "imported from YouTube"
+    assert block("Car article") == "imported from a saved source"
+    assert "From: imported from your browsing" in user
+    assert ask.origin("chat") == "imported from a saved AI chat"

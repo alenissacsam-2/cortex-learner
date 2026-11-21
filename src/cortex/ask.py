@@ -33,8 +33,13 @@ SYSTEM = (
     "passages. If they hold part of the answer, give that part and say what is missing. Only "
     "when no passage bears on the question, say just: I don't know from your archive. Cite the "
     "passages you use by number, as [1], [2]. Be brief. Words like \"today\", \"tomorrow\" or "
-    "\"next week\" inside a passage are relative to that passage's Date line, not to today.")
+    "\"next week\" inside a passage are relative to that passage's Date line, not to today. "
+    "Each passage's From line says whose words it holds: \"your note\" is the user's own "
+    "writing; \"imported from ...\" is text saved from elsewhere (an article, video, highlight, "
+    "AI chat or another app): report what it says, never as the user's own view.")
 SOURCES = {"notes": True, "chats": True, "browsing": True, "private": True}  # Chat's defaults
+# an imported page's `Source: <app> · Date: …` line, alone or on its Timeline line (as lint's)
+_SOURCE_LINE = re.compile(r"^(?:Timeline: [^\n]*?· )?Source: ([^\n·]+?)\s*(?:·|$)", re.M)
 _CITE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")  # 3 digits: int() of a huge one raises
 # vault root -> {file: (its (mtime_ns, size), chunk starts, vectors, every chunk in)}: memory only
 _PRIVATE: dict = {}
@@ -197,10 +202,26 @@ def _span(body: str, text: str, title: str) -> tuple[int, int]:
     return at, (end + len(last) - at) if end >= 0 else len(text)
 
 
+def origin(kind: str, n: dict | None = None) -> str:
+    """Whose words a passage holds, for its From line, so a small model never voices an article
+    or a highlight as the owner's view: "imported from <app>" from the page's `Source:` line
+    (near its top), from the passage kind (browsing, an AI chat) or a `resource` page (a saved
+    source); else "your note"."""
+    if kind == "browse":
+        return "imported from your browsing"
+    if n is not None and (m := _SOURCE_LINE.search(n["body"][:600])):
+        return "imported from " + " ".join(m[1].split())[:40]
+    if kind == "chat":
+        return "imported from a saved AI chat"
+    return "imported from a saved source" if n is not None and n["kind"] == "resource" \
+        else "your note"
+
+
 def _note(vault: Vault, id: str, n: dict, path: str, text: str, kind: str, **extra) -> dict:
     """A passage of a page the index reads; `_body` is for its span (`_span`) once cut."""
     return {"path": path, "title": n["title"], "text": text, "kind": kind,
-            "day": _note_day(vault, id, n, path), "_body": n["body"], **extra}
+            "day": _note_day(vault, id, n, path), "origin": origin(kind, n), "_body": n["body"],
+            **extra}
 
 
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
@@ -262,10 +283,10 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
 
 
 def prompt(found: list[dict], question: str) -> str:
-    """The user message: each passage wrapped as untrusted data (its day when it has one),
-    then the question."""
-    return "\n\n".join(_wrap(str(n), f"{p['title']}\n" + (f"Date: {p['day']}\n" if p.get("day")
-                                                          else "") + p["text"])
+    """The user message: each passage wrapped as untrusted data with its From line (`origin`)
+    and its day when it has one, then the question."""
+    return "\n\n".join(_wrap(str(n), f"{p['title']}\nFrom: {p.get('origin') or origin(p['kind'])}"
+                             + (f"\nDate: {p['day']}" if p.get("day") else "") + f"\n{p['text']}")
                        for n, p in enumerate(found, 1)) + f"\n\nQuestion: {question.strip()}"
 
 
