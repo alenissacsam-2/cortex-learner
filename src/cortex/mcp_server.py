@@ -262,6 +262,9 @@ CONTEXT_CAPS = {"profile": 400, "topic": 700, "projects": 500,
                 "related": 500, "personality": 400, "goals": 200}  # preferences get the rest
 # cortex_prime's Related part; the light blocks and PRIME_MAX, PRIME_CAPS are in cortex.prime
 PRIME_POOL, PRIME_RECALLS, PRIME_MISTAKES = 8, 3, 2
+# RR-21: pages changed or touched in the last LATELY_DAYS, a hint at what the user is up to
+PRIME_LATELY, LATELY_DAYS = 3, 7
+LATELY_HEAD = "Lately (recent, use only if relevant)"
 # the live chat log (Cortex._chat_log): a call this long after the last one starts a new chat;
 # a gist's length; SEEN holds each client's last call, rewritten at most every SEEN_EVERY s
 CHAT_IDLE, GIST_CHARS = 2 * 3600, 300
@@ -1272,6 +1275,22 @@ class Cortex:
             "Use this to tailor your answer; save durable new facts with cortex_patch."
             + (self._offer([h["id"] for h in concepts]) if topic else ""))}
 
+    def _lately(self, events: list[dict]) -> list[str]:
+        """Page ids a `change` event (cortex_add, cortex_patch) or a `touch` log named in the
+        last LATELY_DAYS local days, newest first; the caller filters what it may show."""
+        since = (datetime.fromisoformat(local_day(self._now()))
+                 - timedelta(days=LATELY_DAYS)).date().isoformat()
+        out: list[str] = []
+        for e in reversed(events):
+            if str(e.get("day") or "") < since:
+                continue
+            p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+            c = p.get("change") if e.get("kind") == "change" else None
+            ids = [c.get("id")] if isinstance(c, dict) else (
+                p.get("ids") if e.get("kind") == "log" and p.get("kind") == "touch" else None)
+            out += [i for i in ids or [] if isinstance(i, str) and i not in out]
+        return out
+
     def _offer(self, ids: list[str]) -> str:
         """L3: OFFER for the first of `ids` that is due or has a confident miss, else ""."""
         day = local_day(self._now())
@@ -1306,9 +1325,9 @@ class Cortex:
             self._reset()
         tagged = self._tags(prompt)
         xs, xr = xray.settings(self.vault), {"served": {}, "trimmed": {}}
+        evs = list(self.log.iter_events())
         parts, left = ([], [PRIME_MAX]) if related_only else prime.core(
-            self.vault, prompt, list(self.log.iter_events()), self._now(), self._withheld(),
-            xr, self._allow())
+            self.vault, prompt, evs, self._now(), self._withheld(), xr, self._allow())
         put = prime.putter(parts, left)
         self._refresh_index()
         hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet())[0]
@@ -1321,12 +1340,22 @@ class Cortex:
             [i for i in sorted(xs["pin"]) if i in notes and not topics.is_hub(notes[i])]
             + [h["id"] for h in hits if (n := notes.get(h["id"])) and not topics.is_hub(n)
                and h["id"] not in xs["mute"]][:PRIME_RECALLS]))
+        # RR-21: pages touched lately, out of the Related budget; `notes` and the mutes keep
+        # private, hidden and withheld pages out, as for Related
+        recent = [i for i in self._lately(evs) if i in notes and i not in xs["mute"]
+                  and i not in ids and i != hub and not semantic.is_chat(notes[i])][:PRIME_LATELY]
+        lat = prime.fit([f"- [[{i}]] — {notes[i]['title']}" for i in recent], "lately",
+                        PRIME_CAPS["related"] // 2, left[0])
+        cost = len(_wrap("lately", "\n".join(lat))) + len(LATELY_HEAD) + 6 if lat else 0
         rel = prime.fit([f"- [[{i}]] — " + (said.get(i) or notes[i]["fields"].get("summary")
                                             or notes[i]["title"]) for i in ids],
-                        "related", PRIME_CAPS["related"], left[0])
+                        "related", PRIME_CAPS["related"] - cost, left[0] - cost)
         if rel:
-            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"])
+            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"] - cost)
         xr["served"]["related"], xr["trimmed"]["related"] = ids[:len(rel)], ids[len(rel):]
+        if lat:
+            put(LATELY_HEAD, "\n".join(lat), "lately", cost)
+        xr["served"]["lately"] = recent[:len(lat)]
         # open mistakes on the hit concepts, as cortex_context lists them
         ids = list(dict.fromkeys(
             m for h in hits if h.get("kind") == "concept" and h.get("match") != "linked"
