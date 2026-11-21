@@ -2572,7 +2572,8 @@ class Cortex:
             self.proposed.append(render.plain(f"{target}: {text}", 200))  # as unconfirmed()
             hint = self.sessions.note("patched", change={
                 "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target,
-                "hash": review.text_hash(text), **({"supersedes": sup} if sup else {})})
+                "hash": review.text_hash(text), **({"supersedes": sup} if sup else {}),
+                "producer": "imports" if harvesting else "chats"})  # RR-10
             if contract:
                 return _update_of(shown, {
                     "changed": False, "queued": True,
@@ -2738,6 +2739,16 @@ class Cortex:
             "tool": "keep_both", "id": page, "kind": "me", "op": "keep_both", "pair": pair,
             "confirm": "clicked"})
         return {"changed": True, "summary": "kept both lines"}
+
+    def _resume(self, producer: str) -> dict[str, Any]:
+        """RR-10, the app's Resume on a paused Review producer (review.ledger): a `resume`
+        change, after which its cards are offered again and its count starts over."""
+        if not self.app_clicks:
+            raise invalid("Resume is the Cortex app's own action.")
+        self.sessions.note("patched", change={
+            "tool": "resume", "id": "review", "kind": "review", "op": "resume",
+            "producer": producer, "confirm": "clicked"})
+        return {"changed": True, "summary": f"resumed {producer} in Review"}
 
     def _claim_op(self, nid: str, op: str, target: str, text: str,
                   confirmed: bool, until: str | None = None,

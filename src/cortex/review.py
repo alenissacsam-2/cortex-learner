@@ -49,6 +49,12 @@ TODAY_MAX = 5  # R3-4: Today's 5, cards a day
 TODAY_CARDS = ("pending", "conflict", "rule")  # the kinds of card Today's 5 offers
 SIGHTINGS = 2  # chats that must propose the same line before it is offered in Today's 5
 SINGLE_DAYS = 14  # a line fewer chats proposed leaves the view this many days after its stamp
+# RR-10: what makes Review cards, as the Status line names them
+PRODUCERS = {"chats": "Lines chats suggest", "imports": "Lines from imported chats",
+             "corrections": "Corrections you repeat", "decisions": "Decisions in your commits",
+             "forget": "//forget cards"}
+PAUSE_AFTER = 20  # decided cards before a producer whose rejects exceed its accepts pauses
+LEGACY_DISMISS = ("corrections", "decisions", "forget")  # a dismiss change's id: its producer
 _WORD = re.compile(r"[a-z0-9']+")
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
@@ -269,16 +275,61 @@ def live_rows(vault, events, today: str) -> list[dict]:
     return [r for r in claims.tiers(vault, events, today=today) if r["page"] not in hidden]
 
 
-def sightings(events) -> dict:
-    """R3-4: {(page, text_hash): sessions} of the unvoided `propose` changes that hold their
-    line's hash: the chats (one session each) that proposed the same line."""
+def _proposals(events) -> dict:
+    """{(page, text_hash): {sessions, producer}} of the unvoided `propose` changes that hold
+    their line's hash; `producer` (RR-10) is the latest one's, `chats` when it names none."""
     events = list(events)
     voided, out = _voided(events), {}
     for e in events:
         c = _payload(e).get("change") if e.get("kind") == "change" else None
         if (isinstance(c, dict) and c.get("tool") == "propose" and isinstance(c.get("hash"), str)
                 and e.get("id") not in voided):
-            out.setdefault((c.get("id"), c["hash"]), set()).add(e.get("session"))
+            x = out.setdefault((c.get("id"), c["hash"]), {"sessions": set()})
+            x["sessions"].add(e.get("session"))
+            x["producer"] = c.get("producer") if c.get("producer") in PRODUCERS else "chats"
+    return out
+
+
+def sightings(events) -> dict:
+    """R3-4: {(page, text_hash): sessions}: the chats (one session each) that proposed the
+    same line."""
+    return {k: v["sessions"] for k, v in _proposals(events).items()}
+
+
+def producer_of(proposals: dict, page: str, text: str) -> str:
+    """RR-10: which producer proposed a waiting line (`_proposals`); an old line: `chats`."""
+    return proposals.get((page, text_hash(text)), {}).get("producer", "chats")
+
+
+def ledger(events) -> dict:
+    """RR-10: {producer: {accept, reject, paused}} over the Review clicks on each producer's
+    cards since its latest `resume` change: a click's changes carry the `producer` the app
+    stamped (one verdict per click, its session); before that stamp, a commit decision's
+    `decide` and a `dismiss` of corrections, decisions or forget still count. A producer whose
+    rejects exceed its accepts over PAUSE_AFTER or more decided cards is `paused`."""
+    events = list(events)
+    voided, said = _voided(events), {p: {} for p in PRODUCERS}
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if not isinstance(c, dict) or e.get("id") in voided or c.get("confirm") != "clicked":
+            continue
+        if c.get("tool") == "resume":
+            if c.get("producer") in PRODUCERS:
+                said[c["producer"]] = {}  # counting starts again
+            continue
+        p = c.get("producer")
+        if p not in PRODUCERS:  # a click from before the stamp
+            p = ("decisions" if c.get("tool") == "decide" else c.get("id")
+                 if c.get("tool") == "dismiss" and c.get("id") in LEGACY_DISMISS else None)
+        if p is None:
+            continue
+        no = c.get("tool") == "dismiss" or c.get("op") == "reject"
+        said[p][e.get("session") or e.get("id")] = "reject" if no else "accept"
+    out = {}
+    for p, votes in said.items():
+        n = {v: list(votes.values()).count(v) for v in ("accept", "reject")}
+        out[p] = {**n, "paused": n["accept"] + n["reject"] >= PAUSE_AFTER
+                  and n["reject"] > n["accept"]}
     return out
 
 
@@ -298,22 +349,26 @@ def view(vault, events, today: str) -> dict:
     """The Review view and its badge `count`: every text is shown text (`_shown`). R3-4: a
     single inference (a waiting line other than a teaching rule that fewer than SIGHTINGS
     chats proposed) leaves the view SINGLE_DAYS after its stamp (inbox.md keeps it), and
-    `today` orders at most TODAY_MAX cards a day (`_today`)."""
+    `today` orders at most TODAY_MAX cards a day (`_today`). RR-10: a `paused` producer's
+    cards (`ledger`) are not offered; `paused` lists them for the Status line."""
     events = list(events)
+    led = ledger(events)
+    off = {p for p, x in led.items() if x["paused"]}
     hidden = _private(vault)
     rows = [r for r in claims.tiers(vault, events) if r["page"] not in hidden]  # writes nothing
     expired = [{"page": r["page"], "id": r["id"], "text": _shown(r["text"]), "until": until}
                for r in rows if (until := claims.expired(r["text"], today))]
-    seen, cut = sightings(events), (dt.date.fromisoformat(today)
-                                    - dt.timedelta(days=SINGLE_DAYS)).isoformat()
+    seen, cut = _proposals(events), (dt.date.fromisoformat(today)
+                                     - dt.timedelta(days=SINGLE_DAYS)).isoformat()
 
     def single(p: dict) -> bool:
         return p["page"] != "teaching-contract" and len(
-            seen.get((p["page"], text_hash(p["text"])), ())) < SIGHTINGS
+            seen.get((p["page"], text_hash(p["text"])), {}).get("sessions", ())) < SIGHTINGS
 
     waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"]),
                 "single": single(p)}
-               for p in pending(vault, today) if not (single(p) and (p["since"] or "~") < cut)]
+               for p in pending(vault, today) if not (single(p) and (p["since"] or "~") < cut)
+               and producer_of(seen, p["page"], p["text"]) not in off]
     old = stale(rows, events, today)
 
     def side(r: dict) -> dict:
@@ -324,17 +379,20 @@ def view(vault, events, today: str) -> dict:
               "right": side(c["right"])} for c in conflicts(current, events)]
     from cortex import corrections, more_sources  # read imported pages: only the Review asks
     rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"]}
-             for x in corrections.proposals(vault, events, current)]
+             for x in ([] if "corrections" in off else corrections.proposals(vault, events,
+                                                                              current))]
     decisions = [{**x, "project": plain(x["project"], 80), "subject": plain(x["subject"], SHOWN)}
-                 for x in more_sources.decision_proposals(vault, events)]
+                 for x in ([] if "decisions" in off
+                           else more_sources.decision_proposals(vault, events))]
     from cortex import tags  # it imports this module
     forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
                "candidates": [side(c) for c in x["candidates"]]}
-              for x in tags.forget_cards(vault, events, today)]
+              for x in ([] if "forget" in off else tags.forget_cards(vault, events, today))]
     left = max(0, TODAY_MAX - answered_today(events, today))
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget,
             "today": _today(waiting, pairs, rules)[:left], "today_left": left,
+            "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
             + len(decisions) + len(forget)}
 
