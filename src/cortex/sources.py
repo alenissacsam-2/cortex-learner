@@ -327,6 +327,7 @@ def _read(src: Source, r: dict, walked: set[str] | None = None):
             continue
         if walked is not None:  # every origin the walk saw, a gated item's too
             walked.add(scrub(it.origin, src))
+        it.text = it.text.replace("\r\n", "\n")  # as `untouched` reads a page back
         if bad := unreadable(it.text):
             r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
         else:
