@@ -1553,6 +1553,8 @@ class App:
 
     def import_run(self, body: dict) -> dict:
         # C2: the tier the page's choice sent; only the notes and calendar cards send one
+        if body.get("tier") not in (None, "skip", "local", "cloud"):  # before the job: the
+            raise ValueError("tier must be one of skip, local, cloud")  # upload is kept
         fn = actions.import_run if body.get("tier") is None else \
             partial(actions.import_run, tier=body["tier"])
         return self._import(body, "Importing", fn, keep=False)

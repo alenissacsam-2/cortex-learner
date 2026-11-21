@@ -1857,8 +1857,14 @@ def test_notes_and_calendar_import_asks_the_tier_and_remembers_it(app, home, vau
     assert wait_job(app)["result"]["counts"] == {"events": 3}
     assert (vault / "resources" / "calendar-private-2026-11.md").is_file()
     assert sources.remembered(Vault(vault)) == {"calendar": sources.Audience.LOCAL}
-    call(app, "POST", "/api/import/run", {**ics, "tier": "public"})
-    assert "tier must be one of" in wait_job(app)["error"]
+    # a bad tier is refused before the job, so the upload is kept for a second try
+    _, up = upload(app, (EXPORTS / "calendar.ics").read_bytes(), "my calendar.ics")
+    run = {"source": "calendar", "upload": up["upload"]}
+    for bad in ("public", ["local"], {"a": 1}):
+        code, body, _, _ = call(app, "POST", "/api/import/run", {**run, "tier": bad})
+        assert code == 400 and "tier must be one of" in body["error"], bad
+    call(app, "POST", "/api/import/run", {**run, "tier": "local"})
+    assert wait_job(app)["error"] is None
 
 
 def test_notes_and_calendar_imports_count_and_mark_history(app, home, vault, tmp_path):
