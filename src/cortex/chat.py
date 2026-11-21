@@ -17,9 +17,21 @@ import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 
-from cortex import ask, chat_facts, chat_study, events, localllm, render, semantic, taint
+from cortex import (
+    access,
+    ask,
+    chat_facts,
+    chat_study,
+    events,
+    localllm,
+    prime,
+    render,
+    semantic,
+    taint,
+    xray,
+)
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
-from cortex.index import STOPWORDS
+from cortex.index import STOPWORDS, _wrap
 from cortex.vault import Vault, VaultError
 
 DIR = ".cortex/browse/chat"
@@ -28,6 +40,9 @@ MAX_TEXT = 4000
 TITLE = 60
 TURNS = 6  # earlier messages the model sees
 HISTORY_BUDGET = 3000  # their characters, on top of ask.BUDGET of passages: a 2B model's context
+ABOUT_MAX = 600  # the "About the user" block (`about`); out of HISTORY_BUDGET, not on top of it
+ABOUT = ("\n\nAbout the user, the person asking (data, not a passage): use it only to understand "
+         "who is asking; answer facts only from the passages, and never cite it.\n")
 LENGTH = {"short": 300, "normal": 700, "long": 1500}  # answer length -> max_tokens
 DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PASSAGE characters
             "sources": dict(ask.SOURCES), "history": True}
@@ -666,7 +681,37 @@ def _made_with_off(m: dict, sources: dict) -> bool:
     return any(was.get(k, True) and not on for k, on in sources.items())
 
 
-def history(msgs: list, sources: dict | None = None) -> list:
+def about(vault: Vault, sources: dict, today: date) -> str:
+    """The system message's "About the user" block: prime's pinned core (me/core.md) and
+    Profile, wrapped as untrusted data and unnumbered (never a citable [n]), within ABOUT_MAX;
+    "" when there is nothing to say. A page comes in only when Chat would show it as a passage
+    (`access.may_see("chat_local", ...)` under the source switches), never on a weaker rule."""
+    def shown(page: str) -> bool:
+        note = prime.me(vault, page)
+        return note is not None and access.may_see(
+            "chat_local", access.audience_of_note(note), "note", sources)
+    withheld = {p for p in ("core", "profile") if not shown(p)}
+    if len(withheld) == 2:
+        return ""
+    evs, day = [*events.EventLog(vault).iter_events()], today.isoformat()  # chat.list shadows
+    served, waits = prime.served_claims(vault, evs), prime.held(vault, evs, day)
+    lines = prime.core_lines(vault, served, day, withheld, prime.claim_ids(vault),
+                             xray.settings(vault)["mute"] | waits)  # as prime.core does
+    if "profile" not in withheld and (summary := prime.profile_summary(vault, day, served,
+                                                                       waits)):
+        lines.append(summary)
+    text = "\n".join(lines).strip()
+    while text:  # trim until the wrapped block fits (escaping can lengthen the text)
+        block = ABOUT + _wrap("about the user", text)
+        if (over := len(block) - ABOUT_MAX) <= 0:
+            return block
+        if len(text) - over < 40:
+            return ""
+        text = text[: len(text) - over - 1].rstrip() + "…"
+    return ""
+
+
+def history(msgs: list, sources: dict | None = None, spent: int = 0) -> list:
     """The last TURNS messages as plain {role, content}, oldest dropped first to fit
     HISTORY_BUDGET, same-role neighbours joined (a failed turn leaves two user messages; some
     chat templates refuse that), starting with a user message. With `sources` (the switches
@@ -674,7 +719,7 @@ def history(msgs: list, sources: dict | None = None) -> list:
     a private site listed earlier never reaches the model after Private is turned off. A turn
     the model never answered (`unanswered`: Cortex's note, not the model's words) is left out."""
     out: list = []
-    for _, m in _sent(msgs, sources):
+    for _, m in _sent(msgs, sources, spent):
         text = m["text"].strip()
         if out and out[-1]["role"] == m["role"]:
             out[-1]["content"] += "\n\n" + text
@@ -683,8 +728,9 @@ def history(msgs: list, sources: dict | None = None) -> list:
     return out
 
 
-def _sent(msgs: list, sources: dict | None) -> list:
-    """[(index in `msgs`, message)] of the messages `history` sends, oldest first."""
+def _sent(msgs: list, sources: dict | None, spent: int = 0) -> list:
+    """[(index in `msgs`, message)] of the messages `history` sends, oldest first; `spent`
+    characters of HISTORY_BUDGET are taken already (the `about` block)."""
     pairs = [(i, m) for i, m in enumerate(msgs) if not m.get("unanswered")]
     if sources is not None:
         kept: list = []
@@ -695,7 +741,7 @@ def _sent(msgs: list, sources: dict | None) -> list:
                 continue
             kept.append((i, m))
         pairs = kept
-    out, left = [], HISTORY_BUDGET
+    out, left = [], HISTORY_BUDGET - spent
     for i, m in reversed(pairs[-TURNS:]):
         text = m["text"].strip()
         if not text:
@@ -952,9 +998,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     else:
         emit({"t": "step", "s": f"Reading {len(found)} page{'s' * (len(found) != 1)} with "
                                 f"{runner.model}"})
+        me = about(vault, s["sources"], today)
         messages = [{"role": "system",
-                     "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}")},
-                    *history(msgs[:-1], s["sources"]),
+                     "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}") + me},
+                    *history(msgs[:-1], s["sources"], len(me)),
                     {"role": "user", "content": ask.prompt(found, text) + CITE}]
     if messages:
         thought = []

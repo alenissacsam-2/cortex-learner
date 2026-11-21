@@ -598,6 +598,60 @@ def test_an_answer_citing_nothing_lists_the_pages_searched(vault, stream):
     assert chat.load(vault, cid)[1]["searched"] == src["searched"]
 
 
+# ---- the "About the user" block (G1) ---------------------------------------------------------
+
+CORE = "# Core\n\n## Core\n- Call me Sam; my project is a graph planner. ^c-abcde\n"
+
+
+def _me(vault, page, front, body):
+    note(vault.root, f"me/{page}.md", front, body)
+
+
+def test_the_system_message_knows_who_asks(vault, stream):
+    _me(vault, "core", "", CORE)
+    _me(vault, "profile", "summary: CS student in Kochi, revising for exams.\n", "# Profile\n")
+    s = stream("ollama", ["Your forum page [1] and [2]."])
+    _, ev = _turn(vault, None, "car motor", s.runner())
+    system, *rest = s.bodies[0]["messages"]
+    assert system["content"].startswith(ask.SYSTEM)
+    assert "- Call me Sam; my project is a graph planner." in system["content"]
+    assert "CS student in Kochi" in system["content"] and "^c-" not in system["content"]
+    assert 'id="about the user"' in system["content"] and "never cite it" in system["content"]
+    assert len(chat.about(vault, ask.SOURCES, TODAY)) <= chat.ABOUT_MAX
+    # unnumbered and outside the passages: citations still count only passages
+    assert "Call me Sam" not in rest[-1]["content"]
+    assert {s_["n"] for s_ in ev[-2]["sources"]} <= set(range(1, rest[-1]["content"].count(
+        '<untrusted_note id="') + 1))
+
+
+def test_the_block_keeps_chats_privacy_rule(vault):
+    _me(vault, "core", "", CORE)
+    _me(vault, "profile", "private: true\nsummary: Secret profile line.\n", "# Profile\n")
+    on = dict(ask.SOURCES)
+    assert "Secret profile" in chat.about(vault, on, TODAY)  # the local model, Private on
+    got = chat.about(vault, dict(on, private=False), TODAY)
+    assert "Secret profile" not in got and "Call me Sam" in got
+    assert chat.about(vault, dict(on, private=False, notes=False), TODAY) == ""
+    _me(vault, "core", "private: true\n", CORE)  # a private core is never pinned (prime)
+    assert "Call me Sam" not in chat.about(vault, on, TODAY)
+
+
+def test_the_block_comes_out_of_the_history_budget(vault, stream):
+    _me(vault, "core", "", CORE)
+    _me(vault, "profile", "summary: " + "Long profile words. " * 60 + "\n", "# Profile\n")
+    me = chat.about(vault, ask.SOURCES, TODAY)
+    assert 0 < len(me) <= chat.ABOUT_MAX and me.rstrip().endswith("…\n</untrusted_note>")
+    s = stream("ollama", ["Answer [1]."])
+    cid = None
+    for q in ("car motor " + "x" * 1300, "car motor " + "y" * 1300, "car motor torque"):
+        cid, _ = _turn(vault, cid, q, s.runner())
+    system, *rest = s.bodies[-1]["messages"]
+    sent = len(system["content"]) - len(chat.SYSTEM.format(today=f"{TODAY:%A}, {TODAY}"))
+    assert sent == len(me)
+    assert sent + sum(len(m["content"]) for m in rest[:-1]) <= chat.HISTORY_BUDGET
+    assert "x" * 1300 not in "".join(m["content"] for m in rest)  # the oldest turn made room
+
+
 # ---- trust: coverage, typed pills and the exact passage (v9 B3/B4) -------------------------
 
 def test_default_passages_are_five_short_ones(vault, stream):
