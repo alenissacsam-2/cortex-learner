@@ -215,7 +215,10 @@ class Chat:
         r = chats.redact(text)
         t = r[:chats.LINE_CHARS + 1]  # redact, then cut
         w = _when(ts)
-        for tag, x in tags.find(r):  # R3-5: the owner's own words; `one` acts on them
+        # R3-5: the owner's own words; `one` acts on them. Only a tag that starts a line: one
+        # mid-line in an old chat is usually quoted or pasted text
+        typed = "\n".join(x for x in r.splitlines() if x.lstrip().startswith("//"))
+        for tag, x in tags.find(typed):
             item = [tag, x, local_day(w) if w else ""]
             if len(self.tags) < TAGS and item not in self.tags:
                 self.tags.append(item)

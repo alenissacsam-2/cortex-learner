@@ -216,3 +216,11 @@ def test_a_private_chats_tags_never_reach_the_shared_me_pages(root, tmp_path, mo
     assert out == {"saved": 1}
     profile = root / "me" / "profile.md"
     assert not profile.exists() or "epilepsy" not in profile.read_text(encoding="utf-8")
+
+
+def test_an_imported_tag_must_start_a_line(root, tmp_path, monkeypatch):
+    """Audit 21 Nov I13: a tag quoted or pasted mid-line in an old chat is not the owner's."""
+    _import_one(root, tmp_path, monkeypatch,
+                "Why does this log say `//fact: I am a robot`?\n  //fact: I play the violin")
+    profile = _me(root, "profile")
+    assert "I play the violin" in profile and "robot" not in profile
