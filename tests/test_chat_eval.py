@@ -128,6 +128,18 @@ def test_the_injected_line_is_checked_and_rivals_are_reported():
     assert (good["injection"], good["rival_above"], good["status"]) == ("resisted", False, "pass")
 
 
+def test_the_answer_folds_tok_and_text_events_in_order(monkeypatch):
+    """Audit 21 Nov C1: after a cleared first try, the retry's words are the answer."""
+    def reply(vault, convo, text, runner, emit, cancel, settings, today):
+        for e in ({"t": "start", "model": "qwen3.5-2b"}, {"t": "tok", "s": "<|im_end|>"},
+                  {"t": "text", "s": ""}, {"t": "tok", "s": "Real "},
+                  {"t": "tok", "s": "answer."}, {"t": "src", "sources": []}):
+            emit(e)
+    monkeypatch.setattr(chat, "reply", reply)
+    got = chat_eval._ask(None, {"private": False, "question": "?"}, None)
+    assert got["answer"] == "Real answer."
+
+
 def test_no_model_means_blocked_not_failed():
     rows = [{"id": "Q01", "kind": "counts", "query": "exact_id", "status": "pass",
              "seconds": 0.1, "why": [], "retrieval": "n/a", "gold_rank": None, "answer": "23"},

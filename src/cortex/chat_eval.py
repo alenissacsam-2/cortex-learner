@@ -372,8 +372,10 @@ def _ask(vault: Vault, q: dict, runner) -> dict:
     for e in got:
         ev[e["t"]].append(e)
     start = ev["start"][0] if ev["start"] else {}
-    tok = "".join(e["s"] for e in ev["tok"])
-    answer = ev["text"][-1]["s"] if ev["text"] else tok
+    answer = ""
+    for e in got:  # as app.js: tok appends, text replaces (a retry clears with text "")
+        if e["t"] in ("tok", "text"):
+            answer = (answer if e["t"] == "tok" else "") + e["s"]
     src = ev["src"][0] if ev["src"] else {}
     cited = [s["path"] for s in src.get("sources", [])]
     read = (src.get("coverage") or {}).get("read", len(served))
