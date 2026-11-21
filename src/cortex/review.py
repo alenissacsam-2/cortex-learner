@@ -6,7 +6,8 @@
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
 - conflicts (plan 5b): pairs of live lines that likely clash (Keep both, Keep left, Keep
-  right): every `possible_update_of` pair cortex_patch recorded and not yet resolved, and any
+  right): every `possible_update_of` or `supersedes` (RR-4) pair cortex_patch recorded and not
+  yet resolved, and any
   two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`);
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
@@ -121,28 +122,21 @@ def collision(vault, page: str, text: str, today: str) -> dict | None:
 
 def pair_key(a: dict, b: dict) -> str:
     """A conflict pair's key: both `page/id`, sorted, so either order is the same pair."""
-    return "|".join(sorted((f"{a['page']}/{a['id']}", f"{b['page']}/{b['id']}")))
+    return claims.pair_key((a["page"], a["id"]), (b["page"], b["id"]))
 
 
 def conflicts(rows: list[dict], events: list[dict]) -> list[dict]:
     """Up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that likely clash, as
-    {key, why, left, right} with raw rows: recorded `possible_update_of` pairs first (why
-    `update`, left the old line), then pairs at least as similar as the cut with exactly one
-    `negated` line (why `opposite`). A pair the user kept both of (a `keep_both` change) is
-    left out; Keep left or right retires the other line, so the pair is gone."""
-    voided, kept, out = _voided(events), set(), {}
-    by = {(r["page"], r["id"]): r for r in rows}
-    for e in events:
-        c = _payload(e).get("change") if e.get("kind") == "change" else None
-        if not isinstance(c, dict) or e.get("id") in voided:
-            continue
-        if c.get("tool") == "keep_both" and isinstance(c.get("pair"), str):
-            kept.add(c["pair"])
-        u = c.get("update_of")
-        if isinstance(u, dict) and isinstance(c.get("claim"), str):
-            old, new = by.get((u.get("page"), u.get("claim"))), by.get((c.get("id"), c["claim"]))
-            if old and new and old is not new:
-                out.setdefault(pair_key(old, new), {"why": "update", "left": old, "right": new})
+    {key, why, left, right} with raw rows: recorded pairs first (claims.recorded_pairs: why
+    `update` for a `possible_update_of`, `supersedes` for RR-4's explicit one; left the old
+    line), then pairs at least as similar as the cut with exactly one `negated` line (why
+    `opposite`). A pair the user kept both of (a `keep_both` change) is left out; Keep left or
+    right retires the other line, so the pair is gone."""
+    recorded, kept = claims.recorded_pairs(events)
+    by, out = {(r["page"], r["id"]): r for r in rows}, {}
+    for key, (old, new, why) in recorded.items():
+        if (o := by.get(old)) and (n := by.get(new)):
+            out[key] = {"why": why, "left": o, "right": n}
     score, cut = scorer([r["text"] for r in rows])
     no = [negated(r["text"]) for r in rows]
     for i in range(len(rows)):
