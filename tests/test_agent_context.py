@@ -280,7 +280,8 @@ async def _sweep(call):
            await call("cortex_read", {"id": "2026-11-20"}),
            await call("cortex_read", {"id": "profile"}),
            await call("cortex_read", {"id": "personality"}),
-           await call("cortex_chats", {})]
+           await call("cortex_chats", {}),
+           await call("cortex_start", {"mode": "home"})]
     return json.dumps(out)
 
 
@@ -378,7 +379,7 @@ def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
          "summary: CANARY-PROF-4Q student in Kochi.\n", "# Profile")
 
     async def body(call):
-        return await _sweep(call) + json.dumps(await call("cortex_start", {"mode": "home"}))
+        return await _sweep(call)
 
     out = serve(vroot, "claude-ai", body)
     for canary in ("CANARY-PERS-4Q", "Python first", "CANARY-PROF-4Q"):

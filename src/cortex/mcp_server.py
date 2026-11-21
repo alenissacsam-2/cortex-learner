@@ -1036,7 +1036,10 @@ class Cortex:
         return sorted(found.values(), key=lambda r: r["day"], reverse=True)
 
     def _contract(self, topic: str | None, today: list[dict]) -> str:
-        """The teaching contract, domain overrides scoped to the topic and today's top 5."""
+        """The teaching contract, domain overrides scoped to the topic and today's top 5; ""
+        for a client that may not get the page (private, or outside its profile)."""
+        if "teaching-contract" in self._withheld():
+            return ""
         ids = [i["id"] for i in today[:5] if i.get("id")]
         if topic:
             try:
