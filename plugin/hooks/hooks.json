@@ -1,5 +1,5 @@
 {
-  "description": "On the first prompt of each Claude Code chat, injects the Cortex context that matches it (cortex_prime). When a Claude Code session ends, closes Cortex sessions whose server has exited (or idle over 2 h). After a web, browser or other non-Cortex MCP tool, marks the vault so the next Cortex write counts as exposed.",
+  "description": "On the first prompt of each Claude Code chat, injects the Cortex context that matches it (cortex_prime), and serves it again after the chat is compacted, resumed or cleared; before a compaction, asks to record durable items first. When a Claude Code session ends, closes Cortex sessions whose server has exited (or idle over 2 h). After a web, browser or other non-Cortex MCP tool, marks the vault so the next Cortex write counts as exposed.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -8,6 +8,29 @@
             "type": "command",
             "command": "cortex prime-hook || true",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortex prime-hook || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortex prime-hook || true",
+            "timeout": 10
           }
         ]
       }
