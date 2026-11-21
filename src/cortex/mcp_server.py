@@ -2679,9 +2679,12 @@ class Cortex:
                 op, until, target = "append_to_section", None, section
                 supersedes = supersedes or [cid]  # Approve then offers to replace the old line
             out = self.cortex_patch(id, op, target, text, key, False, until, supersedes, ctx)
-            if out.get("queued") or out.get("changed"):  # changed: a goals line, served (ask)
+            if out.get("queued"):
                 out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "
                                "in the Cortex app; say so in one line and go on.")
+            elif out.get("changed"):  # a goals or profile line: written now, served (ask)
+                out["next"] = (f"Saved now but unconfirmed ({why}): AI apps see it marked (ask) "
+                               "until the user confirms it; say so in one line and go on.")
             return out
         claim_page = kind == "me" and nid in claims.PAGES
         contract = kind == "me" and nid == "teaching-contract"

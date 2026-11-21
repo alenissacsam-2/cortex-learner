@@ -94,6 +94,22 @@ def test_a_downgraded_revise_keeps_the_line_it_replaces(vault):
     assert out["queued"] is True and out.get("supersedes") == ["c-plain"], out
 
 
+def test_a_downgraded_goals_revise_says_it_is_saved_not_waiting(vault):
+    """Audit 21 Nov M5: a goals line takes a relayed revise at once (served marked ask), but
+    the reply told the model it waits for Approve in the app."""
+    (vault / "me" / "goals.md").write_text("# Goals\n\n## Now\n- Pass the OA ^c-goals\n",
+                                           encoding="utf-8")
+
+    async def body(call):
+        await call("cortex_prime", {"prompt": PROMPT})
+        return await call("cortex_patch", {"id": "me/goals", "op": "revise", "target": "c-goals",
+                                           "text": "Pass the Hyland OA", "user_confirmed": True})
+
+    out = serve(vault, body)
+    assert out["changed"] is True and "waits" not in out["next"] and "(ask)" in out["next"]
+    assert "- Pass the Hyland OA ^c-" in (vault / "me" / "goals.md").read_text("utf-8")
+
+
 def test_a_line_no_turn_says_is_downgraded(vault):
     async def body(call):
         await call("cortex_prime", {"prompt": PROMPT})
