@@ -111,7 +111,7 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
                 add("links_no_reason", n.id, "## Links is empty")
             elif any(_BARE_LINK_RE.match(ln) for ln in links):
                 add("links_no_reason", n.id, "a ## Links bullet has no reason")
-        if why := weak_summary(n.fields):
+        if n.kind not in NOT_ORPHANS and (why := weak_summary(n.fields)):  # me/ labels
             add("weak_summary", n.id, why)
         for t in sorted(_edge_targets(n.fields.get("related") or [])):
             if t in merged:
