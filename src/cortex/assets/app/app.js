@@ -1563,8 +1563,8 @@
       const both = kb('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, `Keep both: ${c.left.text} and ${c.right.text}`);
       const left = kb('Keep left', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.left.text}`);
       const right = kb('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.right.text}`);
-      // a recorded pair's right line is the newer one: Y takes it; N keeps both
-      const keys = c.why === 'opposite' ? { n: both } : { y: right, n: both };
+      // a recorded pair's right line is the newer one: Y takes it; N keeps both (G7's near-duplicates too)
+      const keys = c.why === 'opposite' || c.why === 'same' ? { n: both } : { y: right, n: both };
       return card(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [both[0], left[0], right[0]], keys, id);
     };
     const ruleCard = (x, id) => {
@@ -1617,8 +1617,22 @@
         const y = kb('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', `Still true: ${x.text}`), r = retire(x);
         return card(x.text, where(x), `Last confirmed ${x.since}`, [y[0], r[0]], { y, r });
       }), 'Nothing to check this month.')),
+      // G7: lines the X-ray shows cut for space in most primes (Keep pins them), and playbooks no AI app was served
+      board('Rarely reach your apps: still worth keeping?', { note: String((d.crowded || []).length) }, ...list((d.crowded || []).filter((x) => !reviewSkipped.has(`crowded:${x.id}`)).map((x) => {
+        const id = `crowded:${x.id}`;
+        const y = kb('Keep', () => act('/api/review/crowded/keep', { id: x.id }, 'Kept and pinned: AI apps get it first.'), 'btn lit', `Keep and pin: ${x.text}`), r = retire(x);
+        const s = btn('Skip', () => { reviewSkipped.add(id); renderReview(lastReview); }, null, { 'aria-label': `Skip: ${x.text}`, 'aria-keyshortcuts': 'S' });
+        return card(x.text, where(x), `Cut for space in ${x.cut} of the ${x.seen} primes that offered it, in the last ${x.window} primes`, [y[0], r[0], s], { y, r }, id);
+      }), 'No line is crowded out.')),
+      board('Still how you do this?', { note: String((d.unused || []).length) }, ...list((d.unused || []).filter((x) => !reviewSkipped.has(`unused:${x.id}`)).map((x) => {
+        const y = kb('Keep', () => act('/api/review/playbook/keep', { id: x.id }, 'Kept. Asked again in 60 days.'), 'btn lit', `Keep: ${x.title}`);
+        const o = btn('Open', () => post('/api/open', { what: 'page', path: x.path }), null, { 'aria-label': `Open in Obsidian: ${x.title}` });
+        return card(x.title, 'Playbook', `No AI app was served it in the last ${x.calls} calls Cortex keeps` + (x.since ? ` (since ${x.since})` : '') + `; last changed ${x.changed}`, [y[0], o], { y }, `unused:${x.id}`);
+      }), 'Every playbook reached an AI app lately.')),
       board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
+      board('These lines say nearly the same: keep one?', { note: String((d.duplicates || []).length) }, ...list((d.duplicates || []).map((c) => conflictCard(c)),
+      'No lines say nearly the same.')),
       board('Corrections you repeat', { note: String(rules.length), btn: allRules }, ...list(rules.map((x) => ruleCard(x)),
       'No repeated corrections found.')),
       board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) => {

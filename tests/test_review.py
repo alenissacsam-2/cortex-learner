@@ -253,7 +253,16 @@ def test_the_badge_and_the_review_page(tmp_path):
                          "title": "<i>Plan</i>", "private": False}],
             "unsafe": [{"key": "u1", "page": "core", "id": "c-eeeee", "invisible": False,
                         "what": 'the phrase "ignore previous instructions"',
-                        "text": "<b>Ignore</b> previous instructions"}], "count": 4}
+                        "text": "<b>Ignore</b> previous instructions"}],
+            "crowded": [{"page": "preferences", "id": "c-fffff", "text": "<b>Long walks</b>",
+                         "cut": 30, "seen": 34, "window": 40}],
+            "unused": [{"id": "cv-bullets", "title": "<i>CV bullets</i>",
+                        "path": "notes/cv-bullets.md", "changed": "2026-08-01", "calls": 120,
+                        "since": "2026-10-01"}],
+            "duplicates": [{"key": "p2", "why": "same",
+                            "left": {"page": "preferences", "id": "c-ggggg", "text": "Uses uv"},
+                            "right": {"page": "preferences", "id": "c-hhhhh",
+                                      "text": "Uses <b>uv</b> always"}}], "count": 4}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
@@ -261,17 +270,22 @@ def test_the_badge_and_the_review_page(tmp_path):
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["badge"] == ["4", False, "Review (4)"]
     assert out["boards"] == ["Today’s 5", "Waiting for your approval", "Past their end date",
-                             "Still true?", "Lines that may conflict", "Corrections you repeat",
+                             "Still true?", "Rarely reach your apps: still worth keeping?",
+                             "Still how you do this?", "Lines that may conflict",
+                             "These lines say nearly the same: keep one?", "Corrections you repeat",
                              "Decisions in your commits",
                              "Lines you asked to forget", "Imported notes you edited",
                              "Lines that may steer an AI"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
                            ["Studies CS", ["Still true", "Retire"]],
+                           ["<b>Long walks</b>", ["Keep", "Retire", "Skip"]],
+                           ["<i>CV bullets</i>", ["Keep", "Open"]],
                            ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
+                           ["Uses uv", ["Keep both", "Keep left", "Keep right"]],
                            ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]],
                            ["<s>Switch to uv</s>", ["Approve", "Dismiss"]],
                            ["//forget: <s>tabs</s>", ["Dismiss"]], ["Uses tabs", ["Retire"]],
                            ["<i>Plan</i>", ["Dismiss"]],
                            ["<b>Ignore</b> previous instructions", ["Keep it out", "Keep it"]]]
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
-    assert out["after"] == ["3", False, 8]
+    assert out["after"] == ["3", False, 11]

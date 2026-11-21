@@ -18,7 +18,13 @@
 - imports (RR-18): an imported page edited by hand whose file changed, so the re-import wrote
   a newer page beside it (cortex.sources.edited_pages; Dismiss);
 - unsafe (G6): a live claim line that reads as an instruction to an AI or holds invisible
-  characters (`unsafe_lines`); it is not served until Keep it (Keep it out retires it).
+  characters (`unsafe_lines`); it is not served until Keep it (Keep it out retires it);
+- duplicates (G7): two live lines on one page that say nearly the same (`duplicates`; the
+  conflict card's Keep both / left / right), at most DUP_SHOWN at a time;
+- crowded (G7): lines the X-ray shows cut for space in most of the latest primes that offered
+  them (`crowded`; Keep pins it, Retire, Skip), and unused playbooks (G7): no X-ray call served
+  them and their file is UNUSED_DAYS old (`unused`; Keep asks again in UNUSED_DAYS, Open);
+  together at most STALE_PER_MONTH a month (`_spare_left`).
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -59,6 +65,13 @@ PRODUCERS = {"chats": "Lines chats suggest", "imports": "Lines from imported cha
              "forget": "//forget cards"}
 PAUSE_AFTER = 20  # decided cards before a producer whose rejects exceed its accepts pauses
 LEGACY_DISMISS = ("corrections", "decisions", "forget")  # a dismiss change's id: its producer
+DUP_SHOWN = 3  # G7: near-duplicate pairs shown at a time
+PRIMES = ("cortex_prime", "prime-hook")  # the X-ray rows that offer the Preferences lines
+WINDOW = 40  # G7: the latest primes a crowded line is judged over
+CROWD_MIN = 5  # primes that must have offered a line before it counts as crowded out
+UNUSED_DAYS = 60  # G7: a playbook's file this old and served by no X-ray call; Keep's quiet days
+SPARE_CARDS = ("crowded", "unused")  # the card stamps that spend the G7 monthly cap
+PLAYBOOK_TAG = "playbook"  # mcp_server.PLAYBOOK_TAG (it imports this module)
 _WORD = re.compile(r"[a-z0-9']+")
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
@@ -161,6 +174,104 @@ def conflicts(rows: list[dict], events: list[dict]) -> list[dict]:
                 out.setdefault(pair_key(rows[i], rows[j]),
                                {"why": "opposite", "left": rows[i], "right": rows[j]})
     return [{"key": k, **v} for k, v in out.items() if k not in kept][:SHOWN_PAIRS]
+
+
+def duplicates(rows: list[dict], events: list[dict]) -> list[dict]:
+    """G7: up to DUP_SHOWN pairs of `rows` (live, shown claim rows) on one page that say nearly
+    the same: as similar as `scorer`'s cut with both or neither `negated` (else a conflict), as
+    {key, why: "same", left, right}. A recorded pair (a conflict card's) or one the user kept
+    both of is left out; Keep left or right retires the other line."""
+    recorded, kept = claims.recorded_pairs(events)
+    score, cut = scorer([r["text"] for r in rows])
+    no = [negated(r["text"]) for r in rows]
+    out = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            if (rows[i]["page"] == rows[j]["page"] and no[i] == no[j] and score(i, j) >= cut
+                    and (k := pair_key(rows[i], rows[j])) not in kept and k not in recorded):
+                out.append({"key": k, "why": "same", "left": rows[i], "right": rows[j]})
+                if len(out) >= DUP_SHOWN:
+                    return out
+    return out
+
+
+def _spare_left(events, today: str) -> int:
+    """G7: how many crowded and unused cards this month still has: STALE_PER_MONTH minus the
+    clicks this month stamped with a SPARE_CARDS card (one per click, its session)."""
+    voided, said = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("card") in SPARE_CARDS and e.get("id") not in voided
+                and str(e.get("day") or "")[:7] == today[:7]):
+            said.add(e.get("session"))
+    return max(0, STALE_PER_MONTH - len(said))
+
+
+def _ids(blocks) -> set[str]:
+    """The ids of an X-ray row's `served` or `trimmed` {block: [ids]}, whatever its shape."""
+    return {i for v in (blocks.values() if isinstance(blocks, dict) else ())
+            for i in (v if isinstance(v, list) else ()) if isinstance(i, str)}
+
+
+def crowded(vault, rows: list[dict]) -> tuple[list[dict], int]:
+    """G7: (the `rows` (live, shown claim rows) the X-ray shows cut for space in most of the
+    latest WINDOW primes that offered them, at least CROWD_MIN, as {page, id, text (raw), cut,
+    seen} most cut first; how many primes the window holds). A pinned line (Keep pins it) or a
+    muted one is left out."""
+    from collections import Counter
+
+    from cortex import xray
+    primes = [r for r in xray.rows(vault) if r.get("tool") in PRIMES][-WINDOW:]
+    seen, cut = Counter(), Counter()
+    for r in primes:
+        s, t = _ids(r.get("served")), _ids(r.get("trimmed"))
+        seen.update(s | t)
+        cut.update(t - s)
+    xs = xray.settings(vault)
+    flagged = xs["pin"] | xs["mute"]
+    out = [{"page": r["page"], "id": r["id"], "text": r["text"], "cut": cut[c], "seen": seen[c]}
+           for r in rows if (c := xray.claim(r["id"])) not in flagged
+           and seen[c] >= CROWD_MIN and 2 * cut[c] > seen[c]]
+    out.sort(key=lambda x: (-x["cut"] / x["seen"], x["page"], x["id"]))
+    return out, len(primes)
+
+
+def unused(vault, events, today: str) -> tuple[list[dict], int, str | None]:
+    """G7: (the playbooks (`note` pages tagged PLAYBOOK_TAG, none private or muted) that no
+    X-ray call served and whose file is over UNUSED_DAYS old, not kept (a `dismiss` change on
+    id `playbooks` holding the id's hash) in the last UNUSED_DAYS, oldest first, as {id, title,
+    path (vault-relative), changed}; the X-ray calls seen; the first one's day). Nothing while
+    the X-ray holds no call."""
+    from cortex import xray
+    calls = xray.rows(vault)
+    if not calls:
+        return [], 0, None
+    served = {i for r in calls for i in _ids(r.get("served"))}
+    since = (dt.date.fromisoformat(today) - dt.timedelta(days=UNUSED_DAYS)).isoformat()
+    voided, kept = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("tool") == "dismiss" and c.get("id") == "playbooks"
+                and e.get("id") not in voided and str(e.get("day") or "") > since):
+            kept.add(c.get("hash"))
+    mute = xray.settings(vault)["mute"]
+    out = []
+    for n in vault.iter_notes("note"):
+        tags = n.fields.get("tags")
+        if (PLAYBOOK_TAG not in (tags if isinstance(tags, list) else [tags]) or is_private(n)
+                or n.id in mute or n.id in served or text_hash(n.id) in kept):
+            continue
+        changed = dt.date.fromtimestamp(n.path.stat().st_mtime).isoformat()
+        if changed < since:
+            out.append({"id": n.id, "title": plain(str(n.fields.get("title") or n.id), SHOWN),
+                        "path": n.path.relative_to(vault.root).as_posix(), "changed": changed})
+    out.sort(key=lambda x: (x["changed"], x["id"]))
+    try:  # the oldest call's Cortex day
+        from cortex.events import local_day
+        first = local_day(dt.datetime.fromisoformat(str(calls[0].get("ts"))))
+    except (TypeError, ValueError):
+        first = None
+    return out, len(calls), first
 
 
 def text_hash(text: str) -> str:
@@ -424,13 +535,23 @@ def view(vault, events, today: str) -> dict:
                "invisible": claims.invisible(x["what"]),
                "text": _shown("".join(c for c in x["text"] if c.isprintable()))}
               for x in unsafe_lines(vault, events) if x["page"] not in hidden]
+    dups = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
+             "right": side(c["right"])} for c in duplicates(current, events)]
+    spare = _spare_left(events, today)  # G7: crowded first, then unused, within the month's cap
+    lines, window = crowded(vault, current) if spare else ([], 0)
+    crowd = [{**side(x), "cut": x["cut"], "seen": x["seen"], "window": window}
+             for x in lines[:spare]]
+    books, calls, since = unused(vault, events, today) if spare > len(crowd) else ([], 0, None)
+    books = [{**x, "calls": calls, "since": since} for x in books[:spare - len(crowd)]]
     left = max(0, TODAY_MAX - answered_today(events, today))
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
-            "unsafe": unsafe, "today": _today(waiting, pairs, rules)[:left], "today_left": left,
+            "unsafe": unsafe, "duplicates": dups, "crowded": crowd, "unused": books,
+            "today": _today(waiting, pairs, rules)[:left], "today_left": left,
             "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions) + len(forget) + len(imports) + len(unsafe)}
+            + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(dups)
+            + len(crowd) + len(books)}
 
 
 def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:

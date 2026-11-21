@@ -343,6 +343,8 @@ class App:
             "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/review/import/dismiss": self.review_import_dismiss,
             "/api/review/unsafe/keep": self.review_unsafe_keep,
+            "/api/review/crowded/keep": self.review_crowded_keep,
+            "/api/review/playbook/keep": self.review_playbook_keep,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
             "/api/xray/dryrun": self.xray_dryrun,
             "/api/tonight/undo": self.tonight_undo}
@@ -747,16 +749,49 @@ class App:
 
     def review_retire(self, body: dict) -> dict:
         """Retire: cortex_patch's retire op moves the line to `## Past`. A //forget card's
-        candidate is the forget producer's accept (RR-10)."""
-        from cortex import tags
+        candidate is the forget producer's accept (RR-10); a crowded line's (G7) is stamped
+        `crowded`, so it counts in that card's monthly cap."""
+        from cortex import review, tags
         from cortex.events import EventLog
         r = self._live(body)
         v = self._vault()
+        events = list(EventLog(v).iter_events())
         forget = "forget" if any(c["id"] == r["id"] for x in tags.forget_cards(
-            v, EventLog(v).iter_events(), self._today()) for c in x["candidates"]) else None
+            v, events, self._today()) for c in x["candidates"]) else None
+        card = forget or ("crowded" if any(x["id"] == r["id"] for x in review.crowded(
+            v, review.live_rows(v, events, self._today()))[0]) else None)
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
-            forget, forget)
+            card, forget)
+
+    def review_crowded_keep(self, body: dict) -> dict:
+        """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin
+        (prime serves it first, within the Preferences cap) and a `dismiss` change on id
+        `crowded` holding its id's hash, stamped `crowded` for the monthly cap."""
+        from cortex import review, xray
+        from cortex.events import EventLog
+        v, cid = self._vault(), body.get("id")
+        if not any(x["id"] == cid for x in review.crowded(
+                v, review.live_rows(v, EventLog(v).iter_events(), self._today()))[0]):
+            raise NotFound
+        with self.reviewing:
+            xray.set_flag(v, "pin", xray.claim(cid), True)
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "crowded", "section": "Crowded", "text": cid, "waiting": False}, "crowded")
+
+    def review_playbook_keep(self, body: dict) -> dict:
+        """G7: Keep, on a playbook no AI app was served lately: a `dismiss` change on id
+        `playbooks` holding its id's hash, so it is not asked about for review.UNUSED_DAYS;
+        stamped `unused` for the monthly cap. The page stays as it is."""
+        from cortex import review
+        from cortex.events import EventLog
+        v, pid = self._vault(), body.get("id")
+        if not any(x["id"] == pid for x in review.unused(
+                v, list(EventLog(v).iter_events()), self._today())[0]):
+            raise NotFound
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "playbooks", "section": "Playbooks", "text": pid, "waiting": False},
+            "unused")
 
     def _producer(self, p: dict) -> str:
         """RR-10: the producer of a waiting line (review.producer_of)."""
@@ -776,8 +811,9 @@ class App:
         return self._click("cortex_patch", "_resume", {"producer": p})
 
     def review_conflict(self, body: dict) -> dict:
-        """A conflict pair (plan 5b): `keep` both (a `keep_both` change), or `left` or `right`,
-        which retires the other line through cortex_patch's retire op."""
+        """A conflict pair (plan 5b) or a near-duplicate pair (G7, stamped `duplicate`): `keep`
+        both (a `keep_both` change), or `left` or `right`, which retires the other line through
+        cortex_patch's retire op."""
         from cortex import review
         from cortex.events import EventLog
         v, key, keep = self._vault(), body.get("key"), body.get("keep")
@@ -785,16 +821,18 @@ class App:
             raise ValueError("keep must be both, left or right.")
         events = list(EventLog(v).iter_events())
         rows = review.live_rows(v, events, self._today())
-        pair = next((c for c in review.conflicts(rows, events) if c["key"] == key), None)
+        pair = next((c for c in review.conflicts(rows, events) if c["key"] == key), None) \
+            or next((c for c in review.duplicates(rows, events) if c["key"] == key), None)
         if pair is None:
             raise NotFound
+        card = "duplicate" if pair["why"] == "same" else "conflict"
         if keep == "both":
             return self._click("cortex_patch", "_keep_both", {"page": pair["left"]["page"],
-                                                              "pair": pair["key"]}, "conflict")
+                                                              "pair": pair["key"]}, card)
         r = pair["right" if keep == "left" else "left"]
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
-            "conflict")
+            card)
 
     def _rule(self, body: dict) -> dict:
         from cortex import corrections, review
