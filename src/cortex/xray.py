@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import Counter
 from datetime import UTC, datetime
 
 from cortex.vault import ID_RE, Vault, VaultError, is_private
@@ -109,10 +110,11 @@ ME_TITLES = {"me/profile": "Profile", "me/core": "Core lines",
              "me/teaching-contract": "Teaching contract"}
 PER_CLIENT = 20  # calls shown per AI app; the ring keeps CAP in all
 PRIVATE = "a private page"
+OFTEN = 5  # "served most often" rows per AI app
 
 
-def view(vault: Vault) -> dict:
-    """The app's X-ray: recent calls grouped by AI app, newest first, ids resolved to titles
+def _items(vault: Vault):
+    """(item(id), blocks({block: ids}), settings) as the app shows ids: resolved to titles
     now. A private or hidden page (planner.hidden) or a line of a private me/ page shows as
     "a private page", without its id; its pin or mute keeps only a `token` to undo it."""
     from cortex import claims, planner
@@ -164,12 +166,51 @@ def view(vault: Vault) -> dict:
                 for b, ids in (d if isinstance(d, dict) else {}).items()
                 if isinstance(ids, list) and ids]
 
+    return item, blocks, s
+
+
+def present(vault: Vault, served: dict, trimmed: dict, chars: int) -> dict:
+    """One call (the app's dry run) as `view` shows a call: titles, never text."""
+    _, blocks, _ = _items(vault)
+    return {"served": blocks(served), "trimmed": blocks(trimmed), "chars": chars}
+
+
+def view(vault: Vault) -> dict:
+    """The app's X-ray: recent calls grouped by AI app, newest first (`_items` shows the ids).
+    Per app also its raw `name` ("" when it sent none), the `scopes` its profile gives it
+    (cortex.profiles), that profile's `match` as `rule` (None: it gets `unknown`), the other
+    apps here the same rule covers (`shared`), and the OFTEN pages and lines served to it most
+    often (`often`, with a `count`; me/ pages, which no one pins or mutes, left out). Also the
+    owner's `profiles`, their cap and `all_scopes` (access.SCOPES), for the scope bar's own
+    save through /api/profiles."""
+    from cortex import profiles
+    from cortex.access import SCOPES
+
+    item, blocks, s = _items(vault)
     groups: dict[str, list] = {}
     for r in reversed(rows(vault)):
         groups.setdefault(str(r.get("client") or "unknown"), []).append(r)
-    return {"clients": [{"client": CLIENTS.get(c, c), "total": len(rs), "calls": [
-        {"ts": r.get("ts"), "tool": r.get("tool"), "chars": r.get("chars"),
-         "served": blocks(r.get("served")), "trimmed": blocks(r.get("trimmed"))}
-        for r in rs[:PER_CLIENT]]} for c, rs in groups.items()],
+    data = profiles.load(vault)
+    names = {c: "" if c == "unknown" else c for c in groups}  # record() had no name
+    rule = {c: profiles.match(data, n) for c, n in names.items()}
+
+    def often(rs: list[dict]) -> list[dict]:
+        n = Counter(i for r in rs if isinstance(r.get("served"), dict)
+                    for ids in r["served"].values()
+                    if isinstance(ids, list) for i in ids
+                    if isinstance(i, str) and not i.startswith("me/"))
+        return [{**item(i), "count": k} for i, k in n.most_common(OFTEN)]
+
+    return {"clients": [{
+        "client": CLIENTS.get(c, c), "name": names[c], "total": len(rs),
+        "scopes": profiles.scopes_of(data, names[c]),
+        "rule": None if rule[c] is None else data["profiles"][rule[c]]["match"],
+        "shared": [CLIENTS.get(o, o) for o in groups if o != c and rule[c] is not None
+                   and rule[o] == rule[c]],
+        "often": often(rs), "calls": [
+            {"ts": r.get("ts"), "tool": r.get("tool"), "chars": r.get("chars"),
+             "served": blocks(r.get("served")), "trimmed": blocks(r.get("trimmed"))}
+            for r in rs[:PER_CLIENT]]} for c, rs in groups.items()],
         "pinned": [item(i) for i in sorted(s["pin"])],
-        "muted": [item(i) for i in sorted(s["mute"])]}
+        "muted": [item(i) for i in sorted(s["mute"])],
+        "profiles": data, "profiles_max": profiles.MAX_PROFILES, "all_scopes": list(SCOPES)}

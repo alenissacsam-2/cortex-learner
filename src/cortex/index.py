@@ -236,8 +236,9 @@ def _one_line(text: str, n: int = SNIPPET) -> str:
 
 class Index:
     def __init__(self, vault: Vault, catalog, states: Mapping[str, Any] | None = None,
-                 withhold=None):
+                 withhold=None, save: bool = True):
         self.vault = vault
+        self.save = save  # False (the app's dry run): never write the snapshot
         # () -> ids kept out like hidden ones (so out of the snapshot too): a non-owner
         # server's me/ pages not shared with work (mcp_server.Cortex._withheld)
         self.withhold = withhold
@@ -386,6 +387,8 @@ class Index:
     def save_snapshot(self) -> None:
         """Write the snapshot under the vault lock; a failure only logs (the next build redoes
         the parse)."""
+        if not self.save:
+            return
         try:
             with self.vault.lock():  # the lock creates .cortex/
                 self.vault.write_text(self.snapshot_path,

@@ -14,7 +14,7 @@ from test_app import _serve, call
 from test_app_js import HARNESS, _run
 
 from cortex import prime, semantic, xray
-from cortex.mcp_server import Cortex, build_server
+from cortex.mcp_server import Cortex, build_server, dry_prime
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -172,8 +172,33 @@ const out = { errors };
     out.boards = $('xray').querySelectorAll('h2').map((x) => x.textContent);
     out.rows = $('xray').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
       r.querySelectorAll('button').map((b) => b.textContent)]);
+    const boards = () => $('xray').querySelectorAll('.board').slice(1);
+    out.chips = boards().map((b) => b.querySelectorAll('.chip').map((c) => [c.textContent,
+      c.getAttribute('aria-pressed'), c.getAttribute('aria-disabled'), c.getAttribute('title')]));
+    out.help = boards().map((b) => b.querySelectorAll('.help').map((x) => x.textContent));
+    out.labels = $('xray').querySelectorAll('label').map((x) => x.textContent);
     $('xray').querySelectorAll('button').find((b) => b.textContent === 'Mute').fire('click');
     await tick();
+    boards()[0].querySelectorAll('.chip').find((c) => c.textContent === 'coding').fire('click');  // locked
+    await tick();
+    boards()[1].querySelectorAll('.chip').find((c) => c.textContent === 'coding').fire('click');
+    await tick();
+    out.toast = $('toast-msg').textContent;
+    const input = boards()[1].querySelector('input');
+    const show = () => boards()[1].querySelectorAll('button').find((b) => b.textContent === 'Show');
+    out.emptyDisabled = show().disabled;
+    input.value = 'car motor';
+    input.fire('input');
+    out.typedDisabled = show().disabled;
+    show().fire('click');
+    await tick();
+    const dry = () => [boards()[1].querySelectorAll('p').filter((p) => p.className !== 'help').map((p) => p.textContent),
+      boards()[1].querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
+        r.querySelectorAll('button').map((b) => b.textContent)])];
+    out.dry = dry();
+    boards()[1].querySelectorAll('button').find((b) => b.textContent === 'Pin').fire('click');
+    await tick();
+    out.dryAfterPin = dry();
     out.posted = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
@@ -195,16 +220,167 @@ def test_the_xray_page(tmp_path):
              "served": [{"block": "related", "items": [item]}],
              "trimmed": [{"block": "profile", "items": [
                  {"id": "me/profile", "kind": "me", "title": "Profile"}]}]}
-    view = {"pinned": [], "muted": [private],
-            "clients": [{"client": "Claude Code", "total": 1, "calls": [call_]}]}
+    profiles = {"profiles": [{"match": "claude", "scopes": ["all"]}], "unknown": ["core"]}
+    view = {"pinned": [], "muted": [private], "profiles": profiles, "profiles_max": 30,
+            "all_scopes": ["all", "core", "coding"],
+            "clients": [{"client": "Claude Code", "name": "claude-code", "total": 1,
+                         "scopes": ["all"], "rule": "claude", "shared": ["Claude Desktop"],
+                         "often": [{**item, "count": 3}], "calls": [call_]},
+                        {"client": "mystery-app", "name": "mystery-app", "total": 1,
+                         "scopes": ["core"], "rule": None, "shared": [], "often": [],
+                         "calls": []}]}
+    pinned = {**view, "pinned": [{**item, "pinned": True}]}
+    dry = {"served": [{"block": "related", "items": [item]}], "trimmed": [], "chars": 420}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "xray", XRAY_JS, {
-        "routes": {"/api/xray": view, "/api/xray/mute": view, "/api/status": status,
-                   "/api/review": {"count": 0}}, "stream": []})
+        "routes": {"/api/xray": view, "/api/xray/mute": view, "/api/xray/pin": pinned,
+                   "/api/xray/dryrun": dry, "/api/profiles": {"profiles": profiles},
+                   "/api/status": status, "/api/review": {"count": 0}}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["boards"] == ["Pinned and muted", "Claude Code"]
+    assert out["boards"] == ["Pinned and muted", "Claude Code", "mystery-app"]
     assert out["rows"] == [["a private page", ["Unmute"]],
+                           ["<b>Engines</b>", ["Pin", "Mute"]],  # served most often
                            ["<b>Engines</b>", ["Pin", "Mute"]],  # text, never markup
                            ["Profile", []]]
-    assert out["posted"] == [["/api/xray/mute", {"id": "engines", "on": True}]]
+    locked = "Turn off Everything first"
+    assert out["chips"] == [
+        [["Everything except private", "true", None, None], ["core", "true", "true", locked],
+         ["coding", "true", "true", locked]],
+        [["Everything except private", "false", None, None], ["core", "true", None, None],
+         ["coding", "false", None, None]]]
+    assert out["help"] == [
+        ["Set by the rule for apps named “claude”, shared with Claude Desktop."],
+        ["No rule names this app, so it gets what “Any other app” gets. Changing a chip adds "
+         "a rule for “mystery-app”."]]
+    assert out["labels"] == ["What would Claude Code get for this prompt?",
+                             "What would mystery-app get for this prompt?"]
+    assert out["toast"] == "Saved. mystery-app reads: core, coding."
+    assert (out["emptyDisabled"], out["typedDisabled"]) == (True, False)
+    heading = "Dry run · 420 characters · nothing was sent or logged"
+    assert out["dry"] == [[heading], [["<b>Engines</b>", ["Pin", "Mute"]]]]
+    assert out["dryAfterPin"] == [[heading], [["<b>Engines</b>", ["Unpin", "Mute"]]]]
+    assert out["posted"] == [
+        ["/api/xray/mute", {"id": "engines", "on": True}],
+        # the unmatched app gets its own rule at the end; "Any other app" stays as it was
+        ["/api/profiles", {"profiles": [{"match": "claude", "scopes": ["all"]},
+                                        {"match": "mystery-app", "scopes": ["core", "coding"]}],
+                           "unknown": ["core"]}],
+        ["/api/xray/dryrun", {"client": "mystery-app", "prompt": "car motor"}],
+        ["/api/xray/pin", {"id": "engines", "on": True}]]
+
+
+# ---- P2 Agent Aperture: the scope bar, served most often, the dry run ----------------------
+PROMPT = "How does a car motor work? I love motor racing and Python."
+
+
+def _aperture(root):
+    note(root, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Sam.\n")
+    note(root, "notes/secret-motor.md", "title: Secret motor diary\nprivate: true\n",
+         "# Secret motor diary\n\nCar motor racing secrets.")
+    note(root, "journal/2026-11-20.md", "id: 2026-11-20\ntitle: Day\n",
+         "- Watched car motor racing today.")
+
+
+def _blocks(d):
+    return {k: list(v) for k, v in d.items() if v}
+
+
+@pytest.mark.parametrize("client", ["claude-ai", "cursor", "mcp"])
+def test_dry_run_serves_what_a_real_prime_serves(vault, client):
+    _aperture(vault)
+    v = Vault(vault)
+    c = Cortex(v)
+    c.over_mcp, c.sessions.client = True, client  # as over MCP: the client's profile applies
+    ctx = c.cortex_prime(PROMPT)["context"]
+    real = xray.rows(v)[-1]
+    dry = dry_prime(v, client, PROMPT)
+    assert _blocks(dry["served"]) == real["served"] and real["served"]
+    assert _blocks(dry["trimmed"]) == real["trimmed"]
+    assert dry["chars"] == real["chars"] == len(ctx)
+    ids = {i for b in dry["served"].values() for i in b} | {
+        i for b in dry["trimmed"].values() for i in b}
+    assert "secret-motor" not in ids  # a private page never goes to an AI app
+    core = {cid for (p, _, _), cid in prime.claim_ids(v).items() if p == "core"}
+    if client == "mcp":  # an app no rule names: `unknown`, the core only
+        assert not set(_blocks(dry["served"])) & {"profile", "preferences", "contract"}
+        assert {i for i in ids if i.startswith("^")} <= core and core <= ids
+        assert "2026-11-20" not in ids  # journal pages are `personal`
+    if client == "cursor":  # coding: the Coding line, never the Personal one
+        assert claim_id(vault, "Python first, type hints.") in ids
+        assert claim_id(vault, "Weekend motor racing fan.") not in ids
+
+
+def test_dry_run_writes_nothing(vault, home, monkeypatch):
+    from cortex import index
+    _aperture(vault)
+    v = Vault(vault)
+    c = Cortex(v)
+    c.sessions.client = "claude-ai"
+    c.cortex_prime(PROMPT)  # the caches a real call makes exist now
+    c._call("cortex_log", c.cortex_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
+    c.sessions.close(summary="test")  # an events file
+    note(vault, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA car motor kitchen recipe.")
+    monkeypatch.setattr(index, "SNAPSHOT_MIN", 0)  # any refresh would save the snapshot
+
+    def files():
+        return {p: p.read_bytes() for d in (vault, home) for p in d.rglob("*") if p.is_file()}
+
+    before = files()
+    assert any("events" in p.parts for p in before) and (vault / semantic.CACHE).is_file()
+    for client in ("claude-ai", "cursor", "mcp", "", "unknown"):
+        dry_prime(v, client, PROMPT + " //note remember this")
+    assert files() == before
+
+
+def test_scope_bar_and_served_most_often(vault):
+    from cortex import profiles
+    v = Vault(vault)
+    for client, ids in (("claude-code", ["engines", "pasta"]), ("claude-code", ["engines"]),
+                        ("claude-ai", ["engines"]), ("mystery-app", ["pasta"]),
+                        (None, ["pasta"]), ("cursor", ["engines"])):
+        xray.record(v, "cortex_prime", client, {"related": ids, "profile": ["me/profile"]},
+                    {}, 10)
+    data = profiles.load(v)
+    view = xray.view(v)
+    g = {c["client"]: c for c in view["clients"]}
+    assert (g["Claude Code"]["rule"], g["Claude Code"]["scopes"]) == ("claude", ["all"])
+    assert g["Claude Code"]["shared"] == ["Claude Desktop"]
+    assert g["Claude Desktop"]["shared"] == ["Claude Code"]
+    assert (g["Cursor"]["rule"], g["Cursor"]["scopes"], g["Cursor"]["shared"]) == (
+        "cursor", profiles.CODING, [])
+    m = g["mystery-app"]
+    assert (m["name"], m["rule"], m["scopes"], m["shared"]) == ("mystery-app", None, ["core"],
+                                                                 [])
+    u = g["unknown"]
+    assert (u["name"], u["rule"], u["scopes"]) == ("", None, ["core"])
+    assert [(x["id"], x["count"]) for x in g["Claude Code"]["often"]] == [
+        ("engines", 2), ("pasta", 1)]  # me/ pages, served every time, are left out
+    assert view["profiles"] == data and view["profiles_max"] == profiles.MAX_PROFILES
+    assert view["all_scopes"][0] == "all"
+    # one matcher: scopes_for agrees with the rule the view shows
+    assert profiles.scopes_for(data, "mystery-app") == frozenset(["core"])
+    assert profiles.match(data, "Claude Code") == 0 and profiles.match(data, "") is None
+
+
+def test_dry_run_endpoint(vault):
+    _aperture(vault)
+    srv, app = _serve(vault)
+    try:
+        body = {"client": "claude-ai", "prompt": PROMPT}
+        assert call(app, "POST", "/api/xray/dryrun", body, token=False)[0] == 401
+        for bad in ({"client": 7, "prompt": PROMPT}, {"client": "x" * 101, "prompt": PROMPT},
+                    {"client": "cursor", "prompt": 7}, {"client": "cursor", "prompt": " "},
+                    {"client": "cursor", "prompt": "a" * 2001}, {"prompt": PROMPT}):
+            assert call(app, "POST", "/api/xray/dryrun", bad)[0] == 400, bad
+        status, js, *_ = call(app, "POST", "/api/xray/dryrun", body)
+        assert status == 200 and js["chars"] > 0 and set(js) == {"served", "trimmed", "chars"}
+        related = next(b for b in js["served"] if b["block"] == "related")
+        assert "Engines" in [x["title"] for x in related["items"]]
+        dumped = json.dumps(js)
+        for text in ("Secret motor", "secret-motor", "Automobile", "how a motor"):
+            assert text not in dumped  # titles only, never text, never a private page
+        assert not (vault / xray.RING).exists()  # nothing logged
+    finally:
+        srv.shutdown()
+        srv.server_close()

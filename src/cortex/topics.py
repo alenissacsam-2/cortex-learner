@@ -229,11 +229,13 @@ def attach_text(index: Index, embed, text: str) -> Attach:
 _PRIMED: tuple = (None, None, None)  # prompt_hub's (vector stack, tree, centroids)
 
 
-def prompt_hub(index: Index, embed, prompt: str, hits: list[dict]) -> str | None:
+def prompt_hub(index: Index, embed, prompt: str, hits: list[dict],
+               save: bool = True) -> str | None:
     """The hub a chat prompt is about (cortex_prime's `touch`), or None. Two views must agree:
     `attach` of the prompt's bare vector to the member centroids (floor TOUCH_FLOOR, the same
     margin and LCA back-off) and recall, where a hit that is not a mere graph neighbour must be
-    that hub, under it, or filed at or under it. No embedder or no hits, no hub."""
+    that hub, under it, or filed at or under it. No embedder or no hits, no hub. With `save`
+    False (the app's dry run) the vector cache is read, never written."""
     from cortex import semantic
 
     global _PRIMED
@@ -245,7 +247,7 @@ def prompt_hub(index: Index, embed, prompt: str, hits: list[dict]) -> str | None
     # ~0.5 s on 5k pages (its manifest walk), and tree + centroids another ~60 ms
     stack = semantic._MEM.get(index.vault.root, (None, None, None))[2]
     if stack is None or stack[3].shape[1] != len(q):
-        stack = semantic.vectors(index, embed, len(q), budget=0.0)
+        stack = semantic.vectors(index, embed, len(q), budget=0.0, save=save)
     if _PRIMED[0] is not stack:  # any page change re-embeds that page, so a new stack
         t = tree(index)
         _PRIMED = (stack, t, centroids(index, t, stack))

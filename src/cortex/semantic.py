@@ -806,7 +806,8 @@ def _neighbours(index: Index, id: str):
 
 def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,
            rerank_with=None, fuse: str = "weighted", chats: bool = False,
-           quiet: dict[str, float] | None = None, explain: dict | None = None) -> list[dict]:
+           quiet: dict[str, float] | None = None, explain: dict | None = None,
+           save: bool = True) -> list[dict]:
     """Hybrid hits (0.7 cosine + 0.3 BM25; keyword only when `embed` is None; a cosine under
     MIN_COS counts as 0, and such a page is a hit only through a keyword match of at least
     MIN_KW_COVER of the query's terms), plus graph
@@ -821,20 +822,21 @@ def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,
     recent journal or chat page up to x(1 + RECENT_BOOST), or any recent dated page up to
     x(1 + CURRENT_BOOST) for an `is_current` query (`_factors`).
     With `rerank_with` (a `load_reranker` scorer) the top RERANK_POOL are reordered by it.
-    `explain` (a dict) is filled with the score parts for `explained`."""
+    `explain` (a dict) is filled with the score parts for `explained`. With `save` False (the
+    app's dry run) the vector cache is read, never written (`vectors`)."""
     limit = max(1, min(MAX_LIMIT, int(limit)))
     hops = max(0, min(2, int(hops)))
     if rerank_with is not None:
         pool = _rank(index, query, embed, max(limit, RERANK_POOL), hops, fuse, chats, quiet,
-                     explain)
+                     explain, save)
         out = None if explain is None else explain.setdefault("rerank", {})
         return rerank(index, query, pool, rerank_with, chats, quiet, out)[:limit]
-    return _rank(index, query, embed, limit, hops, fuse, chats, quiet, explain)
+    return _rank(index, query, embed, limit, hops, fuse, chats, quiet, explain, save)
 
 
 def _rank(index: Index, query: str, embed, limit: int, hops: int, fuse: str,
           chats: bool = False, quiet: dict[str, float] | None = None,
-          explain: dict | None = None) -> list[dict]:
+          explain: dict | None = None, save: bool = True) -> list[dict]:
     kw = raw_kw = _keyword(index, query)
     cos: dict[str, float] = {}
     raw_cos: dict[str, float] = {}
@@ -843,7 +845,8 @@ def _rank(index: Index, query: str, embed, limit: int, hops: int, fuse: str,
     use_cos = embed is not None and bool((query or "").strip())
     if use_cos:
         q = _unit(np.asarray(embed([QUERY_PREFIX + query])[0], dtype=np.float32))
-        ids, page, start, m = vectors(index, embed, len(q), RECALL_BUDGET, heads=HEAD_BUDGET)
+        ids, page, start, m = vectors(index, embed, len(q), RECALL_BUDGET, heads=HEAD_BUDGET,
+                                       save=save)
         best, where = best_chunks(page, start, m @ q, len(ids))
         at = dict(zip(ids, where.tolist(), strict=True))
         # under the floor a page is only a hit through a keyword match of most query terms,
@@ -911,13 +914,13 @@ def _rank(index: Index, query: str, embed, limit: int, hops: int, fuse: str,
 def search(index: Index, query: str, limit: int = 8, hops: int = 1,
            rerank: bool = True, chats: bool = False,
            quiet: dict[str, float] | None = None,
-           explain: dict | None = None) -> tuple[list[dict], str]:
+           explain: dict | None = None, save: bool = True) -> tuple[list[dict], str]:
     """`recall` with the downloaded model (and the reranker when present, on and `rerank`);
     without the embedder, keyword + graph and the NOT_SET_UP notice (never a download)."""
     embed = load_embedder()
     ce = load_reranker() if rerank else None
     return recall(index, query, embed, limit, hops, ce, chats=chats, quiet=quiet,
-                  explain=explain), \
+                  explain=explain, save=save), \
         "" if embed else NOT_SET_UP
 
 
