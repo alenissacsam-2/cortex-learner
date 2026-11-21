@@ -46,6 +46,12 @@ def _route(q):
     ("tell me everything about rust", "about", "rust"),
     ("What do I know about machine learning?", "about", "machine learning"),
     ("everything I have on dynamic programming", "about", "dynamic programming"),
+    ("rust vs go", "compare", "rust vs go"),
+    ("What's the difference between heaps vs stacks?", "compare", "heaps vs stacks"),
+    ("compare my notes on B-Trees with LSM trees", "compare", "b trees vs lsm trees"),
+    ("Compare kubernetes and helm", "compare", "kubernetes vs helm"),
+    ("what am I missing about databases?", "gaps", "databases"),
+    ("What else am I missing on distributed systems", "gaps", "distributed systems"),
 ])
 def test_typed_questions_are_routed(q, kind, term):
     got = _route(q)
@@ -61,6 +67,8 @@ def test_typed_questions_are_routed(q, kind, term):
     "when did I first", "summarize this article", "what happened on 11 September 2001?",
     "which sites did I visit yesterday?", "what did I study yesterday?",
     "how many times will I visit github tomorrow?",
+    "should I use postgres vs mysql?", "compare it and that", "rust vs rust",
+    "what am I missing?", "what is missing from this list?",
 ])
 def test_ordinary_questions_go_to_the_passages(q):
     assert _route(q) is None
@@ -203,6 +211,82 @@ def test_everything_about(vault):
     subject = chat_facts.facts(vault, _route("what do I know about two pointers?"), ALL_ON)
     assert subject["page"] == {"id": "two-pointers", "title": "Two pointers",
                                "kind": "concept"}
+
+
+def test_compare_counts_each_side_with_its_top_page(vault):
+    f = chat_facts.facts(vault, _route("kubernetes vs helm"), ALL_ON)
+    assert f["kind"] == "compare" and [r["term"] for r in f["rows"]] == ["kubernetes", "helm"]
+    kube, helm = f["rows"]
+    assert kube["total"] == 9 and kube["page"] == {"id": "kubernetes", "title": "Kubernetes",
+                                                   "day": "2026-09-01", "source": "notes"}
+    assert helm["total"] == 1 and helm["page"]["title"] == "Helm charts"
+    assert f["total"] == 10 and f["sources"]["notes"] == 4
+    said = chat_facts.say(f, TODAY)
+    assert said.startswith('"kubernetes" shows up 9 times (') and \
+        'most in "Kubernetes" (written on 1 Sep)' in said and '"helm" shows up 1 time' in said
+    off = chat_facts.facts(vault, _route("compare kubernetes and helm"), OFF)
+    assert "Night diary" not in json.dumps(off)
+    none = chat_facts.facts(vault, _route("zebra vs okapi"), ALL_ON)
+    assert chat_facts.empty(none) and chat_facts.say(none, TODAY) == (
+        'I found nothing about "zebra vs okapi" in your archive.')
+
+
+def test_compare_reads_each_top_page_with_its_written_on_line(vault):
+    s = Stream("ollama", ["Kubernetes has more [1]."])
+    try:
+        _, ev = _turn(vault, "compare kubernetes and helm", s.runner())
+    finally:
+        s.close()
+    user = s.bodies[0]["messages"][1]["content"]
+    assert "Kubernetes\nFrom: your note\nWritten on 2026-09-01\n" in user
+    assert "Helm charts\nFrom: your note\nWritten on 2026-11-12\n" in user
+    assert user.index('<untrusted_note id="facts">') < user.index('<untrusted_note id="1">')
+    assert next(e for e in ev if e["t"] == "step")["s"] == 'Comparing "kubernetes vs helm"'
+    src = next(e for e in ev if e["t"] == "src")["sources"]
+    assert [(x["n"], x["path"]) for x in src] == [(1, "notes/kubernetes.md")]
+
+
+def _hub(vault):
+    note(vault.root, "notes/devops.md", "title: DevOps\ntags: [topic]\n", "# DevOps\n")
+    note(vault.root, "notes/devops-ci.md", "title: CI pipelines\ntags: [topic]\n"
+         "related: ['[[devops]]']\n", "# CI pipelines\n")
+    for slug, title in (("docker", "Docker basics"), ("terraform", "Terraform state")):
+        note(vault.root, f"notes/{slug}.md", f"title: {title}\nrelated: ['[[devops]]']\n",
+             f"# {title}\n\nNotes.")
+    note(vault.root, "notes/vault-secrets.md", "title: Vault secrets\nprivate: true\n"
+         "related: ['[[devops]]']\n", "# Vault secrets\n\nPrivate.")
+    old = datetime(2026, 10, 2, 12, tzinfo=UTC).timestamp()
+    import os
+    os.utime(vault.root / "notes/terraform.md", (old, old))
+
+
+def test_gaps_lists_a_hubs_pages_oldest_first_and_unopened_recalls(vault):
+    _hub(vault)
+    f = chat_facts.facts(vault, _route("what am I missing about devops?"), ALL_ON)
+    assert f["page"] == {"id": "devops", "title": "DevOps", "kind": "note"}
+    assert [r["title"] for r in f["rows"]][:1] == ["Terraform state"]  # untouched longest
+    assert {r["title"] for r in f["rows"]} == {"Terraform state", "Docker basics",
+                                               "CI pipelines"}
+    assert f["rows"][0]["day"] == "2026-10-02" and f["total"] == 3
+    assert next(r for r in f["rows"] if r["title"] == "CI pipelines")["hub"] is True
+    assert "Vault secrets" not in json.dumps(f)  # a private page is never listed
+    assert f["unopened"] == []  # no recall log: that half is skipped
+    log = vault.root / ".cortex" / "recall-log.jsonl"
+    log.parent.mkdir(exist_ok=True)
+    log.write_text("\n".join(json.dumps(r) for r in [
+        {"rid": "a", "query": "devops on call rota", "ids": []},
+        {"rid": "b", "query": "devops docker layers", "ids": ["docker"]},
+        {"opened": "b", "id": "docker"},
+        {"rid": "c", "query": "pasta recipe", "ids": []}]) + "\n", encoding="utf-8")
+    f = chat_facts.facts(vault, _route("what am I missing about devops?"), ALL_ON)
+    assert f["unopened"] == ["devops on call rota"]
+    said = chat_facts.say(f, TODAY)
+    assert said.startswith('Your topic "DevOps" has 3 pages; the longest untouched') and \
+        '"Terraform state" (2 Oct)' in said and '"devops on call rota"' in said
+    assert chat_facts.facts(vault, _route("what am I missing about devops?"),
+                            dict(ALL_ON, notes=False))["rows"] == []
+    none = chat_facts.facts(vault, _route("what am I missing about knitting?"), ALL_ON)
+    assert chat_facts.say(none, TODAY).startswith('No topic page matches "knitting"')
 
 
 def test_a_private_subject_is_counted_only_under_the_private_switch(vault):

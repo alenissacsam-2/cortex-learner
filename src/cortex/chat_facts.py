@@ -7,6 +7,10 @@ code over every dated item Cortex holds, then worded by the local model in 1-3 s
 - timeline: "timeline of October", "what did I do each day last week?" (and a "what did I do"
   older than the digest's year)
 - about: "tell me everything about rust", "what do I know about heaps?"
+- compare: "rust vs go", "compare heaps and stacks": each side counted as `about` counts, with
+  its top page (most mentions), which the model then reads with a "Written on <date>" line
+- gaps: "what am I missing about databases?": the topic hub's pages with the day each last
+  changed, and recall questions about it that opened nothing (`.cortex/recall-log.jsonl`)
 
 `route` picks one from the words alone (no model); `facts` reads the stores: notes, saved AI
 chats and journal lines (`chat._pages_in`), browsing visits (`.cortex/browse/store.db`) and
@@ -55,6 +59,14 @@ _ABOUT = re.compile(_LEAD + r"(?:(?:(?:tell|show|give) me )?everything (?:(?:i|y
                     r"(?:know|knows|have|has|wrote|saved) )?(?:about|on|regarding)"
                     r"|what (?:do|did) i know about|what (?:do i have|have i got) (?:on|about))"
                     r" (?P<x>.+)")
+
+
+_MINE = r"(?:my (?:notes|pages|thoughts) (?:on|about) )?"  # "compare my notes on X and Y"
+_COMPARE = re.compile(_LEAD + rf"(?:compare {_MINE}(?P<a>.+?) (?:and|with|to|vs|versus) {_MINE}"
+                      r"(?P<b>.+)|(?:what is )?(?:the )?(?:difference between )?(?P<c>.+?) "
+                      r"(?:vs|versus) (?P<d>.+))")
+_GAPS = re.compile(_LEAD + r"what (?:am i|have i been|else am i) missing (?:about|on|in|for) "
+                   r"(?P<x>.+)")
 
 
 def _per(n: int) -> str:
@@ -114,7 +126,8 @@ def words(term: str) -> list[str]:
 
 
 def route(text: str, got, today: date) -> dict | None:
-    """{kind (count, first, last, timeline, about), term, lo, hi, focus, unit} for a question
+    """{kind (count, first, last, timeline, about, gaps, compare), term, lo, hi, focus, unit,
+    and for compare its two sides} for a question
     `route` answers from Cortex's data, or None (the passages answer it). `got` is
     chat._when's (first day, last day, span) of `text`'s own date phrase. No date: all days, or
     the last 7 for a timeline. Ranges stop at today."""
@@ -169,6 +182,16 @@ def route(text: str, got, today: date) -> dict | None:
         if not words(term) and focus is None:
             return None  # "how many times did I?": nothing to count
         return {**base, "kind": "count", "term": term, "focus": focus, "unit": unit}
+    if m := _GAPS.fullmatch(rest):
+        term = _subject(m["x"])
+        return {**base, "kind": "gaps", "term": term} if words(term) else None
+    if m := _COMPARE.fullmatch(rest):
+        # not _subject: its leading verbs ("go", "read") can be a side's whole name
+        sides = [" ".join(_TAIL_FILL.sub("", " " + x).split()) for x in (
+            m["a"] or m["c"], m["b"] or m["d"])]
+        sides = [re.sub(r"^(?:(?:the|a|an|my) )+", "", s) for s in sides]
+        if all(words(s) for s in sides) and sides[0] != sides[1]:
+            return {**base, "kind": "compare", "term": " vs ".join(sides), "sides": sides}
     return None
 
 
@@ -338,7 +361,11 @@ def facts(vault, q: dict, sources: dict) -> dict:
     """The computed facts for route `q`: {kind, query, period: [first, last] or None for all
     days, total, sources: {source: count}, rows, coverage: {read, matched, off}} and, by kind,
     focus and unit (count), item (first, last), unit (timeline), page, first, last, related
-    and sites (about). An empty answer has total 0 and no rows."""
+    and sites (about), page and unopened (gaps). An empty answer has total 0 and no rows."""
+    if q["kind"] == "gaps":
+        return _gaps(vault, q, sources)
+    if q["kind"] == "compare":
+        return _compare(vault, q, sources)
     read, found, off, titles = _gather(vault, q, sources)
     out = {"kind": q["kind"], "query": q["term"],
            "period": None if q["lo"] == FIRST_DAY else [q["lo"], q["hi"]],
@@ -376,6 +403,98 @@ def facts(vault, q: dict, sources: dict) -> dict:
                         for s, n in sorted(sites.items(), key=lambda kv: (-kv[1], kv[0]))[:5]]
         out["page"] = _page(vault, q["term"], sources, titles)
     return out
+
+
+def _compare(vault, q: dict, sources: dict) -> dict:
+    """A compare's facts: per side (`rows`) {term, total, sources, page: the note or saved AI
+    chat that mentions it most, newest on a tie, {id, title, day, source}, or None}; the total
+    and sources of both sides."""
+    rows, read, off = [], 0, []
+    for side in q["sides"]:
+        r, found, off, titles = _gather(vault, {**q, "term": side, "focus": None}, sources)
+        read = max(read, r)  # both sides read the same items
+        top = max((it for it in found if it[2] in ("notes", "chats")),
+                  key=lambda it: (it[5], it[0]), default=None)
+        rows.append({"term": side, "total": sum(it[4] for it in found),
+                     "sources": _counts(found),
+                     "page": None if top is None else {
+                         "id": titles.get(top[3].casefold(), ("",))[0], "title": top[3],
+                         "day": top[0], "source": top[2]}})
+    by = {s: sum(r["sources"].get(s, 0) for r in rows) for s in SOURCES}
+    total = sum(r["total"] for r in rows)
+    return {"kind": "compare", "query": q["term"],
+            "period": None if q["lo"] == FIRST_DAY else [q["lo"], q["hi"]], "total": total,
+            "sources": {s: n for s, n in by.items() if n}, "rows": rows,
+            "coverage": {"read": read, "matched": total, "off": off}}
+
+
+UNOPENED = 5  # recall questions listed by a gaps answer
+
+
+def _gaps(vault, q: dict, sources: dict) -> dict:
+    """A gaps answer's facts: the topic hub matching the term (`page`; an exact title first,
+    else the shortest title holding every word), its sub-topics and pages (`rows`: {title,
+    day it last changed, source, hub}, the longest untouched first) and recall questions
+    holding the term whose results were never opened (`unopened`). Hubs are notes: nothing
+    without the notes switch. The shared index holds no private page, so none is listed."""
+    from datetime import UTC, datetime
+
+    from cortex import chat, semantic, topics
+    from cortex.events import local_day
+
+    off = [k for k, on in sources.items() if not on]
+    out = {"kind": "gaps", "query": q["term"], "period": None, "total": 0, "sources": {},
+           "rows": [], "more": 0, "page": None, "unopened": [],
+           "coverage": {"read": 0, "matched": 0, "off": off}}
+    if not sources.get("notes"):
+        return out
+    match = _matcher(words(q["term"]))[0]
+    key = q["term"].casefold()
+    with chat._INDEX_LOCK:
+        idx = chat._index(vault)
+        t = topics.tree(idx)
+        title = {h: chat_study._title(x) or h for h, x in t.title.items()}
+        hub = min((h for h in t.title if match(f"{h} {title[h]}")),
+                  key=lambda h: (title[h].casefold() != key, len(title[h]), h), default=None)
+        if hub is None:
+            return out
+        kids = [*t.kids.get(hub, []), *sorted(topics.members(idx, t).get(hub, ()))]
+        paths = {i: p for p, i in idx._ids.items()}
+        pages = [(i, idx._notes[i]) for i in kids if i in idx._notes and i in paths]
+    rows = []
+    for i, n in pages:
+        src = "chats" if semantic.is_chat(n) else "notes"
+        if not sources.get(src):
+            continue
+        try:
+            day = local_day(datetime.fromtimestamp(paths[i].stat().st_mtime, UTC))
+        except OSError:
+            continue
+        rows.append({"title": chat_study._title(n["title"]) or i, "day": day, "source": src,
+                     "hub": topics.is_hub(n)})
+    rows.sort(key=lambda r: (r["day"], r["title"]))
+    counts = Counter(r["source"] for r in rows)
+    out.update(total=len(rows), sources={s: counts[s] for s in SOURCES if counts[s]},
+               rows=rows[:ROWS], more=max(0, len(rows) - ROWS), unopened=_unopened(vault, match),
+               page={"id": hub, "title": title[hub], "kind": "note"},
+               coverage={"read": len(pages), "matched": len(rows), "off": off})
+    return out
+
+
+def _unopened(vault, match) -> list[str]:
+    """Recall questions (`recall_log`; [] without the log) matching the term whose results were
+    never opened, newest first: what was looked for and not found."""
+    from cortex import recall_log
+
+    rows = recall_log.rows(vault)
+    opened = {r.get("opened") for r in rows}
+    out: list = []
+    for r in reversed(rows):
+        asked = chat_study._title(" ".join(str(r.get("query") or "").split()))
+        if r.get("rid") and r["rid"] not in opened and asked and match(asked) \
+                and asked not in out:
+            out.append(asked)
+    return out[:UNOPENED]
 
 
 def _buckets(found: list, unit: str) -> tuple[list, int]:
@@ -448,6 +567,10 @@ def say(f: dict, today: date) -> str:
     subject = f'"{q}"' if q else "anything"
     if f["kind"] == "count" and f["focus"] and not q and not f["total"]:
         return f"I found no {NOUN[f['focus']]}s{when} in your archive."
+    if f["kind"] == "gaps":
+        return _say_gaps(f, today)
+    if f["kind"] == "compare" and f["total"]:
+        return "; ".join(_say_side(r, when, today) for r in f["rows"]) + "."
     if empty(f):
         return f"I found nothing about {subject} in your archive{when}."
     if f["kind"] == "count":
@@ -484,6 +607,31 @@ def say(f: dict, today: date) -> str:
     return " ".join(parts)
 
 
+def _say_side(r: dict, when: str, today: date) -> str:
+    if not r["total"]:
+        return f'"{r["term"]}" shows up nowhere{when}'
+    p = r["page"]
+    return (f'"{r["term"]}" shows up {chat_study._plural(r["total"], "time")}{when} '
+            f"({_split(r['sources'])})" + (f', most in "{p["title"]}" (written on '
+                                            f'{_day(p["day"], today)})' if p else ""))
+
+
+def _say_gaps(f: dict, today: date) -> str:
+    if not f["page"]:
+        return f'No topic page matches "{f["query"]}", so I cannot list what is under it.'
+    head = f'Your topic "{f["page"]["title"]}"'
+    if not f["rows"]:
+        out = [f"{head} has no pages under it yet."]
+    else:
+        old = "; ".join(f'"{r["title"]}" ({_day(r["day"], today)})' for r in f["rows"][:SHOWN])
+        out = [f"{head} has {chat_study._plural(f['total'], 'page')}; the longest untouched, "
+               f"by the day each last changed: {old}."]
+    if f["unopened"]:
+        out.append("Searches about it that opened nothing: "
+                   + "; ".join(f'"{x}"' for x in f["unopened"]) + ".")
+    return " ".join(out)
+
+
 def _lines(f: dict, today: date) -> list[str]:
     """Every fact as a line for the model: the plain-word summary, then the rows."""
     out = [say(f, today)]
@@ -497,6 +645,11 @@ def _lines(f: dict, today: date) -> list[str]:
             tops = "; ".join(f"{s}: {', '.join(ts)}" for s, ts in r["top"].items())
             out.append(f"- {r['from']}" + (f" to {r['to']}" if r["to"] != r["from"] else "")
                        + f": {r['total']} items ({_split(r['sources'])}). {tops}")
+    elif f["kind"] == "gaps":
+        out += [f"- last changed {r['day']}: {r['title']}" + (" (sub-topic)" if r["hub"] else "")
+                for r in f["rows"]]
+    elif f["kind"] == "compare":
+        pass  # say holds both sides
     else:
         if f["sites"]:
             out.append("Sites: " + ", ".join(f"{s['site']} ({s['visits']} visits)"
@@ -510,14 +663,17 @@ def prompt(f: dict, found: list, question: str, today: date) -> str:
     from cortex import ask
 
     head = _wrap("facts", "Facts computed by Cortex:\n" + "\n".join(_lines(f, today)))
-    body = ask.prompt(found, question) if found else f"Question: {question.strip()}"
+    # a compare's top pages say when each was written: a view may have changed since
+    body = ask.prompt(found, question, "Written on" if f["kind"] == "compare" else "Date:") \
+        if found else f"Question: {question.strip()}"
     return (f"{head}\n\n{body}\n\n(Answer in 1 to 3 sentences with only the facts' numbers and "
             "dates.)")
 
 
 STEP = {"count": "Counting {q}", "first": "Finding the first time {q} shows up",
         "last": "Finding the last time {q} shows up", "timeline": "Putting together your timeline",
-        "about": "Gathering everything about {q}"}
+        "about": "Gathering everything about {q}", "compare": "Comparing {q}",
+        "gaps": "Looking for gaps in {q}"}
 
 
 def step(q: dict, today: date) -> str:

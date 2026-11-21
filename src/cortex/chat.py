@@ -722,6 +722,27 @@ def relatives(vault: Vault, text: str) -> list[str]:
     return out[:RELATIVES]
 
 
+def _page_passages(vault: Vault, ids: list) -> list[dict]:
+    """The start of each page in `ids` as a passage (`ask._passages`' shape), for a compare's
+    top pages. `chat_facts` named them under Chat's switches, so a private one (only there
+    under `private`) is read as `ask.private_pages` reads it."""
+    with _INDEX_LOCK:
+        idx = _index(vault)
+        paths = {i: p for p, i in idx._ids.items()}
+        private = set(idx._private)
+    out = []
+    for i in dict.fromkeys(ids):
+        if i not in paths or (n := ask._page(vault, paths[i], i)) is None:
+            continue
+        p = ask._note(vault, i, n, paths[i].relative_to(vault.root).as_posix(),
+                      semantic._chunk_text(n, 0)[:ask.PASSAGE],
+                      "chat" if semantic.is_chat(n) else "note",
+                      **({"private": True} if i in private else {}))
+        p["at"], p["len"] = ask._span(p.pop("_body"), p["text"], p["title"])
+        out.append(p)
+    return out
+
+
 def _clean(text: str) -> str:
     """Untrusted page text, line by line, without links, images, URLs or HTML."""
     return "\n".join(render.plain(ln, 10_000) for ln in text.splitlines()).strip()
@@ -778,7 +799,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
     as the model starts reading (the app shows each with a live count), {"t": "think"} while a
     reasoning model only thinks, {"t": "facts", facts} before any words of a typed data answer
-    (`chat_facts`: count, first, last, timeline, about; the model then only words them, or
+    (`chat_facts`: count, first, last, timeline, about, compare, gaps; the model then only
+    words them (a compare also reads each side's top page), or
     `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
@@ -873,6 +895,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             emit({"t": "facts", "facts": facts})
             if fq["kind"] == "about" and semantic.load_embedder() is not None:
                 found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats)
+            elif fq["kind"] == "compare":  # each side's top page, read from its start
+                found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
+                                               if r["page"] and r["page"]["id"]])
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})

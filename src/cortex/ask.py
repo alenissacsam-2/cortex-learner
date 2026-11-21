@@ -282,11 +282,11 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
     return out
 
 
-def prompt(found: list[dict], question: str) -> str:
+def prompt(found: list[dict], question: str, dated: str = "Date:") -> str:
     """The user message: each passage wrapped as untrusted data with its From line (`origin`)
-    and its day when it has one, then the question."""
+    and its day when it has one (after `dated`), then the question."""
     return "\n\n".join(_wrap(str(n), f"{p['title']}\nFrom: {p.get('origin') or origin(p['kind'])}"
-                             + (f"\nDate: {p['day']}" if p.get("day") else "") + f"\n{p['text']}")
+                             + (f"\n{dated} {p['day']}" if p.get("day") else "") + f"\n{p['text']}")
                        for n, p in enumerate(found, 1)) + f"\n\nQuestion: {question.strip()}"
 
 

@@ -592,10 +592,17 @@
     let head;
     if (f.kind === 'count') head = big(f.total, f.unit === 'days' ? 'days' : f.focus ? FACT_NOUN[f.focus] : 'mentions');
     else if (f.kind === 'timeline') head = big(f.total, `items across ${n(f.rows.length + (f.more || 0))} ${f.unit}s`);
-    else if (f.kind === 'about') head = big(f.total, 'mentions');
+    else if (f.kind === 'about' || f.kind === 'compare') head = big(f.total, 'mentions');
+    else if (f.kind === 'gaps') head = big(f.total, f.page ? `pages under ${f.page.title}` : 'topic pages found');
     else head = f.item ? [h('span', { class: 'fx-n', text: f.item.day }), h('span', { text: `${f.kind} time: ${f.item.title} (${FACT_SRC[f.item.source] || f.item.source})` })]
       : big(0, 'matches');
-    const extra = f.kind === 'about' && f.first ? h('div', { class: 'fx-line', text: `First ${f.first.day}, last ${f.last.day}` + (f.page ? ` · page: ${f.page.title}` : '') }) : '';
+    const line = (text) => h('div', { class: 'fx-line', text });
+    let extra = f.kind === 'about' && f.first ? line(`First ${f.first.day}, last ${f.last.day}` + (f.page ? ` · page: ${f.page.title}` : '')) : '';
+    if (f.kind === 'compare') extra = (f.rows || []).map((r) => line(`${r.term}: ${n(r.total)}` + (r.page ? ` · most in ${r.page.title} (written ${r.page.day})` : '')));
+    if (f.kind === 'gaps') {
+      extra = (f.rows || []).slice(0, 10).map((r) => line(`${r.title} · last changed ${r.day}`));
+      if (f.unopened && f.unopened.length) extra.push(line(`Searched, opened nothing: ${f.unopened.join('; ')}`));
+    }
     const cov = f.coverage || {};
     return h('div', { class: 'facts', role: 'group', 'aria-label': 'Facts computed by Cortex' },
       h('div', { class: 'fx-top' }, h('span', { class: 'fx-ttl', text: 'Computed from your data' }), h('span', { class: 'ink-3', text: period + (f.query ? ` · “${f.query}”` : '') })),
