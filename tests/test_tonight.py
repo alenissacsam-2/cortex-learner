@@ -206,3 +206,11 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path):
     # Y on the focused card answers it through Review's endpoint, as on the Review page
     assert out["posted"][1:] == [["/api/review/approve", {"key": "k1"}]]  # after the Undo
     assert out["refocus"] == "Uses Vim"
+
+
+def test_the_apps_own_check_is_not_an_ai_app():
+    from cortex import tonight
+    events = [{"session": "s_a", "kind": "open", "payload": {"client": "cortex-app"}},
+              {"session": "s_b", "kind": "assessment", "grader": {"client": "cortex-app"}},
+              {"session": "s_c", "kind": "open", "payload": {"client": "claude-ai"}}]
+    assert tonight.clients(events) == {"s_c": "claude-ai"}
