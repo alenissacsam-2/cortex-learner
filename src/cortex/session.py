@@ -169,9 +169,11 @@ class SessionManager:
                                model=model, started=now, last_activity=now, before=before,
                                mark=self.vault.writes, exposed=mode == "capture" or recent)
         # an event so a sweep can find (and close and commit) a session that wrote no others;
-        # the pid lets a sweep close it as soon as this server process has gone
+        # the pid lets a sweep close it as soon as this server process has gone; `client` (the
+        # MCP handshake's name, never tool input) names the AI app for the app's Tonight tab
         self.log.append(session=self.current.id, kind="open", source="tutor", mode=mode,
-                        fields={"payload": {"pid": os.getpid()}}, now=now)
+                        fields={"payload": {"pid": os.getpid(), **(
+                            {"client": self.client[:100]} if self.client else {})}}, now=now)
         return self.current
 
     def require(self, tool: str, label: str | None = None) -> Session | None:

@@ -15,6 +15,7 @@
   <div class="brand"><span id="wordmark"></span><span class="greet">Set up and manage Cortex</span></div>
   <select class="section-select" id="section-select" aria-label="Section">
     <option value="home">Home</option>
+    <option value="tonight">Tonight</option>
     <option value="setup">Setup</option>
     <option value="chat">Chat</option>
     <option value="status">Status</option>
@@ -41,6 +42,7 @@
 <div class="shell" id="shell">
   <nav class="side" aria-label="Sections">
     <a href="/">Home</a>
+    <button type="button" data-s="tonight">Tonight</button>
     <button type="button" data-s="setup">Setup</button>
     <button type="button" data-s="chat">Chat</button>
     <button type="button" data-s="status">Status</button>
@@ -52,6 +54,11 @@
     <button type="button" data-s="vault">Dashboard and vault</button>
   </nav>
   <main id="main">
+    <section id="s-tonight" hidden tabindex="-1">
+      <h1 tabindex="-1">Tonight</h1>
+      <p class="lede">Close the day: what happened, what waits for you, what comes tomorrow.</p>
+      <div id="tonight"></div>
+    </section>
     <section id="s-setup" hidden tabindex="-1">
       <h1 tabindex="-1">Setup</h1>
       <p class="lede">Get Cortex working on this computer, one step at a time. Finished steps show ✓; every step can be skipped and done later.</p>

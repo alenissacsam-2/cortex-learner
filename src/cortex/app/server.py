@@ -294,7 +294,8 @@ class App:
                     "/api/chat/passage": self.chat_passage,
                     "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view,
-                    "/api/review": self.review, "/api/xray": self.xray}
+                    "/api/review": self.review, "/api/xray": self.xray,
+                    "/api/tonight": self.tonight}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/profiles": self.profiles_set,
@@ -336,7 +337,8 @@ class App:
             "/api/review/decision/dismiss": self.review_decision_dismiss,
             "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/review/import/dismiss": self.review_import_dismiss,
-            "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute}
+            "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
+            "/api/tonight/undo": self.tonight_undo}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -809,6 +811,36 @@ class App:
             raise NotFound
         return self._click("cortex_patch", "_dismiss", {
             "page": "imports", "section": "Imports", "text": key, "waiting": False})
+
+    # ---- Tonight (Gemini round 3 "Nightly Closeout"): close the day ----
+    def tonight(self) -> dict:
+        """The Tonight tab (cortex.tonight) for the current Cortex day, plus the Review view
+        its Today's 5 board shows; read-only, shown text only."""
+        from datetime import UTC, datetime
+
+        from cortex import tonight
+        from cortex.events import EventLog
+        v = self._vault()
+        return {**tonight.view(v, list(EventLog(v).iter_events()), datetime.now(UTC)),
+                "review": self.review()}
+
+    def tonight_undo(self, body: dict) -> dict:
+        """Undo one AI app's session shown under "What AI apps learned today", as `cortex
+        undo <session>` does (the CLI's own code, as a job). A session not shown there
+        (unknown, or already undone: its events went with it) is 404."""
+        from cortex import cli
+        sid, root = body.get("session"), self.need_root()
+        if not isinstance(sid, str) or sid not in {
+                g["session"] for g in self.tonight()["learned"]}:
+            raise NotFound
+
+        def run(job):
+            try:
+                return actions.capture(job, cli.undo, sid, vault=root)
+            finally:
+                self.core = None  # the Review clicks' Cortex reloads the reverted catalog
+
+        return self.jobs.start("Undoing an AI app's changes", "tonight", run)
 
     # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
     def xray(self) -> dict:
@@ -1911,6 +1943,20 @@ def show_window(url: str) -> bool:
         c.close()
 
 
+def start_url(app: App, now=None) -> str:
+    """The page the app opens on when it starts: Home, or Tonight from 20:00 until the Cortex
+    day rolls over at 04:00 local time (the owner's choice), once a vault exists. `now`: a
+    naive local datetime (tests); later navigation is never moved."""
+    from datetime import datetime
+
+    from cortex.events import DAY_ROLLOVER
+    h = (now or datetime.now()).hour
+    night = (h >= 20 or h < DAY_ROLLOVER.seconds // 3600) and app.root is not None \
+        and (app.root / ".cortex").is_dir()
+    return f"http://{HOST}:{app.port}/" + (f"manage?t={app.token}#tonight" if night
+                                           else f"?t={app.token}")
+
+
 def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
           ) -> tuple[ThreadingHTTPServer, App, str]:
     """The app's server, app.json and its watch and auto-import threads, not yet serving: the
@@ -1924,7 +1970,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             raise SystemExit(f"Port {port} is in use or not allowed ({e.strerror or e}). Pick "
                              "another, or leave --port out for a free one.") from None
         srv, app = make_server(root, 0)  # PORT is taken (a second Cortex, another program)
-    url = f"http://{HOST}:{app.port}/?t={app.token}"
+    url = start_url(app)
     try:
         _save_state(app)
     except OSError:  # no single-instance file: a second launch starts its own app

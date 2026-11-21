@@ -11,7 +11,7 @@
   history.replaceState(null, '', '/manage' + location.hash);
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const SECTIONS = ['setup', 'chat', 'status', 'review', 'xray', 'connect', 'llm', 'browse', 'vault'];
+  const SECTIONS = ['tonight', 'setup', 'chat', 'status', 'review', 'xray', 'connect', 'llm', 'browse', 'vault'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---- DOM helpers ---- */
@@ -1482,13 +1482,15 @@
     cards.forEach((c, j) => c.setAttribute('tabindex', j === k ? '0' : '-1'));
     cards[k].focus();
   }
+  // the sections whose cards answer the keys (Tonight shows Review's Today's 5) and their redraw
+  const CARD_PAGES = { review: () => renderReview(lastReview), tonight: () => renderTonight(lastTonight) };
   function reviewKey(e) {
-    if (current !== 'review' || e.ctrlKey || e.metaKey || e.altKey || reviewBusy) return;
+    if (!CARD_PAGES[current] || e.ctrlKey || e.metaKey || e.altKey || reviewBusy) return;
     const t = e.target || {}, tag = String(t.tagName || '').toUpperCase();
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || t.isContentEditable) return;
     const k = String(e.key || '').toLowerCase();
     if (!['j', 'k', 'y', 'n', 'r', 's'].includes(k)) return;
-    const cards = [...$('review').querySelectorAll('.rcard')], at = cards.indexOf(cardOf(document.activeElement));
+    const cards = [...$(current).querySelectorAll('.rcard')], at = cards.indexOf(cardOf(document.activeElement));
     if (k === 'j' || k === 'k') {
       e.preventDefault();
       focusCard(cards, at < 0 ? 0 : at + (k === 'j' ? 1 : -1));
@@ -1498,10 +1500,10 @@
     const c = cards[at];
     if (k === 's') {
       e.preventDefault();
-      if (c.skipId && lastReview) {
+      if (c.skipId) {
         reviewSkipped.add(c.skipId);
         reviewAt = at;
-        renderReview(lastReview);
+        CARD_PAGES[current]();
       } else focusCard(cards, at + 1);
       return;
     }
@@ -1512,12 +1514,10 @@
     Promise.resolve(c.keys[k]()).then(() => { reviewBusy = false; }, () => { reviewBusy = false; });
   }
   addEventListener('keydown', reviewKey);
-  function renderReview(d) {
-    lastReview = d;
-    badge(d.count);
-    const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
+  const list = (rows, empty) => (rows.length ? rows : [note(empty)]);
+  // Review's card makers, shared with Tonight; `act(path, body, said)` posts a click and redraws
+  function reviewCards(act) {
     const where = (x) => (PAGE[x.page] || x.page) + (x.section ? ` · ${x.section}` : '');
-    const list = (rows, empty) => (rows.length ? rows : [note(empty)]);
     const two = (y, n) => ({ y, n });  // [button, function] for Y and N
     const kb = (text, fn, cls, label) => { const b = btn(text, fn, cls, { 'aria-label': label }); return [b, fn]; };
     const pendingCard = (p, id) => {
@@ -1539,19 +1539,40 @@
       return card(`You told ${x.chats} chats: ${x.text}`, x.page === 'core' ? 'Core' : 'Preferences', null, [y[0], n[0]], two(y, n), id);
     };
     const retire = (x) => kb('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, `Retire: ${x.text}`);
-    const rules = d.rules || [];
-    const find = { pending: d.pending, conflict: d.conflicts || [], rule: rules };
-    const make = { pending: pendingCard, conflict: conflictCard, rule: ruleCard };
+    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire };
+  }
+  // R3-4's Today's 5 board (Review and Tonight): the view's `today` keys as cards, skips left out
+  function todayBoard(d, m) {
+    const find = { pending: d.pending || [], conflict: d.conflicts || [], rule: d.rules || [] };
+    const make = { pending: m.pendingCard, conflict: m.conflictCard, rule: m.ruleCard };
     const today = (d.today || []).filter((t) => !reviewSkipped.has(`${t.type}:${t.key}`)).map((t) => {
       const x = (find[t.type] || []).find((y) => y.key === t.key);
       return x ? make[t.type](x, `${t.type}:${t.key}`) : null;
     }).filter(Boolean);
+    return board('Today’s 5', { note: String(today.length) },
+      h('p', { class: 'help pad', text: 'Keys: J and K move between cards, Y approve, N dismiss, R retire, S skip.' }),
+      ...list(today, d.today_left === 0 ? 'Done for today. The lists below still wait.' : 'Nothing for today.'));
+  }
+  // after a key's action or a skip, focus stays at the same place among section `s`'s cards
+  function cardsDrawn(s) {
+    const cards = [...$(s).querySelectorAll('.rcard')];
+    if (reviewAt >= 0) {
+      const at = reviewAt;
+      reviewAt = -1;
+      focusCard(cards, at);
+    } else if (cards.length && !cards.some((c) => c.getAttribute('tabindex') === '0')) cards[0].setAttribute('tabindex', '0');
+  }
+  function renderReview(d) {
+    lastReview = d;
+    badge(d.count);
+    const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
+    const m = reviewCards(act);
+    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire } = m;
+    const rules = d.rules || [];
     const allRules = rules.length > 1 ? ['Approve all', () => act('/api/review/rule/approve-all', { keys: rules.map((x) => x.key) }, 'Added to your lines.'),
       { 'aria-label': `Approve all ${rules.length} repeated corrections` }] : null;
     put('review',
-      board('Today’s 5', { note: String(today.length) },
-        h('p', { class: 'help pad', text: 'Keys: J and K move between cards, Y approve, N dismiss, R retire, S skip.' }),
-        ...list(today, d.today_left === 0 ? 'Done for today. The lists below still wait.' : 'Nothing for today.')),
+      todayBoard(d, m),
       board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) => pendingCard(p)),
       'Nothing is waiting.')),
       board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) => {
@@ -1580,12 +1601,44 @@
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
         return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
       }), 'No edited imports.')));
-    const cards = [...$('review').querySelectorAll('.rcard')];
-    if (reviewAt >= 0) {  // after a key's action or a skip: focus stays at the same place
-      const at = reviewAt;
-      reviewAt = -1;
-      focusCard(cards, at);
-    } else if (cards.length && !cards.some((c) => c.getAttribute('tabindex') === '0')) cards[0].setAttribute('tabindex', '0');
+    cardsDrawn('review');
+  }
+
+  /* Tonight (Gemini round 3 "Nightly Closeout"): close the day. One GET (/api/tonight) holds
+     every board; Today's 5 is Review's own board, answered through Review's endpoints. Every
+     text is the server's shown text, set with textContent. */
+  let lastTonight = null;
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  function renderTonight(d) {
+    lastTonight = d;
+    const rv = d.review || {}, c = d.counts;
+    badge(rv.count);
+    const act = (path, body, said) => post(path, body, (r) => { renderTonight({ ...lastTonight, review: r }); toast.ok(said); });
+    const empty = !d.pulse.some((x) => x.n);
+    const pulse = empty ? [note('Nothing recorded today yet.')] : [
+      h('div', { class: 'pulse pad' }, d.pulse.map((x, i) => {
+        const label = `${x.from}–${x.to}: ${plural(x.n, 'event')}`;
+        return h('span', { class: `pcell l${x.level}${i === d.hour ? ' now' : ''}`, role: 'img', 'aria-label': label, title: label,
+          'aria-current': i === d.hour ? 'time' : null });
+      })),
+      h('p', { class: 'pad ink-2', text: `${plural(c.added, 'page')} added · ${plural(c.changed, 'page')} changed · ${plural(c.chat_turns, 'chat turn')} · ${plural(c.recorded, 'thing')} recorded by AI apps` }),
+      d.sources.length ? h('div', { class: 'pad inline' }, d.sources.map((s) => h('span', { class: 'chip', text: `${s.source}: ${s.n}` }))) : null];
+    const five = todayBoard(rv, reviewCards(act));
+    const paused = rv.paused || [];
+    five.append(h('div', { class: 'pad inline' }, btn('Open Review', () => show('review', true), 'linkbtn')),
+      paused.length ? note(`Review stopped offering ${paused.map((p) => p.label).join(', ')}; Status has Resume.`) : '');
+    const learned = d.learned.map((g) => h('div', { role: 'group', 'aria-label': `${g.client}: ${plural(g.rows.length, 'change')}` },
+      row(g.client, plural(g.rows.length, 'change'), `Session ${g.session}`, [
+        btn('Undo', () => job('/api/tonight/undo', { session: g.session }), null, { 'aria-label': `Undo everything ${g.client} saved in session ${g.session}` })]),
+      g.rows.map((x) => row(x.text, x.id, x.time, null))));
+    put('tonight',
+      board('Today', { note: d.day }, ...pulse),
+      five,
+      board('What AI apps learned today', { note: String(d.learned.reduce((n, g) => n + g.rows.length, 0)) },
+        ...list(learned, 'No AI app saved anything today.')),
+      board('Tomorrow', { note: d.tomorrow_day }, ...list(d.tomorrow.map((x) => row(x.title, x.subject, null, null)), 'Nothing due tomorrow.'),
+        d.tomorrow.length ? h('p', { class: 'pad ink-2' }, 'A 2-minute cold check tomorrow: ask any AI app ', h('code', { text: '/cortex review' }), '.') : null));
+    cardsDrawn('tonight');
   }
 
   /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come
@@ -1746,7 +1799,7 @@
     put('setup', ...d.order.map((k) => steps[k]), sFinish);
   }
 
-  const RENDER = { setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
+  const RENDER = { tonight: renderTonight, setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 
   /* ---- header: wordmark, theme, quit, nav ---- */
   $('wordmark').append(dm('CORTEX', 3, 'Cortex'));
