@@ -664,12 +664,13 @@ class App:
         return item
 
     def review_rule_approve(self, body: dict) -> dict:
-        """A repeated correction (plan 5b) approved: me/core's `## Core` gets it as the user's
-        own line, written as Approve writes a waiting one (`confirm: clicked`)."""
+        """A repeated correction (plan 5b) approved: me/core's `## Core` (a standing rule) or
+        me/preferences' `## Personal` gets it as the user's own line (`corrections.bound`),
+        written as Approve writes a waiting one (`confirm: clicked`)."""
         x = self._rule(body)
         return self._click("cortex_patch", "cortex_patch", {
-            "id": "me/core", "op": "append_to_section", "target": "Core", "text": x["text"],
-            "user_confirmed": True})
+            "id": f"me/{x['page']}", "op": "append_to_section", "target": x["section"],
+            "text": x["text"], "user_confirmed": True})
 
     def review_rule_dismiss(self, body: dict) -> dict:
         """A repeated correction dismissed: a `dismiss` change on page `corrections` holds its

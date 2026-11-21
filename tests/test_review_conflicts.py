@@ -1,7 +1,8 @@
 """Plan 5b: cortex_patch's `possible_update_of` (word overlap, a warm embedder, never a model
 load), the Review's conflict pairs and their Keep both / left / right, and repeated corrections
-mined from imported chats (two or more chats, private chats skipped, the incremental scan,
-Approve into me/core, Dismiss remembered), with the API escaping note text."""
+mined from imported chats (two or three chats by kind, private chats skipped, the incremental
+scan, Approve into me/preferences or me/core, Dismiss remembered), with the API escaping note
+text."""
 
 import hashlib
 import json
@@ -188,15 +189,34 @@ def corrections_vault(root):
 def test_a_correction_seen_in_two_chats_is_offered(root, app):  # noqa: F811
     corrections_vault(root)
     (rule,) = app.review()["rules"]  # French: one non-private chat only; the question: none
-    assert (rule["text"], rule["chats"]) == ("don't use bullet points", 2)
+    assert (rule["text"], rule["chats"], rule["page"]) == (
+        "don't use bullet points", 2, "preferences")
     cache = json.loads((root / corrections.CACHE).read_text("utf-8"))["chats"]
     assert cache["c-four"]["lines"] == [] and "French" not in json.dumps(cache["c-four"])
     view = app.review_rule_approve({"key": rule["key"]})
     assert view["rules"] == []  # now a live line about the user
-    core = (root / "me" / "core.md").read_text("utf-8")
-    assert f"- don't use bullet points (confirmed {today()}) ^c-" in core
-    (row,) = live(root, "core")
+    page = (root / "me" / "preferences.md").read_text("utf-8")
+    assert f"- don't use bullet points (confirmed {today()}) ^c-" in page.split("## Personal")[1]
+    (row,) = [r for r in live(root, "preferences") if "bullet" in r["text"]]
     assert (row["tier"], row["confirm"]) == ("confirmed", "clicked")
+
+
+def test_a_core_rule_or_a_soft_wording_needs_three_chats(root, app):  # noqa: F811
+    """RR-25: a standing always/never line is pinned to every chat, and a soft opener is often
+    no correction at all, so both need 3 chats; a preference line needs 2."""
+    chat(root, "s-one", ["Never answer in French", "too long, keep it short"])
+    chat(root, "s-two", ["never answer in French", "Too long. Keep it short"])
+    assert app.review()["rules"] == []
+    chat(root, "s-three", ["Never answer in French!", "way too long, keep it short"])
+    got = {r["text"]: (r["chats"], r["page"]) for r in app.review()["rules"]}
+    assert got == {"Never answer in French": (3, "core"),
+                   "Too long. Keep it short": (3, "preferences")}
+    key = next(r["key"] for r in app.review()["rules"] if r["page"] == "core")
+    app.review_rule_approve({"key": key})
+    assert "- Never answer in French (confirmed" in (root / "me" / "core.md").read_text("utf-8")
+    assert corrections.bound("from now on, use metric units")[::2] == ("core", 3)
+    assert corrections.bound("I prefer metric units")[::2] == ("preferences", 3)
+    assert corrections.bound("please use metric units")[::2] == ("preferences", 2)
 
 
 def test_dismiss_is_remembered_by_hash(root, app):  # noqa: F811
@@ -234,10 +254,12 @@ def test_the_scan_reads_only_changed_chats(root, monkeypatch):
 def test_is_correction():
     for t in ("don't use emojis", "Stop apologising", "No, I said Python 3.12", "always cite",
               "Never answer in French", "please use metric units", "Please don't do that",
-              "I told you: short answers"):
+              "I told you: short answers", "I prefer metric units", "From now on, cite sources",
+              "That's too long", "not what I meant", "Actually, use Rust"):
         assert corrections.is_correction(t), t
     for t in ("don't you think so?", "use the function above", "how do I stop a thread",
-              "x" * 201, "Why don't you try", ""):
+              "x" * 201, "Why don't you try", "", "actually is that right?", "actuallyx",
+              "the list is too long"):
         assert not corrections.is_correction(t), t
 
 
@@ -246,6 +268,7 @@ def test_the_api_escapes_conflicts_and_rules(root, app):  # noqa: F811
           "Always write <b>bold</b> [docs](http://evil.test/x)")
     chat(root, "e-one", ["Never use <script>x</script> emojis ![i](http://img.test/a.png)"])
     chat(root, "e-two", ["never use <script>x</script> emojis ![i](http://img.test/a.png)"])
+    chat(root, "e-three", ["Never use <script>x</script> emojis ![i](http://img.test/a.png)"])
     srv, a = _serve(root)
     try:
         code, js, raw, _ = call(a, "GET", "/api/review")

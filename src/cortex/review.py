@@ -289,7 +289,7 @@ def view(vault, events, today: str) -> dict:
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
               "right": side(c["right"])} for c in conflicts(current, events)]
     from cortex import corrections, more_sources  # read imported pages: only the Review asks
-    rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"]}
+    rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"], "page": x["page"]}
              for x in corrections.proposals(vault, events, current)]
     decisions = [{**x, "project": plain(x["project"], 80), "subject": plain(x["subject"], SHOWN)}
                  for x in more_sources.decision_proposals(vault, events)]
