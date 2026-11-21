@@ -202,6 +202,20 @@ def test_private_core_and_hidden_subjects_stay_out(home, vroot):
     assert "CANARY-THNK-4Q" in packs.pack(Vault(vroot), "general")  # personality is not private
 
 
+def test_a_core_line_muted_in_the_xray_stays_out_of_rules_and_packs(home, vroot):
+    from cortex import xray
+    note(vroot, "me/core.md", "id: core\n",
+         "# Core\n\n## Core\n- Call me Sam.\n- CANARY-MUTE-4Q is muted. ^c-mmmmm\n")
+    v = Vault(vroot)
+    assert "CANARY-MUTE-4Q" in packs.rule_block(v)
+    xray.set_flag(v, "mute", xray.claim("c-mmmmm"), True)
+    (home / ".codex").mkdir()
+    targets.by_id()["codex"].apply(entry(vroot))
+    out = (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8") + "".join(
+        packs.pack(v, n) for n in packs.PACKS)
+    assert "Call me Sam." in out and "CANARY-MUTE-4Q" not in out
+
+
 # ---- context packs -----------------------------------------------------------------------
 
 

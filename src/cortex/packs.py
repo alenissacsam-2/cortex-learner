@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from cortex import access, planner, prime
+from cortex import access, planner, prime, xray
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.vault import Vault, is_private
@@ -41,13 +41,17 @@ def lines(vault: Vault, scopes, now: datetime | None = None) -> tuple[list[str],
     """(core lines, preference lines) for a pack of `scopes` (None: all)."""
     now = now or datetime.now(UTC)
     today = local_day(now)
-    served = prime.served_claims(vault, list(EventLog(vault).iter_events()))
+    events = list(EventLog(vault).iter_events())
+    served = prime.served_claims(vault, events)
     private = {p for p in ("core", *access.SECTIONED)
                if (n := prime.me(vault, p)) is not None and is_private(n)}
-    core = prime.core_lines(vault, served, today, private)
+    # as prime.core: X-ray muted lines, and R3-3 held ones while their pair waits, stay out
+    xs, ids = xray.settings(vault), prime.claim_ids(vault)
+    xs = {**xs, "mute": xs["mute"] | prime.held(vault, events, today)}
+    core = prime.core_lines(vault, served, today, private, ids, xs["mute"])
     allow = None if scopes is None else (lambda p, h: access.scope_section(scopes, p, h))
-    prefs = [r[3] for r in prime.pref_rows(vault, "", served, today, core, private, allow)
-             if not r[4]]
+    prefs = [r[3] for r in prime.pref_rows(vault, "", served, today, core, private, allow,
+                                           ids, xs) if not r[4]]
     bad = _hidden_words(vault)
     ok = [[ln for ln in got if not any(b.search(ln.lower()) for b in bad)] for got in (core, prefs)]
     return ok[0], ok[1]
