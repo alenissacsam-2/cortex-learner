@@ -1954,6 +1954,38 @@ def test_doctor_in_the_app_points_at_setup_not_at_cortex_app(app, vault):
     assert "cortex app" in doctor.check_search_model()[3]
 
 
+def test_capture_takes_only_its_own_threads_output(capsys):
+    """Audit 21 Nov A8: while a job runs, another thread's print (the HTTP server, the update
+    check) stays on the console and out of the job's lines."""
+    import typer
+
+    said, started, printed = [], threading.Event(), threading.Event()
+
+    class Job:
+        def say(self, line):
+            said.append(line)
+
+    def other():
+        started.wait(5)
+        print("from another thread")
+        printed.set()
+
+    def fn():
+        print("job print")
+        started.set()
+        printed.wait(5)
+        typer.echo("job echo")
+        typer.echo("job err", err=True)
+
+    t = threading.Thread(target=other)
+    t.start()
+    out = actions.capture(Job(), fn)
+    t.join()
+    assert out == {"ok": True, "lines": ["job print", "job echo", "job err"]}, out
+    assert said == out["lines"]
+    assert "from another thread" in capsys.readouterr().out
+
+
 def test_llm_settings_refuse_no_model_but_keep_the_switch(app):
     """QA 6: Save with no model is refused (never `model: null`); the on/off switch alone
     still saves; the page gets Ollama's state in Setup's words."""
