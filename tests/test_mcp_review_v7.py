@@ -122,3 +122,15 @@ def test_a_taken_test_waiting_for_its_result_is_no_longer_coming_up(root):
 
     run(root, body)
     assert "outcome: \"taken\"" in (root / "assessments" / "zz-oa.md").read_text(encoding="utf-8")
+
+
+def test_a_test_summary_can_be_corrected_after_the_test(root):
+    async def body(call):
+        await call("cortex_log", {"kind": "assessment_result",
+                                  "payload": {"assessment": "zz-oa", "outcome": "pending"}})
+        out = await call("cortex_patch", {"id": "zz-oa", "op": "set_field", "target": "summary",
+                                          "text": "MCQs plus a sliding window and a grid DP"})
+        assert "error" not in out, out
+
+    run(root, body)
+    assert "grid DP" in (root / "assessments" / "zz-oa.md").read_text(encoding="utf-8")

@@ -36,7 +36,7 @@ CHAT_ARCHIVE = "archive/chats"
 # SPEC §15a.2: fields marked * per kind. TOOL_PROPS are written only by set_tool_props.
 SET_FIELD_WHITELIST = {
     "problem": {"status", "solved_on"},
-    "assessment": {"date", "outcome", "score"},
+    "assessment": {"date", "outcome", "score", "summary"},
     "application": {"status"},
     "track": {"current_day"},
     "resource": {"status", "summary", "url"},
