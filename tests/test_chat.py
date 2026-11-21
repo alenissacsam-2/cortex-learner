@@ -798,11 +798,58 @@ def test_errors_are_events(vault, stream, monkeypatch):
     assert ev == [{"t": "err", "code": "no_local_model", "message": ask.NO_MODEL,
                    "id": ev[0]["id"]}]
     dead = localllm.Runner("ollama", "http://127.0.0.1:9", "m")  # nothing listens
-    _, ev = _turn(vault, None, "car motor", dead)
-    assert ev[-1]["t"] == "err" and ev[-1]["code"] == "no_answer"
+    _, ev = _turn(vault, None, "car motor", dead)  # asked twice, then the pages searched
+    assert ev[-1]["t"] == "done" and ev[-2]["searched"] and not ev[-2]["sources"]
+    assert chat.SAID_NOTHING.format(model="m") in [e.get("s") for e in ev if e["t"] == "tok"]
     monkeypatch.setattr(semantic, "_embedder", None)
     _, ev = _turn(vault, None, "car motor", dead)
     assert ev[0]["code"] == "not_set_up"
+
+
+class Silent(Stream):
+    """Streams `first` to the first request and `then` to every later one."""
+
+    def __init__(self, first, then):
+        super().__init__("openai", first)
+        self.then = then
+
+    def lines(self):
+        if len(self.bodies) > 1:
+            self.pieces = self.then
+        yield from super().lines()
+
+
+def test_a_silent_model_is_asked_once_more(vault):
+    s = Silent(["  ", "<|im_end|>"], ["Pistons [1].<|im_end|>"])
+    try:
+        cid, ev = _turn(vault, None, "car motor", s.runner())
+    finally:
+        s.close()
+    assert len(s.bodies) == 2
+    assert "gemma3:2b said nothing; asking once more" in [e.get("s") for e in ev
+                                                          if e["t"] == "step"]
+    assert ev[[e["t"] for e in ev].index("text")]["s"] == ""  # the empty first try is cleared
+    assert [e["s"] for e in ev if e["t"] == "text"][-1] == "Pistons [1]."
+    saved = chat.load(vault, cid)[-1]
+    assert saved["text"] == "Pistons [1]." and "unanswered" not in saved
+
+
+def test_still_nothing_shows_the_pages_searched_and_stays_out_of_history(vault, stream):
+    s = Silent(["</think>"], ["<|eot_id|>"])
+    try:
+        cid, ev = _turn(vault, None, "car motor", s.runner())
+    finally:
+        s.close()
+    assert len(s.bodies) == 2 and not [e for e in ev if e["t"] == "err"]
+    assert ev[-2]["sources"] == [] and 1 <= len(ev[-2]["searched"]) <= chat.SEARCHED
+    saved = chat.load(vault, cid)
+    assert saved[-1]["text"] == chat.SAID_NOTHING.format(model="gemma3:2b")
+    assert saved[-1]["unanswered"] is True
+    ok = stream("ollama", ["Engines [1]."])
+    _turn(vault, cid, "car motor torque", ok.runner())
+    msgs = ok.bodies[0]["messages"]  # Cortex's note never reaches the model as its own words
+    assert [m["role"] for m in msgs] == ["system", "user", "user"]  # as after a failed turn
+    assert "gave no answer" not in json.dumps(msgs)
 
 
 def test_a_cloud_runner_never_hears_private_passages(vault, monkeypatch):

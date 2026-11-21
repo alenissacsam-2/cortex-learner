@@ -33,6 +33,8 @@ DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PAS
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
+SAID_NOTHING = ("{model} gave no answer, twice. These are the pages it searched; open one to "
+                "read it, or ask again in other words.")
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
 SYSTEM = ask.SYSTEM + (" Earlier messages are the conversation so far: use them to understand a "
                        "follow-up question, but answer only from the passages in the latest "
@@ -669,7 +671,9 @@ def history(msgs: list, sources: dict | None = None) -> list:
     HISTORY_BUDGET, same-role neighbours joined (a failed turn leaves two user messages; some
     chat templates refuse that), starting with a user message. With `sources` (the switches
     now), an answer made with a switch now off is left out with the question(s) before it, so
-    a private site listed earlier never reaches the model after Private is turned off."""
+    a private site listed earlier never reaches the model after Private is turned off. A turn
+    the model never answered (`unanswered`: Cortex's note, not the model's words) is left out."""
+    msgs = [m for m in msgs if not m.get("unanswered")]
     if sources is not None:
         kept: list = []
         for m in msgs:
@@ -805,7 +809,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
     matched, also (names `relatives` added, when any)} when passages were searched (how many
-    the model read of how many the search found; saved on the answer too)}, {"t": "done", id,
+    the model read of how many the search found; saved on the answer too)}; {"t": "text", "s"}
+    replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
+    nothing is asked once more; still nothing, the answer is SAID_NOTHING with the pages it
+    searched (saved with `unanswered`). Then {"t": "done", id,
     model, seconds, stopped}; or {"t": "err", code (not_set_up, no_local_model, no_answer),
     message}. A set `cancel` stops the stream;
     the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
@@ -935,22 +942,38 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             if not thought and not parts:
                 thought.append(1)
                 emit({"t": "think"})
-        try:
-            for piece in runner.stream(messages, temperature=s["temperature"],
-                                       max_tokens=max_tokens, cancel=cancel,
-                                       on_thinking=thinking):
-                parts.append(piece)
-                emit({"t": "tok", "s": piece})
-                if "\n" in piece and _looping("".join(parts)):  # stop a loop, each line once
-                    parts[:] = [_once("".join(parts))]
-                    emit({"t": "text", "s": parts[0]})
-                    break
-        except (OSError, ValueError):  # no answer, a timeout, a refused url
-            pass
+        for attempt in range(2):  # a small model now and then says nothing: ask once more
+            if attempt:
+                if parts:  # only whitespace or leaked tokens came
+                    parts.clear()
+                    emit({"t": "text", "s": ""})
+                emit({"t": "step", "s": f"{runner.model} said nothing; asking once more"})
+            try:
+                for piece in runner.stream(messages, temperature=s["temperature"],
+                                           max_tokens=max_tokens, cancel=cancel,
+                                           on_thinking=thinking):
+                    parts.append(piece)
+                    emit({"t": "tok", "s": piece})
+                    if "\n" in piece and _looping("".join(parts)):  # stop a loop, each line once
+                        parts[:] = [_once("".join(parts))]
+                        emit({"t": "text", "s": parts[0]})
+                        break
+            except (OSError, ValueError):  # no answer, a timeout, a refused url
+                pass
+            said_raw = "".join(parts)
+            if (said := localllm._clean(said_raw)) != said_raw.strip():  # a leaked </think>
+                parts[:] = [said]
+                emit({"t": "text", "s": said})
+            if said or (cancel is not None and cancel.is_set()):
+                break
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
+        emit({"t": "tok", "s": answer})
+    unanswered = not answer and not stopped and bool(found)
+    if unanswered:  # still nothing: the pages it searched, listed below, instead of an error
+        answer = SAID_NOTHING.format(model=runner.model)
         emit({"t": "tok", "s": answer})
     if not answer and not stopped:
         emit({"t": "err", "code": "no_answer", "id": convo_id,
@@ -971,6 +994,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                  **({"facts": facts} if facts is not None else {}),
                  **({"coverage": coverage} if coverage else {}),
                  "model": model, "switches": dict(s["sources"]),
+                 **({"unanswered": True} if unanswered else {}),
                  **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched,

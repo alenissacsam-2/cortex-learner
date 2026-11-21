@@ -253,6 +253,17 @@ def test_classify_strips_think(serve):
     assert Runner("ollama", f.base, "m").classify("t", ["a", "b"]) == ("a", 0.7)
 
 
+@pytest.mark.parametrize("raw,want", [
+    ("The answer.<|im_end|>", "The answer."),
+    ("</think>\n\nThe answer [1].", "The answer [1]."),
+    ("Yes<end_of_turn>", "Yes"), ("Done.<|eot_id|>", "Done."), ("<|endoftext|>", ""),
+    ("Use <|pipe|> and </b> as they are", "Use <|pipe|> and </b> as they are"),
+    ("<think>plan</think>Real text<|im_end|>", "Real text"),
+])
+def test_clean_drops_leaked_tokens_not_words(raw, want):
+    assert localllm._clean(raw) == want
+
+
 def test_unclosed_think_is_failure(serve):
     f = serve({("POST", "/api/chat"): ollama_reply("<think>ran out", "<think>again")})
     assert Runner("ollama", f.base, "m").classify("t", ["a"]) is None
