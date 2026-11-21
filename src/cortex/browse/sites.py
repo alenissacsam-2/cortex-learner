@@ -2,7 +2,7 @@
 
 `record` folds a run's filtered items into per-day, per-site counts, rows of the browsing
 store's `site_days` table (the browser forgets old history; these counts do not; the older
-`.cortex/browse/site-days.json` is read in once and kept as a backup), keyed
+`.cortex/browse/site-days.json` is read in once by `cortex.browse.legacy`), keyed
 `site|category|private-domain`, so who may see a site is decided when the pages are written,
 from the settings of that moment. `write` makes, through `cortex.vault` only:
 - a visible page per site, `browse/sites/<category>/browse-<site>.md`, from the items of no
@@ -54,8 +54,8 @@ HIDDEN = DIR + "/private"  # never read by the index, the dashboard or any chat
 CACHE = ".cortex/browse/sites.json"  # the local LLM's output and the page hashes
 # a description made with an older prompt is made again on the next deepen
 DESC_PROMPT = 2
-DAYS = ".cortex/browse/site-days.json"  # the counts before the store: read in once, a backup
-VERDICTS = ".cortex/browse/verdicts.json"  # C1: the local model's label per text hash
+DAYS = ".cortex/browse/site-days.json"  # the counts before the store: `legacy.migrate` only
+VERDICTS = ".cortex/browse/verdicts.json"  # the labels before the store: `legacy.migrate` only
 SITES_DIR, HIDDEN_SITES_DIR = DIR + "/sites", HIDDEN + "/sites"
 INDEX_ID, HIDDEN_INDEX_ID = "browse-sites", "browse-private-sites"
 PROFILE_ID, HIDDEN_PROFILE_ID = "browse-profile", "browse-private-profile"
@@ -185,37 +185,27 @@ def _save(vault: Vault, rel: str, data: dict) -> None:
 def load_days(vault: Vault, only_days: set[str] | None = None,
               only_sites: set[str] | None = None) -> tuple[dict, str | None]:
     """The per-day counts {day: {key: counts}}: all of them, those of the days `only_days` or
-    of the sites `only_sites`; and the name a torn site-days.json was set aside as by this
-    call (R2-7, when it was read into the store)."""
-    con, bad = _days_store(vault)
-    if con is None:  # a vault imported before the store: the file as it is
-        days, bad = _json_days(vault)
-        return {d: {k: a for k, a in keys.items()
-                    if only_sites is None or _key_site(k) in only_sites}
-                for d, keys in days.items() if only_days is None or d in only_days}, bad
+    of the sites `only_sites`, from the browsing store ({} without one); and None (a torn
+    site-days.json is set aside by `legacy.migrate` now, never here)."""
     from cortex.browse import store
+
+    con = _days_store(vault)
+    if con is None:
+        return {}, None
 
     with closing(con):
         rows = store.day_rows(con, "counts", only_days, only_sites)
     out: dict = {}
     for d, k, c in rows:
         out.setdefault(d, {})[k] = json.loads(c)
-    return out, bad
-
-
-def days_read_in(vault: Vault) -> str | None:
-    """Make the store and read site-days.json into it, if not done yet (an import does this
-    first); the name a torn file was set aside as by this call."""
-    con, bad = _days_store(vault, create=True)
-    con.close()
-    return bad
+    return out, None
 
 
 def stored_days(vault: Vault) -> set[str]:
     """Every day the site counts hold."""
-    con, _ = _days_store(vault)
+    con = _days_store(vault)
     if con is None:
-        return set(_json_days(vault)[0])
+        return set()
     with closing(con):
         return {d for (d,) in con.execute("SELECT DISTINCT day FROM site_days")}
 
@@ -224,7 +214,7 @@ def days_gen(vault: Vault) -> int:
     """A count that moves whenever the stored site counts change; 0 without a store."""
     from cortex.browse import store
 
-    con, _ = _days_store(vault)
+    con = _days_store(vault)
     if con is None:
         return 0
     with closing(con):
@@ -232,23 +222,10 @@ def days_gen(vault: Vault) -> int:
 
 
 def _days_store(vault: Vault, create: bool = False):
-    """(the browsing store, the name a torn site-days.json was set aside as): the file's
-    counts are read into the store once and the file stays as a backup, never read again.
-    (None, None) when there is no store and `create` is False."""
+    """The browsing store, or None when there is none and `create` is False."""
     from cortex.browse import store
 
-    if not create and not store.exists(vault):
-        return None, None
-    con = store.connect(vault)
-    try:
-        bad = None
-        if not store.get_meta(con, "days_migrated"):
-            days, bad = _json_days(vault)  # before the store's write lock: a big file is slow
-            store.migrate_days(con, days, _rows(days))
-    except BaseException:
-        con.close()
-        raise
-    return con, bad
+    return store.connect(vault) if create or store.exists(vault) else None
 
 
 def _key_site(key: str) -> str:
@@ -277,7 +254,7 @@ def _put_days(vault: Vault, days: dict, checkpoint: bool = False) -> None:
     (a forget): the old rows' page images leave the WAL too."""
     from cortex.browse import store
 
-    con, _ = _days_store(vault, create=True)
+    con = _days_store(vault, create=True)
     with closing(con):
         store.put_days(con, days, _rows(days))
         if checkpoint:
@@ -286,7 +263,8 @@ def _put_days(vault: Vault, days: dict, checkpoint: bool = False) -> None:
 
 def _json_days(vault: Vault) -> tuple[dict, str | None]:
     """site-days.json's counts, and the name an unreadable file was set aside as (R2-7): a
-    torn file is never read as empty, since it holds the days the browsers forgot."""
+    torn file is never read as empty, since it holds the days the browsers forgot. Only
+    `legacy.migrate` reads it."""
     p = vault.root / DAYS
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -332,39 +310,26 @@ def lean_days(vault: Vault) -> dict:
     and shared, so callers must not change it. Chat's answers read this."""
     from cortex.browse import store
 
-    # the version before the read: a change after it misses the cache next time
-    if store.exists(vault):
-        stamp = store.version(vault)
-    else:  # a vault imported before the store
-        try:
-            st = (vault.root / DAYS).stat()
-        except OSError:
-            return {}
-        stamp = (st.st_mtime_ns, st.st_size)
+    if not store.exists(vault):
+        return {}
+    stamp = store.version(vault)  # before the read: a change after it misses the cache next time
     hit = _LEAN.get(vault.root)
     if hit is None or hit[0] != stamp:
-        con, _ = _days_store(vault)
         lean: dict = {}
-        if con is None:
-            for day, keys in _json_days(vault)[0].items():
-                if isinstance(keys, dict):
-                    lean[day] = {k: _lean(a) for k, a in keys.items() if isinstance(a, dict)}
-        else:
-            with closing(con):
-                for d, k, a in store.day_rows(con, "lean"):
-                    lean.setdefault(d, {})[k] = json.loads(a)
+        with closing(store.connect(vault)) as con:
+            for d, k, a in store.day_rows(con, "lean"):
+                lean.setdefault(d, {})[k] = json.loads(a)
         hit = _LEAN[vault.root] = (stamp, lean)
     return hit[1]
 
 
 def load_verdicts(vault: Vault) -> dict[str, str]:
     """{privacy.text_key(text): label}: the local model's verdicts on titles and search terms
-    (a sensitive category or "ordinary"); hashes only, never the text. The older JSON file's
-    and the store's (`cortex.browse.store`), the store's winning."""
+    (a sensitive category or "ordinary"); hashes only, never the text. From the store
+    (`cortex.browse.store`; the older verdicts.json is read in by `legacy.migrate`)."""
     from cortex.browse import store
 
-    return {**{k: v for k, v in _load(vault, VERDICTS).items() if isinstance(v, str)},
-            **store.verdicts(vault)}
+    return store.verdicts(vault)
 
 
 def load_cache(vault: Vault) -> dict:

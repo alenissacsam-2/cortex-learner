@@ -22,7 +22,7 @@ interest lines); site_pages (one row per site and side: what the site Markdown p
 once `migrate` moved them out of the vault: the per-site numbers the brain and Chat read, so
 no reader ever scans the visits; `prof` holds what the CSVs and profiles need, so they are
 made from rows); site_days (`sites.record`'s counts per day and site key, with a lean copy
-for Chat; site-days.json is read in once, `migrate_days`, and kept as a backup); judged
+for Chat; site-days.json is read in once by `legacy.migrate` through `migrate_days`); judged
 (`ingest`'s privacy memo). Indexes: visits by day and by text hash; a first import into an
 empty store makes them after its rows (`bulk`).
 
@@ -773,15 +773,18 @@ def migrate(vault: Vault, *, settings: Settings, dry_run: bool = False, step=Non
     pages = [(p, _page_site(p)) for p in files]
     report = {"pages": sum(1 for _, s in pages if s), "files": len(files), "missing": 0,
               "zip": None, "removed": 0, "already": False}
+    from cortex.browse import legacy  # the counts from before the store first (F3)
+
+    moved = {} if dry_run else legacy.migrate(vault)
+    if moved.get(sites.DAYS, "migrated") != "migrated":  # torn or not read in: pages stay
+        report["error"] = "site counts unreadable"
+        return report
     with closing(connect(vault, memory=dry_run)) as con:
         if get_meta(con, "pages_migrated"):
             report["already"] = True
             if not files or dry_run:
                 return report
-        days, bad = sites.load_days(vault)
-        if bad:
-            report["error"] = "site counts unreadable"
-            return report
+        days, _ = sites.load_days(vault)
         llm = sites.load_cache(vault)["llm"]
         put_pages(con, sites.pages(vault, settings, days, llm), llm)
         held = {(s, bool(h)) for s, h in con.execute("SELECT site, hidden FROM site_pages")}

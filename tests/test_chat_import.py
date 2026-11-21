@@ -630,3 +630,65 @@ def test_a_start_time_too_far_apart_keeps_both_pages(root_committed, dirs, tmp_p
     _export(tmp_path, hour=11)  # an hour later: another chat that opened the same way
     assert chat_import.run(Vault(root_committed)) == {"saved": 2}
     assert len(_pages(root_committed)) == 2
+
+
+def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_committed, dirs,
+                                                                    app, monkeypatch):
+    """G2: Browsing › Chats kept private: title, app, date and category, 20 a page, newest
+    first; a shared chat, one the owner made shared again and private browsing never show,
+    nor any chat text past the title; a page written before the category was recorded is
+    judged again from its body; no MCP tool reads it."""
+    import inspect
+
+    from cortex import mcp_server
+    from cortex.app import hello
+    from cortex.events import EventLog
+    code, _ = dirs
+    for d in range(1, 26):
+        write(code / "p" / f"h{d}.jsonl", [
+            u(f"what do these symptoms mean {d}", ts=f"2026-10-{d:02d}T09:00:00Z"),
+            u(f"SECOND-TURN-{d}", ts=f"2026-10-{d:02d}T09:01:00Z")])
+    write(code / "p" / "plain.jsonl", [u("How do heaps work?", ts="2026-10-28T09:00:00Z")])
+    canary = root_committed / "browse" / "private" / "browse-private-2026-10-02.md"
+    canary.parent.mkdir(parents=True, exist_ok=True)
+    canary.write_text("---\nprivate: true\n---\nBROWSE-CANARY health\n", encoding="utf-8")
+    assert chat_import.run(Vault(root_committed)) == {"saved": 26}
+    mine = {x["chat_id"]: x for x in saved(root_committed)}
+    assert all(mine[f"p/h{d}"].get("category") == "health" for d in range(1, 26))
+    assert "category" not in mine["p/plain"]
+    # the owner made one shared again: it leaves the list
+    p = root_committed / CHATS / f"{mine['p/h25']['pages'][0]}.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("private: true\n", ""), encoding="utf-8")
+    # locked: counts by category only, no title anywhere
+    status, js, _, _ = call(app, "GET", "/api/browse/private-chats?offset=20")
+    assert status == 200 and js == {"rows": [], "total": 24, "offset": 0, "locked": True,
+                                    "by_category": {"health": 24}}
+    assert "symptoms" not in json.dumps(js)
+    monkeypatch.setattr(hello, "verify", lambda: (True, None))
+    assert call(app, "POST", "/api/home/unlock", {})[1]["unlocked"]
+    status, js, _, _ = call(app, "GET", "/api/browse/private-chats")
+    assert status == 200 and js["total"] == 24 and len(js["rows"]) == 20 and not js["locked"]
+    dates = [r["date"] for r in js["rows"]]
+    assert dates == sorted(dates, reverse=True)
+    top = js["rows"][0]
+    assert top["app"] == "Claude Code" and top["category"] == "health"
+    assert top["date"] == local_day(chat_import._when("2026-10-24T09:00:00Z"))
+    assert top["title"].startswith("what do these symptoms mean")
+    rest = call(app, "GET", "/api/browse/private-chats?offset=20")[1]
+    assert len(rest["rows"]) == 4 and rest["offset"] == 20
+    text = json.dumps([js, rest])
+    for gone in ("SECOND-TURN", "heaps", "BROWSE-CANARY"):
+        assert gone not in text, gone
+    assert call(app, "GET", "/api/browse/private-chats?offset=x")[1]["offset"] == 0
+    assert call(app, "GET", "/api/browse/private-chats", token=False)[0] == 401
+    call(app, "POST", "/api/home/lock", {})  # locked again: no row
+    js = call(app, "GET", "/api/browse/private-chats")[1]
+    assert js["locked"] and js["rows"] == [] and "symptoms" not in json.dumps(js)
+    # a page saved before the category was recorded: judged again from its body
+    evs = [dict(e, payload={k: v for k, v in e["payload"].items() if k != "category"})
+           if isinstance(e.get("payload"), dict) else e
+           for e in EventLog(Vault(root_committed)).iter_events()]
+    assert [r["category"] for r in chat_import.made_private(Vault(root_committed), evs)] \
+        == ["health"] * 24
+    src = inspect.getsource(mcp_server)
+    assert "made_private" not in src and "private-chats" not in src

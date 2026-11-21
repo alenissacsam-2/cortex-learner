@@ -485,7 +485,12 @@ class Ctx:
         self._openings: dict = {}  # opening -> [(source, start, path)]
 
     def audience(self, text: str) -> str:
-        return privacy.audience(privacy.category("", "/", text)[0], self.settings)
+        return self.judge(text)[1]
+
+    def judge(self, text: str) -> tuple[str | None, str]:
+        """(the sensitive category `text` falls in or None, that category's audience)."""
+        cat = privacy.category("", "/", text)[0]
+        return cat, privacy.audience(cat, self.settings)
 
     def excluded(self, cwd: str) -> bool:
         if cwd not in self._excluded:
@@ -607,13 +612,44 @@ def _ledger(events) -> dict:
     return out
 
 
+def made_private(vault: Vault, events, settings: privacy.Settings | None = None) -> list[dict]:
+    """The imported chats this module wrote private for a sensitive category and that are still
+    private, newest first: [{id, title, app, date, category}]; titles plain (`render.plain`),
+    never chat text. The category is the one recorded when the page was written; a page
+    written before it was recorded is judged again from its body under the settings of now
+    (listed only when that category is local-only)."""
+    ctx = Ctx(vault, settings)
+    out: dict[str, dict] = {}
+    for p in _ledger(events).values():
+        pid = _pid(p)
+        if not p.get("auto") or pid is None or pid in out:
+            continue
+        try:
+            n = vault.read("resource", pid)
+        except VaultError:
+            continue
+        if n.fields.get("private") is not True:
+            continue
+        cat = p.get("category")
+        if not isinstance(cat, str):
+            cat, aud = ctx.judge(n.body)
+            if aud != "local" or cat is None:
+                continue
+        out[pid] = {"id": pid, "title": render.plain(str(n.fields.get("title") or pid)),
+                    "app": LABELS.get(p.get("source"), str(p.get("source") or "")),
+                    "date": str(n.fields.get("date") or ""), "category": cat}
+    return sorted(out.values(), key=lambda r: (r["date"], r["id"]), reverse=True)
+
+
 def _event(evlog: EventLog, ledger: dict, source: str, cid: str, title: str, pid: str,
-           h: str) -> None:
+           h: str, category: str | None = None) -> None:
     """The chat_saved ledger line. The key makes a retry after a crash a no-op; `ledger` is
-    kept current for this pass."""
+    kept current for this pass. `category`: the sensitive category that made the page
+    private (`made_private` lists it)."""
     key = "chat-import:" + hashlib.sha1(f"{source}:{cid}".encode()).hexdigest()[:16] + f":{h}"
     payload = {"kind": "chat_saved", "source": source, "chat_id": cid, "title": title,
-               "pages": [pid], "auto": True, "hash": h}
+               "pages": [pid], "auto": True, "hash": h, **({"category": category} if category
+                                                            else {})}
     evlog.append(session="import", kind="log", source="imported", key=key,
                  fields={"payload": payload})
     ledger[(source, cid)] = payload
@@ -676,7 +712,7 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
             keys.append(okey)
             had = had if mine else o
     page = build(source, path, c, ctx)
-    audience = ctx.audience(page.text)
+    cat, audience = ctx.judge(page.text)
     if audience == "skip":
         return "skipped_category", rec
     if c.tags:  # R3-5: an imported chat's //tags are the owner's typed words, so said
@@ -696,7 +732,8 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
         for s, i in keys:
             e = ledger.get((s, i))
             if e is None or e.get("hash") != h or _pid(e) != pid:
-                _event(evlog, ledger, s, i, page.title, pid, h)
+                _event(evlog, ledger, s, i, page.title, pid, h,
+                       cat if audience == "local" else None)
     if not md.is_file():
         if had is not None:
             return "deleted_by_you", rec  # never brought back

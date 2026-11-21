@@ -55,9 +55,10 @@ STATIC = {"/": (None, "text/html; charset=utf-8"),
           "/dashboard.css": (ASSETS.parent / "dashboard.css", _CSS),
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
+PAGE_ROWS = 20  # the private chats list, a page at a time
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
 QUERY_GETS = {"/api/chat/get", "/api/chat/passage", "/api/home",  # GETs that read the query
-              "/api/home/delta", "/api/home/site", "/api/status"}
+              "/api/home/delta", "/api/home/site", "/api/status", "/api/browse/private-chats"}
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -295,7 +296,8 @@ class App:
                     "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view,
                     "/api/review": self.review, "/api/xray": self.xray,
-                    "/api/tonight": self.tonight}
+                    "/api/tonight": self.tonight,
+                    "/api/browse/private-chats": self.private_chats}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/profiles": self.profiles_set,
@@ -435,6 +437,28 @@ class App:
         b = status.browse(self.root if self.entry() else None)
         return {**b, "history": status.history(self.root if self.entry() else None, self.scanned),
                 "cloud": status.cloud(self.root if self.entry() else None)}
+
+    def private_chats(self, query: dict) -> dict:
+        """Imported chats made private for a sensitive category (chat_import.made_private),
+        newest first, PAGE_ROWS from `offset`: titles, apps, dates and categories only, never
+        chat text or browsing. The app's own page only: no MCP tool reads it. While the Private
+        switch is locked: counts by category only (`locked`), no row."""
+        from cortex import chat_import
+        from cortex.events import EventLog
+        try:
+            at = max(0, int((query.get("offset") or ["0"])[0]))
+        except ValueError:
+            at = 0
+        v = self._vault()
+        rows = chat_import.made_private(v, EventLog(v).iter_events())
+        cats: dict[str, int] = {}
+        for r in rows:
+            cats[r["category"]] = cats.get(r["category"], 0) + 1
+        if not self.private_unlocked:  # titles only while the Private switch is open
+            return {"rows": [], "total": len(rows), "offset": 0, "locked": True,
+                    "by_category": cats}
+        return {"rows": rows[at:at + PAGE_ROWS], "total": len(rows), "offset": at,
+                "locked": False, "by_category": cats}
 
     def vault(self) -> dict:
         from cortex.session import git_choice
@@ -1988,6 +2012,11 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             from cortex import dashboard
             dashboard.retire_old(app._vault())  # the old .cortex/dashboard.html, once
         except Exception:  # noqa: BLE001  (it is moved at the next start; the app still opens)
+            traceback.print_exc(limit=3)
+        try:
+            from cortex.browse import legacy
+            legacy.migrate(app._vault())  # the browse files from before the store, once
+        except Exception:  # noqa: BLE001  (tried again at the next start or import)
             traceback.print_exc(limit=3)
 
     def watch():

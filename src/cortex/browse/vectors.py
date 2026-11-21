@@ -9,7 +9,7 @@ downloaded here; tests inject a fake one as `semantic._embedder`). A page is cut
 line-aligned chunks and scores by its best one; pages are re-embedded only when their content
 hash changes, and removed pages drop out. An update saves every GROUP chunks, so one stopped by
 its budget (the background runs) goes on where it stopped. The older
-`.cortex/browse/vectors-private.npz` is read into the store once and kept as a backup.
+`.cortex/browse/vectors-private.npz` is read into the store once by `cortex.browse.legacy`.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from cortex.vault import Vault, VaultError, _split
 log = logging.getLogger(__name__)
 
 CACHE = ".cortex/browse/vectors-private.db"
-NPZ = ".cortex/browse/vectors-private.npz"  # the cache before the store: read once, a backup
+NPZ = ".cortex/browse/vectors-private.npz"  # the cache before the store: `legacy.migrate`
 CHUNK_CHARS = 1000
 SNIPPET = 240
 VERSION = 1  # bump when the chunking changes, so the cache is rebuilt
@@ -111,11 +111,13 @@ def _ours(con, dim: int | None = None) -> int | None:
     return s.get("dim") if ok and dim in (None, s.get("dim")) else None
 
 
-def _npz(vault: Vault, dim: int | None = None) -> tuple[dict, str | None, int | None]:
-    """The .npz cache from before the store: ({path: (hash, starts, vecs)}, its signature,
-    its dim), or ({}, None, None) when missing, unreadable or built otherwise."""
+def _npz(vault: Vault, dim: int | None = None, rel: str = NPZ
+         ) -> tuple[dict, str | None, int | None]:
+    """The .npz cache from before the store (or its `.migrated` backup, `rel`): ({path: (hash,
+    starts, vecs)}, its signature, its dim), or ({}, None, None) when missing, unreadable or
+    built otherwise."""
     try:
-        with np.load(vault.root / NPZ, allow_pickle=False) as z:
+        with np.load(vault.root / rel, allow_pickle=False) as z:
             meta = json.loads(z["meta"].item())
             if [meta.get("model"), meta.get("version")] != [semantic.MODEL, VERSION] or (
                     dim is not None and meta.get("dim") != dim):
@@ -131,8 +133,9 @@ def _npz(vault: Vault, dim: int | None = None) -> tuple[dict, str | None, int | 
     return {}, None, None
 
 
-def _npz_write(vault: Vault, cache: dict, dim: int, sig: str | None = None) -> None:
-    """Rewrite the .npz backup with `cache` ({path: (hash, starts, vecs)}) only."""
+def _npz_write(vault: Vault, cache: dict, dim: int, sig: str | None = None,
+               rel: str = NPZ) -> None:
+    """Rewrite the .npz at `rel` with `cache` ({path: (hash, starts, vecs)}) only."""
     paths = list(cache)
     rows = [cache[p] for p in paths]
     buf = io.BytesIO()
@@ -143,24 +146,16 @@ def _npz_write(vault: Vault, cache: dict, dim: int, sig: str | None = None) -> N
              meta=np.array(json.dumps({"model": semantic.MODEL, "version": VERSION, "dim": dim,
                                        "hashes": [e[0] for e in rows], "sig": sig})))
     with vault.lock():
-        vault._atomic_write(vault.root / NPZ, buf.getvalue())
+        vault._atomic_write(vault.root / rel, buf.getvalue())
 
 
 def _connect(vault: Vault, dim: int):
-    """The store for `dim` (other settings empty it and its signature) with the .npz read into
-    it once (the .npz is kept as a backup, never deleted)."""
+    """The store for `dim` (other settings empty it and its signature)."""
     con = vecstore.connect(vault.root / CACHE)
     try:
         if vecstore.prepare(con, _want(dim)):
             with vecstore.tx(con):
                 vecstore.set_meta(con, "sig", None)
-        if not vecstore.get_meta(con, "migrated"):  # idempotent: a rerun upserts the same rows
-            old, sig, _ = _npz(vault, dim)
-            vecstore.put(con, {p: (h, True, s, v) for p, (h, s, v) in old.items()})
-            with vecstore.tx(con):
-                if old:
-                    vecstore.set_meta(con, "sig", sig)
-                vecstore.set_meta(con, "migrated", True)
     except BaseException:
         con.close()
         raise
@@ -269,21 +264,23 @@ def update(vault: Vault, progress=None, budget: float | None = None, gate=None) 
 
 def prune(vault: Vault) -> int:
     """Drop the rows of pages that went or changed, with no model needed (a forget or a
-    settings change must not leave a page's vectors and path behind); the .npz backup loses
-    them too. Rows dropped from the store."""
-    root, n, files = vault.root, 0, None
+    settings change must not leave a page's vectors and path behind); the .npz backup
+    `legacy.migrate` left loses them too. Rows dropped from the store."""
+    from cortex.browse import legacy
+
+    root, n, files, kept = vault.root, 0, None, NPZ + legacy.DONE
     if (root / CACHE).is_file():
         with closing(vecstore.connect(root / CACHE)) as con:
             if have := vecstore.manifests(con):
                 files = _files(vault)
                 n = vecstore.delete(con, [p for p, h in have.items()
                                           if p not in files or files[p][0] != h])
-    old, sig, dim = _npz(vault)
+    old, sig, dim = _npz(vault, rel=kept)
     if old:
         files = _files(vault) if files is None else files
         keep = {p: e for p, e in old.items() if p in files and files[p][0] == e[0]}
         if len(keep) < len(old):
-            _npz_write(vault, keep, dim, sig)
+            _npz_write(vault, keep, dim, sig, kept)
     return n
 
 

@@ -451,7 +451,8 @@ def doctor(vault: VaultOpt = None) -> None:
                     doctor_mod.check_contract_size(root), doctor_mod.check_claims(root),
                     doctor_mod.check_kill(root), doctor_mod.check_me_pages(root),
                     doctor_mod.check_private_browse_git(root),
-                    doctor_mod.check_chat_archive_git(root), *doctor_mod.check_clients(root),
+                    doctor_mod.check_chat_archive_git(root),
+                    doctor_mod.check_browse_legacy(root), *doctor_mod.check_clients(root),
                     *doctor_mod.check_import_shapes(root)]
     except VaultError as e:
         results.append(("FAIL", "Vault", str(e), "Open Cortex from the Start menu and set "
