@@ -242,3 +242,40 @@ def test_lint_skips_imported_pages(root):
         ids = [x["id"] for x in by_kind(f, kind)]
         assert "chat-gemini-2026-05-01-hi" not in ids and "youtube-channel-x" not in ids
     assert "own-book" in [x["id"] for x in by_kind(f, "resource_no_covers")]
+
+
+def test_lint_weak_summary(root):
+    """RR-26: a summary under 30 characters or one that mostly repeats the title."""
+    from cortex.lint import weak_summary
+
+    assert weak_summary({"title": "Two pointers", "summary": "x"}).startswith("summary is under")
+    assert weak_summary({"title": "Graph walks in BFS order",
+                         "summary": "Graph walks, in BFS order of course"}) == \
+        "summary mostly repeats the title"
+    assert weak_summary({"title": "Graphs", "summary": "Graphs are nodes joined by edges, "
+                                                       "walked breadth or depth first"}) == ""
+    assert weak_summary({"title": "T"}) == ""  # no summary: no_summary's job, if any
+    note(root, "notes", "dup", 'title: "Graph walks in BFS order"\n'
+         'summary: "Graph walks, in BFS order of course"\nrelated: ["[[two-pointers]]"]\n')
+    f = lint_report(Vault(root))[0]
+    assert "dup" in [x["id"] for x in by_kind(f, "weak_summary")]
+
+
+def test_lint_findability_reports_and_never_writes(root):
+    """RR-26: a page whose own second-chunk words rank it below the top 3 is reported;
+    keyword only with no model; nothing is written."""
+    from cortex.lint import findability
+
+    words = "zeta eta theta iota kappa "
+    note(root, "notes", "lost", 'title: "Lost page"\n', words * 80)
+    for i in range(4):
+        note(root, "notes", f"clone-{i}", f'title: "{words.strip()} {i}"\n', words * 2)
+    note(root, "notes", "found", 'title: "Found page"\n', "orange plum fig " * 120)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    got = findability(Vault(root))
+    assert [f["id"] for f in got] == ["lost"] and got[0]["kind"] == "not_findable"
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+    out = CliRunner().invoke(app, ["lint", "--findability", "--vault", str(root)])
+    assert out.exit_code == 0, out.output
+    assert "not_findable: lost" in out.output
+    assert "1 pages not findable by their own text (keyword only: no model)" in out.output
