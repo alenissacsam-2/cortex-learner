@@ -130,7 +130,7 @@ Privacy: a note with `private: true`, and every catalog entry under a private do
 | targets_mistakes | string[]? | mistake ids this item tests |
 | key | string? | |
 
-**Returns** `{item_id, next}`. The server still stamps `predicted_p` on the ask event; it is not returned, so it cannot anchor the grade. Without `targets_mistakes`, `next` names the concept's open mistakes and up to 2 linked mistake notes (the concept's `mistakes:` or a mistake note's `concepts:`; open ones left out; sorted by id; ids only) as traps for a later ask.
+**Returns** `{item_id, next}`. The server still stamps `predicted_p` on the ask event; it is not returned, so it cannot anchor the grade. Without `targets_mistakes`, `next` names the concept's open mistakes and up to 2 linked mistake notes (the concept's `mistakes:` or a mistake note's `concepts:`; open ones left out; sorted by id; ids only) as traps for a later ask. A question over 280 characters (`ASK_LONG`) or with two or more `?` adds a soft hint to `next` (`ASK_FOCUS`) to ask one focused question next time; the ask is still recorded. The description points at the five-line question rubric in `modes/grading.md` (focused, precise, consistent, tractable, effortful).
 
 ### cortex_grade
 | Arg | Type | Notes |
