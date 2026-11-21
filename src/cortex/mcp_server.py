@@ -2677,6 +2677,7 @@ class Cortex:
                 if section is None:
                     raise invalid(f"{target} is not a live claim on me/{nid}; read it first.")
                 op, until, target = "append_to_section", None, section
+                supersedes = supersedes or [cid]  # Approve then offers to replace the old line
             out = self.cortex_patch(id, op, target, text, key, False, until, supersedes, ctx)
             if out.get("queued") or out.get("changed"):  # changed: a goals line, served (ask)
                 out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "

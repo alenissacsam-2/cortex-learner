@@ -81,6 +81,19 @@ def test_a_line_the_users_turn_says_stays_confirmed(vault):
     assert "Prefers short answers, no fluff (confirmed " in page(vault)
 
 
+def test_a_downgraded_revise_keeps_the_line_it_replaces(vault):
+    """Audit 21 Nov M4: a relayed revise that waits in Review lost its pair to the old line,
+    so Approve added the new line beside the old one instead of offering to replace it."""
+    async def body(call):
+        await call("cortex_prime", {"prompt": PROMPT})
+        return await call("cortex_patch", {"id": "me/preferences", "op": "revise",
+                                           "target": "c-plain", "text": "Wants jargon everywhere",
+                                           "user_confirmed": True})
+
+    out = serve(vault, body)
+    assert out["queued"] is True and out.get("supersedes") == ["c-plain"], out
+
+
 def test_a_line_no_turn_says_is_downgraded(vault):
     async def body(call):
         await call("cortex_prime", {"prompt": PROMPT})
