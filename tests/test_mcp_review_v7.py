@@ -100,3 +100,25 @@ def test_a_proposal_needs_a_one_line_section_name(root):
 
     run(root, body)
     assert (inbox.read_bytes() if inbox.exists() else None) == before
+
+
+def test_a_taken_test_waiting_for_its_result_is_no_longer_coming_up(root):
+    from datetime import date
+
+    from cortex import planner
+    from cortex.vault import Vault
+
+    def coming():
+        return [a["id"] for a in planner._upcoming(Vault(root), date(2098, 12, 1))]
+
+    async def body(call):
+        log = {"kind": "assessment_result",
+               "payload": {"assessment": "zz-oa", "outcome": "pending", "date": "2099-01-01"}}
+        assert (await call("cortex_log", log))["recorded"] == 1
+        assert coming() == ["zz-oa"]
+        log["payload"]["outcome"] = "taken"
+        assert (await call("cortex_log", log))["recorded"] == 1
+        assert coming() == []
+
+    run(root, body)
+    assert "outcome: \"taken\"" in (root / "assessments" / "zz-oa.md").read_text(encoding="utf-8")

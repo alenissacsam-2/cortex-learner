@@ -175,7 +175,7 @@ With `items` the whole batch is validated before anything is written, each item 
 | key | string? | |
 
 Payloads:
-- **assessment_result:** `{assessment?, company?, assessment_kind?: oa|mock|interview|test, date?, outcome: pending|pass|fail|unknown, score?, felt_weak?: [concept or domain]}`. It creates the assessment note if it is missing, and does not move levels.
+- **assessment_result:** `{assessment?, company?, assessment_kind?: oa|mock|interview|test, date?, outcome: pending|taken|pass|fail|unknown (taken: done, result not out yet; only pending is listed as coming up), score?, felt_weak?: [concept or domain]}`. It creates the assessment note if it is missing, and does not move levels.
 - **self_report:** `{concept, verdict, hints?, note?}`.
 - **taught:** `{concept, summary≤300}`. The concept is marked "Taught, not yet checked".
 - **problem_status:** `{problem, status: todo|attempted|solved, hints?}` (`hints` a whole number 0-3, else `invalid_argument`). `solved` = a correct verdict on the problem's primary concept.

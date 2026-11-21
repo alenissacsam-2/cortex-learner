@@ -2451,7 +2451,8 @@ class Cortex:
     def _log_assessment(self, p: dict, key: str | None) -> str:
         outcome = p.get("outcome")
         if not isinstance(outcome, str) or outcome not in ENUMS[("assessment", "outcome")]:
-            raise invalid("outcome must be pending, pass, fail or unknown.")
+            raise invalid("outcome must be pending (not taken yet), taken (done, result not out), "
+                          "pass, fail or unknown.")
         akind = p.get("assessment_kind")
         if akind is not None and (not isinstance(akind, str) or akind not in ASSESSMENT_KINDS):
             raise invalid("assessment_kind must be oa, mock, interview or test.")

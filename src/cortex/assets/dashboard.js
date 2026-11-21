@@ -38,7 +38,7 @@
   const LABEL = { solid: 'Solid', learning: 'Learning', needs_refresh: 'Needs refresh',
     unverified: 'Unverified', not_started: 'Not started' };
   const VERDICT = { correct: '✓', partial: '½', wrong: '✗' };
-  const OUTCOME = { pass: '✓ pass', fail: '✗ fail', pending: '… pending', unknown: '? unknown' };
+  const OUTCOME = { pass: '✓ pass', fail: '✗ fail', pending: '… pending', taken: '◷ waiting for result', unknown: '? unknown' };
   const GROUPS = [['unchecked', 'Taught, not yet checked'], ['asked', 'Asked, not graded'],
     ['confident_miss', 'Confident miss'], ['track', 'Plan steps'], ['warmup', 'Warm-up'],
     ['refresh', 'Refresh'], ['new', 'Ready to learn']];

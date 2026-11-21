@@ -48,7 +48,8 @@ SET_FIELD_WHITELIST = {
 TOOL_PROPS = {"cortex_status", "cortex_next"}
 ENUMS = {
     ("problem", "status"): {"todo", "attempted", "solved"},
-    ("assessment", "outcome"): {"pending", "pass", "fail", "unknown"},
+    # taken: the test is done and the result is not out yet; only pending counts as coming up
+    ("assessment", "outcome"): {"pending", "taken", "pass", "fail", "unknown"},
     ("application", "status"): {"applied", "oa", "interview", "offer", "rejected", "withdrawn"},
     # phase4-wiki.md §2, §2a
     ("resource", "resource_type"): {"book", "paper", "course", "video", "repo", "article", "other"},
