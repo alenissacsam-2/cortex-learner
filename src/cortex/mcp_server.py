@@ -2771,6 +2771,7 @@ class Cortex:
         """Append one line under `heading` (default `## About me (unconfirmed)`) in inbox.md
         (created if missing)."""
         scan_secrets(text)
+        claims.check(text)  # G6: every waiting line is an about-me line or a teaching rule
 
         def add(page: str) -> str:  # B13: reruns on the reread page if the owner edited it
             lines = page.rstrip("\n").split("\n")
@@ -2812,6 +2813,8 @@ class Cortex:
         if (op == "append_to_section" and kind == "me" and text.strip() and "\n" not in text.strip()
                 and nid in claims.PAGES and not text.lstrip().startswith(("- ", "#"))):
             text = "- " + text.strip()  # a bare line would be no claim at all
+        if kind == "me" and op in ("append_to_section", "revise"):  # G6: before any write path
+            claims.check(f"{target}\n{text}" if op == "append_to_section" else text)
         sup = None if supersedes is None else self._supersedes(supersedes, kind, nid, op, text)
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
         if kind == "me" and self.session.exposed and not self.app_clicks and op in (

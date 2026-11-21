@@ -342,6 +342,7 @@ class App:
             "/api/review/decision/dismiss": self.review_decision_dismiss,
             "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/review/import/dismiss": self.review_import_dismiss,
+            "/api/review/unsafe/keep": self.review_unsafe_keep,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
             "/api/xray/dryrun": self.xray_dryrun,
             "/api/tonight/undo": self.tonight_undo}
@@ -899,6 +900,18 @@ class App:
             raise NotFound
         return self._click("cortex_patch", "_dismiss", {
             "page": "imports", "section": "Imports", "text": key, "waiting": False})
+
+    def review_unsafe_keep(self, body: dict) -> dict:
+        """G6: Keep it, on a line that reads as an instruction to an AI or holds invisible
+        characters: a `dismiss` change on id `unsafe` holding its key, so it is served again
+        (review.unsafe_lines); the line stays as it is. Keep it out is Retire."""
+        from cortex import review
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        if not any(x["key"] == key for x in review.unsafe_lines(v, EventLog(v).iter_events())):
+            raise NotFound
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "unsafe", "section": "Unsafe", "text": key, "waiting": False})
 
     # ---- Tonight (Gemini round 3 "Nightly Closeout"): close the day ----
     def tonight(self) -> dict:

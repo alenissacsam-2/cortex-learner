@@ -16,7 +16,9 @@
 - forget (R3-5): a `//forget:` the user typed that matched no line or several, with its
   candidate lines (cortex.tags.forget_cards; Retire a line, or Dismiss);
 - imports (RR-18): an imported page edited by hand whose file changed, so the re-import wrote
-  a newer page beside it (cortex.sources.edited_pages; Dismiss).
+  a newer page beside it (cortex.sources.edited_pages; Dismiss);
+- unsafe (G6): a live claim line that reads as an instruction to an AI or holds invisible
+  characters (`unsafe_lines`); it is not served until Keep it (Keep it out retires it).
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -184,6 +186,30 @@ def dismissed(events, page: str, text: str) -> bool:
                 and c.get("hash") == h and e.get("id") not in voided):
             return True
     return False
+
+
+def unsafe_lines(vault, events) -> list[dict]:
+    """G6: the live claim lines (private pages too) whose text or section claims.unsafe flags
+    and Keep has not kept, as {key, page, id, section, text (raw), what}. Keep is a `dismiss`
+    change on id `unsafe` holding the key's hash (`dismissed`); the key hashes the page and the
+    exact line, so a line edited since is checked again."""
+    events = list(events)
+    voided, kept = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("tool") == "dismiss" and c.get("id") == "unsafe"
+                and e.get("id") not in voided):
+            kept.add(c.get("hash"))
+    out = []
+    for r in claims.rows(vault):
+        if r["status"] != "live" or not (what := claims.unsafe(r["text"])
+                                         or claims.unsafe(r["section"])):
+            continue
+        key = hashlib.sha256(f"{r['page']}\n{r['section']}\n{r['text']}".encode()).hexdigest()[:16]
+        if text_hash(key) not in kept:
+            out.append({"key": key, "page": r["page"], "id": r["id"], "section": r["section"],
+                        "text": r["text"], "what": what})
+    return out
 
 
 def _private(vault) -> set[str]:
@@ -394,13 +420,17 @@ def view(vault, events, today: str) -> dict:
     from cortex import sources
     imports = [{**x, "title": plain(x["title"], SHOWN)}
                for x in sources.edited_pages(vault, events)]
+    unsafe = [{"key": x["key"], "page": x["page"], "id": x["id"], "what": x["what"],
+               "invisible": claims.invisible(x["what"]),
+               "text": _shown("".join(c for c in x["text"] if c.isprintable()))}
+              for x in unsafe_lines(vault, events) if x["page"] not in hidden]
     left = max(0, TODAY_MAX - answered_today(events, today))
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
-            "today": _today(waiting, pairs, rules)[:left], "today_left": left,
+            "unsafe": unsafe, "today": _today(waiting, pairs, rules)[:left], "today_left": left,
             "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions) + len(forget) + len(imports)}
+            + len(decisions) + len(forget) + len(imports) + len(unsafe)}
 
 
 def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:

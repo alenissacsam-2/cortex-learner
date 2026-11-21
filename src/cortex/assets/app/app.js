@@ -1634,7 +1634,13 @@
       board('Imported notes you edited', { note: String((d.imports || []).length) }, ...list((d.imports || []).map((x) => {
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
         return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
-      }), 'No edited imports.')));
+      }), 'No edited imports.')),
+      // G6: a line AI apps are not given until Keep it; Keep it out retires it to ## Past
+      board('Lines that may steer an AI', { note: String((d.unsafe || []).length) }, ...list((d.unsafe || []).map((x) => {
+        const r = kb('Keep it out', () => act('/api/review/retire', { id: x.id }, 'Kept out: the line moved to Past.'), null, `Keep it out: ${x.text}`);
+        const y = kb('Keep it', () => act('/api/review/unsafe/keep', { key: x.key }, 'Kept. AI apps get the line again.'), null, `Keep it: ${x.text}`);
+        return card(x.text, `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`, null, [r[0], y[0]], { r, y });
+      }), 'No line looks like an instruction to an AI.')));
     cardsDrawn('review');
   }
 

@@ -4,7 +4,8 @@ user can paste into other assistants (Gemini, Codex, Cursor). It reuses prime's 
 labelled (ask), so never `## Past`, `## Not me`, inbox proposals, agent or exposed lines, or a
 yes the model relayed from claims.RELAYED_FROM; lines carry no label. Profile is me/profile's
 `summary:` field, else its act-grade claim lines. Private me/ pages and any line matching a
-secret pattern are left out. It writes nothing in the vault.
+secret pattern are left out, as is a line review.unsafe_lines flags (G6) and a profile summary
+claims.unsafe flags. It writes nothing in the vault.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from cortex import claims, prime, render, taint
+from cortex import claims, prime, render, review, taint
 from cortex.events import local_day
 from cortex.vault import Vault, VaultError, is_private, secret_pattern
 
@@ -47,9 +48,11 @@ def build(vault: Vault, events: list[dict], now: datetime) -> tuple[str, int]:
              "goals": lambda h: h == "now", "profile": lambda h: True}
     rows: dict[str, list] = {"preferences": [], "goals": [], "profile": []}
     skipped = 0
+    unsafe = {(x["page"], x["id"]) for x in review.unsafe_lines(vault, events)}  # G6
     for i, r in enumerate(claims.tiers(vault, events)):  # live claims only
         keep = keeps.get(r["page"])
         if (keep is None or not keep(r["section"].lower()) or not _page_ok(vault, r["page"])
+                or (r["page"], r["id"]) in unsafe
                 or claims.expired(r["text"], local_day(now))):  # agenda 4
             continue
         label, score = served.get((r["page"], r["section"], r["text"]), ("", 0.5))
@@ -66,8 +69,8 @@ def build(vault: Vault, events: list[dict], now: datetime) -> tuple[str, int]:
     if _page_ok(vault, "profile"):  # its summary: field, else its act-grade claim lines only
         summary = str(prime.me(vault, "profile").fields.get("summary") or "")
         summary = "" if summary.strip() == prime.PROFILE_TEMPLATE else summary  # no fact in it
-        summary = "" if claims.expired(summary, local_day(now)) else _clean(
-            claims._ANY_ID.sub("", summary), 600)
+        summary = "" if claims.expired(summary, local_day(now)) or claims.unsafe(  # G6
+            summary) else _clean(claims._ANY_ID.sub("", summary), 600)
         sections.append(("Profile", [summary] if summary else rows["profile"]))
     if _page_ok(vault, "teaching-contract"):
         rules = [s for s in map(_clean, prime.contract_core(prime.contract(vault, set()))) if s]

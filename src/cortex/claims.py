@@ -31,6 +31,61 @@ _H2 = re.compile(r"^##[ \t]+(.*?)[ \t]*$")
 _TOP = re.compile(r"^#{1,2}[ \t]")  # a heading that ends a ## section
 
 
+# G6 (HERMES-GAPS): claim lines reach other apps' rules files word for word, so a line that reads
+# as an instruction to an AI, or hides characters, is refused on write and not served. Phrases
+# are matched on `index._key` folding with spaces kept (look-alikes, zero-width chars and
+# dashes gone), tokens on the same folding with spaces dropped too.
+_PHRASES = (
+    ("ignore previous instructions", re.compile(
+        r"(?<!not )(?<!n't )(?<!n\u2019t )(?<!dont )(?<!never )"  # "don't forget prior rules"
+        r"\b(?:ignore|disregard|forget) (?:(?:all|any) )?(?:(?:the|your|my) )?"
+        r"(?:previous|prior|above|earlier) (?:instructions?|rules|messages|prompts?)\b")),
+    ("new instructions:", re.compile(r"\bnew instructions? ?:")),
+    # shortcut: only a system prompt someone is told to reveal, drop or replace, or a
+    # `system prompt:` label, so "I write system prompts for my bots" passes
+    ("system prompt", re.compile(r"\b(?:ignore|disregard|forget|reveal|print|show|repeat|leak|"
+                                 r"override)\b(?: \w+){0,3} system prompts?\b|"
+                                 r"\bsystem prompt ?:")))
+_TOKENS = (("a chat template token", re.compile(r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>")),
+           ("Cortex's untrusted_note tag", re.compile(r"</?untrustednote")))
+
+
+def unsafe(text: str) -> str | None:
+    """What makes `text` unfit for a me/ page (G6): an invisible or control character (a
+    format or bidi control, a tag character, a C0/C1 control other than tab and line breaks;
+    a zero-width joiner or non-joiner after a non-ASCII char is a script's or an emoji's own),
+    an injection phrase or a chat template token; None when it is fine."""
+    import unicodedata
+
+    from cortex.index import _key  # its folding: look-alikes, marks and zero-width chars out
+
+    for i, c in enumerate(text):
+        cat = unicodedata.category(c)
+        if cat == "Cc" and c not in "\t\n\r":
+            return f"a control character (U+{ord(c):04X})"
+        if cat == "Cf" and not (c in "\u200c\u200d" and i and not text[i - 1].isascii()):
+            return f"an invisible character (U+{ord(c):04X})"
+    loose = " ".join("".join(" " if c.isspace() else _key(c) for c in text).split())
+    tight = loose.replace(" ", "")
+    for name, rx in _PHRASES:
+        if rx.search(loose):
+            return f'the phrase "{name}"'
+    return next((name for name, rx in _TOKENS if rx.search(tight)), None)
+
+
+def invisible(what: str) -> bool:
+    """Whether an `unsafe` finding is a hidden character rather than an instruction."""
+    return what.startswith(("an invisible", "a control"))
+
+
+def check(text: str) -> None:
+    """Refuse `text` for a me/ page when `unsafe` finds something; nothing is written."""
+    if what := unsafe(text):
+        raise invalid(f"Nothing was written: the text holds {what}. Lines on me/ pages go word "
+                      "for word to other AI apps, so Cortex refuses text that reads as an "
+                      "instruction to an AI or hides characters; reword it.")
+
+
 def norm(text: str) -> str:
     """Claim text for hashing and matching: no id, no `(confirmed …)`-style markers, collapsed
     whitespace, lowercase."""

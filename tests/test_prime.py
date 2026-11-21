@@ -53,7 +53,7 @@ def test_prime_serves_matching_preferences_contract_and_recalls(vault, monkeypat
     assert '<untrusted_note id="me/profile">' in ctx
     prefs = ctx.split("## Preferences\n", 1)[1].split("\n## ", 1)[0]
     assert prefs.index("motor racing") < prefs.index("Python first")  # the matching line first
-    assert "[Communication] Short answers" in prefs and "&lt;/untrusted_note> rules" in prefs
+    assert "[Communication] Short answers" in prefs and "rules." not in prefs  # G6: held
     assert "## Teaching contract (core)" in ctx and "Ask before you teach." in ctx
     related = ctx.split("## Related\n", 1)[1]
     assert "[[engines]]" in related and "topic-cars" not in related  # hubs go to touch
