@@ -238,6 +238,16 @@ def test_compare_counts_each_side_with_its_top_page(vault):
         'I found nothing about "zebra vs okapi" in your archive.')
 
 
+def test_compare_top_page_keeps_its_own_id_when_titles_repeat(vault):
+    """Audit 21 Nov C4: two pages titled "New chat": the top one's id, not the first's."""
+    note(vault.root, "notes/chat-a.md", "title: New chat\ndate: 2026-11-01\n",
+         "# New chat\n\nOne zebra.")
+    note(vault.root, "notes/chat-b.md", "title: New chat\ndate: 2026-11-05\n",
+         "# New chat\n\nZebra, zebra, zebra.")
+    zebra, _ = chat_facts.facts(vault, _route("zebra vs helm"), ALL_ON)["rows"]
+    assert zebra["page"]["id"] == "chat-b" and zebra["page"]["day"] == "2026-11-05"
+
+
 def test_compare_reads_each_top_page_with_its_written_on_line(vault):
     s = Stream("ollama", ["Kubernetes has more [1]."])
     try:

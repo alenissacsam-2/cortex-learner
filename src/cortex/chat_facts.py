@@ -216,7 +216,8 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
            titles: dict) -> tuple[int, list]:
     """(items read, matches) of notes, saved AI chats and journal lines dated in [lo, hi]
     under Chat's switches (`chat._pages_in`). An item: (day, ts, source, title, n, mentions,
-    site). `titles` gets {casefolded title: (id, title, kind, day)} of every page read."""
+    site), a page's id last. `titles` gets {casefolded title: (id, title, kind, day)} of
+    every page read."""
     from cortex import chat
 
     read, out = 0, []
@@ -238,7 +239,8 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
         read += 1
         hay = f"{title}\n{body}"
         if match(hay):
-            out.append((d, 0.0, src, title, 1, sum(len(rx.findall(hay)) for rx in rxs), ""))
+            out.append((d, 0.0, src, title, 1, sum(len(rx.findall(hay)) for rx in rxs), "",
+                        _id))
     return read, out
 
 
@@ -424,14 +426,14 @@ def _compare(vault, q: dict, sources: dict) -> dict:
     and sources of both sides."""
     rows, read, off = [], 0, []
     for side in q["sides"]:
-        r, found, off, titles = _gather(vault, {**q, "term": side, "focus": None}, sources)
+        r, found, off, _ = _gather(vault, {**q, "term": side, "focus": None}, sources)
         read = max(read, r)  # both sides read the same items
         top = max((it for it in found if it[2] in ("notes", "chats")),
                   key=lambda it: (it[5], it[0]), default=None)
         rows.append({"term": side, "total": sum(it[4] for it in found),
                      "sources": _counts(found),
                      "page": None if top is None else {
-                         "id": titles.get(top[3].casefold(), ("",))[0], "title": top[3],
+                         "id": top[7], "title": top[3],
                          "day": top[0], "source": top[2]}})
     by = {s: sum(r["sources"].get(s, 0) for r in rows) for s in SOURCES}
     total = sum(r["total"] for r in rows)
