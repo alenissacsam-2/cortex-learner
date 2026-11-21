@@ -517,7 +517,7 @@ def highlights_source(path: Path) -> sources.Source:
         raise VaultError("invalid_argument", f"Found no Kindle clippings, Readwise or Pocket "
                          f"export in {path.name}.")
     pocket = all(k == "pocket" for _, k in found)
-    skips = ("bookmark or empty", "no readable date", "over 5 MB",
+    skips = ("bookmark or empty", "no readable date", "over 200 MB",
              "a Pocket list (import it on its own)")
 
     def items():
@@ -525,10 +525,10 @@ def highlights_source(path: Path) -> sources.Source:
             if kind == "pocket" and not pocket:
                 yield skips[3]
                 continue
-            try:
-                text = read().decode("utf-8-sig", "replace")
+            try:  # My Clippings.txt is a .txt but not a note: an export's cap, not a note's
+                text = read(cap=importers.MAX_ENTRY).decode("utf-8-sig", "replace")
             except VaultError:
-                yield "over 5 MB"
+                yield "over 200 MB"
                 continue
             if kind == "pocket":
                 yield from _pocket(text)

@@ -368,6 +368,22 @@ POCKET = ("title,url,time_added,cursor,tags,status\n"
           "Bad row,https://example.org/x,,,,unread\n")
 
 
+def test_a_kindle_or_whatsapp_txt_past_the_note_cap_still_imports(root_plain, tmp_path,
+                                                                   monkeypatch):
+    """Audit 21 Nov I10: My Clippings.txt and WhatsApp exports are .txt but not notes: the
+    note cap (MAX_BYTES, made tiny here) does not refuse them."""
+    from cortex import life_sources
+    monkeypatch.setattr(importers, "MAX_BYTES", 100)
+    v = Vault(root_plain)
+    clip = tmp_path / "My Clippings.txt"
+    clip.write_bytes(CLIPPINGS.encode("utf-8"))
+    assert sources.run(v, more_sources.highlights_source(clip), C)["imported"] == 2
+    chat = tmp_path / "WhatsApp Chat with Me.txt"
+    chat.write_text("13/03/2024, 09:15 - Me: " + "buy milk and bread " * 20 + "\n",
+                    encoding="utf-8")
+    assert sources.run(v, life_sources.selfchat_source(chat), C)["imported"] == 1
+
+
 def test_kindle_and_readwise_pages(root_plain, tmp_path):
     v = Vault(root_plain)
     clip = tmp_path / "My Clippings.txt"

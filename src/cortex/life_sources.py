@@ -273,7 +273,7 @@ def _figure(pattern: str):
 
 CHAT_CHARS = 2000  # one message on a month line
 SELF_SKIPS = ("not a chat with yourself", "a system line", "deleted", "forwarded",
-              "not yours", "empty", "malformed file", "over 5 MB")
+              "not yours", "empty", "malformed file", "over 200 MB")
 # Android "12/03/2024, 09:15 - Name: text"; iOS "[12/03/24, 9:15:23 AM] Name: text"
 _WA = re.compile(r"^[\u200e\u200f]?\[?(\d{1,2})[./-](\d{1,2})[./-](\d{2,4}),?\s+"
                  r"(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s?([AaPp]\.?\s?[Mm]\.?)?\]?\s(?:-\s)?(.*)$")
@@ -429,10 +429,10 @@ def selfchat_source(path: Path) -> sources.Source:
 
     def items():
         for name, _size, _mtime, read in found:
-            try:
-                raw = read()
+            try:  # a WhatsApp .txt is not a note: an export's cap, not a note's
+                raw = read(cap=importers.MAX_ENTRY)
             except VaultError:
-                yield "over 5 MB"
+                yield "over 200 MB"
                 continue
             if name.lower().endswith(".txt"):
                 yield from _whatsapp(raw.decode("utf-8-sig", "replace"))

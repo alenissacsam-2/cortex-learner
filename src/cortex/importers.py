@@ -227,15 +227,16 @@ def _too_big(name: str, one: int) -> VaultError:
 
 
 def _read(name: str, size: int, opener, left: list[int], n: int | None = None,
-          items: bool = False):
+          items: bool = False, cap: int | None = None):
     """A file's bytes, streamed and capped so a zip bomb fails before it fills memory. With
-    `items`, an iterator over the elements of its top-level JSON array (see _items)."""
+    `items`, an iterator over the elements of its top-level JSON array (see _items). `cap`:
+    one file's limit when it is not the default (a .txt export that is not a note)."""
     if items:
         return _items(name, size, opener, left)
     with opener() as f:
         if n is not None:
             return f.read(n)
-        one = MAX_BYTES if name.lower().endswith(NOTE_SUFFIXES) else MAX_ENTRY
+        one = cap or (MAX_BYTES if name.lower().endswith(NOTE_SUFFIXES) else MAX_ENTRY)
         cap = min(one, left[0])
         # the declared size is checked first; reading cap + 1 catches a size that lies
         data = f.read(cap + 1) if size <= cap else b""
