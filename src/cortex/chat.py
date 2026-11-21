@@ -760,7 +760,7 @@ def remembers(msgs: list, sources: dict | None = None) -> int:
     """The index of the oldest message of `msgs` the model still gets on the next turn
     (`history`), for the Chat page's "The model remembers from here" line: 0 when it gets them
     all (no line), len(msgs) when it gets none."""
-    sent = _sent(msgs, sources)
+    sent = _sent(msgs, sources, ABOUT_MAX)  # the most `about` may take: never too generous
     return sent[0][0] if sent else len(msgs)
 
 
