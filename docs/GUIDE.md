@@ -53,6 +53,8 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 | `/cortex reflect` | The weekly review: confirm or drop the about-me lines waiting for you, emerging idea clusters, old fleeting notes, 3 spot-checks of how a chat graded you |
 | `/cortex map` | Opens the Cortex app's home (Today, readiness, the graph) |
 
+**Playbooks: how you want a kind of task done.** A playbook is an ordinary note with the tag `playbook` (`tags: [playbook]` in its properties), say "Writing a CV bullet" or "Starting a Python repo", with sections `## Steps`, `## Pitfalls` and `## Done when` (suggested, not required). When your message is about that kind of task, every AI app's first Cortex call gets the playbook's title and summary (at most two) and is told to read it and follow it, and to update it when you correct how it does the task. Ask an AI app to save one ("save this as a playbook"), or write it yourself. One an AI wrote is marked "check with you" until you edit it yourself or tell the AI it is right. A private playbook never reaches an AI app; add `scope: coding` (or another scope from the app's **Agent profiles**) to give it only to the apps that read that scope.
+
 ### Past chats
 | Command | What it does |
 |---|---|

@@ -60,6 +60,7 @@ from cortex.events import (
 from cortex.index import (
     GLYPHS,
     READ_CAP_CHARS,
+    STOPWORDS,
     TRUNCATED,
     Index,
     _edge_targets,
@@ -131,7 +132,7 @@ ADD_FIELDS = {
     # docs/design/phase4-wiki.md §2: wiki kinds; not catalog kinds, never in the FSRS queue
     "resource": {"resource_type", "url", "source", "status", "covers", "summary", "related",
                  "private"},
-    "note": {"note_type", "tags", "summary", "related", "private"},
+    "note": {"note_type", "tags", "summary", "related", "private", "scope"},
     "project": {"status", "repo_url", "stack", "applies", "decisions", "summary", "related",
                 "private"},
     "decision": {"date", "status", "project", "summary", "related", "private", "review_on",
@@ -297,6 +298,12 @@ READ_SIMILAR = 3  # RR-23: meaning-neighbours cortex_read lists, from head vecto
 # RR-21: pages changed or touched in the last LATELY_DAYS, a hint at what the user is up to
 PRIME_LATELY, LATELY_DAYS = 3, 7
 LATELY_HEAD = "Lately (recent, use only if relevant)"
+# G4: playbooks (notes tagged `playbook`) the prompt matches, out of the Related budget
+PRIME_PLAYBOOKS, PLAYBOOK_TAG, PLAYBOOK_SUMMARY = 2, "playbook", 60
+PLAYBOOK_SAYS = ("Follow it for this task (cortex_read it first); if the user corrects how, "
+                 "cortex_patch that playbook.")
+# a playbook file changed this long after the last write Cortex logged on it: the owner edited it
+OWNER_EDIT_SLACK = 2
 # the live chat log (Cortex._chat_log): a call this long after the last one starts a new chat;
 # a gist's length; SEEN holds each client's last call, rewritten at most every SEEN_EVERY s
 CHAT_IDLE, GIST_CHARS = 2 * 3600, 300
@@ -1576,20 +1583,40 @@ class Cortex:
         # _notes holds no private or hidden page, so neither a pin nor a hit can serve one
         notes = self.index._notes
         said = {h["id"]: h.get("summary") or h["title"] for h in hits}
+        # G4: the playbooks the prompt matches lead, out of the Related budget, and are not
+        # repeated in Related or Lately
+        before, found = left[0], self._playbooks(prompt, hits, notes, xs["mute"], evs)
+        say = len(PLAYBOOK_SAYS) + 1  # the instruction line follows the wrapped lines
+        cap = PRIME_CAPS["related"] * 3 // 4  # Related keeps a quarter, about one line
+        lines = prime.fit([ln for _, ln in found[:PRIME_PLAYBOOKS]], "playbooks", cap - say,
+                          left[0] - say)
+        if any(ln.endswith(" (ask)") for ln in lines) and not any(
+                p.startswith("## How to read the claims\n") for p in parts):
+            put("How to read the claims", LEGEND)
+        if lines:
+            put("Playbooks", "\n".join(lines), "playbooks", cap, PLAYBOOK_SAYS)
+        if not (parts and parts[-1].startswith("## Playbooks\n")):
+            lines = []  # put found no room
+        pcost = before - left[0]
+        books = ([i for i, _ in found[:len(lines)]], [i for i, _ in found[len(lines):]])
+        xr["served"]["playbooks"], xr["trimmed"]["playbooks"] = books
         ids = list(dict.fromkeys(  # X-ray pins first, then the ranked hits
             [i for i in sorted(xs["pin"]) if i in notes and not topics.is_hub(notes[i])]
             + [h["id"] for h in hits if (n := notes.get(h["id"])) and not topics.is_hub(n)
-               and h["id"] not in xs["mute"]][:PRIME_RECALLS]))
+               and h["id"] not in xs["mute"] and h["id"] not in books[0]][:PRIME_RECALLS]))
+        ids = [i for i in ids if i not in books[0]]  # a pinned playbook too
         # RR-21: pages touched lately, out of the Related budget; `notes` and the mutes keep
         # private, hidden and withheld pages out, as for Related
         recent = [i for i in self._lately(evs) if i in notes and i not in xs["mute"]
-                  and i not in ids and i != hub and not semantic.is_chat(notes[i])][:PRIME_LATELY]
+                  and i not in ids and i not in books[0] and i != hub
+                  and not semantic.is_chat(notes[i])][:PRIME_LATELY]
         lat = prime.fit([f"- [[{i}]] — {notes[i]['title']}" for i in recent], "lately",
-                        PRIME_CAPS["related"] // 2, left[0])
-        cost = len(_wrap("lately", "\n".join(lat))) + len(LATELY_HEAD) + 6 if lat else 0
+                        min(PRIME_CAPS["related"] // 2, PRIME_CAPS["related"] - pcost), left[0])
+        cost = pcost + (len(_wrap("lately", "\n".join(lat))) + len(LATELY_HEAD) + 6 if lat else 0)
         rel = prime.fit([f"- [[{i}]] — " + (said.get(i) or notes[i]["fields"].get("summary")
                                             or notes[i]["title"]) for i in ids],
-                        "related", PRIME_CAPS["related"] - cost, left[0] - cost, "related")
+                        "related", PRIME_CAPS["related"] - cost, left[0] - cost + pcost,
+                        "related")
         if rel:
             put("Related", "\n".join(rel), "related", PRIME_CAPS["related"] - cost,
                 prime.more(len(ids) - len(rel), "related"))
@@ -1614,6 +1641,64 @@ class Cortex:
             put("Coverage", cov, "coverage", room, COVERAGE_SAYS)
         xr["served"]["hub"] = [hub] if hub and hub not in self.touched else []
         return parts, xr, hits
+
+    def _playbooks(self, prompt: str, hits: list[dict], notes: dict, mute: set[str],
+                   evs: list[dict]) -> list[tuple[str, str]]:
+        """G4: [(id, "- [[id]] title: summary")] of the playbooks (`note` pages tagged
+        `playbook`) the prompt matches, best first: recall hits, then by the content words
+        (prime.pref_rows' terms) their title and summary share. `notes` (the index) holds no
+        private page; a muted one, or one whose `scope` this client's profile lacks, is out.
+        An agent-written one the owner has not confirmed (`_unconfirmed`) ends in ` (ask)`."""
+        words = re.findall(r"\w+", prompt.lower())
+        terms = {t for t in words if len(t) > 2 and t not in STOPWORDS
+                 and t not in prime.TASK_WORDS}
+        terms |= {x for w in words for x in prime.ABBREVIATIONS.get(w, ())}
+        rank = {h["id"]: n for n, h in enumerate(hits) if h.get("match") != "linked"}
+        scopes, found = self._scopes(), []
+        for i, n in notes.items():
+            f, tags = n["fields"], n["fields"].get("tags")
+            if (n["kind"] != "note" or i in mute or PLAYBOOK_TAG not in (
+                    tags if isinstance(tags, list) else [tags])):
+                continue
+            if scopes is not None and str(f.get("scope") or "all") not in ("all", *scopes):
+                continue
+            summary = render.plain(str(f.get("summary") or ""), PLAYBOOK_SUMMARY)
+            shared = sum(t in f"{n['title']} {summary}".lower() for t in terms)
+            if i in rank or shared:
+                found.append((rank.get(i, len(rank)), -shared, i, n["title"], summary))
+        found.sort()
+        ask = self._unconfirmed({x[2] for x in found[:PRIME_PLAYBOOKS]}, evs)
+        return [(i, f"- [[{i}]] {title}" + (f": {summary}" if summary else "")
+                 + (" (ask)" if i in ask else "")) for _, _, i, title, summary in found]
+
+    def _unconfirmed(self, ids: set[str], evs: list[dict]) -> set[str]:
+        """G4: which of the note `ids` an agent wrote and the owner has not confirmed: the last
+        write Cortex logged on the page (its `cortex_add`, or a `cortex_patch` with its `tier`
+        as for claims) is not the owner's (`confirmed`, or `clicked` in the app), and the file
+        has not changed since. A page with no logged write is the owner's own; filing it under
+        a topic (`set_topics`) is no write about its content."""
+        last, at = {}, {}
+        for e in evs:
+            pl = e.get("payload") if e.get("kind") == "change" else None
+            c = pl.get("change") if isinstance(pl, dict) else None
+            if isinstance(c, dict) and c.get("kind") == "note" and c.get("id") in ids:
+                at[c["id"]] = e.get("ts")
+                if c.get("op") != "set_topics":
+                    last[c["id"]] = c
+        out = set()
+        for i, c in last.items():
+            if c.get("tier") == "confirmed" or c.get("confirm") == "clicked":
+                continue
+            ts = at[i]
+            try:  # shortcut: any later write Cortex did not log (a relink) reads as the owner's
+                # edit; record a hash with each write if that ever matters
+                edited = self.vault.path_for("note", i).stat().st_mtime > datetime.strptime(
+                    ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp() + OWNER_EDIT_SLACK
+            except (OSError, TypeError, ValueError):
+                edited = False
+            if not edited:
+                out.add(i)
+        return out
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
                            asks: bool = False, lines: list | None = None) -> None:
@@ -2813,6 +2898,8 @@ class Cortex:
                 change["update_of"] = {"page": update["page"], "claim": update["id"]}
             if sup and isinstance(claim, str):  # RR-4: explicit pairs, shown alike
                 change["supersedes"] = sup
+        elif kind == "note":  # G4: a playbook is served (ask) until a confirmed write
+            change.update(self._tier(user_confirmed, said == "yes"))
         if self.app_clicks:
             change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
@@ -3144,6 +3231,8 @@ class Cortex:
             allowed = ENUMS.get((kind, name))
             if allowed and (not isinstance(value, str) or value not in allowed):
                 raise invalid(f"{name} must be one of {', '.join(sorted(allowed))}.")
+        if kind == "note" and "scope" in fields and fields["scope"] not in access.SCOPES:
+            raise invalid(f"scope must be one of {', '.join(access.SCOPES)}.")  # G4 playbooks
         if kind == "assessment":
             check_assessment_result(fields.get("score"), fields.get("date"))
         if kind in WIKI_DEFAULTS:
@@ -3186,6 +3275,8 @@ class Cortex:
             body = f"# {title}{DECISION_BODY}"
         elif fields.get("note_type") == "permanent" and kind == "note":
             body += "\n## Links\n"
+        elif kind == "note" and PLAYBOOK_TAG in (fields.get("tags") or ()):
+            body = f"# {title}\n\n## Steps\n\n## Pitfalls\n\n## Done when\n"  # G4, filled by patch
         if kind in WIKI_DEFAULTS:
             fields = {"kind": kind, **fields}
         if raw_text is None:
