@@ -24,9 +24,13 @@ from __future__ import annotations
 import calendar
 import csv
 import io
+import json
 import os
+import queue
 import re
 import subprocess
+import sys
+import threading
 import zipfile
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -50,7 +54,14 @@ _NOT_DECISION = re.compile(
     r"^\W*(?:merge|bump|release|wip|fixup|typo|lint|format|revert)(?:s|ed|ing|ting)?\b", re.I)
 _HIT = re.compile(r"^- (\d{4}-\d\d-\d\d) ([0-9a-f]{12}) \(([^)]+)\): (.+)$")
 DOC_SKIPS = ("not a document", "encrypted", "scanned or no text", "over 200 MB", "unreadable",
-             "over 5 MB", "not UTF-8 text")
+             "over 5 MB", "not UTF-8 text", "a shortcut, not the file", "parse timed out")
+# RR-37: folders never walked (any hidden folder too), and shortcut files that only point at a
+# document somewhere else (a cloud doc, a link) and hold none of its text
+SKIP_DIRS = frozenset({"node_modules", ".git", ".venv", "__pycache__"})
+POINTERS = (".url", ".lnk", ".gdoc", ".gsheet", ".gslides")
+FOLD_CASE = os.name == "nt"  # Windows folder names ignore case (tests patch it)
+PARSE_TIMEOUT = 30.0  # seconds one PDF or .docx may take in the child before it is a skip
+_CHILD = [sys.executable, "-c", "from cortex.more_sources import _parse_child; _parse_child()"]
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
 _OLE = b"\xd0\xcf\x11\xe0"  # a password-protected .docx is an OLE container, not a zip
@@ -129,39 +140,132 @@ def _docx(data: bytes) -> tuple[str, str, str] | str:
     return title, "", "\n".join(p for p in paras if p)
 
 
-def docs_source(path: Path) -> sources.Source:
-    """One page per document in the folder (or the one file); see the module docstring."""
-    path, files = Path(path), importers._files(path)
+def _parse_child() -> None:
+    """The parse child's loop: `<kind> <n>\\n` and n bytes in on stdin, one JSON line out (the
+    `_pdf` / `_docx` result) per document, until stdin closes."""
+    inp, out = sys.stdin.buffer, sys.stdout
+    while head := inp.readline():
+        kind, n = head.split()
+        data = inp.read(int(n))
+        out.write(json.dumps(_pdf(data) if kind == b"pdf" else _docx(data)) + "\n")
+        out.flush()
+
+
+class _Parser:
+    """RR-37: PDF and .docx parsing in a child process (`_CHILD`), so a hostile file that
+    hangs or crashes pypdf is one "parse timed out" (or "unreadable") skip after
+    PARSE_TIMEOUT, not a hung import. One child serves the whole walk; a timeout kills it and
+    the next document starts a new one."""
+
+    def __init__(self):
+        self.proc = None
+
+    def __call__(self, kind: str, data: bytes) -> tuple[str, str, str] | str:
+        if self.proc is None:
+            self.proc = subprocess.Popen(_CHILD, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+            self.lines = queue.Queue()
+            threading.Thread(target=self._pump, args=(self.proc.stdout, self.lines),
+                             daemon=True).start()
+        try:
+            self.proc.stdin.write(f"{kind} {len(data)}\n".encode() + data)
+            self.proc.stdin.flush()
+            line = self.lines.get(timeout=PARSE_TIMEOUT)
+        except queue.Empty:
+            self.close()
+            return "parse timed out"
+        except OSError:  # the child died while reading
+            line = None
+        if line is None:
+            self.close()
+            return "unreadable"
+        got = json.loads(line)
+        return got if isinstance(got, str) else tuple(got)
+
+    @staticmethod
+    def _pump(stream, lines: queue.Queue) -> None:
+        try:
+            for line in stream:
+                lines.put(line)
+        except (OSError, ValueError):  # closed by `close` after a kill
+            pass
+        lines.put(None)  # end of output: the child exited
+
+    def close(self) -> None:
+        if self.proc is not None:
+            self.proc.kill()
+            self.proc.wait()
+            for f in (self.proc.stdin, self.proc.stdout):
+                f.close()
+            self.proc = None
+
+
+def _fold(name: str) -> str:
+    return name.casefold() if FOLD_CASE else name
+
+
+def skip_folder(rel: str, rules: tuple[str, ...] = ()) -> bool:
+    """Whether the folder `rel` (relative to the import, "/"-separated) is left out: any hidden
+    folder or SKIP_DIRS name in it, or a `rules` entry ("Archive", "School/Old") matching whole
+    folder names in a row, so "Archive" never matches "Archived"; case-folded on Windows."""
+    parts = [_fold(p) for p in rel.replace("\\", "/").split("/") if p and p != "."]
+    if any(p.startswith(".") or p in SKIP_DIRS for p in parts):
+        return True
+    for rule in rules:
+        seg = [_fold(p) for p in rule.replace("\\", "/").split("/") if p]
+        if seg and any(parts[i:i + len(seg)] == seg for i in range(len(parts))):
+            return True
+    return False
+
+
+def docs_source(path: Path, skip: tuple[str, ...] = ()) -> sources.Source:
+    """One page per document in the folder (or the one file); see the module docstring. The
+    walk leaves out `skip_folder`'s folders (`skip`: more folder rules) and shortcut files."""
+    path = Path(path)
+    files = importers._files(path, skip_dir=lambda rel: skip_folder(rel, skip))
 
     def items():
-        for name, size, mtime, read in files:
-            low = name.lower()
-            hidden = any(p.startswith(".") for p in PurePosixPath(name).parts)
-            if hidden or not low.endswith(DOC_SUFFIXES + importers.NOTE_SUFFIXES):
-                yield "not a document"
-                continue
-            if low.endswith(importers.NOTE_SUFFIXES):
-                yield importers.note_item(name, size, mtime, read)
-                continue
-            try:
-                data = read() if size <= importers.MAX_ENTRY else None
-            except VaultError:  # past the whole import's cap
-                data = None
-            if data is None:
-                yield "over 200 MB"
-                continue
-            got = _pdf(data) if low.endswith(".pdf") else _docx(data)
-            if isinstance(got, str):
-                yield got
-                continue
-            title, made, text = got
-            if not text.strip():
-                yield "scanned or no text"
-                continue
-            yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime),
-                               _clip(text, DOC_CHARS), _origin(path, name))
+        parse = _Parser()
+        try:
+            yield from _doc_items(path, files, skip, parse)
+        finally:
+            parse.close()
 
     return sources.Source("docs", "Documents", "folder", items, skips=DOC_SKIPS)
+
+
+def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
+    for name, size, mtime, read in files:
+        low, folder = name.lower(), PurePosixPath(name).parent.as_posix()
+        if PurePosixPath(name).name.startswith(".") or skip_folder(folder, skip):
+            yield "not a document"  # a hidden file, or a skipped folder inside a .zip
+            continue
+        if low.endswith(POINTERS):
+            yield "a shortcut, not the file"
+            continue
+        if not low.endswith(DOC_SUFFIXES + importers.NOTE_SUFFIXES):
+            yield "not a document"
+            continue
+        if low.endswith(importers.NOTE_SUFFIXES):
+            yield importers.note_item(name, size, mtime, read)
+            continue
+        try:
+            data = read() if size <= importers.MAX_ENTRY else None
+        except VaultError:  # past the whole import's cap
+            data = None
+        if data is None:
+            yield "over 200 MB"
+            continue
+        got = parse("pdf" if low.endswith(".pdf") else "docx", data)
+        if isinstance(got, str):
+            yield got
+            continue
+        title, made, text = got
+        if not text.strip():
+            yield "scanned or no text"
+            continue
+        yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime),
+                           _clip(text, DOC_CHARS), _origin(path, name))
 
 
 # ---- repos ----

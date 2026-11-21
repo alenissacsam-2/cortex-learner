@@ -54,7 +54,7 @@ CACHE = ".cortex/vectors.db"  # the vector store (cortex.vecstore)
 NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once, then a backup
 BODY_CHARS = 1500
 CHUNK_CHARS, CHUNK_OVERLAP = 1000, 200  # ~250-300 tokens: well under bge-small's 512
-TEXT_VERSION = 4  # bump when _text or _chunks change, so cached vectors are rebuilt
+TEXT_VERSION = 5  # bump when _text or _chunks change, so cached vectors are rebuilt
 CHUNKING = [BODY_CHARS, CHUNK_CHARS, CHUNK_OVERLAP]  # in the cache meta: a change rebuilds
 RECALL_BUDGET = 1.0  # seconds of extra-chunk embedding per recall; `cortex model build` the rest
 HEAD_BUDGET = 1.0  # seconds of missing chunk-0 embedding per recall (a lost cache, an import)
@@ -291,11 +291,25 @@ def _today() -> str:
     return local_day(datetime.now(UTC))
 
 
+def older_versions(index: Index) -> frozenset[str]:
+    """RR-18: imported pages a newer import of the same file replaced: the same `Source:`
+    label, `From:` origin and title on the header line (sources.HEADER) and an older Date
+    (`x-2` is newer than `x` on the same day). A read-time fold; nothing is stored."""
+    from cortex.sources import HEADER  # lazy: sources pulls in the import machinery
+    groups: dict[tuple, list] = {}
+    for id, n in index._notes.items():
+        if n["kind"] == "resource" and (m := HEADER.search(n["body"][:2000])) and m.group(3):
+            groups.setdefault((m.group(1), m.group(3), n["title"]), []).append(
+                (m.group(2), len(id), id))
+    return frozenset(i for g in groups.values() for *_, i in sorted(g)[:-1])
+
+
 def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
-             current: bool = False) -> dict:
+             current: bool = False, older: frozenset[str] = frozenset()) -> dict:
     """A page's score factors other than 1 after the floors: `quiet`, its harvest.quiet weight
     (0 hides a folded copy even with `chats`), else `chat`, CHAT_WEIGHT for a chat page (`chats`
-    lifts both but 0); `status`, STALE_WEIGHT for a STALE status; `recency`, up to
+    lifts both but 0); `status`, STALE_WEIGHT for a STALE status; `older_version`, STALE_WEIGHT
+    for a page in `older` (`older_versions`); `recency`, up to
     1 + RECENT_BOOST for a journal or chat page dated in the last months, or with `current`
     (`is_current` query) up to 1 + CURRENT_BOOST for any dated page."""
     q = (quiet or {}).get(id)
@@ -311,6 +325,8 @@ def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
         f["chat"] = CHAT_WEIGHT
     if (n["kind"], str(n["fields"].get("status"))) in STALE:  # str: a YAML list is unhashable
         f["status"] = STALE_WEIGHT
+    if id in older:
+        f["older_version"] = STALE_WEIGHT
     if (current or chat or n["kind"] == "journal") \
             and (d := page_date(id, n["fields"], n["body"])):
         boost, days = (CURRENT_BOOST, CURRENT_DAYS) if current else (RECENT_BOOST, RECENT_DAYS)
@@ -323,9 +339,9 @@ def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
 
 
 def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
-            current: bool = False) -> float:
+            current: bool = False, older: frozenset[str] = frozenset()) -> float:
     """The product of the page's `_factors`; 0 drops it."""
-    return math.prod(_factors(index, id, chats, quiet, current).values(), start=1.0)
+    return math.prod(_factors(index, id, chats, quiet, current, older).values(), start=1.0)
 
 
 def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = False,
@@ -341,8 +357,8 @@ def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = Fals
         log.warning("rerank skipped: %s", e)
         return hits
     # logits can be negative, so weight their sigmoid (same order) rather than the logit
-    now = is_current(query)
-    s = [1 / (1 + np.exp(-x)) * _weight(index, h["id"], chats, quiet, now)
+    now, older = is_current(query), older_versions(index)
+    s = [1 / (1 + np.exp(-x)) * _weight(index, h["id"], chats, quiet, now, older)
          for x, h in zip(s, hits, strict=True)]
     if out is not None:  # `--explain` shows the weighted rerank score per page
         out.update({h["id"]: float(x) for x, h in zip(s, hits, strict=True)})
@@ -390,8 +406,8 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     """(start in the filled body, text) per chunk. Chunk 0 is `_text` (start 0). The rest are
     windows of about CHUNK_CHARS over the body from BODY_CHARS - CHUNK_OVERLAP on, each under
     a `_header` line (the last 2 levels of headings above the window start), overlapping the
-    one before by CHUNK_OVERLAP and cut at the last turn (`### `, `**Me:**`), else paragraph,
-    boundary in the window's final CHUNK_OVERLAP characters."""
+    one before by CHUNK_OVERLAP and cut at the best boundary in the window's final
+    CHUNK_OVERLAP characters (`_cut`: turn, paragraph, line, sentence, then space)."""
     body = _filled(n["body"].strip())
     out = [(0, _text(n))]
     if len(body) <= BODY_CHARS:
@@ -414,9 +430,7 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
         if end >= len(body) - CHUNK_OVERLAP:  # the rest, rather than a short last window
             out.append((s, f"{header(s)}\n{body[s:]}"))
             break
-        seg = body[end - CHUNK_OVERLAP:end]
-        turns = [m.start() for m in _TURN.finditer(seg)]
-        cut = turns[-1] if turns else seg.rfind("\n\n")
+        cut = _cut(body[end - CHUNK_OVERLAP:end])
         if cut > 0:
             end += cut - CHUNK_OVERLAP
         out.append((s, f"{header(s)}\n{body[s:end]}"))
@@ -424,6 +438,21 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     return out
 
 
+def _cut(seg: str) -> int:
+    """Where in `seg` (a window's last CHUNK_OVERLAP characters) the window ends, by a ladder:
+    before the last turn, else at a paragraph break, a line end, after a sentence's end, a
+    space, so a word is never split; -1 (a hard cut) only when `seg` has none of them."""
+    turns = [m.start() for m in _TURN.finditer(seg)]
+    if turns:
+        return turns[-1]
+    for at in (seg.rfind("\n\n"), seg.rfind("\n"),
+               max((m.end() for m in _SENTENCE.finditer(seg)), default=-1), seg.rfind(" ")):
+        if at > 0:
+            return at
+    return -1
+
+
+_SENTENCE = re.compile(r"[.!?][\"')\]]*(?=\s)")
 _HEAD_LINE = re.compile(r"^(#{1,6})[ \t][^\n]*", re.M)
 # a turn starts at its `### <time>` line when it has one, else at `**Me:**`
 _TURN = re.compile(r"\n(?:### [^\n]*\n)?\*\*Me:\*\*|\n### ")
@@ -787,7 +816,8 @@ def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,
     `at` is the start of the page's best chunk in its filled body (absent for chunk 0).
     Imported chat pages (`is_chat`) score x CHAT_WEIGHT after the floors, unless `chats`;
     `quiet` ({id: weight}, harvest.quiet) overrides that weight, and weight 0 drops the page,
-    from the graph neighbours too, even with `chats`. A STALE page scores x STALE_WEIGHT and a
+    from the graph neighbours too, even with `chats`. A STALE page or an older version of an
+    imported file (`older_versions`) scores x STALE_WEIGHT and a
     recent journal or chat page up to x(1 + RECENT_BOOST), or any recent dated page up to
     x(1 + CURRENT_BOOST) for an `is_current` query (`_factors`).
     With `rerank_with` (a `load_reranker` scorer) the top RERANK_POOL are reordered by it.
@@ -832,12 +862,12 @@ def _rank(index: Index, query: str, embed, limit: int, hops: int, fuse: str,
                 if i in score:
                     score[i] += 1 / (RRF_K + r + 1)
     # after the floors, so a chat page that is the only match still shows
-    now = is_current(query)
+    now, older = is_current(query), older_versions(index)
     score = {i: sc * w for i, sc in score.items()
-             if (w := _weight(index, i, chats, quiet, now))}
+             if (w := _weight(index, i, chats, quiet, now, older))}
     if explain is not None:
         explain.update(cos=raw_cos, kw=raw_kw, cover=cover, at=at, score=score, chats=chats,
-                       quiet=quiet, current=now, w=(w_cos, w_kw))
+                       quiet=quiet, current=now, w=(w_cos, w_kw), older=older)
 
     def match(i):
         return "keyword" if w_kw * kw.get(i, 0.0) > w_cos * cos.get(i, 0.0) else "similar"
@@ -903,12 +933,13 @@ def explained(index: Index, explain: dict, hits: list[dict],
 
     def weight(i: str) -> float:
         return _weight(index, i, explain["chats"], explain["quiet"],
-                       explain.get("current", False)) or 0.0
+                       explain.get("current", False), explain.get("older", frozenset())) or 0.0
 
     def parts(i: str, h: dict | None = None) -> dict:
         at = explain["at"].get(i, 0)
         chunk = _chunk_text(index._notes[i], at).split("\n", 1)[-1] if raw_cos else ""
-        f = _factors(index, i, explain["chats"], explain["quiet"], explain.get("current", False))
+        f = _factors(index, i, explain["chats"], explain["quiet"], explain.get("current", False),
+                     explain.get("older", frozenset()))
         return {"id": i, "cos": raw_cos.get(i), "kw": kw.get(i, 0.0), "cover": cover.get(i),
                 "weight": weight(i), "factors": {k: round(v, 3) for k, v in f.items()},
                 "score": h["score"] if h else round(score.get(i, 0.0), 3),

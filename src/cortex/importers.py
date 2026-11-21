@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import re
 import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -103,12 +105,15 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _ESC = re.compile(r"\\([\\;,nN])")
 
 
-def _files(path: Path) -> list[tuple[str, int, float, partial]]:
+def _files(path: Path, skip_dir: Callable[[str], bool] | None = None,
+           errors: list[OSError] | None = None) -> list[tuple[str, int, float, partial]]:
     """(relative name, size, mtime, read) of every file in a .zip (and in zips inside it, one
     level: Notion nests its export parts), a folder, or one file. The one reader every
     importer and `detect` use. `read()` refuses a file over MAX_ENTRY (MAX_BYTES for a note)
     or past MAX_TOTAL for the whole call, before it decompresses it; `read(n)` reads only the
-    first n bytes; `read(items=True)` streams a JSON list up to MAX_STREAM (json_value)."""
+    first n bytes; `read(items=True)` streams a JSON list up to MAX_STREAM (json_value).
+    In a folder, `skip_dir(relative folder path)` prunes a folder before it is walked
+    (node_modules is never listed), and a subfolder that cannot be read goes to `errors`."""
     path, left = Path(path), [MAX_TOTAL]
     try:
         if path.suffix.lower() == ".zip":
@@ -117,11 +122,24 @@ def _files(path: Path) -> list[tuple[str, int, float, partial]]:
             return [(p.relative_to(path).as_posix(), p.stat().st_size, p.stat().st_mtime,
                      partial(_read, p.relative_to(path).as_posix(), p.stat().st_size,
                              partial(p.open, "rb"), left))
-                    for p in sorted(path.rglob("*")) if p.is_file()]
+                    for p in _walk(path, skip_dir, [] if errors is None else errors)
+                    if p.is_file()]
         return [(path.name, path.stat().st_size, path.stat().st_mtime,
                  partial(_read, path.name, path.stat().st_size, partial(path.open, "rb"), left))]
     except (OSError, zipfile.BadZipFile) as e:
         raise VaultError("invalid_argument", f"Cannot read {path.name}: {e}") from None
+
+
+def _walk(root: Path, skip_dir: Callable[[str], bool] | None, errors: list) -> list[Path]:
+    """Every path under `root`, sorted, minus the folders `skip_dir` prunes; unreadable
+    folders are appended to `errors` instead of stopping the walk."""
+    out = []
+    for d, dirs, names in os.walk(root, onerror=errors.append):
+        rel = Path(d).relative_to(root)
+        if skip_dir:
+            dirs[:] = [x for x in dirs if not skip_dir((rel / x).as_posix())]
+        out += [Path(d, n) for n in names]
+    return sorted(out)
 
 
 def _zip_files(z: zipfile.ZipFile, left: list[int], nested: bool = False) -> list:
@@ -306,11 +324,13 @@ def report_line(label: str, r: dict) -> str:
     why = {k: n for k, n in r.get("reasons", {}).items() if n}
     reasons = f" ({', '.join(f'{n:,} {k}' for k, n in why.items())})" if why else ""
     updated = f", updated {r['updated']:,}" if r.get("updated") else ""
+    gone = (f", {r['gone']:,} earlier page{'s' * (r['gone'] != 1)} not in the folder (kept)"
+            if r.get("gone") else "")
     bad = {k: r["unreadable"][k] for k in sources.UNREADABLE if r.get("unreadable", {}).get(k)}
     gate = (f". Skipped {sum(bad.values()):,} as unreadable ("
             f"{', '.join(f'{n:,} {k}' for k, n in bad.items())})") if bad else ""
     return (f"{label}: read {r['read']:,}, imported {r['imported']:,}{updated}, private "
-            f"{r['private']:,}, duplicate {r['duplicate']:,}, skipped "
+            f"{r['private']:,}, duplicate {r['duplicate']:,}{gone}, skipped "
             f"{sum(why.values()):,}{reasons}{gate}")
 
 
@@ -323,9 +343,11 @@ def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
     """One item per .md/.txt note (≤ MAX_BYTES, UTF-8 text, outside hidden folders such as
     .obsidian); anything else is skipped with its reason. A note whose frontmatter marks it
     private (any truthy `private`, a `private` tag, or frontmatter that does not parse) is a
-    private item. Dedupe hashes the whole text, frontmatter too, so an edited note comes in as a
-    new page."""
-    files = _files(path)
+    private item. Dedupe hashes the whole text, frontmatter too; RR-18: a changed note rewrites
+    its page (by its path, `From:`) when that page is as the import wrote it, else comes in as
+    a new page (`sources.Source.by_origin`)."""
+    errors: list[OSError] = []
+    files = _files(path, errors=errors)
     names = [n.replace("\\", "/") for n, *_ in files]
     flavor = flavor or ("obsidian" if any(".obsidian" in n.split("/") for n in names) or
                         (Path(path).is_dir() and (Path(path) / ".obsidian").is_dir())
@@ -337,7 +359,8 @@ def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
             yield note_item(*f)
 
     return sources.Source("notes", LABELS[flavor], "folder", items, prefix=flavor,
-                          skips=("not a note", "over 5 MB", "not UTF-8 text"))
+                          skips=("not a note", "over 5 MB", "not UTF-8 text"), by_origin=True,
+                          walk_errors=errors)
 
 
 def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
@@ -366,12 +389,13 @@ def _tier(private: bool, tier: str | None) -> sources.Audience:
 def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: bool = False,
                  private: bool = False, tier: str | None = None) -> dict:
     """`notes_source` through `sources.run`: one resource page per new note, every one private
-    with `private` (or `tier` "private"). A note whose text was imported before is skipped, so
-    re-importing is safe."""
+    with `private` (or `tier` "private"). A note whose text was imported before is skipped and a
+    changed one updates its page (see notes_source), so re-importing is safe."""
     src = notes_source(path, flavor)
     r = sources.run(vault, src, _tier(private, tier), dry_run)
     return {"source": src.prefix, "new": r["imported"], "same": r["duplicate"],
-            "skipped": sum(r["reasons"].values()), **{k: r[k] for k in REPORT}}
+            "skipped": sum(r["reasons"].values()), **{k: r[k] for k in REPORT},
+            "updated": r["updated"], "gone": r.get("gone")}
 
 
 def _events(text: str):

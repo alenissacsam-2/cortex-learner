@@ -37,7 +37,7 @@ REPORT = importers.REPORT
 
 def _counts(r: dict) -> dict:
     """The importer's own counts, without the shared import-report keys."""
-    return {k: v for k, v in r.items() if k not in REPORT}
+    return {k: v for k, v in r.items() if k not in (*REPORT, "updated", "gone")}
 
 
 def _notion_zip(tmp_path) -> Path:
@@ -101,8 +101,11 @@ def test_reimport_dedupes_by_content(root_plain, tmp_path):
     assert _counts(importers.import_calendar(v, EXPORTS / "calendar.ics")) == \
         {"events": 3, "months": 2, "new": 0}
     assert _tree(root_plain) == after_cal and set(before) < set(after_cal)
-    (src / "Daily.md").write_text("Revised Prim too.\n", "utf-8")  # edited: a new page
-    assert importers.import_notes(v, src)["new"] == 1
+    (src / "Daily.md").write_text("Revised Prim too.\n", "utf-8")  # RR-18: updated in place
+    r = importers.import_notes(v, src)
+    assert (r["new"], r["updated"]) == (0, 1)
+    assert "Revised Prim too." in (root_plain / "resources" / "obsidian-daily.md").read_text(
+        "utf-8")
 
 
 def test_calendar_month_pages_without_attendees(root_plain):
