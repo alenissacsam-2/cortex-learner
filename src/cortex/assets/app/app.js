@@ -1445,48 +1445,135 @@
   }
   const PAGE = { 'teaching-contract': 'Teaching rule', preferences: 'Preferences', personality: 'Personality',
     goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait', core: 'Core' };
+  /* R3-4: every Review row is a card. J/K move focus between cards (a roving tabindex), and on
+     the focused card Y approves, N dismisses, R retires and S skips; never while typing. */
+  let lastReview = null, reviewAt = -1, reviewBusy = false;
+  const reviewSkipped = new Set();  // cards skipped with S: out of Today's 5 until the page reloads
+  function card(title, value, sub, acts, keys, id) {
+    // keys: {y|n|r: [button, function]}; each key's button says its shortcut
+    const r = row(title, value, sub, acts);
+    r.classList.add('rcard');
+    r.setAttribute('role', 'group');
+    r.setAttribute('aria-label', title);
+    r.setAttribute('tabindex', '-1');
+    r.keys = {};
+    for (const [k, [b, fn]] of Object.entries(keys || {})) {
+      b.setAttribute('aria-keyshortcuts', k.toUpperCase());
+      r.keys[k] = fn;
+    }
+    r.skipId = id || null;
+    return r;
+  }
+  function cardOf(e) {
+    for (; e && e !== document.body; e = e.parentNode) if (e.keys) return e;
+    return null;
+  }
+  function focusCard(cards, i) {
+    if (!cards.length) return;
+    const k = Math.max(0, Math.min(i, cards.length - 1));
+    cards.forEach((c, j) => c.setAttribute('tabindex', j === k ? '0' : '-1'));
+    cards[k].focus();
+  }
+  function reviewKey(e) {
+    if (current !== 'review' || e.ctrlKey || e.metaKey || e.altKey || reviewBusy) return;
+    const t = e.target || {}, tag = String(t.tagName || '').toUpperCase();
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || t.isContentEditable) return;
+    const k = String(e.key || '').toLowerCase();
+    if (!['j', 'k', 'y', 'n', 'r', 's'].includes(k)) return;
+    const cards = [...$('review').querySelectorAll('.rcard')], at = cards.indexOf(cardOf(document.activeElement));
+    if (k === 'j' || k === 'k') {
+      e.preventDefault();
+      focusCard(cards, at < 0 ? 0 : at + (k === 'j' ? 1 : -1));
+      return;
+    }
+    if (at < 0) return;
+    const c = cards[at];
+    if (k === 's') {
+      e.preventDefault();
+      if (c.skipId && lastReview) {
+        reviewSkipped.add(c.skipId);
+        reviewAt = at;
+        renderReview(lastReview);
+      } else focusCard(cards, at + 1);
+      return;
+    }
+    if (!c.keys[k]) return;
+    e.preventDefault();
+    reviewAt = at;
+    reviewBusy = true;
+    Promise.resolve(c.keys[k]()).then(() => { reviewBusy = false; }, () => { reviewBusy = false; });
+  }
+  addEventListener('keydown', reviewKey);
   function renderReview(d) {
+    lastReview = d;
     badge(d.count);
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
     const where = (x) => (PAGE[x.page] || x.page) + (x.section ? ` · ${x.section}` : '');
     const list = (rows, empty) => (rows.length ? rows : [note(empty)]);
+    const two = (y, n) => ({ y, n });  // [button, function] for Y and N
+    const kb = (text, fn, cls, label) => { const b = btn(text, fn, cls, { 'aria-label': label }); return [b, fn]; };
+    const pendingCard = (p, id) => {
+      const y = kb('Approve', () => act('/api/review/approve', { key: p.key }, 'Approved.'), 'btn lit', `Approve: ${p.text}`);
+      const n = kb('Dismiss', () => act('/api/review/dismiss', { key: p.key }, 'Dismissed. It will not be suggested again.'), null, `Dismiss: ${p.text}`);
+      return card(p.text, where(p), p.since ? `Suggested ${p.since}` : null, [y[0], n[0]], two(y, n), id);
+    };
+    const conflictCard = (c, id) => {
+      const both = kb('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, `Keep both: ${c.left.text} and ${c.right.text}`);
+      const left = kb('Keep left', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.left.text}`);
+      const right = kb('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.right.text}`);
+      // a recorded pair's right line is the newer one: Y takes it; N keeps both
+      const keys = c.why === 'opposite' ? { n: both } : { y: right, n: both };
+      return card(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [both[0], left[0], right[0]], keys, id);
+    };
+    const ruleCard = (x, id) => {
+      const y = kb('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', `Approve: ${x.text}`);
+      const n = kb('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, `Dismiss: ${x.text}`);
+      return card(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [y[0], n[0]], two(y, n), id);
+    };
+    const retire = (x) => kb('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, `Retire: ${x.text}`);
+    const rules = d.rules || [];
+    const find = { pending: d.pending, conflict: d.conflicts || [], rule: rules };
+    const make = { pending: pendingCard, conflict: conflictCard, rule: ruleCard };
+    const today = (d.today || []).filter((t) => !reviewSkipped.has(`${t.type}:${t.key}`)).map((t) => {
+      const x = (find[t.type] || []).find((y) => y.key === t.key);
+      return x ? make[t.type](x, `${t.type}:${t.key}`) : null;
+    }).filter(Boolean);
+    const allRules = rules.length > 1 ? ['Approve all', () => act('/api/review/rule/approve-all', { keys: rules.map((x) => x.key) }, 'Added to your core lines.'),
+      { 'aria-label': `Approve all ${rules.length} repeated corrections` }] : null;
     put('review',
-      board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) =>
-        row(p.text, where(p), p.since ? `Suggested ${p.since}` : null, [
-          btn('Approve', () => act('/api/review/approve', { key: p.key }, 'Approved.'), 'btn lit', { 'aria-label': `Approve: ${p.text}` }),
-          btn('Dismiss', () => act('/api/review/dismiss', { key: p.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${p.text}` })])),
+      board('Today’s 5', { note: String(today.length) },
+        h('p', { class: 'help pad', text: 'Keys: J and K move between cards, Y approve, N dismiss, R retire, S skip.' }),
+        ...list(today, d.today_left === 0 ? 'Done for today. The lists below still wait.' : 'Nothing for today.')),
+      board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) => pendingCard(p)),
       'Nothing is waiting.')),
-      board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) =>
-        row(x.text, where(x), `Ended ${x.until}`, [
-          btn('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, { 'aria-label': `Retire: ${x.text}` })])),
-      'No line is past its end date.')),
-      board('Still true?', { note: String(d.stale.length) }, ...list(d.stale.map((x) =>
-        row(x.text, where(x), `Last confirmed ${x.since}`, [
-          btn('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', { 'aria-label': `Still true: ${x.text}` }),
-          btn('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, { 'aria-label': `Retire: ${x.text}` })])),
-      'Nothing to check this month.')),
-      board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) =>
-        row(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [
-          btn('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, { 'aria-label': `Keep both: ${c.left.text} and ${c.right.text}` }),
-          btn('Keep left', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, { 'aria-label': `Keep only: ${c.left.text}` }),
-          btn('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, { 'aria-label': `Keep only: ${c.right.text}` })])),
+      board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) => {
+        const r = retire(x);
+        return card(x.text, where(x), `Ended ${x.until}`, [r[0]], { r });
+      }), 'No line is past its end date.')),
+      board('Still true?', { note: String(d.stale.length) }, ...list(d.stale.map((x) => {
+        const y = kb('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', `Still true: ${x.text}`), r = retire(x);
+        return card(x.text, where(x), `Last confirmed ${x.since}`, [y[0], r[0]], { y, r });
+      }), 'Nothing to check this month.')),
+      board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
-      board('Corrections you repeat', { note: String((d.rules || []).length) }, ...list((d.rules || []).map((x) =>
-        row(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [
-          btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
-          btn('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.text}` })])),
+      board('Corrections you repeat', { note: String(rules.length), btn: allRules }, ...list(rules.map((x) => ruleCard(x)),
       'No repeated corrections found.')),
-      board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) =>
-        row(x.subject, `${x.project} · ${x.date}`, `Matched "${x.word}"` + (x.private ? ' · private' : ''), [
-          btn('Approve', () => act('/api/review/decision/approve', { key: x.key }, 'Saved as a decision.'), 'btn lit', { 'aria-label': `Approve: ${x.subject}` }),
-          btn('Dismiss', () => act('/api/review/decision/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.subject}` })])),
-      'No decisions found in your commits.')),
-      board('Lines you asked to forget', { note: String((d.forget || []).length) }, ...list((d.forget || []).flatMap((x) => [
-        row(`//forget: ${x.text}`, x.candidates.length ? 'Retire the line you meant' : 'No line matched', null, [
-          btn('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, { 'aria-label': `Dismiss: ${x.text}` })]),
-        ...x.candidates.map((c) => row(c.text, where(c), null, [
-          btn('Retire', () => act('/api/review/retire', { id: c.id }, 'Retired.'), null, { 'aria-label': `Retire: ${c.text}` })]))]),
-      'Nothing to forget.')));
+      board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) => {
+        const y = kb('Approve', () => act('/api/review/decision/approve', { key: x.key }, 'Saved as a decision.'), 'btn lit', `Approve: ${x.subject}`);
+        const n = kb('Dismiss', () => act('/api/review/decision/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, `Dismiss: ${x.subject}`);
+        return card(x.subject, `${x.project} · ${x.date}`, `Matched "${x.word}"` + (x.private ? ' · private' : ''), [y[0], n[0]], two(y, n));
+      }), 'No decisions found in your commits.')),
+      board('Lines you asked to forget', { note: String((d.forget || []).length) }, ...list((d.forget || []).flatMap((x) => {
+        const n = kb('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, `Dismiss: ${x.text}`);
+        return [card(`//forget: ${x.text}`, x.candidates.length ? 'Retire the line you meant' : 'No line matched', null, [n[0]], { n }),
+          ...x.candidates.map((c) => { const r = retire(c); return card(c.text, where(c), null, [r[0]], { r }); })];
+      }), 'Nothing to forget.')));
+    const cards = [...$('review').querySelectorAll('.rcard')];
+    if (reviewAt >= 0) {  // after a key's action or a skip: focus stays at the same place
+      const at = reviewAt;
+      reviewAt = -1;
+      focusCard(cards, at);
+    } else if (cards.length && !cards.some((c) => c.getAttribute('tabindex') === '0')) cards[0].setAttribute('tabindex', '0');
   }
 
   /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come

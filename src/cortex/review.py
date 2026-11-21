@@ -45,6 +45,10 @@ _CONFIRMED = re.compile(r"\(confirmed (\d{4}-\d\d-\d\d)\)")
 COS = 0.72  # cosine (warm embedder) from which two lines say about the same thing
 JACCARD = 0.6  # the same for word overlap, when the embedder is not loaded
 SHOWN_PAIRS = 5  # conflict pairs shown at a time
+TODAY_MAX = 5  # R3-4: Today's 5, cards a day
+TODAY_CARDS = ("pending", "conflict", "rule")  # the kinds of card Today's 5 offers
+SIGHTINGS = 2  # chats that must propose the same line before it is offered in Today's 5
+SINGLE_DAYS = 14  # a line fewer chats proposed leaves the view this many days after its stamp
 _WORD = re.compile(r"[a-z0-9']+")
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
@@ -265,15 +269,51 @@ def live_rows(vault, events, today: str) -> list[dict]:
     return [r for r in claims.tiers(vault, events, today=today) if r["page"] not in hidden]
 
 
+def sightings(events) -> dict:
+    """R3-4: {(page, text_hash): sessions} of the unvoided `propose` changes that hold their
+    line's hash: the chats (one session each) that proposed the same line."""
+    events = list(events)
+    voided, out = _voided(events), {}
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("tool") == "propose" and isinstance(c.get("hash"), str)
+                and e.get("id") not in voided):
+            out.setdefault((c.get("id"), c["hash"]), set()).add(e.get("session"))
+    return out
+
+
+def answered_today(events, today: str) -> int:
+    """R3-4: the Today's 5 kinds of card (TODAY_CARDS) the user answered on `today`: one per
+    app click, each its own session stamped with the card's kind (app/server.py `_click`)."""
+    voided, said = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("card") in TODAY_CARDS and e.get("day") == today
+                and e.get("id") not in voided):
+            said.add(e.get("session"))
+    return len(said)
+
+
 def view(vault, events, today: str) -> dict:
-    """The Review view and its badge `count`: every text is shown text (`_shown`)."""
+    """The Review view and its badge `count`: every text is shown text (`_shown`). R3-4: a
+    single inference (a waiting line other than a teaching rule that fewer than SIGHTINGS
+    chats proposed) leaves the view SINGLE_DAYS after its stamp (inbox.md keeps it), and
+    `today` orders at most TODAY_MAX cards a day (`_today`)."""
     events = list(events)
     hidden = _private(vault)
     rows = [r for r in claims.tiers(vault, events) if r["page"] not in hidden]  # writes nothing
     expired = [{"page": r["page"], "id": r["id"], "text": _shown(r["text"]), "until": until}
                for r in rows if (until := claims.expired(r["text"], today))]
-    waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"])}
-               for p in pending(vault, today)]
+    seen, cut = sightings(events), (dt.date.fromisoformat(today)
+                                    - dt.timedelta(days=SINGLE_DAYS)).isoformat()
+
+    def single(p: dict) -> bool:
+        return p["page"] != "teaching-contract" and len(
+            seen.get((p["page"], text_hash(p["text"])), ())) < SIGHTINGS
+
+    waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"]),
+                "single": single(p)}
+               for p in pending(vault, today) if not (single(p) and (p["since"] or "~") < cut)]
     old = stale(rows, events, today)
 
     def side(r: dict) -> dict:
@@ -291,7 +331,21 @@ def view(vault, events, today: str) -> dict:
     forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
                "candidates": [side(c) for c in x["candidates"]]}
               for x in tags.forget_cards(vault, events, today)]
+    left = max(0, TODAY_MAX - answered_today(events, today))
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget,
+            "today": _today(waiting, pairs, rules)[:left], "today_left": left,
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
             + len(decisions) + len(forget)}
+
+
+def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:
+    """R3-4's order, as {type, key} of cards in the boards: teaching-rule proposals, then
+    contradiction pairs, repeated corrections, and last the other waiting lines that 2+ chats
+    proposed (a single inference never)."""
+    rule = [p for p in waiting if p["page"] == "teaching-contract"]
+    return ([{"type": "pending", "key": p["key"]} for p in rule]
+            + [{"type": "conflict", "key": c["key"]} for c in pairs]
+            + [{"type": "rule", "key": x["key"]} for x in rules]
+            + [{"type": "pending", "key": p["key"]} for p in waiting
+               if p not in rule and not p["single"]])

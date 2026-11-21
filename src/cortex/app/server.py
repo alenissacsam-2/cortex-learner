@@ -328,6 +328,7 @@ class App:
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
             "/api/review/rule/approve": self.review_rule_approve,
+            "/api/review/rule/approve-all": self.review_rule_approve_all,
             "/api/review/rule/dismiss": self.review_rule_dismiss,
             "/api/review/decision/approve": self.review_decision_approve,
             "/api/review/decision/dismiss": self.review_decision_dismiss,
@@ -555,10 +556,11 @@ class App:
         v = self._vault()
         return review.view(v, EventLog(v).iter_events(), self._today())
 
-    def _click(self, tool: str, method: str, kwargs: dict) -> dict:
+    def _click(self, tool: str, method: str, kwargs: dict, card: str | None = None) -> dict:
         """One Review click, written by an mcp_server.Cortex with `app_clicks` set through the
         tool's own code path (cortex_patch, cortex_log), in a session closed at once so it is
-        committed and `cortex undo` can take it back. Returns the fresh Review view."""
+        committed and `cortex undo` can take it back. Returns the fresh Review view. `card`
+        (R3-4): the card's kind, stamped on each change the click writes."""
         from cortex.mcp_server import Cortex
         from cortex.vault import Vault
         root = self.need_root()
@@ -568,9 +570,11 @@ class App:
                 core.app_clicks = True  # every write here is the user's own click
                 self.core = (root, core)
             core = self.core[1]
+            core.sessions.stamp = {"card": card} if card else {}
             try:
                 out = core._call(tool, getattr(core, method), kwargs)
             finally:
+                core.sessions.stamp = {}
                 if core.sessions.current is not None:
                     core.sessions.close(summary="Review in the Cortex app")
         if "error" in out:
@@ -608,7 +612,7 @@ class App:
         rule = p["page"] == "teaching-contract"  # a proposal is stored bare; a rule is a list line
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{p['page']}", "op": "append_to_section", "target": p["section"],
-            "text": "- " * rule + p["text"], "user_confirmed": True})
+            "text": "- " * rule + p["text"], "user_confirmed": True}, "pending")
 
     def review_dismiss(self, body: dict) -> dict:
         """Dismiss: a claim page's line goes to its `## Not me` (cortex_patch reject); another
@@ -618,9 +622,9 @@ class App:
         if p["page"] in claims.PAGES:
             return self._click("cortex_patch", "cortex_patch", {
                 "id": f"me/{p['page']}", "op": "reject",
-                "target": f"{p['section']}: {p['text']}"})
+                "target": f"{p['section']}: {p['text']}"}, "pending")
         return self._click("cortex_patch", "_dismiss", {
-            "page": p["page"], "section": p["section"], "text": p["text"]})
+            "page": p["page"], "section": p["section"], "text": p["text"]}, "pending")
 
     def review_still(self, body: dict) -> dict:
         """Still true: a reconfirm stamped `confirm: clicked` (claims.tiers: confirmed)."""
@@ -649,10 +653,11 @@ class App:
             raise NotFound
         if keep == "both":
             return self._click("cortex_patch", "_keep_both", {"page": pair["left"]["page"],
-                                                              "pair": pair["key"]})
+                                                              "pair": pair["key"]}, "conflict")
         r = pair["right" if keep == "left" else "left"]
         return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
+            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
+            "conflict")
 
     def _rule(self, body: dict) -> dict:
         from cortex import corrections, review
@@ -671,14 +676,29 @@ class App:
         x = self._rule(body)
         return self._click("cortex_patch", "cortex_patch", {
             "id": "me/core", "op": "append_to_section", "target": "Core", "text": x["text"],
-            "user_confirmed": True})
+            "user_confirmed": True}, "rule")
+
+    def review_rule_approve_all(self, body: dict) -> dict:
+        """R3-4: Approve all, only on repeated corrections (mined patterns, each seen in 2+
+        chats): every offered one of the shown `keys`, each written as its own Approve."""
+        keys = body.get("keys")
+        if not isinstance(keys, list):
+            raise ValueError("keys must be the shown corrections' keys.")
+        items = [x for k in dict.fromkeys(keys) if isinstance(k, str)
+                 for x in [self._rule({"key": k})]]  # an unknown key is 404 before any write
+        out = self.review()
+        for x in items:
+            out = self._click("cortex_patch", "cortex_patch", {
+                "id": "me/core", "op": "append_to_section", "target": "Core", "text": x["text"],
+                "user_confirmed": True}, "rule")
+        return out
 
     def review_rule_dismiss(self, body: dict) -> dict:
         """A repeated correction dismissed: a `dismiss` change on page `corrections` holds its
         text's hash, so it is not offered again."""
         x = self._rule(body)
         return self._click("cortex_patch", "_dismiss", {
-            "page": "corrections", "section": "Core", "text": x["text"], "waiting": False})
+            "page": "corrections", "section": "Core", "text": x["text"], "waiting": False}, "rule")
 
     def _decision(self, body: dict) -> dict:
         from cortex import more_sources
@@ -705,7 +725,7 @@ class App:
         if x["private"]:
             fields["private"] = True
         return self._click("cortex_add", "_decide", {"title": x["subject"], "fields": fields,
-                                                     "hash": x["key"]})
+                                                     "hash": x["key"]}, "decision")
 
     def review_decision_dismiss(self, body: dict) -> dict:
         """RR-9: a dismissed commit decision leaves a `dismiss` change on id `decisions` with its
@@ -713,7 +733,7 @@ class App:
         x = self._decision(body)
         return self._click("cortex_patch", "_dismiss", {
             "page": "decisions", "section": x["project"], "text": f"{x['page']} {x['hash']}",
-            "waiting": False})
+            "waiting": False}, "decision")
 
     def review_forget_dismiss(self, body: dict) -> dict:
         """A //forget card (cortex.tags) dismissed: a `dismiss` change on page `forget` holds
@@ -725,7 +745,7 @@ class App:
                 v, EventLog(v).iter_events(), self._today())):
             raise NotFound
         return self._click("cortex_patch", "_dismiss", {
-            "page": "forget", "section": "Forget", "text": key, "waiting": False})
+            "page": "forget", "section": "Forget", "text": key, "waiting": False}, "forget")
 
     # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
     def xray(self) -> dict:
