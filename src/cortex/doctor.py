@@ -139,6 +139,20 @@ def check_chat_archive_git(root: Path) -> tuple[str, str, str, str]:
     return "PASS", name, f"{CHAT_ARCHIVE}/ is ignored", ""
 
 
+def check_browse_legacy(root: Path) -> tuple[str, str, str, str]:
+    """F3: the browse files from before the store (`browse.legacy`), not read in yet."""
+    from cortex.browse import legacy
+    from cortex.vault import Vault
+    name = "Old browse files"
+    left = legacy.pending(Vault(root))
+    if not left:
+        return "PASS", name, "none left to read in", ""
+    return ("WARN", name, f"{len(left)} not read into the browsing store yet: "
+            + ", ".join(Path(r).name for r in left),
+            "Run `cortex browse import` (or open the app): it reads them in and renames each "
+            "to <name>.migrated.")
+
+
 def _history_warn(name: str, n: int) -> tuple[str, str, str, str]:
     return ("WARN", name, f"{n} commit{'s' * (n != 1)} in the vault's git history hold "
             "private browse pages",

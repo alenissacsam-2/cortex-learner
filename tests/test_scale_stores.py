@@ -17,10 +17,10 @@ from test_browse_sites import OWNER, ROWS, days_text, imp
 from test_private_search import pages as browse_pages
 
 from cortex import semantic, vecstore
-from cortex.browse import build, forget, privacy, sites, sources, store, vectors
+from cortex.browse import build, forget, legacy, privacy, sites, sources, store, vectors
 from cortex.catalog import Catalog
 from cortex.index import Index
-from cortex.vault import Vault
+from cortex.vault import Vault, VaultError
 
 REAL_LOAD = semantic.load_embedder  # before the autouse fixture wraps it
 
@@ -125,7 +125,9 @@ def test_private_browse_vectors_never_reach_the_public_store(root, monkeypatch):
     assert vectors.CACHE != semantic.CACHE
 
 
-def test_the_private_npz_is_read_in_once_and_kept(root, monkeypatch):
+def test_the_private_npz_is_migrated_once_and_renamed(root, monkeypatch):
+    """F3: only `legacy.migrate` reads the .npz; it is then renamed, never deleted, and a
+    forget still prunes the renamed backup."""
     browse_pages(root)
     fake = FakeEmbed()
     monkeypatch.setattr(semantic, "_embedder", fake)
@@ -133,14 +135,41 @@ def test_the_private_npz_is_read_in_once_and_kept(root, monkeypatch):
     vectors.update(v)
     old, sig = vectors._read(v), vectors._stored_signature(v)
     vectors._npz_write(v, old, 4, sig)
+    npz = (root / vectors.NPZ).read_bytes()
     for s in vecstore.SUFFIXES:
         (root / f"{vectors.CACHE}{s}").unlink(missing_ok=True)
     vectors._MEM.clear()
+    assert legacy.pending(v) == [vectors.NPZ]
+    assert vectors._read(v) == {}  # the store never reads the .npz itself
+    assert legacy.migrate(v) == {vectors.NPZ: "migrated"}
+    kept = root / (vectors.NPZ + legacy.DONE)
+    assert not (root / vectors.NPZ).exists() and kept.read_bytes() == npz
+    assert legacy.pending(v) == [] and legacy.migrate(v) == {}  # once
     fake.texts.clear()
-    assert vectors.update(v)["embedded"] == 0 and (root / vectors.NPZ).is_file()
-    vectors._connect(v, 4).close()  # again: nothing changes
-    assert vectors._read(v).keys() == old.keys()
-    assert vectors._stored_signature(v) == sig
+    assert vectors.update(v)["embedded"] == 0
+    assert vectors._read(v).keys() == old.keys() and vectors._stored_signature(v) == sig
+    gone = sorted(old)[0]
+    (root / gone).unlink()
+    vectors.prune(v)
+    assert gone not in vectors._npz(v, rel=vectors.NPZ + legacy.DONE)[0]
+
+
+def test_a_store_migrated_by_an_earlier_version_only_renames_the_old_files(root):
+    """The site counts read in already (`days_migrated`): the file is renamed, not read
+    again; verdicts.json goes into the store under the store's own labels."""
+    v = Vault(root)
+    p = root / sites.DAYS
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with closing(store.connect(v)) as con:
+        store.migrate_days(con, {}, [])
+        store.put_verdicts(con, {"h1": "health"})
+    p.write_text(json.dumps(DAYS), encoding="utf-8")
+    (root / sites.VERDICTS).write_text(json.dumps({"h1": "ordinary", "h2": "money"}),
+                                       encoding="utf-8")
+    assert legacy.migrate(v) == {sites.DAYS: "migrated", sites.VERDICTS: "migrated"}
+    assert sites.load_days(v)[0] == {}
+    assert sites.load_verdicts(v) == {"h1": "health", "h2": "money"}
+    assert (root / (sites.VERDICTS + legacy.DONE)).is_file()
 
 
 # ---- background embedding --------------------------------------------------------------------
@@ -185,22 +214,26 @@ DAYS = {"2026-11-09": {"lichess.org|gaming|0": {
     "n": 2, "s": 60, "w": {"chrome": 2}, "p": {"https://lichess.org/a": ["Chess", 2, 60]}}}}
 
 
-def test_site_days_json_is_read_in_once_and_kept(root):
+def test_site_days_json_is_migrated_once_and_renamed(root):
+    from cortex import doctor
     v = Vault(root)
     p = root / sites.DAYS
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(DAYS), encoding="utf-8")
-    assert sites.load_days(v)[0] == DAYS and not store.exists(v)  # before the store: the file
-    assert sites.lean_days(v)["2026-11-09"]["lichess.org|gaming|0"]["h"] == ["lichess.org"]
-    assert sites.days_read_in(v) is None
+    text = p.read_text(encoding="utf-8")
+    assert sites.load_days(v)[0] == {} and sites.lean_days(v) == {}  # no reader of the file
+    assert doctor.check_browse_legacy(root)[0] == "WARN"
+    assert legacy.migrate(v) == {sites.DAYS: "migrated"}
+    assert doctor.check_browse_legacy(root)[0] == "PASS"
     gen = sites.days_gen(v)
     assert sites.load_days(v)[0] == DAYS and gen
-    text = p.read_text(encoding="utf-8")
+    assert not p.exists() and (root / (sites.DAYS + legacy.DONE)).read_text(
+        encoding="utf-8") == text  # renamed, never deleted
     p.write_text(json.dumps({**DAYS, "2026-11-10": DAYS["2026-11-09"]}), encoding="utf-8")
-    assert sites.days_read_in(v) is None and sites.days_gen(v) == gen  # once only
-    assert sites.stored_days(v) == {"2026-11-09"}
-    p.write_text(text, encoding="utf-8")
-    assert p.read_text(encoding="utf-8") == text  # kept as a backup
+    with pytest.raises(VaultError):  # a second file, but the backup name holds other bytes
+        v.move(p, root / (sites.DAYS + legacy.DONE))
+    assert legacy.migrate(v) == {sites.DAYS: "failed"} and sites.days_gen(v) == gen  # once
+    assert sites.stored_days(v) == {"2026-11-09"} and p.is_file()  # left for doctor
     assert sites.lean_days(v)["2026-11-09"]["lichess.org|gaming|0"] == {
         "n": 2, "w": {"chrome": 2}, "h": ["lichess.org"]}
     sites._put_days(v, {"2026-11-09": {}})
@@ -225,14 +258,15 @@ def hist(tmp_path):
 def test_forget_takes_a_site_out_of_the_counts_their_backup_and_the_file(bvault, hist):
     imp(bvault, hist)
     v = Vault(bvault)
-    sites._save(v, sites.DAYS, sites.load_days(v)[0])  # a backup from before the store
+    kept = sites.DAYS + legacy.DONE
+    sites._save(v, kept, sites.load_days(v)[0])  # the backup legacy.migrate left
     assert "lichess" in days_text(bvault)
     with closing(store.connect(v)) as con:
         assert con.execute("SELECT COUNT(*) FROM judged WHERE kept LIKE '%lichess%'").fetchone()[0]
     c = forget.purge(v, forget.Rule(hosts=("lichess.org",)), settings=OWNER)
     assert c["site_keys"] and c["site_days_backup"]
     assert "lichess" not in days_text(bvault)
-    assert "lichess" not in (bvault / sites.DAYS).read_text(encoding="utf-8")
+    assert "lichess" not in (bvault / kept).read_text(encoding="utf-8")
     assert "chess.com" in days_text(bvault)  # only that site went
     assert b"lichess" not in on_disk(bvault / store.PATH)  # memo and counts included
 

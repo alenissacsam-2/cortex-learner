@@ -33,7 +33,7 @@ import logging
 import re
 import time
 from collections import Counter, defaultdict
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 
@@ -41,6 +41,7 @@ import numpy as np
 
 from cortex import topics
 from cortex.browse import forget, lists, privacy, sites, sources
+from cortex.browse.legacy import migrate as migrate_legacy
 from cortex.browse.privacy import Kept, Settings
 from cortex.events import EventLog, live, local_day, void_event
 from cortex.render import esc, plain
@@ -267,7 +268,8 @@ def _ask(vault: Vault, need: dict[str, str], local, budget, verdicts: dict, *, s
     c["vet_calls"] += n["calls"]
     verdicts.update(got)
     if save and con is None and got:
-        sites._save(vault, sites.VERDICTS, {**sites._load(vault, sites.VERDICTS), **got})
+        with closing(store.connect(vault)) as c2:
+            store.put_verdicts(c2, got)
     return c
 
 
@@ -850,6 +852,10 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
     tell = say or (lambda s: None)  # counts-only progress, so a long run is never silent
     phase = step or (lambda n, done, total: None)
     state = load_state(vault)
+    # the files from before the store read in, once, first (the old cursors' days need the
+    # counts): the name a torn site-days.json was set aside as
+    moved = {} if dry_run else migrate_legacy(vault)
+    bad = m if (m := moved.get(sites.DAYS)) not in (None, "migrated", "failed") else None
     report: Counter = Counter()
     fp = fingerprint(settings)
     keep_local = local_only(runner) is not None or _local_set_up() if keep_local is None \
@@ -890,8 +896,6 @@ def run(vault: Vault, srcs: list[sources.Source], settings: Settings, *, embed=N
         cursors = _read_and_save(vault, con, srcs, settings, tz, now, reset, legacy,
                                  takeout, report, tell, phase, progress, pause)
         part = store.partial(con)
-        # site-days.json read into the store (once): the name a torn one was set aside as
-        bad = None if dry_run else sites.days_read_in(vault)
         # the site counts or the model's site cache changed since the last run (a forget, a
         # deepen): every site page is made again, not only those of the days made now
         outside = state.get("sites_stamp") != _sites_stamp(vault)

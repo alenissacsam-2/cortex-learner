@@ -1886,6 +1886,11 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             dashboard.retire_old(app._vault())  # the old .cortex/dashboard.html, once
         except Exception:  # noqa: BLE001  (it is moved at the next start; the app still opens)
             traceback.print_exc(limit=3)
+        try:
+            from cortex.browse import legacy
+            legacy.migrate(app._vault())  # the browse files from before the store, once
+        except Exception:  # noqa: BLE001  (tried again at the next start or import)
+            traceback.print_exc(limit=3)
 
     def watch():
         while not app.stop.wait(WATCH_S):

@@ -135,10 +135,10 @@ def build(root: Path, *, days: int, keys: int, urls: int, sites: int, notes: int
         encoding="utf-8")
     (browse / "sites.json").write_text(json.dumps({"llm": llm_cache(rng, sites), "hashes": {}}),
                                        encoding="utf-8")
-    from cortex.browse import sites as site_counts
+    from cortex.browse import legacy
     from cortex.vault import Vault
 
-    site_counts.days_read_in(Vault(root))  # the counts in the browsing store, as an import does
+    legacy.migrate(Vault(root))  # the counts in the browsing store, as an import does
 
 
 def calls(vault) -> dict:

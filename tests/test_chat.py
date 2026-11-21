@@ -906,11 +906,12 @@ def test_bad_text_is_refused(vault, stream):
 def _site_days(vault, days, llm=None):
 
 
-    from cortex.browse import sites
+    from cortex.browse import legacy, sites
     for rel, data in ((sites.DAYS, days), (sites.CACHE, {"llm": llm or {}, "hashes": {}})):
         p = vault.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data), encoding="utf-8")
+    legacy.migrate(vault)  # the counts into the browsing store, where they are read
 
 
 ALL_ON = {"notes": True, "chats": True, "browsing": True, "private": True}

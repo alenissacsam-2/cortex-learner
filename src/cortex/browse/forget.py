@@ -111,27 +111,23 @@ def _sig(text: str) -> str:
 
 def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
           gone: dict[str, set[str]]) -> Counter:
-    """Take the rule's keys and rows out of the stored site counts, out of site-days.json (the
-    store's backup, or the counts themselves in a vault imported before it) and the torn copies
-    set aside (`.bad-*`: unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of
-    every title and search term that went, so the day page's lines go too, whatever matched."""
+    """Take the rule's keys and rows out of the stored site counts, out of the site-days.json
+    backup `legacy.migrate` left (`.migrated`) and the torn copies set aside (`.bad-*`:
+    unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of every title and search
+    term that went, so the day page's lines go too, whatever matched."""
+    from cortex.browse import legacy
+
     c: Counter = Counter()
-    days, bad = sites.load_days(vault)
-    in_store = store.exists(vault)
-    backup, b = sites._json_days(vault) if in_store else ({}, None)
-    if bad or b:
-        c["site_days_set_aside"] += 1
+    days, _ = sites.load_days(vault)
     p = vault.root / sites.DAYS
     for torn in sorted(p.parent.glob(p.name + ".bad-*")):
         c["site_days_torn"] += vault.remove(torn)
-    changed = _scrub(days, rule, llm, gone_titles, gone, c)
-    if changed and in_store:
+    if changed := _scrub(days, rule, llm, gone_titles, gone, c):
         sites._put_days(vault, {d: days.get(d) or {} for d in changed}, checkpoint=True)
-    elif changed:
-        sites._save(vault, sites.DAYS, days)
     old: Counter = Counter()
-    if _scrub(backup, rule, llm, gone_titles, gone, old):
-        sites._save(vault, sites.DAYS, backup)
+    kept = sites.DAYS + legacy.DONE
+    if _scrub(backup := sites._load(vault, kept), rule, llm, gone_titles, gone, old):
+        sites._save(vault, kept, backup)
         c["site_days_backup"] += old["site_keys"] + old["site_rows"]
     return c
 

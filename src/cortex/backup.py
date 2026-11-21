@@ -1,5 +1,5 @@
 """Vault backup copies: one zip of the whole vault, .git included, and the durable browse stores
-in .cortex/browse (site-days.json, sites.json, verdicts.json, state.json, inbox-archive/, any
+in .cortex/browse (sites.json, state.json, browse.legacy's *.migrated backups, inbox-archive/, any
 not-yet-imported inbox-*.jsonl the capture extension left before 0.3.2, filtered like the
 archive), which hold browsing the browsers have already forgotten. The SQLite stores (DBS: the
 browsing store and the two vector stores, which take minutes to embed again) are copied by
