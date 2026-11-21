@@ -2530,6 +2530,18 @@ class Cortex:
             "hash": review.text_hash(text), "confirm": "clicked"})
         return {"changed": True, "summary": f"dismissed a proposed line for me {page}"}
 
+    def _decide(self, title: str, fields: dict, hash: str) -> dict[str, Any]:
+        """RR-9, the app's Approve on a decision found in a commit subject: a decision page (as
+        cortex_add writes it) and a `decide` change holding the proposal's key, so the Review
+        does not offer it again (more_sources.decision_proposals)."""
+        if not self.app_clicks:
+            raise invalid("Approve is the Cortex app's own action.")
+        out = self.cortex_add("decision", title, fields=fields, force=True)
+        self.sessions.note("patched", change={
+            "tool": "decide", "id": "decisions", "kind": "decision", "op": "decide",
+            "target": out["id"], "hash": hash, "confirm": "clicked"})
+        return out
+
     def _keep_both(self, page: str, pair: str) -> dict[str, Any]:
         """Plan 5b, the app's Keep both on a conflict pair (`review.pair_key`): a `keep_both`
         change, so the Review stops showing the pair; neither line changes."""

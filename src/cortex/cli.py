@@ -1101,10 +1101,13 @@ def import_cmd(path: Annotated[Path, typer.Argument(
             more_sources.SOURCE_OF[kind](path)
         # C2: asked once per source in a real terminal, then remembered (sources.TIERS_FILE)
         ask = _ask_tier if given is None and sys.stdin.isatty() else None
-        t, how = sources.pick_tier(v, src, given, ask, save=not dry_run)
+        told: list[str] = []  # RR-29: what a stricter tier did to the pages already in
+        t, how = sources.pick_tier(v, src, given, ask, save=not dry_run, said=told.append)
         typer.echo(f"{src.label}: tier {sources.word(t)} (" + (
             "--tier" if given else "your answer" if how == "chosen"
             else f"{how}; change it with --tier") + ")")
+        for line in told:
+            typer.echo(line)
         if t is sources.Audience.SKIP:
             typer.echo(f"{src.label}: skip, so nothing was imported.")
         elif kind == "notes":

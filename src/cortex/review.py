@@ -9,7 +9,9 @@
   right): every `possible_update_of` pair cortex_patch recorded and not yet resolved, and any
   two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`);
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
-  me/core line (cortex.corrections; Approve or Dismiss).
+  me/core line (cortex.corrections; Approve or Dismiss);
+- decisions (RR-9): decision-like commit subjects of imported git repos
+  (more_sources.decision_proposals); Approve makes a decision page, Dismiss drops it.
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -284,9 +286,12 @@ def view(vault, events, today: str) -> dict:
     current = [r for r in rows if not claims.expired(r["text"], today)]  # = live_rows
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
               "right": side(c["right"])} for c in conflicts(current, events)]
-    from cortex import corrections  # reads the imported chats: only the app's Review asks
+    from cortex import corrections, more_sources  # read imported pages: only the Review asks
     rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"]}
              for x in corrections.proposals(vault, events, current)]
+    decisions = [{**x, "project": plain(x["project"], 80), "subject": plain(x["subject"], SHOWN)}
+                 for x in more_sources.decision_proposals(vault, events)]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
-            "rules": rules,
-            "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)}
+            "rules": rules, "decisions": decisions,
+            "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
+            + len(decisions)}

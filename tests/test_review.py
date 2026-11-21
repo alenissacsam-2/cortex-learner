@@ -243,7 +243,10 @@ def test_the_badge_and_the_review_page(tmp_path):
             "conflicts": [{"key": "p1", "why": "opposite",
                            "left": {"page": "preferences", "id": "c-bbbbb", "text": "Never tabs"},
                            "right": {"page": "core", "id": "c-ccccc", "text": "<i>Tabs</i>"}}],
-            "rules": [{"key": "r1", "text": "<u>Stop using emojis</u>", "chats": 3}], "count": 4}
+            "rules": [{"key": "r1", "text": "<u>Stop using emojis</u>", "chats": 3}],
+            "decisions": [{"key": "d1", "project": "planner", "date": "2026-03-15",
+                           "word": "switch to", "subject": "<s>Switch to uv</s>",
+                           "private": True}], "count": 4}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
@@ -251,10 +254,12 @@ def test_the_badge_and_the_review_page(tmp_path):
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["badge"] == ["4", False, "Review (4)"]
     assert out["boards"] == ["Waiting for your approval", "Past their end date", "Still true?",
-                             "Lines that may conflict", "Corrections you repeat"]
+                             "Lines that may conflict", "Corrections you repeat",
+                             "Decisions in your commits"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
                            ["Studies CS", ["Still true", "Retire"]],
                            ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
-                           ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]]]
+                           ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]],
+                           ["<s>Switch to uv</s>", ["Approve", "Dismiss"]]]
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
-    assert out["after"] == ["3", False, 3]
+    assert out["after"] == ["3", False, 4]

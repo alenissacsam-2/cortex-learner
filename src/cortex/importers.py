@@ -29,7 +29,7 @@ MAX_STREAM = 2 * 1024**3  # C11: one JSON list read element by element (conversa
 MAX_TOTAL = 2 * 1024**3  # everything one import decompresses, so a zip bomb fails early
 STREAM_CHUNK = 1 << 20
 NOTE_SUFFIXES = (".md", ".txt")
-REPORT = ("read", "imported", "private", "duplicate", "reasons")  # report_line's keys
+REPORT = ("read", "imported", "private", "duplicate", "reasons", "unreadable")  # report_line's
 LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
@@ -301,13 +301,17 @@ def _is_private(front: str) -> bool:
 
 def report_line(label: str, r: dict) -> str:
     """The line every import ends with: counts read, imported, private, duplicate and
-    skipped, with the reason for each skip."""
+    skipped, with the reason for each skip; then the items the quality gate kept out
+    (sources.unreadable), when any: ". Skipped 3 as unreadable (2 garbled, 1 link list)"."""
     why = {k: n for k, n in r.get("reasons", {}).items() if n}
     reasons = f" ({', '.join(f'{n:,} {k}' for k, n in why.items())})" if why else ""
     updated = f", updated {r['updated']:,}" if r.get("updated") else ""
+    bad = {k: r["unreadable"][k] for k in sources.UNREADABLE if r.get("unreadable", {}).get(k)}
+    gate = (f". Skipped {sum(bad.values()):,} as unreadable ("
+            f"{', '.join(f'{n:,} {k}' for k, n in bad.items())})") if bad else ""
     return (f"{label}: read {r['read']:,}, imported {r['imported']:,}{updated}, private "
             f"{r['private']:,}, duplicate {r['duplicate']:,}, skipped "
-            f"{sum(why.values()):,}{reasons}")
+            f"{sum(why.values()):,}{reasons}{gate}")
 
 
 def _clean(name: str) -> str:

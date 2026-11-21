@@ -2,7 +2,8 @@
 
 A `Source` says what it is (id, label, what it reads, its default tier) and yields `Item`s, or a
 reason string for each entry it skips. `run` does the rest, the same for every source: the
-never-capture filter (`scrub`), secret redaction, the tier, dedupe, the page write through the
+never-capture filter (`scrub`), secret redaction, the quality gate (`unreadable`: garbled,
+symbol, link-list and repeated text is kept out), the tier, dedupe, the page write through the
 vault, the dry run and the report counts (`importers.report_line` prints them).
 
 Two page shapes. `page="item"`: one `resource` page per item, `<prefix>-<title slug>`, deduped by
@@ -40,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -67,6 +69,10 @@ _FORWARDED = re.compile(r"^[ \t]*-{2,}[ \t]*(?:Original Message|Forwarded messag
 # shortcut: only "lat, lon" pairs with 4+ decimals (about 10 m); a source that reads a location
 # history (item 14) reduces its own places to a city per day
 _COORDS = re.compile(r"(?<![\d.])(-?\d{1,2}\.\d{4,})(\s*,\s*)(-?\d{1,3}\.\d{4,})(?![\d.])")
+# the quality gate (`unreadable`): an item under GATE_MIN characters is never judged
+GATE_MIN = 200
+UNREADABLE = ("garbled", "mostly symbols", "link list", "repetitive")  # the report's order
+_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
 
 
 @dataclass
@@ -121,10 +127,12 @@ def remembered(vault: Vault) -> dict[str, Audience]:
 
 def pick_tier(vault: Vault, src: Source, given: str | None = None,
               ask: Callable[[Source], str] | None = None,
-              save: bool = True) -> tuple[Audience, str]:
+              save: bool = True, said: Callable[[str], object] | None = None
+              ) -> tuple[Audience, str]:
     """(tier, how it was chosen): `given` (the --tier flag or the app's click), else the last
     choice for this source, else `ask` (a real terminal), else the source's default. A given or
-    asked choice is remembered when `save` (not in a dry run)."""
+    asked choice is remembered when `save` (not in a dry run), and a stricter one reaches the
+    pages already imported (`tighten`); its one line goes to `said`."""
     last = remembered(vault)
     if given is None and src.id in last:
         return last[src.id], "your last choice"
@@ -135,7 +143,62 @@ def pick_tier(vault: Vault, src: Source, given: str | None = None,
         vault.write_text(vault.root / TIERS_FILE, json.dumps(
             {k: v.value for k, v in {**last, src.id: t}.items()}, indent=1, sort_keys=True)
             + "\n")
+        if (line := tighten(vault, src, last.get(src.id, src.default_tier), t)) and said:
+            said(line)
     return t, "chosen"
+
+
+_STRICT = (Audience.CLOUD, Audience.LOCAL, Audience.SKIP)  # loosest first
+
+
+def _labels(src: Source) -> set[str]:
+    """Every `Source:` label a tier key's pages carry: notes import as Obsidian, Notion or
+    Notes, highlights as Highlights or Pocket."""
+    from cortex import importers  # it imports this module
+    return {src.label, *{"notes": importers.LABELS.values(),
+                         "highlights": ("Highlights", "Pocket")}.get(src.id, ())}
+
+
+def source_pages(vault: Vault, src: Source) -> list[Path]:
+    """The pages earlier imports of `src`'s tier key wrote: resources/ pages whose header line
+    (just under the title) is `Source: <one of its labels> · Date: …`."""
+    labels, out = _labels(src), []
+    for p in sorted((vault.root / "resources").glob("*.md")):
+        try:  # an import page's frontmatter is short: its first 8 KB hold the header line
+            with p.open("rb") as f:
+                head = f.read(8192).decode("utf-8", "replace").split("\n---\n", 1)[-1]
+        except OSError:
+            continue
+        m = re.search(r"^Source: (.+?) · Date: ", "\n".join(head.split("\n")[:6]), re.M)
+        if m and m.group(1) in labels:
+            out.append(p)
+    return out
+
+
+def tighten(vault: Vault, src: Source, old: Audience, new: Audience) -> str | None:
+    """RR-29: a stricter tier reaches the pages already imported. To private: each of
+    `source_pages` not private yet gets `private: true` (through the vault). To skip: nothing
+    is deleted; the line says how many pages are still there and how to forget them. A looser
+    or the same tier changes nothing (never un-privates). The line to show, or None."""
+    if _STRICT.index(new) <= _STRICT.index(old):
+        return None
+    pages = source_pages(vault, src)
+    if new is Audience.SKIP:
+        n = len(pages)
+        return (f"{n:,} page{'s' * (n != 1)} from {src.label} {'are' if n != 1 else 'is'} "
+                f"still in your vault; to forget them, delete the pages in resources/ that say "
+                f"\"Source: {src.label}\" under their title.") if n else None
+    made = 0
+    for p in pages:
+        try:
+            if is_private(vault.read_path(p)):
+                continue
+            vault._edit_fields("resource", p.stem, {"private": True})
+        except VaultError:  # a page with broken frontmatter is left as it is
+            continue
+        made += 1
+    return f"Made {made:,} earlier page{'s' * (made != 1)} from {src.label} private." \
+        if made else None
 
 
 def _coarse(m: re.Match) -> str:
@@ -174,6 +237,29 @@ def scrub(text: str, src: Source | None = None) -> str:
     return chats.redact(text)
 
 
+def unreadable(text: str) -> str | None:
+    """Why an item's text is garbage (an UNREADABLE reason), or None when it reads as text:
+    U+FFFD over 5% of its non-space characters (a bad decode), letters, digits and marks under
+    25% of them, over 60% of its non-empty lines mostly a URL, or 10+ lines of which under 30%
+    are distinct. Text under GATE_MIN characters always passes."""
+    chars = [c for c in text if not c.isspace()]
+    if len(text) < GATE_MIN or not chars:
+        return None
+    if text.count("�") > 0.05 * len(chars):
+        return "garbled"
+    # a mark counts: a Devanagari or Tamil vowel sign is a mark, not a letter
+    if sum(c.isalnum() or unicodedata.category(c)[0] == "M" for c in chars) < 0.25 * len(chars):
+        return "mostly symbols"
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    links = sum(2 * sum(len(u) for u in _URL.findall(ln)) > len(ln.replace(" ", ""))
+                for ln in lines)
+    if links > 0.6 * len(lines):
+        return "link list"
+    if len(lines) >= 10 and len(set(lines)) < 0.3 * len(lines):
+        return "repetitive"
+    return None
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -201,9 +287,11 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
     """Import `src` at `tier`. The report: `read` (entries, skipped ones too), `imported` (new
     pages for item sources, new lines for month sources), `private`, `duplicate`, `reasons`
     (skip reason -> count), `items` (items read), `pages` (pages they belong on) and `updated`
-    (pages rewritten by a source that `updates`)."""
+    (pages rewritten by a source that `updates`) and `unreadable` (quality-gate reason ->
+    count: the items `unreadable` kept out, for every source)."""
     r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
-         "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value}
+         "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value,
+         "unreadable": {}}
     if tier is Audience.SKIP:
         return r
     (_items if src.page == "item" else _months)(vault, src, tier is Audience.LOCAL, dry_run, r)
@@ -215,6 +303,8 @@ def _read(src: Source, r: dict):
         r["read"] += 1
         if isinstance(it, str):
             r["reasons"][it] = r["reasons"].get(it, 0) + 1
+        elif bad := unreadable(it.text):
+            r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
         else:
             r["items"] += 1
             yield it

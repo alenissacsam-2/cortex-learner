@@ -153,3 +153,108 @@ def test_cli_asks_once_per_source_in_a_terminal(root_plain, tmp_path, monkeypatc
     (notes / "Two.md").write_bytes(b"# Two\n\nsecond\n")
     out = _cli(root_plain, notes).output  # remembered: not asked again
     assert "who may read" not in out and "tier private (your last choice" in out
+
+
+# ---- RR-2: the quality gate, for every source -------------------------------------------
+
+PROSE = ("I spent the evening reading about B-trees and why databases like them: every node "
+         "holds many keys, so a lookup touches only a few disk pages. Tomorrow I will try to "
+         "write one in Python and compare it with a plain sorted list.\n")
+CODE = ("def merge(a, b):\n    out, i, j = [], 0, 0\n    while i < len(a) and j < len(b):\n"
+        "        if a[i] <= b[j]:\n            out.append(a[i]); i += 1\n        else:\n"
+        "            out.append(b[j]); j += 1\n    return out + a[i:] + b[j:]\n")
+HINDI = ("आज मैंने डेटा संरचनाओं के बारे में पढ़ा। बाइनरी सर्च ट्री में हर नोड की बाईं ओर छोटी "
+         "और दाईं ओर बड़ी कुंजियाँ होती हैं, इसलिए खोज तेज़ होती है। कल मैं इसे खुद लिखकर "
+         "देखूँगा और सूची से तुलना करूँगा।\n")
+
+
+@pytest.mark.parametrize("text, why", [
+    ("Notes on graphs " + "�" * 30 + PROSE, "garbled"),
+    ("|=+-*/#@!{}[]<>~^%$&;:" * 12 + "ok", "mostly symbols"),
+    ("".join(f"- https://example.com/articles/{i}/a-long-slug-here\n" for i in range(8))
+     + "Links I saved\n", "link list"),
+    ("same line again and again\n" * 12 + "one\ntwo\n", "repetitive"),
+    (PROSE, None), (CODE * 2, None), (HINDI, None),
+    ("�" * 50, None), ("https://example.com/x\n" * 5, None),  # short: never judged
+])
+def test_unreadable(text, why):
+    assert sources.unreadable(text) == why
+
+
+def test_garbage_items_are_skipped_and_counted_in_the_report(root_plain):
+    from cortex import importers
+    v = Vault(root_plain)
+    links = "".join(f"https://example.com/page/{i}/with/a/long/path\n" for i in range(10))
+    r = sources.run(v, _src(sources.Item("Bad", "2026-11-02", "x" + "�" * 250),
+                            sources.Item("Worse", "2026-11-02", "�" * 300),
+                            sources.Item("Links", "2026-11-02", links),
+                            sources.Item("Good", "2026-11-02", PROSE),
+                            sources.Item("Hindi", "2026-11-02", HINDI)))
+    assert r["imported"] == 2 and r["read"] == 5
+    assert r["unreadable"] == {"garbled": 2, "link list": 1}
+    assert not (root_plain / "resources" / "test-bad.md").exists()
+    assert importers.report_line("Test", r).endswith(
+        "skipped 0. Skipped 3 as unreadable (2 garbled, 1 link list)")
+    clean = sources.run(v, _src(sources.Item("Fine", "2026-11-03", PROSE + "more")))
+    assert "unreadable" not in importers.report_line("Test", clean)
+
+
+# ---- RR-29: a stricter tier reaches the pages already imported ---------------------------
+
+def _private(v: Vault, nid: str) -> bool:
+    return "private: true" in _page(v, nid)
+
+
+def test_a_private_tier_makes_earlier_pages_private(root_plain):
+    v, told = Vault(root_plain), []
+    src = _src(sources.Item("One", "2026-11-02", "first"), sources.Item("Two", "2026-11-03", "x"),
+               id="notes")
+    sources.run(v, src, C)
+    sources.run(v, sources.Source("o", "Other", "file", lambda: [
+        sources.Item("Other", "2026-11-02", "theirs")]), C)
+    (root_plain / "resources" / "notes-two.md").write_bytes(
+        _page(v, "notes-two").replace("Source: Test", "Source: Obsidian").encode())  # same key
+    assert sources.pick_tier(v, src, "private", save=False, said=told.append)[0] is L
+    assert told == [] and not _private(v, "notes-one")  # a dry run changes nothing
+    assert sources.pick_tier(v, src, "private", said=told.append) == (L, "chosen")
+    assert told == ["Made 2 earlier pages from Test private."]
+    assert _private(v, "notes-one") and _private(v, "notes-two") and not _private(v, "o-other")
+    assert sources.pick_tier(v, src, "private", said=told.append)[0] is L
+    assert len(told) == 1  # the same tier again: nothing to do
+
+
+def test_loosening_never_unprivates_and_skip_only_says(root_plain):
+    v, told = Vault(root_plain), []
+    src = _src(sources.Item("One", "2026-11-02", "first"), sources.Item("Day", "2026-11-02",
+                                                                         "line"))
+    sources.run(v, src, C)
+    sources.run(v, _src(sources.Item("Day", "2026-11-02", "line"), page="month"), C)
+    sources.pick_tier(v, src, "private", said=told.append)
+    assert told == ["Made 3 earlier pages from Test private."]  # month pages too
+    sources.pick_tier(v, src, "normal", said=told.append)
+    assert len(told) == 1 and _private(v, "test-one") and _private(v, "test-2026-11")
+    sources.pick_tier(v, src, "skip", said=told.append)
+    assert told[1].startswith("3 pages from Test are still in your vault; to forget them, "
+                              'delete the pages in resources/ that say "Source: Test"')
+    assert (root_plain / "resources" / "test-one.md").is_file()  # nothing deleted
+
+
+def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "One.md").write_bytes(b"# One\n\nfirst\n")
+    _cli(root_plain, notes, "--tier", "normal")
+    assert not _private(Vault(root_plain), "notes-one")
+    out = _cli(root_plain, notes, "--tier", "private").output
+    assert "Notes: tier private (--tier)\nMade 1 earlier page from Notes private." in out
+    assert _private(Vault(root_plain), "notes-one")
+    from cortex.app import actions
+
+    class Job:
+        def say(self, _):
+            pass
+
+    out = actions.import_run(Job(), "notes", notes, root_plain, "skip")
+    assert out["lines"] == ["Nothing was imported: you chose Don't save.",
+                            '1 page from Notes is still in your vault; to forget them, delete '
+                            'the pages in resources/ that say "Source: Notes" under their title.']

@@ -1451,7 +1451,12 @@
         row(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [
           btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
           btn('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.text}` })])),
-      'No repeated corrections found.')));
+      'No repeated corrections found.')),
+      board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) =>
+        row(x.subject, `${x.project} · ${x.date}`, `Matched "${x.word}"` + (x.private ? ' · private' : ''), [
+          btn('Approve', () => act('/api/review/decision/approve', { key: x.key }, 'Saved as a decision.'), 'btn lit', { 'aria-label': `Approve: ${x.subject}` }),
+          btn('Dismiss', () => act('/api/review/decision/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.subject}` })])),
+      'No decisions found in your commits.')));
   }
 
   /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come
