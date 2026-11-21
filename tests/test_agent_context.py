@@ -202,6 +202,40 @@ def test_private_core_and_hidden_subjects_stay_out(home, vroot):
     assert "CANARY-THNK-4Q" in packs.pack(Vault(vroot), "general")  # personality is not private
 
 
+def test_a_core_line_muted_in_the_xray_stays_out_of_rules_and_packs(home, vroot):
+    from cortex import xray
+    note(vroot, "me/core.md", "id: core\n",
+         "# Core\n\n## Core\n- Call me Sam.\n- CANARY-MUTE-4Q is muted. ^c-mmmmm\n")
+    v = Vault(vroot)
+    assert "CANARY-MUTE-4Q" in packs.rule_block(v)
+    xray.set_flag(v, "mute", xray.claim("c-mmmmm"), True)
+    (home / ".codex").mkdir()
+    targets.by_id()["codex"].apply(entry(vroot))
+    out = (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8") + "".join(
+        packs.pack(v, n) for n in packs.PACKS)
+    assert "Call me Sam." in out and "CANARY-MUTE-4Q" not in out
+
+
+def test_rules_files_follow_each_apps_profile(home, vroot):
+    data = profiles.load(Vault(vroot))
+    data["profiles"].insert(0, {"match": "Cursor", "scopes": ["coding"]})  # no core
+    profiles.save(Vault(vroot), data)
+    (home / ".cursor").mkdir()
+    (home / ".codex").mkdir()
+    for tid in ("cursor", "codex"):
+        targets.by_id()[tid].apply(entry(vroot))
+    cursor = (home / ".cursor" / "rules" / "cortex.mdc").read_text(encoding="utf-8")
+    codex = (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Call me Sam." not in cursor and packs.PRIME_LINE in cursor
+    assert "Call me Sam." in codex  # Codex's default profile has the core
+    # the periodic pass keeps each file to its own profile
+    note(vroot, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Alex.\n")
+    targets.refresh_rules(entry(vroot))
+    assert "Call me Alex." not in (home / ".cursor" / "rules" / "cortex.mdc").read_text(
+        encoding="utf-8")
+    assert "Call me Alex." in (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+
+
 # ---- context packs -----------------------------------------------------------------------
 
 

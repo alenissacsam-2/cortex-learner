@@ -171,13 +171,16 @@ def _vault_of(base: dict | None) -> Path | None:
     return Path(args[i]) if 0 < i < len(args) else None
 
 
-def rule_block(base: dict | None) -> str:
-    """packs.rule_block for the vault `base` points at; the prime line alone without one."""
-    from cortex import packs
+def rule_block(base: dict | None, client: str = "") -> str:
+    """packs.rule_block for the vault `base` points at, within the owner's profile for the MCP
+    `client` name (cortex.profiles, as over MCP); the prime line alone without a vault."""
+    from cortex import packs, profiles
     from cortex.vault import Vault
     root = _vault_of(base)
     try:
-        return packs.rule_block(Vault(root) if root and (root / ".cortex").is_dir() else None)
+        v = Vault(root) if root and (root / ".cortex").is_dir() else None
+        return packs.rule_block(v, scopes=profiles.scopes_for(profiles.load(v), client)
+                                if v else None)
     except Exception:  # noqa: BLE001  (an unreadable vault: the app's check refreshes it later)
         return packs.rule_block(None)
 
@@ -186,9 +189,11 @@ class Rules:
     """A target that also keeps the Cortex block (`rule_block`: the pinned core and the line
     asking for cortex_prime) in a Markdown rules file its app reads in every chat. Apply adds
     or refreshes the block, remove takes out only the block (a file left empty goes, after its
-    backup). RULE_HEAD: front matter a new file gets above the block."""
+    backup). RULE_HEAD: front matter a new file gets above the block. CLIENT: the name the
+    app gives itself over MCP, whose profile (cortex.profiles) scopes the block."""
 
     RULE_HEAD = ""
+    CLIENT = ""
 
     def rule_path(self) -> Path:
         raise NotImplementedError
@@ -203,7 +208,7 @@ class Rules:
     def plan(self, add: bool, base: dict | None = None) -> list[dict]:
         out = super().plan(add, base)
         try:
-            change, new = self._rule_change(add, rule_block(base) if add else None)
+            change, new = self._rule_change(add, rule_block(base, self.CLIENT) if add else None)
             if new is not None:
                 out.append(_row(self.rule_path(), change, "the Cortex block"))
         except (OSError, ValueError) as e:
@@ -223,7 +228,7 @@ class Rules:
         return [_row(p, change, "the Cortex block")]
 
     def apply(self, base: dict) -> list[dict]:
-        return super().apply(base) + self._rule_write(True, rule_block(base))
+        return super().apply(base) + self._rule_write(True, rule_block(base, self.CLIENT))
 
     def remove(self) -> list[dict]:
         return super().remove() + self._rule_write(False, None)
@@ -242,10 +247,11 @@ def refresh_rules(base: dict | None) -> list[dict]:
             pass
     if base is None or not have:
         return []
-    block, out = rule_block(base), []
+    out = []
     for t in have:
         try:
-            out += [{"id": t.id, "label": t.label, **r} for r in t._rule_write(True, block)]
+            out += [{"id": t.id, "label": t.label, **r}
+                    for r in t._rule_write(True, rule_block(base, t.CLIENT))]
         except (OSError, ValueError):
             pass
     return out
@@ -303,9 +309,9 @@ class JsonTarget:
 class RuleJson(Rules, JsonTarget):
     """A JsonTarget with a rules file (`rule`: its path)."""
 
-    def __init__(self, *a, rule, head: str = "", **k):
+    def __init__(self, *a, rule, head: str = "", client: str = "", **k):
         super().__init__(*a, **k)
-        self._rule, self.RULE_HEAD = rule, head
+        self._rule, self.RULE_HEAD, self.CLIENT = rule, head, client
 
     def rule_path(self) -> Path:
         return self._rule()
@@ -504,6 +510,8 @@ class CodexToml:
 class Codex(Rules, CodexToml):
     """Codex CLI, plus the Cortex block in its global `~/.codex/AGENTS.md`."""
 
+    CLIENT = "codex-mcp-client"
+
     def rule_path(self) -> Path:
         return Path.home() / ".codex" / "AGENTS.md"
 
@@ -653,10 +661,12 @@ def targets() -> list:
         JsonTarget("antigravity", "Antigravity",
                    lambda: h() / ".gemini" / "antigravity" / "mcp_config.json"),
         RuleJson("cursor", "Cursor", lambda: h() / ".cursor" / "mcp.json",
-                 rule=lambda: h().joinpath(*CURSOR_RULE), head=CURSOR_HEAD),
+                 rule=lambda: h().joinpath(*CURSOR_RULE), head=CURSOR_HEAD,
+                 client="cursor-vscode"),
         RuleJson("vscode", "VS Code (Copilot)", lambda: _vscode_user() / "mcp.json",
                  key="servers", extra={"type": "stdio"},
-                 rule=lambda: _vscode_user().joinpath(*VSCODE_RULE), head=VSCODE_HEAD),
+                 rule=lambda: _vscode_user().joinpath(*VSCODE_RULE), head=VSCODE_HEAD,
+                 client="Visual Studio Code"),
         JsonTarget("windsurf", "Windsurf",
                    lambda: h() / ".codeium" / "windsurf" / "mcp_config.json"),
         LMStudio(),

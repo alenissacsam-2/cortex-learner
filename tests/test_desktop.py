@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import note
-from test_app import call
+from test_app import call, daytime
 from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or opens)
 from test_app import vault as vault  # noqa: F401 (fixture)
 
@@ -55,6 +55,9 @@ class FakeWindow:
 
     def restore(self):
         self.calls.append("restore")
+
+    def load_url(self, url):
+        self.calls.append(("load", url))
 
     def destroy(self):  # as WinForms: Close() raises the closing event first
         if False not in self.events.closing.set():
@@ -160,6 +163,7 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     the window, ends the loop, stops the tray, removes app.json and remembers the place."""
     monkeypatch.setattr(server, "IDLE_S", 0)  # the browser app would stop at once
     monkeypatch.setattr(server, "WATCH_S", 0.05)
+    daytime(monkeypatch)
     ran = []
     monkeypatch.setattr(desktop, "first_run", lambda echo: ran.append("first_run"))
     seen = {}
@@ -221,6 +225,31 @@ def test_hidden_start_and_the_remembered_place(gui, vault, monkeypatch):
     assert desktop._geometry(wv)["width"] == desktop.SIZE[0]
     desktop.save_state("window", "junk")
     assert desktop._geometry(wv) == {"width": desktop.SIZE[0], "height": desktop.SIZE[1]}
+
+
+def test_a_hidden_start_opens_on_the_page_for_the_time_it_is_shown(gui, vault, monkeypatch):
+    """Started hidden at 09:00 (Start with Windows), opened from the tray at 21:00: Tonight.
+    Only that first show loads the page; later ones keep where the owner is."""
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    clock, orig = [datetime(2026, 11, 20, 9)], server.start_url
+    monkeypatch.setattr(server, "start_url", lambda app, now=None: orig(app, clock[0]))
+    seen = {}
+
+    def start(wv):
+        w = wv.windows[0]
+        seen["first"] = w.kw["url"]
+        clock[0] = datetime(2026, 11, 20, 21)
+        for _ in range(2):
+            FakeIcon.made[-1].item("Open Cortex").action()
+        seen["calls"] = list(w.calls)
+        FakeIcon.made[-1].item("Quit").action()
+        w.events.shown.set()
+        assert w.destroyed.wait(10)
+    gui(start)
+    desktop.run(vault, hidden=True, echo=lambda s: None)
+    assert "#tonight" not in seen["first"]
+    (load, url), *rest = seen["calls"]
+    assert load == "load" and url.endswith("#tonight") and rest == ["show", "show"]
 
 
 def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypatch):

@@ -125,6 +125,41 @@ def test_undo_an_ai_apps_session_then_404(root, monkeypatch):
         app.tonight_undo({"session": g["session"]})
 
 
+def test_undo_of_a_session_still_open_says_so(root):
+    async def body(call):  # no cortex_end: the session is open, nothing committed yet
+        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+                                  "parent": "dsa.arrays"})
+
+    run(root, body)
+    assert not [e for e in EventLog(Vault(root)).iter_events() if e["kind"] == "close"]
+    app = server.App(root)
+    (g,) = app.tonight()["learned"]  # what it saved is still shown
+    with pytest.raises(ValueError, match="still open"):
+        app.tonight_undo({"session": g["session"]})
+    assert not app.jobs.running() and "sliding-window" in (root / "catalog.yaml").read_text(
+        "utf-8")
+
+
+def test_undo_resets_the_review_cortex_only_between_clicks(root, monkeypatch):
+    async def body(call):
+        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+                                  "parent": "dsa.arrays"})
+        await call("cortex_end", {"summary": "added a concept"})
+
+    run(root, body)
+    app = server.App(root)
+    (g,) = app.tonight()["learned"]
+    monkeypatch.setattr(server.actions, "capture", lambda *a, **k: {"ok": True})
+    app.core = (root, object())
+    with app.reviewing:  # a Review click in progress
+        app.tonight_undo({"session": g["session"]})
+        time.sleep(0.3)
+        assert app.core is not None  # never swapped out under the click
+    while app.jobs.running():
+        time.sleep(0.05)
+    assert app.core is None
+
+
 @pytest.mark.parametrize(("hh", "mm", "night"), [(19, 59, False), (20, 0, True),
                                                  (3, 59, True), (4, 0, False)])
 def test_the_app_opens_on_tonight_in_the_evening(root, hh, mm, night):
@@ -152,6 +187,10 @@ OPEN_TONIGHT = """    nav.querySelectorAll('button').find((b) => b.dataset.s ===
     out.text = t.textContent;
     out.undo = t.querySelectorAll('button').filter((b) => b.textContent === 'Undo').map((b) => b.getAttribute('aria-label'));
     t.querySelectorAll('button').find((b) => b.textContent === 'Undo').fire('click');
+    await tick();
+    out.undoAsk = [$('confirm-title').textContent, $('confirm-ok').textContent, $('confirm-body').textContent,
+      fetched.some((f) => f.path === '/api/tonight/undo')];
+    $('confirm-ok').onclick();
     await tick();
     out.undone = fetched.filter((f) => f.path === '/api/tonight/undo').map((f) => f.body);
     out.today = todayCards().map"""  # noqa: E501  (JavaScript)
@@ -201,6 +240,9 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path):
     assert "Claude Code: 6" in out["text"] and "<b>Likes tea</b>" in out["text"]  # as text
     assert "A 2-minute cold check tomorrow: ask any AI app /cortex review." in out["text"]
     assert out["undo"] == ["Undo everything Claude Code saved in session s_1"]
+    title, ok, ask, posted = out["undoAsk"]  # asked first: nothing posted before the OK
+    assert (title, ok, posted) == ("Undo Claude Code’s session?", "Undo", False)
+    assert "Claude Code" in ask and "1 change" in ask and "cannot be redone" in ask
     assert out["undone"] == [{"session": "s_1"}]
     assert out["today"] == [["Quiz me", "group", "0"], ["Uses Vim", "group", "-1"]]
     # Y on the focused card answers it through Review's endpoint, as on the Review page

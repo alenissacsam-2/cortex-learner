@@ -733,3 +733,12 @@ def test_browse_import_takeout_says_how_many_rows_were_skipped(vault, monkeypatc
     html = FIXTURES / "exports" / "takeout_html"
     out = run("browse", "import", "--takeout", html, "--dry-run", "--vault", vault).output
     assert "takeout: 3 activity rows read; 1 row skipped (unreadable date)" in out
+
+
+def test_tier_on_a_chat_export_names_every_source_that_takes_one(vault):
+    from cortex.app import actions
+    r = run("import", FIXTURES / "exports" / "perplexity_thread.md", "--tier", "private",
+            "--vault", vault, ok=False)
+    assert r.exit_code == 1 and "--tier applies to notes, calendars" in r.output
+    for kind in actions.TIERED:
+        assert kind in r.output, kind

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from cortex import access, planner, prime
+from cortex import access, planner, prime, xray
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.vault import Vault, is_private
@@ -41,13 +41,17 @@ def lines(vault: Vault, scopes, now: datetime | None = None) -> tuple[list[str],
     """(core lines, preference lines) for a pack of `scopes` (None: all)."""
     now = now or datetime.now(UTC)
     today = local_day(now)
-    served = prime.served_claims(vault, list(EventLog(vault).iter_events()))
+    events = list(EventLog(vault).iter_events())
+    served = prime.served_claims(vault, events)
     private = {p for p in ("core", *access.SECTIONED)
                if (n := prime.me(vault, p)) is not None and is_private(n)}
-    core = prime.core_lines(vault, served, today, private)
+    # as prime.core: X-ray muted lines, and R3-3 held ones while their pair waits, stay out
+    xs, ids = xray.settings(vault), prime.claim_ids(vault)
+    xs = {**xs, "mute": xs["mute"] | prime.held(vault, events, today)}
+    core = prime.core_lines(vault, served, today, private, ids, xs["mute"])
     allow = None if scopes is None else (lambda p, h: access.scope_section(scopes, p, h))
-    prefs = [r[3] for r in prime.pref_rows(vault, "", served, today, core, private, allow)
-             if not r[4]]
+    prefs = [r[3] for r in prime.pref_rows(vault, "", served, today, core, private, allow,
+                                           ids, xs) if not r[4]]
     bad = _hidden_words(vault)
     ok = [[ln for ln in got if not any(b.search(ln.lower()) for b in bad)] for got in (core, prefs)]
     return ok[0], ok[1]
@@ -68,9 +72,11 @@ def pack(vault: Vault, name: str, now: datetime | None = None) -> str:
     return "\n".join(out) if len(out) > 1 else ""
 
 
-def rule_block(vault: Vault | None, now: datetime | None = None) -> str:
-    """The Markdown block for agent rule files: the pinned core and the prime line."""
-    core = lines(vault, frozenset(("core",)), now)[0] if vault is not None else []
+def rule_block(vault: Vault | None, now: datetime | None = None, scopes=None) -> str:
+    """The Markdown block for agent rule files: the pinned core and the prime line. `scopes`:
+    the app's profile (cortex.profiles; None: all); without `core` in it, the prime line only."""
+    core = lines(vault, frozenset(("core",)), now)[0] \
+        if vault is not None and access.scope_page(scopes, "core") else []
     # a line may not close the block's HTML-comment markers early
     core = [ln.replace("<!--", "<!-").replace("-->", "->") for ln in core]
     return "\n".join([BLOCK_HEAD, *core] if core else ["## Cortex"]) + "\n" + PRIME_LINE + "\n"

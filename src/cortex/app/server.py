@@ -915,18 +915,25 @@ class App:
     def tonight_undo(self, body: dict) -> dict:
         """Undo one AI app's session shown under "What AI apps learned today", as `cortex
         undo <session>` does (the CLI's own code, as a job). A session not shown there
-        (unknown, or already undone: its events went with it) is 404."""
+        (unknown, or already undone: its events went with it) is 404. A session still open
+        has no commit yet, so it is refused rather than "undone" with nothing reverted."""
         from cortex import cli
+        from cortex.events import EventLog
         sid, root = body.get("session"), self.need_root()
         if not isinstance(sid, str) or sid not in {
                 g["session"] for g in self.tonight()["learned"]}:
             raise NotFound
+        if not any(e.get("session") == sid and e.get("kind") == "close"
+                   for e in EventLog(self._vault()).iter_events()):
+            raise ValueError("This AI app's session is still open, so nothing is saved to undo "
+                             "yet. Undo works once the session closes.")
 
         def run(job):
             try:
                 return actions.capture(job, cli.undo, sid, vault=root)
             finally:
-                self.core = None  # the Review clicks' Cortex reloads the reverted catalog
+                with self.reviewing:  # never mid-click: the Review clicks' Cortex reloads
+                    self.core = None  # the reverted catalog
 
         return self.jobs.start("Undoing an AI app's changes", "tonight", run)
 
@@ -1567,6 +1574,8 @@ class App:
 
     def import_run(self, body: dict) -> dict:
         # C2: the tier the page's choice sent; only the notes and calendar cards send one
+        if body.get("tier") not in (None, "skip", "local", "cloud"):  # before the job: the
+            raise ValueError("tier must be one of skip, local, cloud")  # upload is kept
         fn = actions.import_run if body.get("tier") is None else \
             partial(actions.import_run, tier=body["tier"])
         return self._import(body, "Importing", fn, keep=False)
