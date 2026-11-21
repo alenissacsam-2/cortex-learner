@@ -54,7 +54,7 @@ CACHE = ".cortex/vectors.db"  # the vector store (cortex.vecstore)
 NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once, then a backup
 BODY_CHARS = 1500
 CHUNK_CHARS, CHUNK_OVERLAP = 1000, 200  # ~250-300 tokens: well under bge-small's 512
-TEXT_VERSION = 3  # bump when _text or _chunks change, so cached vectors are rebuilt
+TEXT_VERSION = 4  # bump when _text or _chunks change, so cached vectors are rebuilt
 CHUNKING = [BODY_CHARS, CHUNK_CHARS, CHUNK_OVERLAP]  # in the cache meta: a change rebuilds
 RECALL_BUDGET = 1.0  # seconds of extra-chunk embedding per recall; `cortex model build` the rest
 HEAD_BUDGET = 1.0  # seconds of missing chunk-0 embedding per recall (a lost cache, an import)
@@ -77,6 +77,15 @@ STALE_WEIGHT = 0.5
 STALE = {("decision", "superseded"), ("decision", "retired"), ("project", "archived"),
          ("loop", "dropped")}
 RECENT_BOOST, RECENT_DAYS = 0.12, 180  # a dated journal or chat page: up to +12%, fading
+# a query asking how things are now: any dated page, up to +30%, fading faster
+CURRENT_BOOST, CURRENT_DAYS = 0.3, 90
+_CURRENT = re.compile(r"\b(?:current|currently|now|still|latest|nowadays|anymore|these days"
+                      r"|at the moment)\b", re.I)
+
+
+def is_current(query: str) -> bool:
+    """Whether `query` asks how things stand now (`_factors`' stronger recency)."""
+    return bool(_CURRENT.search(query or ""))
 BATCH = 64
 PROGRESS_S = 5.0  # a long embedding pass says how far it got
 # vault root -> (the store's stamp as last seen, cache, stacked rows or None)
@@ -282,11 +291,13 @@ def _today() -> str:
     return local_day(datetime.now(UTC))
 
 
-def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None) -> dict:
+def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
+             current: bool = False) -> dict:
     """A page's score factors other than 1 after the floors: `quiet`, its harvest.quiet weight
     (0 hides a folded copy even with `chats`), else `chat`, CHAT_WEIGHT for a chat page (`chats`
     lifts both but 0); `status`, STALE_WEIGHT for a STALE status; `recency`, up to
-    1 + RECENT_BOOST for a journal or chat page dated in the last months."""
+    1 + RECENT_BOOST for a journal or chat page dated in the last months, or with `current`
+    (`is_current` query) up to 1 + CURRENT_BOOST for any dated page."""
     q = (quiet or {}).get(id)
     if q == 0:
         return {"quiet": 0.0}
@@ -300,18 +311,21 @@ def _factors(index: Index, id: str, chats: bool, quiet: dict[str, float] | None)
         f["chat"] = CHAT_WEIGHT
     if (n["kind"], str(n["fields"].get("status"))) in STALE:  # str: a YAML list is unhashable
         f["status"] = STALE_WEIGHT
-    if (chat or n["kind"] == "journal") and (d := page_date(id, n["fields"], n["body"])):
+    if (current or chat or n["kind"] == "journal") \
+            and (d := page_date(id, n["fields"], n["body"])):
+        boost, days = (CURRENT_BOOST, CURRENT_DAYS) if current else (RECENT_BOOST, RECENT_DAYS)
         try:
             age = max(0, (date.fromisoformat(_today()) - date.fromisoformat(d)).days)
-            f["recency"] = 1 + RECENT_BOOST * math.exp(-age / RECENT_DAYS)
+            f["recency"] = 1 + boost * math.exp(-age / days)
         except ValueError:  # a malformed day (2026-13-45) gets no boost
             pass
     return f
 
 
-def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None) -> float:
+def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
+            current: bool = False) -> float:
     """The product of the page's `_factors`; 0 drops it."""
-    return math.prod(_factors(index, id, chats, quiet).values(), start=1.0)
+    return math.prod(_factors(index, id, chats, quiet, current).values(), start=1.0)
 
 
 def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = False,
@@ -327,7 +341,8 @@ def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = Fals
         log.warning("rerank skipped: %s", e)
         return hits
     # logits can be negative, so weight their sigmoid (same order) rather than the logit
-    s = [1 / (1 + np.exp(-x)) * _weight(index, h["id"], chats, quiet)
+    now = is_current(query)
+    s = [1 / (1 + np.exp(-x)) * _weight(index, h["id"], chats, quiet, now)
          for x, h in zip(s, hits, strict=True)]
     if out is not None:  # `--explain` shows the weighted rerank score per page
         out.update({h["id"]: float(x) for x, h in zip(s, hits, strict=True)})
@@ -360,29 +375,56 @@ def _text(n: dict) -> str:
     return f"{n['title']}\n{summary}\n{_filled(n['body'].strip())[:BODY_CHARS]}"
 
 
+HEADER_CHARS = 150
+
+
+def _header(title: str, path: list[str], day: str, kind: str) -> str:
+    """A deep chunk's first line, `title › heading path · day · kind`, at most HEADER_CHARS
+    (the title and path are cut first), so a chunk read alone says where it is from."""
+    tail = " · ".join(x for x in (day, kind) if x)
+    head = " › ".join([" ".join(title.split()), *path])
+    return f"{head[:HEADER_CHARS - len(tail) - 3]} · {tail}" if tail else head[:HEADER_CHARS]
+
+
 def _chunks(n: dict) -> list[tuple[int, str]]:
     """(start in the filled body, text) per chunk. Chunk 0 is `_text` (start 0). The rest are
-    title-prefixed windows of about CHUNK_CHARS over the body from BODY_CHARS - CHUNK_OVERLAP
-    on, each overlapping the one before by CHUNK_OVERLAP and cut at the last turn (`### `,
-    `**Me:**`), else paragraph, boundary in the window's final CHUNK_OVERLAP characters."""
-    body, title = _filled(n["body"].strip()), n["title"]
+    windows of about CHUNK_CHARS over the body from BODY_CHARS - CHUNK_OVERLAP on, each under
+    a `_header` line (the last 2 levels of headings above the window start), overlapping the
+    one before by CHUNK_OVERLAP and cut at the last turn (`### `, `**Me:**`), else paragraph,
+    boundary in the window's final CHUNK_OVERLAP characters."""
+    body = _filled(n["body"].strip())
     out = [(0, _text(n))]
+    if len(body) <= BODY_CHARS:
+        return out
+    day = page_date("", n["fields"], n["body"])
+    heads = _HEAD_LINE.finditer(body)
+    h, stack = next(heads, None), []  # [(level, "## heading")] open above the window start
+
+    def header(s: int) -> str:
+        nonlocal h
+        while h is not None and h.start() < s:  # one pass: windows only move forward
+            stack[:] = [x for x in stack if x[0] < len(h[1])] + [(len(h[1]), h[0].strip())]
+            h = next(heads, None)
+        path = [t for _, t in stack if t.lstrip("#").strip() != n["title"]]  # not "# Title"
+        return _header(n["title"], path[-2:], day, n["kind"])
+
     s = BODY_CHARS - CHUNK_OVERLAP
-    while len(body) > BODY_CHARS:
+    while True:
         end = s + CHUNK_CHARS
         if end >= len(body) - CHUNK_OVERLAP:  # the rest, rather than a short last window
-            out.append((s, f"{title}\n{body[s:]}"))
+            out.append((s, f"{header(s)}\n{body[s:]}"))
             break
         seg = body[end - CHUNK_OVERLAP:end]
         turns = [m.start() for m in _TURN.finditer(seg)]
         cut = turns[-1] if turns else seg.rfind("\n\n")
         if cut > 0:
             end += cut - CHUNK_OVERLAP
-        out.append((s, f"{title}\n{body[s:end]}"))
+        out.append((s, f"{header(s)}\n{body[s:end]}"))
         s = end - CHUNK_OVERLAP
     return out
 
 
+_HEAD_LINE = re.compile(r"^(#{1,6})[ \t][^\n]*", re.M)
 # a turn starts at its `### <time>` line when it has one, else at `**Me:**`
 _TURN = re.compile(r"\n(?:### [^\n]*\n)?\*\*Me:\*\*|\n### ")
 
@@ -727,7 +769,8 @@ def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,
     Imported chat pages (`is_chat`) score x CHAT_WEIGHT after the floors, unless `chats`;
     `quiet` ({id: weight}, harvest.quiet) overrides that weight, and weight 0 drops the page,
     from the graph neighbours too, even with `chats`. A STALE page scores x STALE_WEIGHT and a
-    recent journal or chat page up to x(1 + RECENT_BOOST) (`_factors`).
+    recent journal or chat page up to x(1 + RECENT_BOOST), or any recent dated page up to
+    x(1 + CURRENT_BOOST) for an `is_current` query (`_factors`).
     With `rerank_with` (a `load_reranker` scorer) the top RERANK_POOL are reordered by it.
     `explain` (a dict) is filled with the score parts for `explained`."""
     limit = max(1, min(MAX_LIMIT, int(limit)))
@@ -770,10 +813,12 @@ def _rank(index: Index, query: str, embed, limit: int, hops: int, fuse: str,
                 if i in score:
                     score[i] += 1 / (RRF_K + r + 1)
     # after the floors, so a chat page that is the only match still shows
-    score = {i: sc * w for i, sc in score.items() if (w := _weight(index, i, chats, quiet))}
+    now = is_current(query)
+    score = {i: sc * w for i, sc in score.items()
+             if (w := _weight(index, i, chats, quiet, now))}
     if explain is not None:
         explain.update(cos=raw_cos, kw=raw_kw, cover=cover, at=at, score=score, chats=chats,
-                       quiet=quiet, w=(w_cos, w_kw))
+                       quiet=quiet, current=now, w=(w_cos, w_kw))
 
     def match(i):
         return "keyword" if w_kw * kw.get(i, 0.0) > w_cos * cos.get(i, 0.0) else "similar"
@@ -838,12 +883,13 @@ def explained(index: Index, explain: dict, hits: list[dict],
     score, (w_cos, w_kw), rr = explain["score"], explain["w"], explain.get("rerank", {})
 
     def weight(i: str) -> float:
-        return _weight(index, i, explain["chats"], explain["quiet"]) or 0.0
+        return _weight(index, i, explain["chats"], explain["quiet"],
+                       explain.get("current", False)) or 0.0
 
     def parts(i: str, h: dict | None = None) -> dict:
         at = explain["at"].get(i, 0)
         chunk = _chunk_text(index._notes[i], at).split("\n", 1)[-1] if raw_cos else ""
-        f = _factors(index, i, explain["chats"], explain["quiet"])
+        f = _factors(index, i, explain["chats"], explain["quiet"], explain.get("current", False))
         return {"id": i, "cos": raw_cos.get(i), "kw": kw.get(i, 0.0), "cover": cover.get(i),
                 "weight": weight(i), "factors": {k: round(v, 3) for k, v in f.items()},
                 "score": h["score"] if h else round(score.get(i, 0.0), 3),
