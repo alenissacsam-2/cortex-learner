@@ -95,17 +95,22 @@ def me(vault: Vault, id: str):
         raise
 
 
-def profile_summary(vault: Vault, today: str, served: dict | None = None) -> str:
+def profile_summary(vault: Vault, today: str, served: dict | None = None,
+                    held_ids: set[str] = frozenset()) -> str:
     """The `summary:` of me/profile.md, else its first paragraph, without lines past their
     `(until …)` day on local day `today` (agenda 4); "" when absent. The init template's
-    summary carries no fact, so its live claim lines stand in for it. A claim line gets its
-    `served` label (B3: an agent or exposed line is ` (ask)`, as in claim_items)."""
+    summary carries no fact, so its live claim lines stand in for it, less those whose id is
+    in `held_ids` (R3-3, `held`). A claim line gets its `served` label (B3: an agent or
+    exposed line is ` (ask)`, as in claim_items)."""
     profile = me(vault, "profile")
     summary = str(profile.fields.get("summary") or "").strip() if profile else ""
     if summary == PROFILE_TEMPLATE:
+        ids = claim_ids(vault) if held_ids else {}
         text = "\n".join(claims.strip_id(ln) for sec in _sections(profile.body)
-                         if sec.partition("\n")[0][3:].strip().lower() not in claims.RESERVED
-                         for ln in sec.splitlines()[1:] if ln.startswith("- "))
+                         if (head := sec.partition("\n")[0][3:].strip()).lower()
+                         not in claims.RESERVED
+                         for ln in sec.splitlines()[1:] if ln.startswith("- ") and ids.get(
+                             ("profile", head, claims.strip_id(ln)[2:].strip())) not in held_ids)
     else:
         text = summary or (_first_paragraph(profile.body) if profile else "")
     labels = {t: lab for (p, _, t), (lab, _) in (served or {}).items() if p == "profile" and lab}
@@ -170,6 +175,20 @@ def served_claims(vault: Vault, events: list[dict]) -> dict:
         out[r["page"], r["section"], r["text"]] = (" (ask)" if ask else "",
                                                    0.5 * (ASK_WEIGHT if ask else 1))
     return out
+
+
+def held(vault: Vault, events, today: str) -> set[str]:
+    """R3-3: the `^c-…` ids of the older line of each recorded pair (claims.recorded_pairs:
+    `update_of`, `supersedes`) that still waits in the app's Review, both lines live on
+    non-private pages. Prime and cortex_context serve only the newer line until the user keeps
+    both or one. Derived from events at read time; nothing stored."""
+    pairs, _ = claims.recorded_pairs(events)
+    if not pairs:
+        return set()
+    hidden = {n.id for n in vault.iter_notes("me") if is_private(n)}
+    live = {(r["page"], r["id"]) for r in claims.rows(vault)
+            if claims.is_live(r, today) and r["page"] not in hidden}
+    return {xray.claim(old[1]) for old, new, _ in pairs.values() if old in live and new in live}
 
 
 def claim_ids(vault: Vault) -> dict:
@@ -386,11 +405,14 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     put = putter(parts, left)
     served = served_claims(vault, events)
     xs, ids = xray.settings(vault), claim_ids(vault)
+    waits = held(vault, events, local_day(now))  # R3-3: as muted while its pair waits
+    xs = {**xs, "mute": xs["mute"] | waits}
     if pinned := core_lines(vault, served, local_day(now), withheld, ids, xs["mute"]):
         put(CORE_HEAD, "\n".join(pinned), "me/core", PRIME_MAX)  # first and whole, never shrunk
     # the core is the user's own pick of preferences, so it comes out of their cap
     pref_cap = max(0, PRIME_CAPS["preferences"] - (PRIME_MAX - left[0]))
-    summary = "" if "profile" in withheld else profile_summary(vault, local_day(now), served)
+    summary = "" if "profile" in withheld else profile_summary(vault, local_day(now), served,
+                                                               waits)
     if summary:
         put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
     rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,

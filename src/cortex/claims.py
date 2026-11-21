@@ -316,3 +316,35 @@ def saved(vault, events, today: str, days: int = SAVED_DAYS) -> dict:
     changes.sort(key=lambda r: not r["exposed"])  # stable: exposed rows first
     return {"claims": rows, "changes": changes}
 
+
+def pair_key(a: tuple[str, str], b: tuple[str, str]) -> str:
+    """A pair's key from its two (page, claim id): both `page/id`, sorted, so either order is
+    the same pair (the Review's conflict key, review.pair_key)."""
+    return "|".join(sorted(f"{p}/{i}" for p, i in (a, b)))
+
+
+def recorded_pairs(events) -> tuple[dict, set]:
+    """({key: (old (page, id), new (page, id), why)}, kept keys): each pair a change event
+    recorded, unvoided and not kept both: cortex_patch's `update_of` (why `update`) and RR-4's
+    `supersedes` (why `supersedes`), old first; and the keys of the app's Keep both clicks.
+    Whether both lines are still live is the caller's to check."""
+    events = list(events)
+    voided = {e.get("ref") for e in events if e.get("kind") == "void"}
+    kept, out = set(), {}
+    for e in events:
+        pl = e.get("payload") if e.get("kind") == "change" else None
+        c = pl.get("change") if isinstance(pl, dict) else None
+        if not isinstance(c, dict) or e.get("id") in voided:
+            continue
+        if c.get("tool") == "keep_both" and isinstance(c.get("pair"), str):
+            kept.add(c["pair"])
+        if not isinstance(c.get("claim"), str):
+            continue
+        sup = c.get("supersedes") if isinstance(c.get("supersedes"), list) else []
+        for why, u in [("update", c.get("update_of")), *(("supersedes", s) for s in sup)]:
+            if isinstance(u, dict) and isinstance(u.get("claim"), str):
+                old, new = (u.get("page"), u["claim"]), (c.get("id"), c["claim"])
+                if old != new:
+                    out.setdefault(pair_key(old, new), (old, new, why))
+    return {k: v for k, v in out.items() if k not in kept}, kept
+

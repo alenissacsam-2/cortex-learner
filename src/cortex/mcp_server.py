@@ -326,6 +326,9 @@ SAID = 0.6  # R3-2: the share of a line's content words one logged user turn mus
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
+SUPERSEDES_MAX = 3  # RR-4: claim ids one new line may replace
+SUPERSEDES_NEXT = ("Until the user picks in the Cortex app's Review, prime serves the new line, "
+                   "not the old one; say so in one line. ")
 # PHASE4 V3 cortex_as_me
 AS_ME_TASK, AS_ME_ASKS = 300, 5
 AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach this "
@@ -1364,7 +1367,7 @@ class Cortex:
         hide = "profile" in self._withheld()
         claims_served = self._served_claims()
         summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()),
-                                                        claims_served)
+                                                        claims_served, self._held())
         put("Profile", summary or (WITHHELD.format(n=1) if hide
                                    else f"me/profile.md: {NOT_RECORDED}"),
             "me/profile" if summary else None, CONTEXT_CAPS["profile"])
@@ -1597,7 +1600,8 @@ class Cortex:
         if (allow := self._allow()) is not None:  # plan v9 item 8: the client's profile
             keeps = {p: k and (lambda h, k=k, p=p: k(h) and allow(p, h)) for p, k in keeps.items()}
         withheld = self._withheld()
-        xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"], lines)
+        xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"] | self._held(),
+              lines)
         got = {p: self._claim_sections(p, k, served, xr) if k and p not in withheld
                else ("", False) for p, k in keeps.items()}
         # server text, so outside the untrusted wrap; first, so caps never trim it
@@ -1616,6 +1620,10 @@ class Cortex:
             where =(f"the ## {want} section of "
                      if want and prime.me(self.vault, "preferences") else "")
             put("Preferences", f"{where}me/preferences.md: {NOT_RECORDED}")
+
+    def _held(self) -> set[str]:
+        """R3-3: the older lines of recorded pairs still waiting in Review (prime.held)."""
+        return prime.held(self.vault, self.log.iter_events(), local_day(self._now()))
 
     def _served_claims(self, events: list[dict] | None = None) -> dict:
         """cortex.prime.served_claims over `events`, else one read of the log."""
@@ -2525,6 +2533,7 @@ class Cortex:
                                                 "revise", "retire", "reject", "set_topics"],
                      target: str = "", text: str = "", key: str | None = None,
                      user_confirmed: bool = False, until: str | None = None,
+                     supersedes: list[str] | None = None,
                      ctx: Context | None = None,
                      click: Annotated[ElicitationResult[_Yes], Resolve(_ask_click)] = None,
                      ) -> dict[str, Any]:
@@ -2546,6 +2555,7 @@ class Cortex:
         if (op == "append_to_section" and kind == "me" and text.strip() and "\n" not in text.strip()
                 and nid in claims.PAGES and not text.lstrip().startswith(("- ", "#"))):
             text = "- " + text.strip()  # a bare line would be no claim at all
+        sup = None if supersedes is None else self._supersedes(supersedes, kind, nid, op, text)
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
         if kind == "me" and self.session.exposed and not self.app_clicks and op in (
                 "append_to_section", "revise", "retire") and nid in (
@@ -2564,7 +2574,7 @@ class Cortex:
                 if section is None:
                     raise invalid(f"{target} is not a live claim on me/{nid}; read it first.")
                 op, until, target = "append_to_section", None, section
-            out = self.cortex_patch(id, op, target, text, key, False, until, ctx)
+            out = self.cortex_patch(id, op, target, text, key, False, until, supersedes, ctx)
             if out.get("queued") or out.get("changed"):  # changed: a goals line, served (ask)
                 out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "
                                "in the Cortex app; say so in one line and go on.")
@@ -2588,9 +2598,13 @@ class Cortex:
             return self._claim_op(nid, op, target, text, user_confirmed, until, said == "yes")
         changed = True
         day = local_day(self._now())
-        # plan 5b: a line that may update a live one; the write goes ahead and the agent asks
+        if sup is None and self.app_clicks and claim_page and op == "append_to_section":
+            sup = self._proposed_supersedes(nid, text)  # Approve: the proposal's own pair
+        # plan 5b: a line that may update a live one; the write goes ahead and the agent asks.
+        # RR-4: an explicit `supersedes` names the pair, so the guess is not needed
         update = (review.collision(self.vault, nid, text, day)
-                  if op == "append_to_section" and kind == "me" and text.strip() else None)
+                  if op == "append_to_section" and kind == "me" and text.strip() and not sup
+                  else None)
         # plan v9 item 8: a profiled client is shown no line of a page outside its scopes (a
         # sectioned page's line has no section here, so none); the pair is recorded all the same
         scopes = self._scopes()
@@ -2621,7 +2635,9 @@ class Cortex:
             self._propose(f"- {target}: {text} (proposed {day}, me/{nid})")  # the page: Approve
             self.proposed.append(render.plain(f"{target}: {text}", 200))  # as unconfirmed()
             hint = self.sessions.note("patched", change={
-                "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target})
+                "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target,
+                "hash": review.text_hash(text), **({"supersedes": sup} if sup else {}),
+                "producer": "imports" if harvesting else "chats"})  # RR-10
             if contract:
                 return _update_of(shown, {
                     "changed": False, "queued": True,
@@ -2632,6 +2648,7 @@ class Cortex:
                             "patch does not apply it." + hint})
             return _update_of(shown, {
                 "changed": False, "queued": True,
+                **({"supersedes": [s["claim"] for s in sup]} if sup else {}),
                 "summary": f"proposed for {kind} {nid}; awaits the user's OK",
                 "next": "Saved as unconfirmed; it waits for the user's Approve in the Cortex app "
                         "(Review). Say so in one line; don't stop to ask." + hint})
@@ -2677,12 +2694,55 @@ class Cortex:
             change.update(claim=claim, **self._tier(user_confirmed, said == "yes"))
             if update and isinstance(claim, str):  # the pair the app's Review shows
                 change["update_of"] = {"page": update["page"], "claim": update["id"]}
+            if sup and isinstance(claim, str):  # RR-4: explicit pairs, shown alike
+                change["supersedes"] = sup
         if self.app_clicks:
             change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
         return _update_of(shown, {"changed": changed, **({"claim": claim} if claim else {}),
+                                   **({"supersedes": [s["claim"] for s in sup]} if sup else {}),
                                    "summary": f"{op} {target!r} on {kind} {nid}",
-                                   "next": self._next(MORE_NEXT) + hint})
+                                   "next": (SUPERSEDES_NEXT if sup else "")
+                                   + self._next(MORE_NEXT) + hint})
+
+    def _supersedes(self, ids, kind: str, nid: str, op: str, text: str) -> list[dict]:
+        """RR-4: cortex_patch's `supersedes` -> [{page, claim}], each id one live line of a
+        non-private claim page; refused unless one line is added to a claim page."""
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= SUPERSEDES_MAX
+                or not all(isinstance(x, str) for x in ids)):
+            raise invalid(f"supersedes takes 1 to {SUPERSEDES_MAX} claim ids (^c-…).")
+        if (op != "append_to_section" or kind != "me" or nid not in claims.PAGES
+                or "\n" in text.strip()):
+            raise invalid("supersedes works only when adding one line to me/"
+                          + ", me/".join(claims.PAGES) + ".")
+        day, hidden = local_day(self._now()), review._private(self.vault)
+        live = [r for r in claims.rows(self.vault)
+                if claims.is_live(r, day) and r["page"] not in hidden]
+        out = []
+        for cid in dict.fromkeys(x.strip().removeprefix("^") for x in ids):
+            hit = [r for r in live if r["id"] == cid]
+            if len(hit) != 1:
+                raise invalid(f"supersedes: {cid!r} is not a live claim id; read the me/* page "
+                              "for the line's ^c-… id.")
+            out.append({"page": hit[0]["page"], "claim": cid})
+        return out
+
+    def _proposed_supersedes(self, page: str, text: str) -> list[dict] | None:
+        """RR-4: the `supersedes` of the latest proposal of `text` for me/<page>, its lines
+        still live; None when it named none. Approve writes the pair the proposal named."""
+        h, sup = review.text_hash(text), None
+        voided = {e.get("ref") for e in self.log.iter_events() if e.get("kind") == "void"}
+        for e in self.log.iter_events():
+            pl = e.get("payload") if e.get("kind") == "change" else None
+            c = pl.get("change") if isinstance(pl, dict) else None
+            if (isinstance(c, dict) and c.get("tool") == "propose" and c.get("id") == page
+                    and c.get("hash") == h and e.get("id") not in voided):
+                sup = c.get("supersedes") if isinstance(c.get("supersedes"), list) else None
+        live = {(r["page"], r["id"]) for r in claims.rows(self.vault)
+                if claims.is_live(r, local_day(self._now()))}
+        sup = [s for s in sup or () if isinstance(s, dict)
+               and (s.get("page"), s.get("claim")) in live]
+        return sup or None
 
     def _tier(self, confirmed: bool, clicked: bool = False) -> dict[str, str]:
         """v5 F3: the server-computed authorship tier of a claim this session writes; with a yes,
@@ -2743,6 +2803,16 @@ class Cortex:
             "tool": "keep_both", "id": page, "kind": "me", "op": "keep_both", "pair": pair,
             "confirm": "clicked"})
         return {"changed": True, "summary": "kept both lines"}
+
+    def _resume(self, producer: str) -> dict[str, Any]:
+        """RR-10, the app's Resume on a paused Review producer (review.ledger): a `resume`
+        change, after which its cards are offered again and its count starts over."""
+        if not self.app_clicks:
+            raise invalid("Resume is the Cortex app's own action.")
+        self.sessions.note("patched", change={
+            "tool": "resume", "id": "review", "kind": "review", "op": "resume",
+            "producer": producer, "confirm": "clicked"})
+        return {"changed": True, "summary": f"resumed {producer} in Review"}
 
     def _claim_op(self, nid: str, op: str, target: str, text: str,
                   confirmed: bool, until: str | None = None,
@@ -3168,7 +3238,9 @@ DESCRIPTIONS = {
                     "plus ## Everyone): user_confirmed=true only after the user agrees; "
                     "otherwise the line waits in inbox.md. me/teaching-contract: a rule always "
                     "waits for the user's Approve in the Cortex app, even with "
-                    "user_confirmed=true. op=set_topics (resource or note): text = 0-4 "
+                    "user_confirmed=true. supersedes: up to 3 ^c-… ids of me/* lines the new "
+                    "line contradicts; the pair waits in Review. "
+                    "op=set_topics (resource or note): text = 0-4 "
                     "topic hub ids, comma-separated, replacing the page's topics; target is "
                     "ignored.",
     "cortex_add": "Create a domain, area, concept, problem, assessment, application, mistake, "

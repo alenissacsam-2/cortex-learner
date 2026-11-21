@@ -111,6 +111,9 @@ class SessionManager:
         # guards (harvest verdict, contradiction 3); persist it if that bites.
         self.served: set[str] = set()
         self.served_sid: str | None = None
+        # R3-4: fields the Cortex app's Review click adds to each change it writes ({card}),
+        # set by app/server.py around one click; never tool input
+        self.stamp: dict = {}
 
     def serve(self, ids) -> None:
         """A harvest bundle's chat ids, served in the current session (which must be open)."""
@@ -224,6 +227,7 @@ class SessionManager:
         if concept:
             s.touched.add(concept)
         if change:
+            change = {**change, **self.stamp}
             s.changes.append(change)
         if change or kind in ("patched", "added"):
             self._persist(s, kind, concept, change)

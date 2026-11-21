@@ -97,7 +97,8 @@ def act(core, tag: str, text: str, said: bool) -> dict:
         core._propose(f"- {section}: {text} (proposed {day}, me/{page})")
         core.proposed.append(plain(f"{section}: {text}", 200))
         core.sessions.note("patched", change={"tool": "propose", "id": page, "kind": "me",
-                                              "op": "append_to_section", "target": section})
+                                              "op": "append_to_section", "target": section,
+                                              "hash": review.text_hash(text)})
         return {"changed": False, "queued": True,
                 "summary": f"//{tag} waits for Approve in the Cortex app (this chat read "
                            "outside text)"}

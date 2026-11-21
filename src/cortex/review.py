@@ -6,7 +6,8 @@
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
 - conflicts (plan 5b): pairs of live lines that likely clash (Keep both, Keep left, Keep
-  right): every `possible_update_of` pair cortex_patch recorded and not yet resolved, and any
+  right): every `possible_update_of` or `supersedes` (RR-4) pair cortex_patch recorded and not
+  yet resolved, and any
   two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`);
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
@@ -46,6 +47,16 @@ _CONFIRMED = re.compile(r"\(confirmed (\d{4}-\d\d-\d\d)\)")
 COS = 0.72  # cosine (warm embedder) from which two lines say about the same thing
 JACCARD = 0.6  # the same for word overlap, when the embedder is not loaded
 SHOWN_PAIRS = 5  # conflict pairs shown at a time
+TODAY_MAX = 5  # R3-4: Today's 5, cards a day
+TODAY_CARDS = ("pending", "conflict", "rule")  # the kinds of card Today's 5 offers
+SIGHTINGS = 2  # chats that must propose the same line before it is offered in Today's 5
+SINGLE_DAYS = 14  # a line fewer chats proposed leaves the view this many days after its stamp
+# RR-10: what makes Review cards, as the Status line names them
+PRODUCERS = {"chats": "Lines chats suggest", "imports": "Lines from imported chats",
+             "corrections": "Corrections you repeat", "decisions": "Decisions in your commits",
+             "forget": "//forget cards"}
+PAUSE_AFTER = 20  # decided cards before a producer whose rejects exceed its accepts pauses
+LEGACY_DISMISS = ("corrections", "decisions", "forget")  # a dismiss change's id: its producer
 _WORD = re.compile(r"[a-z0-9']+")
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
@@ -123,28 +134,21 @@ def collision(vault, page: str, text: str, today: str) -> dict | None:
 
 def pair_key(a: dict, b: dict) -> str:
     """A conflict pair's key: both `page/id`, sorted, so either order is the same pair."""
-    return "|".join(sorted((f"{a['page']}/{a['id']}", f"{b['page']}/{b['id']}")))
+    return claims.pair_key((a["page"], a["id"]), (b["page"], b["id"]))
 
 
 def conflicts(rows: list[dict], events: list[dict]) -> list[dict]:
     """Up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that likely clash, as
-    {key, why, left, right} with raw rows: recorded `possible_update_of` pairs first (why
-    `update`, left the old line), then pairs at least as similar as the cut with exactly one
-    `negated` line (why `opposite`). A pair the user kept both of (a `keep_both` change) is
-    left out; Keep left or right retires the other line, so the pair is gone."""
-    voided, kept, out = _voided(events), set(), {}
-    by = {(r["page"], r["id"]): r for r in rows}
-    for e in events:
-        c = _payload(e).get("change") if e.get("kind") == "change" else None
-        if not isinstance(c, dict) or e.get("id") in voided:
-            continue
-        if c.get("tool") == "keep_both" and isinstance(c.get("pair"), str):
-            kept.add(c["pair"])
-        u = c.get("update_of")
-        if isinstance(u, dict) and isinstance(c.get("claim"), str):
-            old, new = by.get((u.get("page"), u.get("claim"))), by.get((c.get("id"), c["claim"]))
-            if old and new and old is not new:
-                out.setdefault(pair_key(old, new), {"why": "update", "left": old, "right": new})
+    {key, why, left, right} with raw rows: recorded pairs first (claims.recorded_pairs: why
+    `update` for a `possible_update_of`, `supersedes` for RR-4's explicit one; left the old
+    line), then pairs at least as similar as the cut with exactly one `negated` line (why
+    `opposite`). A pair the user kept both of (a `keep_both` change) is left out; Keep left or
+    right retires the other line, so the pair is gone."""
+    recorded, kept = claims.recorded_pairs(events)
+    by, out = {(r["page"], r["id"]): r for r in rows}, {}
+    for key, (old, new, why) in recorded.items():
+        if (o := by.get(old)) and (n := by.get(new)):
+            out[key] = {"why": why, "left": o, "right": n}
     score, cut = scorer([r["text"] for r in rows])
     no = [negated(r["text"]) for r in rows]
     for i in range(len(rows)):
@@ -273,15 +277,100 @@ def live_rows(vault, events, today: str) -> list[dict]:
     return [r for r in claims.tiers(vault, events, today=today) if r["page"] not in hidden]
 
 
-def view(vault, events, today: str) -> dict:
-    """The Review view and its badge `count`: every text is shown text (`_shown`)."""
+def _proposals(events) -> dict:
+    """{(page, text_hash): {sessions, producer}} of the unvoided `propose` changes that hold
+    their line's hash; `producer` (RR-10) is the latest one's, `chats` when it names none."""
     events = list(events)
+    voided, out = _voided(events), {}
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("tool") == "propose" and isinstance(c.get("hash"), str)
+                and e.get("id") not in voided):
+            x = out.setdefault((c.get("id"), c["hash"]), {"sessions": set()})
+            x["sessions"].add(e.get("session"))
+            x["producer"] = c.get("producer") if c.get("producer") in PRODUCERS else "chats"
+    return out
+
+
+def sightings(events) -> dict:
+    """R3-4: {(page, text_hash): sessions}: the chats (one session each) that proposed the
+    same line."""
+    return {k: v["sessions"] for k, v in _proposals(events).items()}
+
+
+def producer_of(proposals: dict, page: str, text: str) -> str:
+    """RR-10: which producer proposed a waiting line (`_proposals`); an old line: `chats`."""
+    return proposals.get((page, text_hash(text)), {}).get("producer", "chats")
+
+
+def ledger(events) -> dict:
+    """RR-10: {producer: {accept, reject, paused}} over the Review clicks on each producer's
+    cards since its latest `resume` change: a click's changes carry the `producer` the app
+    stamped (one verdict per click, its session); before that stamp, a commit decision's
+    `decide` and a `dismiss` of corrections, decisions or forget still count. A producer whose
+    rejects exceed its accepts over PAUSE_AFTER or more decided cards is `paused`."""
+    events = list(events)
+    voided, said = _voided(events), {p: {} for p in PRODUCERS}
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if not isinstance(c, dict) or e.get("id") in voided or c.get("confirm") != "clicked":
+            continue
+        if c.get("tool") == "resume":
+            if c.get("producer") in PRODUCERS:
+                said[c["producer"]] = {}  # counting starts again
+            continue
+        p = c.get("producer")
+        if p not in PRODUCERS:  # a click from before the stamp
+            p = ("decisions" if c.get("tool") == "decide" else c.get("id")
+                 if c.get("tool") == "dismiss" and c.get("id") in LEGACY_DISMISS else None)
+        if p is None:
+            continue
+        no = c.get("tool") == "dismiss" or c.get("op") == "reject"
+        said[p][e.get("session") or e.get("id")] = "reject" if no else "accept"
+    out = {}
+    for p, votes in said.items():
+        n = {v: list(votes.values()).count(v) for v in ("accept", "reject")}
+        out[p] = {**n, "paused": n["accept"] + n["reject"] >= PAUSE_AFTER
+                  and n["reject"] > n["accept"]}
+    return out
+
+
+def answered_today(events, today: str) -> int:
+    """R3-4: the Today's 5 kinds of card (TODAY_CARDS) the user answered on `today`: one per
+    app click, each its own session stamped with the card's kind (app/server.py `_click`)."""
+    voided, said = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("card") in TODAY_CARDS and e.get("day") == today
+                and e.get("id") not in voided):
+            said.add(e.get("session"))
+    return len(said)
+
+
+def view(vault, events, today: str) -> dict:
+    """The Review view and its badge `count`: every text is shown text (`_shown`). R3-4: a
+    single inference (a waiting line other than a teaching rule that fewer than SIGHTINGS
+    chats proposed) leaves the view SINGLE_DAYS after its stamp (inbox.md keeps it), and
+    `today` orders at most TODAY_MAX cards a day (`_today`). RR-10: a `paused` producer's
+    cards (`ledger`) are not offered; `paused` lists them for the Status line."""
+    events = list(events)
+    led = ledger(events)
+    off = {p for p, x in led.items() if x["paused"]}
     hidden = _private(vault)
     rows = [r for r in claims.tiers(vault, events) if r["page"] not in hidden]  # writes nothing
     expired = [{"page": r["page"], "id": r["id"], "text": _shown(r["text"]), "until": until}
                for r in rows if (until := claims.expired(r["text"], today))]
-    waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"])}
-               for p in pending(vault, today)]
+    seen, cut = _proposals(events), (dt.date.fromisoformat(today)
+                                     - dt.timedelta(days=SINGLE_DAYS)).isoformat()
+
+    def single(p: dict) -> bool:
+        return p["page"] != "teaching-contract" and len(
+            seen.get((p["page"], text_hash(p["text"])), {}).get("sessions", ())) < SIGHTINGS
+
+    waiting = [{**p, "section": plain(p["section"], 80), "text": _shown(p["text"]),
+                "single": single(p)}
+               for p in pending(vault, today) if not (single(p) and (p["since"] or "~") < cut)
+               and producer_of(seen, p["page"], p["text"]) not in off]
     old = stale(rows, events, today)
 
     def side(r: dict) -> dict:
@@ -291,18 +380,36 @@ def view(vault, events, today: str) -> dict:
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
               "right": side(c["right"])} for c in conflicts(current, events)]
     from cortex import corrections, more_sources  # read imported pages: only the Review asks
-    rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"], "page": x["page"]}
-             for x in corrections.proposals(vault, events, current)]
+    rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"],
+              "page": x["page"]}
+             for x in ([] if "corrections" in off else corrections.proposals(vault, events,
+                                                                              current))]
     decisions = [{**x, "project": plain(x["project"], 80), "subject": plain(x["subject"], SHOWN)}
-                 for x in more_sources.decision_proposals(vault, events)]
+                 for x in ([] if "decisions" in off
+                           else more_sources.decision_proposals(vault, events))]
     from cortex import tags  # it imports this module
     forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
                "candidates": [side(c) for c in x["candidates"]]}
-              for x in tags.forget_cards(vault, events, today)]
+              for x in ([] if "forget" in off else tags.forget_cards(vault, events, today))]
     from cortex import sources
     imports = [{**x, "title": plain(x["title"], SHOWN)}
                for x in sources.edited_pages(vault, events)]
+    left = max(0, TODAY_MAX - answered_today(events, today))
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
+            "today": _today(waiting, pairs, rules)[:left], "today_left": left,
+            "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
             + len(decisions) + len(forget) + len(imports)}
+
+
+def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:
+    """R3-4's order, as {type, key} of cards in the boards: teaching-rule proposals, then
+    contradiction pairs, repeated corrections, and last the other waiting lines that 2+ chats
+    proposed (a single inference never)."""
+    rule = [p for p in waiting if p["page"] == "teaching-contract"]
+    return ([{"type": "pending", "key": p["key"]} for p in rule]
+            + [{"type": "conflict", "key": c["key"]} for c in pairs]
+            + [{"type": "rule", "key": x["key"]} for x in rules]
+            + [{"type": "pending", "key": p["key"]} for p in waiting
+               if p not in rule and not p["single"]])

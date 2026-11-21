@@ -257,8 +257,8 @@ def test_the_badge_and_the_review_page(tmp_path):
         "routes": {"/api/review": view, "/api/status": status}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["badge"] == ["4", False, "Review (4)"]
-    assert out["boards"] == ["Waiting for your approval", "Past their end date", "Still true?",
-                             "Lines that may conflict", "Corrections you repeat",
+    assert out["boards"] == ["Today’s 5", "Waiting for your approval", "Past their end date",
+                             "Still true?", "Lines that may conflict", "Corrections you repeat",
                              "Decisions in your commits",
                              "Lines you asked to forget", "Imported notes you edited"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup

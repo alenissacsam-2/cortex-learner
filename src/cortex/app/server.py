@@ -328,6 +328,8 @@ class App:
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
             "/api/review/rule/approve": self.review_rule_approve,
+            "/api/review/rule/approve-all": self.review_rule_approve_all,
+            "/api/review/resume": self.review_resume,
             "/api/review/rule/dismiss": self.review_rule_dismiss,
             "/api/review/decision/approve": self.review_decision_approve,
             "/api/review/decision/dismiss": self.review_decision_dismiss,
@@ -362,10 +364,24 @@ class App:
         ready = v["ok"] and (_connect_skipped() or any(
             t["connected"] for t in status.kept(("targets", json.dumps(entry, sort_keys=True)),
                                                 lambda: targets.describe(entry))))
-        return {"rows": status.rows(self.root),
+        return {"rows": status.rows(self.root) + (self._paused_rows() if v["ok"] else []),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
+
+    def _paused_rows(self) -> list[dict]:
+        """RR-10: one Status row per paused Review producer, with its Resume."""
+        from cortex import review
+        from cortex.events import EventLog
+        try:
+            led = review.ledger(EventLog(self._vault()).iter_events())
+        except Exception:  # noqa: BLE001  (a Status row must never cost the board)
+            return []
+        return [{"id": f"review-{p}", "label": "Review", "state": "warn",
+                 "value": f"{review.PRODUCERS[p]} paused",
+                 "detail": f"You dismissed {x['reject']} of the last {x['accept'] + x['reject']} "
+                           "of these cards, so Review stopped offering them.", "resume": p}
+                for p, x in led.items() if x["paused"]]
 
     def warm_status(self) -> None:
         """Status and Setup read once in the background at start: a first read waits ~3-4 s
@@ -556,10 +572,13 @@ class App:
         v = self._vault()
         return review.view(v, EventLog(v).iter_events(), self._today())
 
-    def _click(self, tool: str, method: str, kwargs: dict) -> dict:
+    def _click(self, tool: str, method: str, kwargs: dict, card: str | None = None,
+               producer: str | None = None) -> dict:
         """One Review click, written by an mcp_server.Cortex with `app_clicks` set through the
         tool's own code path (cortex_patch, cortex_log), in a session closed at once so it is
-        committed and `cortex undo` can take it back. Returns the fresh Review view."""
+        committed and `cortex undo` can take it back. Returns the fresh Review view. `card`
+        (R3-4) and `producer` (RR-10, review.ledger): stamped on each change the click
+        writes."""
         from cortex.mcp_server import Cortex
         from cortex.vault import Vault
         root = self.need_root()
@@ -569,9 +588,12 @@ class App:
                 core.app_clicks = True  # every write here is the user's own click
                 self.core = (root, core)
             core = self.core[1]
+            core.sessions.stamp = {k: v for k, v in (("card", card), ("producer", producer))
+                                   if v}
             try:
                 out = core._call(tool, getattr(core, method), kwargs)
             finally:
+                core.sessions.stamp = {}
                 if core.sessions.current is not None:
                     core.sessions.close(summary="Review in the Cortex app")
         if "error" in out:
@@ -609,7 +631,8 @@ class App:
         rule = p["page"] == "teaching-contract"  # a proposal is stored bare; a rule is a list line
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{p['page']}", "op": "append_to_section", "target": p["section"],
-            "text": "- " * rule + p["text"], "user_confirmed": True})
+            "text": "- " * rule + p["text"], "user_confirmed": True}, "pending",
+            self._producer(p))
 
     def review_dismiss(self, body: dict) -> dict:
         """Dismiss: a claim page's line goes to its `## Not me` (cortex_patch reject); another
@@ -619,9 +642,10 @@ class App:
         if p["page"] in claims.PAGES:
             return self._click("cortex_patch", "cortex_patch", {
                 "id": f"me/{p['page']}", "op": "reject",
-                "target": f"{p['section']}: {p['text']}"})
+                "target": f"{p['section']}: {p['text']}"}, "pending", self._producer(p))
         return self._click("cortex_patch", "_dismiss", {
-            "page": p["page"], "section": p["section"], "text": p["text"]})
+            "page": p["page"], "section": p["section"], "text": p["text"]}, "pending",
+            self._producer(p))
 
     def review_still(self, body: dict) -> dict:
         """Still true: a reconfirm stamped `confirm: clicked` (claims.tiers: confirmed)."""
@@ -630,10 +654,34 @@ class App:
             "kind": "reconfirm", "payload": {"claim": r["id"], "verdict": "yes"}})
 
     def review_retire(self, body: dict) -> dict:
-        """Retire: cortex_patch's retire op moves the line to `## Past`."""
+        """Retire: cortex_patch's retire op moves the line to `## Past`. A //forget card's
+        candidate is the forget producer's accept (RR-10)."""
+        from cortex import tags
+        from cortex.events import EventLog
         r = self._live(body)
+        v = self._vault()
+        forget = "forget" if any(c["id"] == r["id"] for x in tags.forget_cards(
+            v, EventLog(v).iter_events(), self._today()) for c in x["candidates"]) else None
         return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
+            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
+            forget, forget)
+
+    def _producer(self, p: dict) -> str:
+        """RR-10: the producer of a waiting line (review.producer_of)."""
+        from cortex import review
+        from cortex.events import EventLog
+        v = self._vault()
+        return review.producer_of(review._proposals(EventLog(v).iter_events()), p["page"],
+                                  p["text"])
+
+    def review_resume(self, body: dict) -> dict:
+        """RR-10: Resume a paused Review producer (a `resume` change; Status names it)."""
+        from cortex import review
+        from cortex.events import EventLog
+        p, v = body.get("producer"), self._vault()
+        if not review.ledger(EventLog(v).iter_events()).get(p, {}).get("paused"):
+            raise NotFound
+        return self._click("cortex_patch", "_resume", {"producer": p})
 
     def review_conflict(self, body: dict) -> dict:
         """A conflict pair (plan 5b): `keep` both (a `keep_both` change), or `left` or `right`,
@@ -650,10 +698,11 @@ class App:
             raise NotFound
         if keep == "both":
             return self._click("cortex_patch", "_keep_both", {"page": pair["left"]["page"],
-                                                              "pair": pair["key"]})
+                                                              "pair": pair["key"]}, "conflict")
         r = pair["right" if keep == "left" else "left"]
         return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True})
+            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
+            "conflict")
 
     def _rule(self, body: dict) -> dict:
         from cortex import corrections, review
@@ -673,14 +722,32 @@ class App:
         x = self._rule(body)
         return self._click("cortex_patch", "cortex_patch", {
             "id": f"me/{x['page']}", "op": "append_to_section", "target": x["section"],
-            "text": x["text"], "user_confirmed": True})
+            "text": x["text"],
+            "user_confirmed": True}, "rule", "corrections")
+
+    def review_rule_approve_all(self, body: dict) -> dict:
+        """R3-4: Approve all, only on repeated corrections (mined patterns, each seen in 2+
+        chats): every offered one of the shown `keys`, each written as its own Approve."""
+        keys = body.get("keys")
+        if not isinstance(keys, list):
+            raise ValueError("keys must be the shown corrections' keys.")
+        items = [x for k in dict.fromkeys(keys) if isinstance(k, str)
+                 for x in [self._rule({"key": k})]]  # an unknown key is 404 before any write
+        out = self.review()
+        for x in items:
+            out = self._click("cortex_patch", "cortex_patch", {
+                "id": f"me/{x['page']}", "op": "append_to_section",
+                "target": x["section"], "text": x["text"],
+                "user_confirmed": True}, "rule", "corrections")
+        return out
 
     def review_rule_dismiss(self, body: dict) -> dict:
         """A repeated correction dismissed: a `dismiss` change on page `corrections` holds its
         text's hash, so it is not offered again."""
         x = self._rule(body)
         return self._click("cortex_patch", "_dismiss", {
-            "page": "corrections", "section": "Core", "text": x["text"], "waiting": False})
+            "page": "corrections", "section": "Core", "text": x["text"], "waiting": False}, "rule",
+            "corrections")
 
     def _decision(self, body: dict) -> dict:
         from cortex import more_sources
@@ -707,7 +774,8 @@ class App:
         if x["private"]:
             fields["private"] = True
         return self._click("cortex_add", "_decide", {"title": x["subject"], "fields": fields,
-                                                     "hash": x["key"]})
+                                                     "hash": x["key"]}, "decision",
+                           "decisions")
 
     def review_decision_dismiss(self, body: dict) -> dict:
         """RR-9: a dismissed commit decision leaves a `dismiss` change on id `decisions` with its
@@ -715,7 +783,7 @@ class App:
         x = self._decision(body)
         return self._click("cortex_patch", "_dismiss", {
             "page": "decisions", "section": x["project"], "text": f"{x['page']} {x['hash']}",
-            "waiting": False})
+            "waiting": False}, "decision", "decisions")
 
     def review_forget_dismiss(self, body: dict) -> dict:
         """A //forget card (cortex.tags) dismissed: a `dismiss` change on page `forget` holds
@@ -727,7 +795,8 @@ class App:
                 v, EventLog(v).iter_events(), self._today())):
             raise NotFound
         return self._click("cortex_patch", "_dismiss", {
-            "page": "forget", "section": "Forget", "text": key, "waiting": False})
+            "page": "forget", "section": "Forget", "text": key, "waiting": False}, "forget",
+            "forget")
 
     def review_import_dismiss(self, body: dict) -> dict:
         """RR-18: a card for a hand-edited imported page dismissed: a `dismiss` change on id
