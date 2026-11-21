@@ -92,6 +92,7 @@ def act(core, tag: str, text: str, said: bool) -> dict:
     day = local_day(core._now())
     if tag == "forget":
         return _forget(core, text, day, said)
+    claims.check(text)  # G6: before _ensure_section writes the heading
     page, section = PAGES[tag]
     if not said:
         core._propose(f"- {section}: {text} (proposed {day}, me/{page})")

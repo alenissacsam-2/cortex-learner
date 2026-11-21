@@ -119,8 +119,10 @@ def profile_summary(vault: Vault, today: str, served: dict | None = None,
         lab = labels.get(claims.strip_id(ln)[2:].strip()) if ln.startswith("- ") else None
         return claims.strip_id(ln) + lab if lab else ln
 
+    # G6: template claim lines are held (`held_ids`) until Keep; free text has no Keep
     return "\n".join(label(ln) for ln in text.splitlines()
-                     if not claims.expired(ln, today)).strip()
+                     if not claims.expired(ln, today) and (
+                         summary == PROFILE_TEMPLATE or not claims.unsafe(ln))).strip()
 
 
 def contract(vault: Vault, domains: set) -> str:
@@ -178,17 +180,24 @@ def served_claims(vault: Vault, events: list[dict]) -> dict:
 
 
 def held(vault: Vault, events, today: str) -> set[str]:
-    """R3-3: the `^c-…` ids of the older line of each recorded pair (claims.recorded_pairs:
-    `update_of`, `supersedes`) that still waits in the app's Review, both lines live on
-    non-private pages. Prime and cortex_context serve only the newer line until the user keeps
-    both or one. Derived from events at read time; nothing stored."""
+    """The `^c-…` ids of lines held back while a Review card waits. R3-3: the older line of
+    each recorded pair (claims.recorded_pairs: `update_of`, `supersedes`), both lines live on
+    non-private pages; prime and cortex_context serve only the newer line until the user keeps
+    both or one. G6: every line review.unsafe_lines flags, until Keep. Every serving path
+    (prime, cortex_context, the delta, packs and rules files, Chat's About block) mutes these.
+    Derived from events at read time; nothing stored."""
+    from cortex import review  # G6; it imports nothing of prime
+
+    events = list(events)
+    out = {xray.claim(x["id"]) for x in review.unsafe_lines(vault, events)}
     pairs, _ = claims.recorded_pairs(events)
     if not pairs:
-        return set()
+        return out
     hidden = {n.id for n in vault.iter_notes("me") if is_private(n)}
     live = {(r["page"], r["id"]) for r in claims.rows(vault)
             if claims.is_live(r, today) and r["page"] not in hidden}
-    return {xray.claim(old[1]) for old, new, _ in pairs.values() if old in live and new in live}
+    return out | {xray.claim(old[1]) for old, new, _ in pairs.values()
+                  if old in live and new in live}
 
 
 def claim_ids(vault: Vault) -> dict:
