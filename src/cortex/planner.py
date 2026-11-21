@@ -8,7 +8,9 @@ ordered list of steps with no dates: its next STEPS_SHOWN undone steps show, the
 the track. Switching subjects only pauses a plan: nothing is "behind". Real dates belong only
 to assessments (exams, interviews, deadlines). `short` mode takes 5: confident misses, then
 concepts an exam within 2 days tests, then the normal order. `sweep` mode is its own short
-list (`sweep`).
+list (`sweep`). When a due concept builds on (`requires`, transitively) a concept that is
+due, Needs refresh or Learning, that ancestor leads the refreshes with one reason line, at most
+one a plan (RR-19).
 """
 
 from __future__ import annotations
@@ -396,10 +398,20 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
         nd = getattr(states.get(c), "next_due", None)
         return f"due {nd}" if nd else "Needs refresh"
 
+    shown_ids = ranked[:room - k]
+    lead = _weak_ancestor(catalog, states, shown_ids, due, taken, day.isoformat()) \
+        if room - k >= 2 else None
+    if lead:  # RR-19: the ancestor leads, inside the cap; the concept that lapsed stays
+        a, c = lead
+        rest = [x for x in shown_ids if x != a]
+        if len(rest) >= room - k:
+            rest.remove(next(x for x in reversed(rest) if x != c))
+        shown_ids = [a] + rest
+
     # ideas-r2 #5: a refresh names one problem already solved under the concept, the oldest
     # `solved_on` first (undated last), ties by id
     models: dict[str, tuple[str, str]] = {}
-    for n in vault.iter_notes("problem") if ranked[:room - k] else ():
+    for n in vault.iter_notes("problem") if shown_ids else ():
         if n.fields.get("status") == "solved" and n.id not in private and not is_private(n):
             key = (str(n.fields.get("solved_on") or "~"), n.id)
             for c in pcs.get(n.id, []):
@@ -407,9 +419,14 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
 
     refresh = [{**item("refresh", c, refresh_why(c)), **({"model": models[c][1]} if c in models
                                                           else {})}
-               for c in ranked[:room - k]]
+               for c in shown_ids]
     shown = {i["id"] for i in refresh}
     new = [item("new", c, "Ready to learn") for c in ready if c not in shown][:k]
+    first = []
+    if lead:
+        first, refresh = refresh[:1], refresh[1:]
+        first[0]["why"] = f"{first[0]['title']} first: {catalog.entries[lead[1]].title} " \
+                          "builds on it"
     # refreshes and plan steps by subject: a named topic's subject first, then the most
     # recently studied (a paused subject just sinks); ties, and each subject's refreshes, keep
     # the risk order; a refresh in a subject with no plan is a group of its own
@@ -418,7 +435,7 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
         groups.setdefault(i["subject"], []).append(i)
     named = {_subject(catalog, c) for c in topic_ids}
     order = sorted(_by_recency(list(groups), active), key=lambda s: s not in named)
-    out += warm + [i for s in order for i in groups[s]] + new
+    out += warm + first + [i for s in order for i in groups[s]] + new
     if mode != "short":
         return out
     # tired evening: confident misses, then concepts an exam within SHORT_EXAM_DAYS tests, then
@@ -636,6 +653,27 @@ def is_ready(state: str | None, concept, states: dict) -> bool:
         getattr(states.get(r), "state", None) == "solid"
         or getattr(states.get(r), "pass_days", 0) >= levels.SOLID_PASS_DAYS
         for r in concept.requires)
+
+
+def _weak_ancestor(catalog, states, ids: list[str], due: set[str], taken: set[str], day: str
+                   ) -> tuple[str, str] | None:
+    """RR-19: (ancestor, concept) for the first due concept in `ids` with a `requires` ancestor
+    (nearest first) that is due, Needs refresh or Learning, and not already listed or private
+    (`taken`): a lapse often sits in what the concept builds on. One per plan."""
+    for c in ids:
+        if c not in due:
+            continue
+        seen, queue = {c}, list(getattr(catalog.entries.get(c), "requires", []))
+        while queue:
+            a = queue.pop(0)
+            if a in seen or (e := catalog.entries.get(a)) is None:
+                continue
+            seen.add(a)
+            st = states.get(a)
+            if a not in taken and (is_due(st, day) or getattr(st, "state", None) == "learning"):
+                return a, c
+            queue += e.requires
+    return None
 
 
 def readiness(vault, catalog, states, assessment) -> float | None:
