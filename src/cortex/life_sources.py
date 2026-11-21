@@ -339,7 +339,9 @@ def _whatsapp(text: str):
     msgs, senders = [], Counter()
     for g, rest in rows:
         who, sep, said = rest.partition(": ")
-        if not sep:
+        # iOS puts the encryption notice under the chat's name, not the owner's: not a sender
+        if not sep or said.lstrip("‎ ").startswith(
+                "Messages and calls are end-to-end encrypted"):
             msgs.append("a system line")
             continue
         senders[who.strip("\u200e ")] += 1

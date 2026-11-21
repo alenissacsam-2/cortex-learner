@@ -190,6 +190,17 @@ def test_selfchat_whatsapp_and_telegram(tmp_path, root_plain):
     assert r["imported"] == 0 and _pages(v, "selfchat") == pages
 
 
+def test_an_ios_encryption_notice_is_not_a_second_sender(tmp_path, root_plain):
+    """Audit 21 Nov I15: iOS puts the end-to-end notice under the chat's name, which need not
+    be the name on the owner's own messages; it is a system line, not a second person."""
+    f = tmp_path / "WhatsApp Chat - Me (You).txt"
+    f.write_text("[03/14/24, 9:15:00 AM] Me (You): ‎Messages and calls are end-to-end "
+                 "encrypted. No one outside of this chat, not even WhatsApp, can read or "
+                 "listen to them.\n" + IOS, encoding="utf-8")
+    r = sources.run(Vault(root_plain), life_sources.selfchat_source(f), C)
+    assert r["reasons"]["a system line"] == 1 and r["imported"] == 2, r
+
+
 def test_selfchat_refuses_a_chat_with_others_and_counts_bad_files(tmp_path, root_plain):
     two = tmp_path / "two"
     two.mkdir()
