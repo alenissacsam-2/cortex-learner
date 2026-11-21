@@ -533,7 +533,7 @@
   // answered from Cortex's own data, with no search model and no local model (chat.site_list, chat_study)
   const DATA_EXAMPLES = ['Which sites did I visit yesterday?', 'What should I study today?', 'What is due for review?', 'Where am I weak?'];
   const KIND = { note: 'note', chat: 'chat', browse: 'browsing' };
-  const chatS = { d: null, id: null, msgs: [], draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null };
+  const chatS = { d: null, id: null, msgs: [], els: [], remembers: 0, draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null };
   const last = (e) => e.childNodes[e.childNodes.length - 1];
 
   function inline(text, cite) {  // **bold**, `code` and [n] citations; everything else is text
@@ -592,10 +592,17 @@
     let head;
     if (f.kind === 'count') head = big(f.total, f.unit === 'days' ? 'days' : f.focus ? FACT_NOUN[f.focus] : 'mentions');
     else if (f.kind === 'timeline') head = big(f.total, `items across ${n(f.rows.length + (f.more || 0))} ${f.unit}s`);
-    else if (f.kind === 'about') head = big(f.total, 'mentions');
+    else if (f.kind === 'about' || f.kind === 'compare') head = big(f.total, 'mentions');
+    else if (f.kind === 'gaps') head = big(f.total, f.page ? `pages under ${f.page.title}` : 'topic pages found');
     else head = f.item ? [h('span', { class: 'fx-n', text: f.item.day }), h('span', { text: `${f.kind} time: ${f.item.title} (${FACT_SRC[f.item.source] || f.item.source})` })]
       : big(0, 'matches');
-    const extra = f.kind === 'about' && f.first ? h('div', { class: 'fx-line', text: `First ${f.first.day}, last ${f.last.day}` + (f.page ? ` · page: ${f.page.title}` : '') }) : '';
+    const line = (text) => h('div', { class: 'fx-line', text });
+    let extra = f.kind === 'about' && f.first ? line(`First ${f.first.day}, last ${f.last.day}` + (f.page ? ` · page: ${f.page.title}` : '')) : '';
+    if (f.kind === 'compare') extra = (f.rows || []).map((r) => line(`${r.term}: ${n(r.total)}` + (r.page ? ` · most in ${r.page.title} (written ${r.page.day})` : '')));
+    if (f.kind === 'gaps') {
+      extra = (f.rows || []).slice(0, 10).map((r) => line(`${r.title} · last changed ${r.day}`));
+      if (f.unopened && f.unopened.length) extra.push(line(`Searched, opened nothing: ${f.unopened.join('; ')}`));
+    }
     const cov = f.coverage || {};
     return h('div', { class: 'facts', role: 'group', 'aria-label': 'Facts computed by Cortex' },
       h('div', { class: 'fx-top' }, h('span', { class: 'fx-ttl', text: 'Computed from your data' }), h('span', { class: 'ink-3', text: period + (f.query ? ` · “${f.query}”` : '') })),
@@ -616,7 +623,7 @@
       h('div', { class: 'msg-acts' }, btn('Open the page in Obsidian', () => post('/api/open', { what: 'page', path: s.path }), 'btn quiet'),
         btn('Close', close, 'btn quiet')));
   }
-  function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage}; returns the element and its updater
+  function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage, unquoted}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
     const open = async (s) => {
@@ -653,7 +660,11 @@
       const cov = m.coverage;  // what the model read of what the search found
       el.replaceChildren(who, m.facts ? factsBox(m.facts) : '', body, copy, sourceRow(m.sources, m.searched, open, shown) || '',
         shown ? passageView(shown, p, () => open(shown)) : '',
-        cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}` }) : '',
+        cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}`
+          + (cov.also && cov.also.length ? ` · also searched: ${cov.also.join(', ')}` : '') }) : '',
+        // quotes no cited passage holds: the model may have made them up
+        m.unquoted && m.unquoted.length && !streaming ? h('p', { class: 'ink-3 small cov qflag',
+          text: `Quote not found in a cited passage: ${m.unquoted.map((q) => `“${q}”`).join(', ')}` }) : '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
@@ -661,6 +672,14 @@
   }
   function userMsg(m) {
     return h('div', { class: 'msg you' }, h('div', { class: 'who', text: 'You' }), h('div', { class: 'md' }, ...md(m.text, () => {})));
+  }
+  // a thin line above the oldest message the local model still gets (the server's chat.remembers);
+  // none while it gets them all. chatS.els holds each message's element, as chatS.msgs
+  function memLine(log) {
+    const old = log.querySelector('.chat-mem');
+    if (old) old.remove();
+    const i = chatS.remembers || 0, at = chatS.els[Math.min(i, chatS.els.length) - 1];
+    if (i > 0 && at && log.contains(at)) at.after(h('div', { class: 'chat-mem', text: 'The model remembers from here' }));
   }
   function missingRows(keys, why) {
     return h('div', { class: 'board' }, note(why || 'Chat needs two things on this computer. Still missing:'),
@@ -672,11 +691,11 @@
 
   async function openChat(id) {
     if (chatS.busy) return;
-    if (!id) Object.assign(chatS, { id: null, msgs: [] });
+    if (!id) Object.assign(chatS, { id: null, msgs: [], remembers: 0 });
     else {
       try {
         const r = await api('/api/chat/get?id=' + encodeURIComponent(id));
-        Object.assign(chatS, { id, msgs: r.messages });
+        Object.assign(chatS, { id, msgs: r.messages, remembers: r.remembers || 0 });
       } catch (e) { toast.error(e.message); return; }
     }
     chatS.focus = true;
@@ -709,7 +728,7 @@
       [h('p', { class: 'ink-2', text: 'Every saved chat is deleted from this computer. This cannot be undone.' })],
       () => post('/api/chat/delete', { all: true }, (r) => {
         toast.ok(`Deleted ${r.deleted} chat${r.deleted === 1 ? '' : 's'}.`);
-        Object.assign(chatS, { id: null, msgs: [] });
+        Object.assign(chatS, { id: null, msgs: [], remembers: 0 });
         load('chat');
       }));
     const det = h('details', { class: 'chat-set', open: chatS.setOpen },
@@ -738,7 +757,7 @@
       h('button', { class: 'chat-open', type: 'button', 'aria-current': c.id === chatS.id ? 'true' : null, onclick: () => openChat(c.id) },
         h('span', { class: 't', text: c.title }), h('span', { class: 'd', text: daysAgo(c.updated) })),
       btn('Delete', () => post('/api/chat/delete', { id: c.id }, () => {
-        if (chatS.id === c.id) Object.assign(chatS, { id: null, msgs: [] });
+        if (chatS.id === c.id) Object.assign(chatS, { id: null, msgs: [], remembers: 0 });
         load('chat');
       }), 'chat-del', { 'aria-label': `Delete chat: ${c.title}` }))));
     side.replaceChildren(btn('New chat', () => openChat(null), 'btn lit chat-new'),
@@ -760,7 +779,9 @@
     const side = h('div', { class: 'chat-side', id: 'chat-side' });
 
     const log = h('div', { class: 'chat-log', id: 'chat-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
-    for (const m of chatS.msgs) log.append(m.role === 'user' ? userMsg(m) : botMsg(m).el);
+    chatS.els = chatS.msgs.map((m) => (m.role === 'user' ? userMsg(m) : botMsg(m).el));
+    log.append(...chatS.els);
+    memLine(log);
     const missing = d.missing || [];
     if (!chatS.msgs.length) {  // the examples fill the message box
       log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
@@ -819,7 +840,8 @@
     const empty = log.querySelector('.chat-empty');
     if (empty) log.replaceChildren();  // the examples go once a chat starts
     chatS.msgs.push({ role: 'user', text });
-    log.append(userMsg({ text }));
+    chatS.els.push(userMsg({ text }));
+    log.append(chatS.els[chatS.els.length - 1]);
     const m = { role: 'assistant', text: '', sources: [], model: chatS.d.model, t0: Date.now() };
     const bot = botMsg(m);
     bot.draw(true);
@@ -862,12 +884,12 @@
           if (ev.id) chatS.id = ev.id;
           if (ev.t === 'start') m.model = ev.model;
           else if (ev.t === 'step') m.step = ev.s;
-          else if (ev.t === 'done') m.seconds = ev.seconds;
+          else if (ev.t === 'done') { m.seconds = ev.seconds; if (ev.remembers != null) chatS.remembers = ev.remembers; }
           else if (ev.t === 'think') m.thinking = true;
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'facts') m.facts = ev.facts;
-          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; }
+          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || []; }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }
@@ -887,12 +909,14 @@
       } else bot.el.replaceChildren(h('div', { class: 'board' }, row('No answer', null, failed.message, null)));
       if (['app', 'not_set_up', 'no_local_model'].includes(failed.code)) {  // the question was not kept
         chatS.msgs.pop();
+        chatS.els.pop();
         ta.value = chatS.draft = text;
       }
       ta.focus({ preventScroll: true });
       return;
     }
-    if (m.text || m.stopped) chatS.msgs.push(m);
+    if (m.text || m.stopped) { chatS.msgs.push(m); chatS.els.push(bot.el); }
+    memLine(log);
     bot.draw(false);
     followEnd();
     ta.focus({ preventScroll: true });

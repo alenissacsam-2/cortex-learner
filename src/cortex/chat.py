@@ -33,6 +33,8 @@ DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PAS
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
+SAID_NOTHING = ("{model} gave no answer, twice. These are the pages it searched; open one to "
+                "read it, or ask again in other words.")
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
 SYSTEM = ask.SYSTEM + (" Earlier messages are the conversation so far: use them to understand a "
                        "follow-up question, but answer only from the passages in the latest "
@@ -669,35 +671,97 @@ def history(msgs: list, sources: dict | None = None) -> list:
     HISTORY_BUDGET, same-role neighbours joined (a failed turn leaves two user messages; some
     chat templates refuse that), starting with a user message. With `sources` (the switches
     now), an answer made with a switch now off is left out with the question(s) before it, so
-    a private site listed earlier never reaches the model after Private is turned off."""
+    a private site listed earlier never reaches the model after Private is turned off. A turn
+    the model never answered (`unanswered`: Cortex's note, not the model's words) is left out."""
+    out: list = []
+    for _, m in _sent(msgs, sources):
+        text = m["text"].strip()
+        if out and out[-1]["role"] == m["role"]:
+            out[-1]["content"] += "\n\n" + text
+        else:
+            out.append({"role": m["role"], "content": text})
+    return out
+
+
+def _sent(msgs: list, sources: dict | None) -> list:
+    """[(index in `msgs`, message)] of the messages `history` sends, oldest first."""
+    pairs = [(i, m) for i, m in enumerate(msgs) if not m.get("unanswered")]
     if sources is not None:
         kept: list = []
-        for m in msgs:
+        for i, m in pairs:
             if m["role"] == "assistant" and _made_with_off(m, sources):
-                while kept and kept[-1]["role"] == "user":
+                while kept and kept[-1][1]["role"] == "user":
                     kept.pop()
                 continue
-            kept.append(m)
-        msgs = kept
+            kept.append((i, m))
+        pairs = kept
     out, left = [], HISTORY_BUDGET
-    for m in reversed(msgs[-TURNS:]):
+    for i, m in reversed(pairs[-TURNS:]):
         text = m["text"].strip()
         if not text:
             continue
         if len(text) > left:
             break
         left -= len(text)
-        if out and out[-1]["role"] == m["role"]:
-            out[-1]["content"] = text + "\n\n" + out[-1]["content"]
-        else:
-            out.append({"role": m["role"], "content": text})
+        out.append((i, m))
     out.reverse()
-    while out and out[0]["role"] != "user":
+    while out and out[0][1]["role"] != "user":
         out.pop(0)
     return out
 
 
+def remembers(msgs: list, sources: dict | None = None) -> int:
+    """The index of the oldest message of `msgs` the model still gets on the next turn
+    (`history`), for the Chat page's "The model remembers from here" line: 0 when it gets them
+    all (no line), len(msgs) when it gets none."""
+    sent = _sent(msgs, sources)
+    return sent[0][0] if sent else len(msgs)
+
+
 _HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
+
+
+RELATIVES = 3  # names one "my <relation>" may add to the search
+_MY = re.compile(r"\bmy\s+\w", re.I)
+
+
+def relatives(vault: Vault, text: str) -> list[str]:
+    """Names of the people pages whose `relation` field `text` names as "my <relation>" ("my
+    sister", "my study-partner"), for the search: the question rarely holds the name itself.
+    Public people pages only: the index never holds a private one, and none is read here."""
+    if not _MY.search(text):
+        return []
+    with _INDEX_LOCK:
+        people = sorted((n["title"], str(n["fields"].get("relation") or ""))
+                        for n in _index(vault)._notes.values() if n["kind"] == "person")
+    out = []
+    for title, rel in people:
+        tag = re.escape(rel).replace(r"\-", r"[\s-]")
+        if rel and re.search(rf"\bmy\s+{tag}s?\b", text, re.I) and (name := chat_study._title(
+                title)) and name not in out:
+            out.append(name)
+    return out[:RELATIVES]
+
+
+def _page_passages(vault: Vault, ids: list) -> list[dict]:
+    """The start of each page in `ids` as a passage (`ask._passages`' shape), for a compare's
+    top pages. `chat_facts` named them under Chat's switches, so a private one (only there
+    under `private`) is read as `ask.private_pages` reads it."""
+    with _INDEX_LOCK:
+        idx = _index(vault)
+        paths = {i: p for p, i in idx._ids.items()}
+        private = set(idx._private)
+    out = []
+    for i in dict.fromkeys(ids):
+        if i not in paths or (n := ask._page(vault, paths[i], i)) is None:
+            continue
+        p = ask._note(vault, i, n, paths[i].relative_to(vault.root).as_posix(),
+                      semantic._chunk_text(n, 0)[:ask.PASSAGE],
+                      "chat" if semantic.is_chat(n) else "note",
+                      **({"private": True} if i in private else {}))
+        p["at"], p["len"] = ask._span(p.pop("_body"), p["text"], p["title"])
+        out.append(p)
+    return out
 
 
 def _clean(text: str) -> str:
@@ -756,15 +820,21 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
     as the model starts reading (the app shows each with a live count), {"t": "think"} while a
     reasoning model only thinks, {"t": "facts", facts} before any words of a typed data answer
-    (`chat_facts`: count, first, last, timeline, about; the model then only words them, or
+    (`chat_facts`: count, first, last, timeline, about, compare, gaps; the model then only
+    words them (a compare also reads each side's top page), or
     `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
-    matched} when passages were searched (how many the model read of how many the search found;
-    saved on the answer too)}, {"t": "done", id, model, seconds, stopped}; or {"t": "err",
-    code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
-    the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
-    `localllm.Runner` or None; never a cloud one."""
+    matched, also (names `relatives` added, when any)} when passages were searched (how many
+    the model read of how many the search found; saved on the answer too), unquoted (quoted
+    spans no cited passage holds, `ask.unquoted`; saved too) when any}; {"t": "text", "s"}
+    replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
+    nothing is asked once more; still nothing, the answer is SAID_NOTHING with the pages it
+    searched (saved with `unanswered`). Then {"t": "done", id, model, seconds, stopped,
+    remembers (`remembers` of the chat now)}; or {"t": "err", code (not_set_up,
+    no_local_model, no_answer), message}. A set `cancel` stops the stream; the partial answer
+    is saved with `stopped: true`. Returns the chat id. `runner` is a local `localllm.Runner`
+    or None; never a cloud one."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"Type a message (up to {MAX_TEXT:,} characters).")
     s = settings or get_settings()
@@ -826,6 +896,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})
     found: list = []
+    also: list = []  # people's names `relatives` added to the search
     stats: dict = {}  # ask._passages' match count, for the coverage line
     parts: list = []
     messages = facts = None
@@ -849,6 +920,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             emit({"t": "facts", "facts": facts})
             if fq["kind"] == "about" and semantic.load_embedder() is not None:
                 found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats)
+            elif fq["kind"] == "compare":  # each side's top page, read from its start
+                found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
+                                               if r["page"] and r["page"]["id"]])
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})
@@ -861,7 +935,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         past = got and got[0] <= today
         emit({"t": "step", "s": "Searching your notes and browsing" + (
             f" from {_span(got[0], min(got[1], today), today)}" if past else "")})
-        found = ask._passages(vault, query, s["passages"],
+        also = relatives(vault, query)  # "my sister": her name is searched too
+        found = ask._passages(vault, "\n".join([query, *also]), s["passages"],
                               between=(got[0].isoformat(), min(got[1], today).isoformat())
                               if past else None,
                               sources=s["sources"], topic=topic(said, got[2]) if got else "",
@@ -885,22 +960,39 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             if not thought and not parts:
                 thought.append(1)
                 emit({"t": "think"})
-        try:
-            for piece in runner.stream(messages, temperature=s["temperature"],
-                                       max_tokens=max_tokens, cancel=cancel,
-                                       on_thinking=thinking):
-                parts.append(piece)
-                emit({"t": "tok", "s": piece})
-                if "\n" in piece and _looping("".join(parts)):  # stop a loop, each line once
-                    parts[:] = [_once("".join(parts))]
-                    emit({"t": "text", "s": parts[0]})
-                    break
-        except (OSError, ValueError):  # no answer, a timeout, a refused url
-            pass
+        for attempt in range(2):  # a small model now and then says nothing: ask once more
+            if attempt:
+                if parts:  # only whitespace or leaked tokens came
+                    parts.clear()
+                    emit({"t": "text", "s": ""})
+                emit({"t": "step", "s": f"{runner.model} said nothing; asking once more"})
+            try:
+                for piece in runner.stream(messages, temperature=s["temperature"],
+                                           max_tokens=max_tokens, cancel=cancel,
+                                           on_thinking=thinking):
+                    parts.append(piece)
+                    emit({"t": "tok", "s": piece})
+                    if "\n" in piece and _looping("".join(parts)):  # stop a loop, each line once
+                        parts[:] = [_once("".join(parts))]
+                        emit({"t": "text", "s": parts[0]})
+                        break
+            except (OSError, ValueError):  # no answer, a timeout, a refused url
+                pass
+            said_raw = "".join(parts)
+            if (said := localllm._clean(said_raw)) != said_raw.strip():  # a leaked </think>
+                parts[:] = [said]
+                emit({"t": "text", "s": said})
+            if said or (cancel is not None and cancel.is_set()):
+                break
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
+    by_model = bool(answer)  # Cortex's own fallback words below quote nothing to check
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
+        emit({"t": "tok", "s": answer})
+    unanswered = not answer and not stopped and bool(found)
+    if unanswered:  # still nothing: the pages it searched, listed below, instead of an error
+        answer = SAID_NOTHING.format(model=runner.model)
         emit({"t": "tok", "s": answer})
     if not answer and not stopped:
         emit({"t": "err", "code": "no_answer", "id": convo_id,
@@ -914,16 +1006,26 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     sources = [{"n": n, **pill(p)} for n, p in enumerate(found, 1) if n in cited]
     # a small model often cites nothing: then show what it read, marked as not cited
     searched = [] if sources else [pill(p) for p in found[:SEARCHED]]
-    coverage = {"read": len(found), "matched": stats["matched"]} if "matched" in stats else None
+    coverage = {"read": len(found), "matched": stats["matched"],
+                **({"also": also} if also else {})} if "matched" in stats else None
+    # quote proof: a quoted span must be in a cited passage (any read one when none is cited)
+    unquoted = ask.unquoted(answer, [text, *(f"{p['title']}\n{p['text']}" for n, p in
+                                             enumerate(found, 1) if n in cited or not sources),
+                                     *(chat_facts._lines(facts, today) if facts else [])]
+                            ) if by_model else []
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
+                 **({"unquoted": unquoted} if unquoted else {}),
                  **({"facts": facts} if facts is not None else {}),
                  **({"coverage": coverage} if coverage else {}),
                  "model": model, "switches": dict(s["sources"]),
+                 **({"unanswered": True} if unanswered else {}),
                  **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched,
+          **({"unquoted": unquoted} if unquoted else {}),
           **({"coverage": coverage} if coverage else {})})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
-          "seconds": round(time.monotonic() - t0, 1)})
+          "seconds": round(time.monotonic() - t0, 1),
+          "remembers": remembers(msgs, s["sources"])})
     return convo_id

@@ -477,6 +477,30 @@ def test_history_keeps_the_last_turns_within_budget(monkeypatch):
     assert two == [{"role": "user", "content": "a\n\nb"}]
 
 
+def test_remembers_marks_the_oldest_message_the_model_still_gets(monkeypatch):
+    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "text": f"m{i}"} for i in range(4)]
+    assert chat.remembers([]) == 0 and chat.remembers(msgs) == 0  # all of them: no line
+    msgs += [{"role": "user" if i % 2 == 0 else "assistant", "text": f"m{i}"}
+             for i in range(4, 10)]
+    assert chat.remembers(msgs) == 10 - chat.TURNS
+    assert chat.history(msgs)[0]["content"] == msgs[chat.remembers(msgs)]["text"]
+    monkeypatch.setattr(chat, "HISTORY_BUDGET", 3)
+    assert chat.remembers(msgs) == 10  # not even the last fits: the line goes below them all
+    off = [{"role": "user", "text": "q"}, {"role": "assistant", "text": "a", "switches": {
+        **ask.SOURCES, "private": True}}, {"role": "user", "text": "q2"},
+        {"role": "assistant", "text": "a2", "switches": {**ask.SOURCES, "private": False}}]
+    monkeypatch.setattr(chat, "HISTORY_BUDGET", 3000)
+    assert chat.remembers(off, {**ask.SOURCES, "private": False}) == 2
+
+
+def test_the_done_event_says_where_the_memory_starts(vault, stream):
+    s = stream("ollama", ["Answer [1]."])
+    cid = None
+    for q in ("car motor", "car motor torque", "car motor gearbox", "car motor oil"):
+        cid, ev = _turn(vault, cid, q, s.runner())
+    assert ev[-1]["t"] == "done" and ev[-1]["remembers"] == 8 - chat.TURNS
+
+
 def test_ids_are_strict_ulids(vault):
     for bad in ("../x", "..\\..\\config", "01ARZ3NDEKTSV4RRFFQ69G5FA", "01arz3ndektsv4rrffq69g5fav",
                 "01ARZ3NDEKTSV4RRFFQ69G5FAV/../x", None, 5, "01ARZ3NDEKTSV4RRFFQ69G5FAU"):
@@ -552,6 +576,17 @@ def test_reply_streams_cites_and_saves(vault, stream):
     assert saved[1]["sources"] == src and saved[1]["model"] == "gemma3:2b"
     assert ev[-1]["id"] == cid and ev[-1]["stopped"] is False
     assert ev[-2]["searched"] == [] and "searched" not in saved[1]
+
+
+def test_a_quote_no_passage_holds_is_flagged_and_saved(vault, stream):
+    s = stream("ollama", ["Your page says “automobile CAR motor\n basics.” and ",
+                          '"the motor runs on pure moonlight".'])
+    cid, ev = _turn(vault, None, "car motor", s.runner())
+    assert ev[-2]["unquoted"] == ["the motor runs on pure moonlight"]
+    assert chat.load(vault, cid)[1]["unquoted"] == ["the motor runs on pure moonlight"]
+    ok = stream("ollama", ['It says "Automobile car motor basics".'])
+    cid, ev = _turn(vault, None, "car motor", ok.runner())
+    assert "unquoted" not in ev[-2] and "unquoted" not in chat.load(vault, cid)[1]
 
 
 def test_an_answer_citing_nothing_lists_the_pages_searched(vault, stream):
@@ -653,6 +688,29 @@ def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, mo
     assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
     assert msgs[1]["content"] == "car motor" and "untrusted_note" not in msgs[2]["content"]
     assert len(chat.load(vault, cid)) == 4
+
+
+def test_my_relation_adds_a_public_persons_name_to_the_search(vault, stream, monkeypatch):
+    note(vault.root, "people/asha-rao.md", "title: Asha Rao\nkind: person\nrelation: sister\n"
+         "private: false\n", "# Asha Rao\n\nPlays the violin.")
+    note(vault.root, "people/hidden-sis.md", "title: Hidden Sis\nkind: person\nrelation: sister\n",
+         "# Hidden Sis\n\nPrivate by default.")  # a people page is private unless it says not
+    note(vault.root, "people/ravi.md", "title: Ravi\nkind: person\nrelation: study-partner\n"
+         "private: false\n", "# Ravi\n\nDSA.")
+    assert chat.relatives(vault, "What does my sister play?") == ["Asha Rao"]
+    assert chat.relatives(vault, "my study partner and my sisters") == ["Asha Rao", "Ravi"]
+    assert chat.relatives(vault, "my brother") == [] and chat.relatives(vault, "a sister") == []
+    asked = []
+    real = ask._passages
+    monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
+                                                                                      **kw))
+    s = stream("ollama", ["The violin [1]."])
+    cid, ev = _turn(vault, None, "What does my sister play?", s.runner())
+    assert asked == ["What does my sister play?\nAsha Rao"]
+    assert ev[-2]["coverage"]["also"] == ["Asha Rao"]
+    assert chat.load(vault, cid)[-1]["coverage"]["also"] == ["Asha Rao"]
+    _, ev = _turn(vault, None, "car motor", s.runner())
+    assert "also" not in ev[-2]["coverage"]
 
 
 def test_history_leaves_out_answers_made_with_a_switch_now_off(vault, stream):
@@ -775,11 +833,58 @@ def test_errors_are_events(vault, stream, monkeypatch):
     assert ev == [{"t": "err", "code": "no_local_model", "message": ask.NO_MODEL,
                    "id": ev[0]["id"]}]
     dead = localllm.Runner("ollama", "http://127.0.0.1:9", "m")  # nothing listens
-    _, ev = _turn(vault, None, "car motor", dead)
-    assert ev[-1]["t"] == "err" and ev[-1]["code"] == "no_answer"
+    _, ev = _turn(vault, None, "car motor", dead)  # asked twice, then the pages searched
+    assert ev[-1]["t"] == "done" and ev[-2]["searched"] and not ev[-2]["sources"]
+    assert chat.SAID_NOTHING.format(model="m") in [e.get("s") for e in ev if e["t"] == "tok"]
     monkeypatch.setattr(semantic, "_embedder", None)
     _, ev = _turn(vault, None, "car motor", dead)
     assert ev[0]["code"] == "not_set_up"
+
+
+class Silent(Stream):
+    """Streams `first` to the first request and `then` to every later one."""
+
+    def __init__(self, first, then):
+        super().__init__("openai", first)
+        self.then = then
+
+    def lines(self):
+        if len(self.bodies) > 1:
+            self.pieces = self.then
+        yield from super().lines()
+
+
+def test_a_silent_model_is_asked_once_more(vault):
+    s = Silent(["  ", "<|im_end|>"], ["Pistons [1].<|im_end|>"])
+    try:
+        cid, ev = _turn(vault, None, "car motor", s.runner())
+    finally:
+        s.close()
+    assert len(s.bodies) == 2
+    assert "gemma3:2b said nothing; asking once more" in [e.get("s") for e in ev
+                                                          if e["t"] == "step"]
+    assert ev[[e["t"] for e in ev].index("text")]["s"] == ""  # the empty first try is cleared
+    assert [e["s"] for e in ev if e["t"] == "text"][-1] == "Pistons [1]."
+    saved = chat.load(vault, cid)[-1]
+    assert saved["text"] == "Pistons [1]." and "unanswered" not in saved
+
+
+def test_still_nothing_shows_the_pages_searched_and_stays_out_of_history(vault, stream):
+    s = Silent(["</think>"], ["<|eot_id|>"])
+    try:
+        cid, ev = _turn(vault, None, "car motor", s.runner())
+    finally:
+        s.close()
+    assert len(s.bodies) == 2 and not [e for e in ev if e["t"] == "err"]
+    assert ev[-2]["sources"] == [] and 1 <= len(ev[-2]["searched"]) <= chat.SEARCHED
+    saved = chat.load(vault, cid)
+    assert saved[-1]["text"] == chat.SAID_NOTHING.format(model="gemma3:2b")
+    assert saved[-1]["unanswered"] is True
+    ok = stream("ollama", ["Engines [1]."])
+    _turn(vault, cid, "car motor torque", ok.runner())
+    msgs = ok.bodies[0]["messages"]  # Cortex's note never reaches the model as its own words
+    assert [m["role"] for m in msgs] == ["system", "user", "user"]  # as after a failed turn
+    assert "gave no answer" not in json.dumps(msgs)
 
 
 def test_a_cloud_runner_never_hears_private_passages(vault, monkeypatch):

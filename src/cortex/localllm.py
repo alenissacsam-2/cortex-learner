@@ -94,12 +94,15 @@ class Budget:
 
 
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+# end-of-turn tokens a chat template leaks into the text, and a lone </think> (a template that
+# opened the block in the prompt): the tokens alone go, never the words around them
+_LEAKED = re.compile(r"</think>|<\|(?:im_end|endoftext|eot_id|end)\|>|<end_of_turn>", re.I)
 
 
 def _clean(text: str) -> str:
     text = _THINK.sub("", text)
     i = text.lower().find("<think>")  # unclosed block: the answer never arrived
-    return (text[:i] if i >= 0 else text).strip()
+    return _LEAKED.sub("", text[:i] if i >= 0 else text).strip()
 
 
 STREAM_TIMEOUT = 120  # per read: a small model on a CPU can take long for its first token

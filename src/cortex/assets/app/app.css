@@ -380,6 +380,9 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .chat-set input[type="range"] { accent-color: var(--lit); width: 100%; }
 .chat-log { flex: 1; display: flex; flex-direction: column; gap: 18px; padding: 8px 0 18px; }
 .chat-empty { color: var(--ink-2); padding: 24px 0; }
+/* above the oldest message the local model still gets */
+.chat-mem { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: 11.5px; }
+.chat-mem::before, .chat-mem::after { content: ''; flex: 1; border-top: 1px solid var(--rule); }
 .chat-empty p { margin: 0 0 12px; }
 .msg .who { color: var(--ink-3); font-size: 12px; margin-bottom: 4px; }
 .msg.you { background: var(--panel); border: 1px solid var(--rule); border-radius: 2px; padding: 10px 12px; }
@@ -416,6 +419,7 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .fx-src { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
 .fx-chip { display: inline-flex; gap: 6px; align-items: baseline; font-variant-numeric: tabular-nums; }
 .fx-cov, .cov { color: var(--ink-3); font-size: 12px; margin: 6px 0 0; }
+.cov.qflag { color: var(--learning); }
 /* the exact passage a source stands for */
 .passage { max-width: 78ch; margin-top: 8px; padding: 8px 12px; background: var(--panel);
   border: 1px solid var(--edge); border-radius: 2px; }

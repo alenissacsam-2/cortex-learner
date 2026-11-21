@@ -1601,6 +1601,7 @@ def test_chat_streams_ndjson_and_keeps_the_chat(app, embed, llm, vault):
     assert call(app, "GET", "/api/chat/list")[1]["chats"][0]["id"] == cid
     got = call(app, "GET", f"/api/chat/get?id={cid}")[1]
     assert [m["role"] for m in got["messages"]] == ["user", "assistant"]
+    assert got["remembers"] == 0 == ev[-1]["remembers"]  # the model still gets every message
     # a follow-up in the same chat; then the answer's source opens in Obsidian
     ev = chat_stream(app, {"id": cid, "text": "and why?"})[2]
     assert ev[-1]["id"] == cid and len(llm.bodies[-1]["messages"]) == 4
