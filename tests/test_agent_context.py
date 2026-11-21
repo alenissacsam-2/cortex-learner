@@ -331,7 +331,7 @@ def test_no_mcp_tool_can_set_profiles(vroot):
 
 def test_in_process_callers_see_everything(vroot):
     core = mcp_server.Cortex(Vault(vroot))  # the app, the CLI: no MCP client
-    assert core._scopes() is None and core._withheld() == set()
+    assert core._scopes() is None and core._withheld() == set()  # nothing marked private
 
 
 def test_scope_rules():
@@ -366,3 +366,26 @@ def test_app_shows_packs_and_saves_profiles(vroot):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
+    """Audit 21 Nov: `private: true` on a me/ page kept it out of the index only; prime,
+    context, start and the Claude Code hook still served it to every cloud app."""
+    from cortex import prime_hook
+
+    note(vroot, "me/preferences.md", "id: preferences\nprivate: true\n", PREFS)
+    note(vroot, "me/profile.md", "id: profile\nprivate: true\n"
+         "summary: CANARY-PROF-4Q student in Kochi.\n", "# Profile")
+
+    async def body(call):
+        return await _sweep(call) + json.dumps(await call("cortex_start", {"mode": "home"}))
+
+    out = serve(vroot, "claude-ai", body)
+    for canary in ("CANARY-PERS-4Q", "Python first", "CANARY-PROF-4Q"):
+        assert canary not in out, canary
+    assert "CANARY-THNK-4Q" in out  # personality is not private: it still reaches the app
+    hook = prime_hook._light(vroot, "help me write python code and walk") or ""
+    assert "Call me Sam." in hook
+    assert "CANARY-PERS-4Q" not in hook and "Python first" not in hook
+    core = mcp_server.Cortex(Vault(vroot))  # in-process (the app): private me pages too
+    assert core._withheld() == {"preferences", "profile"}

@@ -12,8 +12,9 @@ import json
 import logging
 import re
 
+from cortex import access
 from cortex.access import SCOPES
-from cortex.vault import Vault
+from cortex.vault import Vault, is_private
 
 PATH = ".cortex/profiles.json"
 CODING = ["core", "coding", "projects", "environment"]  # SCOPES order, as check() stores it
@@ -80,3 +81,17 @@ def scopes_for(data: dict, client: str) -> frozenset[str] | None:
     scopes = next((p["scopes"] for p in data["profiles"] if norm(p["match"]) in name),
                   data["unknown"]) if name else data["unknown"]
     return None if "all" in scopes else frozenset(scopes)
+
+
+def withheld(vault: Vault, scopes) -> set[str]:
+    """Bare ids of the pages an MCP client with `scopes` (None: everything) may not get from
+    the me/ pages and the personal kinds: every private me/ page, always (Claude and cloud
+    apps never see private notes); with a profile, also the me/ pages outside its scopes
+    (access.scope_page) and journal and people pages unless it has `personal` (scope_kind).
+    One rule for the MCP server and the Claude Code prime hook."""
+    out = {n.id for n in vault.iter_notes("me") if is_private(n)}
+    if scopes is not None:
+        out |= {p.stem for p in vault.note_paths("me") if not access.scope_page(scopes, p.stem)}
+        out |= {p.stem for k in access.KIND_SCOPE if not access.scope_kind(scopes, k)
+                for p in vault.note_paths(k)}
+    return out

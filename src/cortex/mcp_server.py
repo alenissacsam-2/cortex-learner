@@ -525,18 +525,14 @@ class Cortex:
 
     def _withheld(self) -> set[str]:
         """Bare ids of the me/ pages this server may not serve, anywhere (index, prime,
-        context, as_me): none for the owner; for a reader every me/ page not
+        context, as_me): every private me/ page; for a reader also every me/ page not
         shared with work (share.allowed; a missing `share:` means self). For a client whose
         profile limits its scopes, also the me/ pages outside them and the journal and people
         pages unless it has `personal` (access.scope_page, scope_kind)."""
         out = set() if self.role == "owner" else (
             {n.id for n in self.vault.iter_notes("me")} - share.allowed(self.vault, "work"))
-        if (scopes := self._scopes()) is not None:  # plan v9 item 8: the client's profile
-            out |= {p.stem for p in self.vault.note_paths("me")
-                    if not access.scope_page(scopes, p.stem)}
-            out |= {p.stem for k in access.KIND_SCOPE if not access.scope_kind(scopes, k)
-                    for p in self.vault.note_paths(k)}
-        return out
+        # private me/ pages always; plan v9 item 8: and what the client's profile leaves out
+        return out | profiles.withheld(self.vault, self._scopes())
 
     def _scopes(self) -> frozenset[str] | None:
         """The context scopes the owner's profile (cortex.profiles) gives this MCP client;

@@ -123,7 +123,7 @@ def _light(root, prompt: str) -> str | None:
     global pending
     from datetime import UTC, datetime
 
-    from cortex import prime, xray
+    from cortex import prime, profiles, xray
     from cortex.events import EventLog
     from cortex.vault import Vault
 
@@ -134,7 +134,7 @@ def _light(root, prompt: str) -> str | None:
         try:
             xr: dict = {}
             parts, _ = prime.core(vault, prompt, list(EventLog(vault).iter_events()),
-                                  datetime.now(UTC), frozenset(), xr)
+                                  datetime.now(UTC), profiles.withheld(vault, None), xr)
             out = "\n\n".join(parts)
             # before `out` is handed over: the process may exit as soon as it is
             xray.record(vault, "prime-hook", "claude-code", xr["served"], xr["trimmed"],
