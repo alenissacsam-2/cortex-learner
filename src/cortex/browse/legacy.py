@@ -5,8 +5,8 @@ local model's verdicts by text hash) and `.cortex/browse/vectors-private.npz` (t
 search vectors) were replaced by `store.db` and `vectors-private.db`. `migrate` runs at the
 app's start and before each browse import: a file still there is read into its store (a
 torn site-days.json is set aside as `.bad-*`, as before) and renamed `<name>.migrated`, never
-deleted; no other code reads these files. A forget still scrubs the `.migrated` backups
-(`forget`, `vectors.prune`). `pending` lists what is left for `cortex doctor`.
+deleted; no other code reads these files. A forget runs `migrate` first and still scrubs the
+`.migrated` backups (`forget`, `vectors.prune`). `pending` lists what is left for `cortex doctor`.
 """
 
 from __future__ import annotations

@@ -259,6 +259,24 @@ def test_forget_drops_torn_site_day_copies(vault, hist):
     assert not torn.exists()
 
 
+@pytest.mark.parametrize("store_kept", [True, False])
+def test_forget_reaches_a_site_days_json_not_read_in_yet(vault, hist, store_kept):
+    """Audit 21 Nov I1: an old site-days.json still waiting for `legacy.migrate` (with the
+    store there or not yet made) neither keeps a forgotten site on disk nor brings it back."""
+    from cortex.browse import legacy
+    v = Vault(vault)
+    imp(vault, hist)
+    sites._save(v, sites.DAYS, sites.load_days(v)[0])  # as an older version kept them
+    if not store_kept:
+        for p in (vault / ".cortex" / "browse").glob("store.db*"):
+            p.unlink()
+    forget.purge(v, forget.Rule(hosts=("lichess.org",)), settings=OWNER)
+    legacy.migrate(v)
+    assert "lichess" not in json.dumps(sites.load_days(v)[0])
+    for p in (vault / ".cortex" / "browse").glob("site-days.json*"):
+        assert "lichess" not in p.read_text(encoding="utf-8"), p.name
+
+
 def test_forget_drops_a_model_summary_fed_by_a_title_not_shown(vault, hist):
     imp(vault, hist, runner=fake_local({}, summary="MODELSUMMARY of the day"))
     p = vault / PRIV / "browse-private-2026-11-09.md"
