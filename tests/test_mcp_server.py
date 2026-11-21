@@ -721,6 +721,23 @@ def test_idempotent_key_writes_again_once_its_event_is_gone(root):
     assert [e["key"] for e in events(root) if e["kind"] == "grade"] == ["k1"]
 
 
+def test_a_keyed_quiz_batch_writes_again_once_its_events_are_gone(root):
+    """Audit 21 Nov M7: a quiz batch keys its events `<key>:1`, `<key>:2`, so the reply cache
+    saw no event under `<key>` and kept answering a re-sent batch from memory after an undo."""
+    async def body(call):
+        await call("cortex_start")
+        args = {"concept": "two-pointers", "key": "q1", "items": [
+            {"question": "q", "answer": "a", "verdict": "correct"},
+            {"question": "r", "answer": "b", "verdict": "wrong"}]}
+        await call("cortex_grade", args)
+        for p in (root / "events").glob("*/*/*.jsonl"):  # what a revert of the session does
+            p.unlink()
+        await call("cortex_grade", args)
+
+    run(root, body)
+    assert [e["key"] for e in events(root) if e["kind"] == "grade"] == ["q1:1", "q1:2"]
+
+
 def test_source_and_grader_are_server_stamped(root):
     async def body(call):
         await call("cortex_start", {"model": "test-model"})

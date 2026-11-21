@@ -606,7 +606,7 @@ class Cortex:
         key = kwargs.get("key")
         if key is not None and (perm, key) in self._done:
             out, logged = self._done[(perm, key)]
-            if not logged or self.log.has_key(key):  # verdict #17: `cortex undo` removed it
+            if not logged or self._logged(key):  # verdict #17: `cortex undo` removed it
                 return out
         try:
             if name != "cortex_start":
@@ -639,8 +639,12 @@ class Cortex:
                 return dict(RESTART_ERROR)
             raise
         if key is not None:
-            self._done[(perm, key)] = (out, self.log.has_key(key))
+            self._done[(perm, key)] = (out, self._logged(key))
         return out
+
+    def _logged(self, key: str) -> bool:
+        """Does an event hold `key`, or the first of a quiz batch's `<key>:1`, `<key>:2`…?"""
+        return self.log.has_key(key) or self.log.has_key(f"{key}:1")
 
     def _keyed(self, key: str, label: str) -> dict | None:
         """B11: the result of a file-writing call whose `key` an earlier process already logged
