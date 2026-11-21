@@ -72,6 +72,24 @@ def test_an_empty_or_weak_result_says_what_was_searched(vault, monkeypatch):
     assert "searched" not in c.cortex_context(topic="car motor")
 
 
+def test_prime_names_its_sources_and_their_dates(vault, monkeypatch):
+    """RR-5: one wrapped line of the visible sources and their months, then what absence
+    means; never a private page's source."""
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    note(vault, "resources/secret-log.md",
+         "title: s\nkind: resource\nprivate: true\ndate: 2020-01-01\n",
+         "# s\n\nSource: Secretlabel · Date: 2020-01-01\n\nx")
+    note(vault, "notes/old.md", "title: Old\ndate: 2024-02-03\n", "# Old\n\nx")
+    c = Cortex(Vault(vault))
+    for related_only in (False, True):
+        ctx = c.cortex_prime("hello there", related_only=related_only)["context"]
+        block = ctx.split("## Coverage\n", 1)[1]
+        assert block == ('<untrusted_note id="coverage">\nnotes 2024-02 to 2026-03, '
+                         "Git 2025-06, Notes 2026-10\n</untrusted_note>\n"
+                         "No result means not recorded, not that it never happened.")
+        assert len(ctx) <= 2000 and "Secretlabel" not in ctx
+
+
 LONG = ("# Garage log\n\nIntro line.\n\n## Week 1\n" + "Changed oil and filters today.\n" * 60
         + "\n## Week 2\nThe motor made a car vehicle noise.\n" + "Washed it.\n" * 40
         + "\n## Week 3\nSold the bike.\n")

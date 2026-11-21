@@ -265,6 +265,10 @@ SPLITS_MAX = 2  # REVIEW-1005 §6.2: split proposals per cortex_reflect, to boun
 CHECK_SENTENCES, CHECK_CHARS = 20, 4000  # PHASE2.md G1: one recall per sentence
 CHECK_MIN = 0.5  # a weaker or keyword-only hit ("I like hiking" -> SQL LIKE) is no claim
 EVIDENCE = 3  # RR-12: the top recall hits that carry `at` and their best passage
+# RR-5: prime's coverage line: at most this many sources, most pages first, then "+N more"
+COVERAGE_MAX = 6
+COVERAGE_SAYS = "No result means not recorded, not that it never happened."
+COVERAGE_KINDS = ("note", "resource", "decision", "project", "loop", "journal", "browse")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 CHECK_NEXT = ("Do not assert beyond Solid, hedge Learning, drop or rephrase unverified claims, "
               "and show the user each flag with its concept.")
@@ -1400,6 +1404,31 @@ class Cortex:
             + (self._offer([h["id"] for h in concepts]) if topic else ""))
         return out
 
+    def _coverage(self) -> str:
+        """RR-5: the sources the index holds, with their month ranges, most pages first:
+        imports by `Source:` label, imported chats by app, browsing, journal and the user's
+        own notes. Only what MCP sees: the index has no private page and no private browsing.
+        "" when there is nothing."""
+        from cortex.semantic import is_chat
+        from cortex.topics import page_date
+
+        span: dict[str, list] = {}  # shortcut: a walk per prime (ms on 5k pages); cache if slow
+        for i, n in self.index._notes.items():
+            if n["kind"] not in COVERAGE_KINDS:
+                continue
+            label = " ".join(page_label(n).split())[:30]
+            name = ("browsing" if n["kind"] == "browse" else "journal" if n["kind"] == "journal"
+                    else f"{label} chats" if label and is_chat(n) else label or "notes")
+            s = span.setdefault(name, [0, "", ""])
+            s[0] += 1
+            if d := page_date(i, n["fields"], n["body"])[:7]:
+                s[1], s[2] = min(s[1] or d, d), max(s[2], d)
+        rows = sorted(span.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        out = [k + (f" {a}" if a else "") + (f" to {b}" if b != a else "")
+               for k, (_, a, b) in rows[:COVERAGE_MAX]]
+        return ", ".join(out) + (f", +{len(rows) - COVERAGE_MAX} more sources"
+                                 if len(rows) > COVERAGE_MAX else "")
+
     def _offer(self, ids: list[str]) -> str:
         """L3: OFFER for the first of `ids` that is due or has a confident miss, else ""."""
         day = local_day(self._now())
@@ -1438,6 +1467,10 @@ class Cortex:
             xr, self._allow())
         put = prime.putter(parts, left)
         self._refresh_index()
+        # RR-5: the coverage line goes last, its room kept from the start
+        cov = self._coverage()
+        room = len(f"## Coverage\n{_wrap('coverage', cov)}\n{COVERAGE_SAYS}") + 2 if cov else 0
+        left[0] -= room
         hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet())[0]
         hub = topics.prompt_hub(self.index, semantic.load_embedder(), prompt, hits)
         hub = None if hub in xs["mute"] else hub
@@ -1467,6 +1500,9 @@ class Cortex:
             put("Open mistakes", "\n".join(mis), "mistakes", PRIME_CAPS["mistakes"],
                 prime.more(len(ids) - len(mis), "mistake"))
         xr["served"]["mistakes"], xr["trimmed"]["mistakes"] = ids[:len(mis)], ids[len(mis):]
+        left[0] += room
+        if cov:
+            put("Coverage", cov, "coverage", room, COVERAGE_SAYS)
         touch = [hub] if hub and hub not in self.touched else []
         xr["served"]["hub"] = touch
         context = "\n\n".join(parts)
