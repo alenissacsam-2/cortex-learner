@@ -106,3 +106,82 @@ def test_cli_imports_mail(tmp_path, root_plain):
     assert "tier private (the default" in r.output and "Sent mail: read" in r.output
     assert "private: true" in (root_plain / "resources" / "mail-sent-mail-2026-03.md") \
         .read_text("utf-8")
+
+
+# ---- notes to self ----
+
+WHATSAPP = (
+    "13/03/2024, 09:15 - Messages and calls are end-to-end encrypted.\n"
+    "13/03/2024, 09:15 - Me: buy milk\nand bread\n"
+    "13/03/2024, 21:05 - Me: IMG-20240313-WA0001.jpg (file attached)\n"
+    "14/03/2024, 08:00 - Me: <Media omitted>\n"
+    "02/04/2024, 7:30 pm - Me: idea: a study timer\n"
+    "02/04/2024, 7:31 pm - Me: This message was deleted\n")
+IOS = "[03/14/24, 9:15:23 AM] Me: video omitted\n[03/14/24, 9:16:00 AM] Me: note one\n"
+TELEGRAM = {"chats": {"list": [
+    {"type": "personal_chat", "name": "Asha", "messages": [
+        {"type": "message", "date": "2024-03-01T10:00:00", "from_id": "user2",
+         "text": "asha's private words"}]},
+    {"type": "saved_messages", "messages": [
+        {"type": "service", "date": "2024-03-01T10:00:00", "action": "x"},
+        {"type": "message", "date": "2024-03-02T10:00:00", "from_id": "user1",
+         "text": ["read ", {"type": "bold", "text": "SICP"}, " ch 3"]},
+        {"type": "message", "date": "2024-03-03T11:00:00", "from_id": "user1",
+         "photo": "photos/p1.jpg", "text": "whiteboard"},
+        {"type": "message", "date": "2024-03-04T12:00:00", "from_id": "user1",
+         "media_type": "voice_message", "file": "voice/v.ogg", "text": ""},
+        {"type": "message", "date": "2024-03-05T12:00:00", "from_id": "user1",
+         "forwarded_from": "News", "text": "someone else's post"}]}]}}
+
+
+def test_selfchat_whatsapp_and_telegram(tmp_path, root_plain):
+    import json
+    folder = tmp_path / "self"
+    folder.mkdir()
+    (folder / "WhatsApp Chat with Me.txt").write_text(WHATSAPP, encoding="utf-8")
+    (folder / "ios.txt").write_text(IOS, encoding="utf-8")
+    (folder / "result.json").write_text(json.dumps(TELEGRAM), encoding="utf-8")
+    v = Vault(root_plain)
+    src = life_sources.selfchat_source(folder)
+    assert src.default_tier is sources.Audience.LOCAL
+    r = sources.run(v, src, C)
+    assert r["reasons"]["a system line"] == 2 and r["reasons"]["deleted"] == 1
+    assert r["reasons"]["forwarded"] == 1
+    pages = _pages(v, "selfchat")
+    assert set(pages) == {"selfchat-2024-03", "selfchat-2024-04"}
+    march, april = pages["selfchat-2024-03"], pages["selfchat-2024-04"]
+    assert "- 2024-03-13 09:15 WhatsApp: buy milk / and bread" in march
+    assert "- 2024-03-13 21:05 WhatsApp: [photo]" in march
+    assert "- 2024-03-14 08:00 WhatsApp: [media]" in march
+    assert "- 2024-03-14 09:15 WhatsApp: [video]" in march  # month first, from the 14
+    assert "- 2024-04-02 19:30 WhatsApp: idea: a study timer" in april
+    assert "- 2024-03-02 10:00 Telegram: read SICP ch 3" in march
+    assert "Telegram: [photo] whiteboard" in march and "Telegram: [voice note]" in march
+    assert "asha's" not in march and "someone else's post" not in march
+    assert "IMG-" not in march and "photos/" not in march
+    r = sources.run(v, life_sources.selfchat_source(folder), C)
+    assert r["imported"] == 0 and _pages(v, "selfchat") == pages
+
+
+def test_selfchat_refuses_a_chat_with_others_and_counts_bad_files(tmp_path, root_plain):
+    two = tmp_path / "two"
+    two.mkdir()
+    (two / "chat.txt").write_text("13/03/2024, 09:15 - Me: hi\n13/03/2024, 09:16 - Asha: "
+                                  "her words\n", encoding="utf-8")
+    (two / "result.json").write_text("{not json", encoding="utf-8")
+    v = Vault(root_plain)
+    r = sources.run(v, life_sources.selfchat_source(two), C)
+    assert r["reasons"]["not a chat with yourself"] == 1
+    assert r["reasons"]["malformed file"] == 1 and r["imported"] == 0
+    assert not _pages(v, "selfchat")
+
+
+def test_cli_imports_selfchat(tmp_path, root_plain):
+    f = tmp_path / "WhatsApp Chat with Me.txt"
+    f.write_text(WHATSAPP, encoding="utf-8")
+    r = runner.invoke(app, ["import", str(f), "--source", "selfchat", "--vault",
+                            str(root_plain)])
+    assert r.exit_code == 0, r.output
+    assert "Notes to self: read" in r.output
+    assert "private: true" in (root_plain / "resources" / "selfchat-private-2024-03.md") \
+        .read_text("utf-8")

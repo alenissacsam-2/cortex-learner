@@ -277,7 +277,8 @@ def test_cli_private_is_refused_for_chats_and_google_activity(root_plain):
 
 
 def test_guides_for_notes_and_calendar():
-    assert set(importers.GUIDES) == {"notes", "calendar", "docs", "repos", "highlights", "mail"}
+    assert set(importers.GUIDES) == {"notes", "calendar", "docs", "repos", "highlights", "mail",
+                                    "selfchat"}
     for k, g in importers.GUIDES.items():
         assert g["steps"] and g["wait"] and g["pick"]
         # docs and repos are folders on this computer: nothing to open

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -230,4 +231,183 @@ def mail_source(path: Path) -> sources.Source:
                           prefix="mail", strips_quotes=True, updates=True, skips=MAIL_SKIPS)
 
 
-SOURCE_OF = {"mail": mail_source}
+# ---- notes to self (WhatsApp, Telegram) ----
+
+CHAT_CHARS = 2000  # one message on a month line
+SELF_SKIPS = ("not a chat with yourself", "a system line", "deleted", "forwarded",
+              "not yours", "empty", "malformed file", "over 5 MB")
+# Android "12/03/2024, 09:15 - Name: text"; iOS "[12/03/24, 9:15:23 AM] Name: text"
+_WA = re.compile(r"^[\u200e\u200f]?\[?(\d{1,2})[./-](\d{1,2})[./-](\d{2,4}),?\s+"
+                 r"(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s?([AaPp]\.?\s?[Mm]\.?)?\]?\s(?:-\s)?(.*)$")
+_WA_OMITTED = {"image": "[photo]", "video": "[video]", "audio": "[audio]",
+               "sticker": "[sticker]", "gif": "[GIF]", "document": "[file]",
+               "contact card": "[contact]"}
+_EXT = {"[photo]": ("jpg", "jpeg", "png", "webp", "heic", "gif"),
+        "[video]": ("mp4", "mov", "3gp", "mkv"), "[audio]": ("opus", "ogg", "m4a", "mp3",
+                                                            "aac", "wav")}
+_TG_MEDIA = {"voice_message": "[voice note]", "video_message": "[video]",
+             "video_file": "[video]", "audio_file": "[audio]", "sticker": "[sticker]",
+             "animation": "[GIF]"}
+
+
+def _by_ext(name: str) -> str:
+    ext = name.rsplit(".", 1)[-1].lower().strip("> ")
+    return next((tag for tag, exts in _EXT.items() if ext in exts), "[file]")
+
+
+def wa_media(text: str) -> str:
+    """A WhatsApp media line as "[photo]", "[video]"…; any other text as it is. The file
+    itself is never read or copied."""
+    low = text.strip().strip("\u200e").lower()
+    if low == "<media omitted>":
+        return "[media]"
+    if m := re.fullmatch(r"(image|video|audio|sticker|gif|document|contact card) omitted",
+                         low):
+        return _WA_OMITTED[m.group(1)]
+    if low.startswith("<attached:"):
+        return _by_ext(low.removesuffix(">"))
+    if low.endswith("(file attached)"):
+        return _by_ext(low.removesuffix("(file attached)").strip())
+    return text
+
+
+def _one_line(text: str) -> str:
+    return _clip(" / ".join(x.strip() for x in text.splitlines() if x.strip()), CHAT_CHARS)
+
+
+def _hm(h: str, m: str, ampm: str | None) -> str:
+    hour, ap = int(h), (ampm or "").lower()
+    if ap.startswith("p") and hour < 12:
+        hour += 12
+    elif ap.startswith("a") and hour == 12:
+        hour = 0
+    return f"{hour:02d}:{m}"
+
+
+def _whatsapp(text: str):
+    """Items of a WhatsApp chat export with only one person writing in it, or skip reasons."""
+    rows, last = [], None
+    for line in text.splitlines():
+        if m := _WA.match(line):
+            last = [m.groups(), m.group(7)]
+            rows.append(last)
+        elif last is not None:  # a message's next line
+            last[1] += "\n" + line
+    if not rows:
+        yield "malformed file"
+        return
+    pairs = [(int(g[0]), int(g[1])) for g, _ in rows]
+    month_first = not any(a > 12 for a, _ in pairs) and any(b > 12 for _, b in pairs)
+    msgs, senders = [], Counter()
+    for g, rest in rows:
+        who, sep, said = rest.partition(": ")
+        if not sep:
+            msgs.append("a system line")
+            continue
+        senders[who.strip("\u200e ")] += 1
+        a, b, y = int(g[0]), int(g[1]), int(g[2])
+        d, mo = (b, a) if month_first else (a, b)
+        try:
+            day = date(y + 2000 if y < 100 else y, mo, d).isoformat()
+        except ValueError:
+            msgs.append("malformed file")
+            continue
+        msgs.append((day, _hm(g[3], g[4], g[5]), said))
+    if len(senders) > 1:  # a chat with others: whose is whose is not known, so none is kept
+        yield "not a chat with yourself"
+        return
+    for x in msgs:
+        if isinstance(x, str):
+            yield x
+            continue
+        day, hm, said = x
+        said = wa_media(said.strip())
+        if said.lower().strip("\u200e ") in ("this message was deleted",
+                                             "you deleted this message"):
+            yield "deleted"
+        elif not said.strip():
+            yield "empty"
+        else:
+            yield sources.Item(day, day, f"{day} {hm} WhatsApp: {_one_line(said)}")
+
+
+def _tg_text(t) -> str:
+    if isinstance(t, list):
+        return "".join(x if isinstance(x, str) else str(x.get("text", "")) for x in t
+                       if isinstance(x, str | dict))
+    return t if isinstance(t, str) else ""
+
+
+def _telegram(data):
+    """Items of Telegram's Saved Messages (a single-chat result.json, or the full export's
+    chat of type saved_messages): the owner's own messages; forwarded ones are skipped."""
+    chats = [data] if isinstance(data, dict) and "messages" in data else \
+        ((data.get("chats") or {}).get("list") or []) if isinstance(data, dict) else []
+    saved = [c for c in chats if isinstance(c, dict) and c.get("type") == "saved_messages"]
+    if not saved:
+        yield "not a chat with yourself"
+        return
+    for chat in saved:
+        msgs = [m for m in chat.get("messages") or [] if isinstance(m, dict)]
+        owner = Counter(m.get("from_id") for m in msgs if m.get("type") == "message"
+                        and not m.get("forwarded_from")).most_common(1)
+        for m in msgs:
+            if m.get("type") != "message":
+                yield "a system line"
+                continue
+            if m.get("forwarded_from") or m.get("saved_from"):
+                yield "forwarded"
+                continue
+            if owner and m.get("from_id") != owner[0][0]:
+                yield "not yours"
+                continue
+            when = str(m.get("date") or "")
+            if not re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d", when):
+                yield "malformed file"
+                continue
+            tag = "[photo]" if m.get("photo") else _TG_MEDIA.get(m.get("media_type"), "") \
+                or ("[file]" if m.get("file") else "")
+            said = " ".join(x for x in (tag, _tg_text(m.get("text")).strip()) if x)
+            if not said:
+                yield "empty"
+                continue
+            yield sources.Item(when[:10], when[:10],
+                               f"{when[:10]} {when[11:16]} Telegram: {_one_line(said)}")
+
+
+def selfchat_source(path: Path) -> sources.Source:
+    """A WhatsApp chat-with-yourself .txt export and Telegram Saved Messages result.json (a
+    file, folder or .zip) into one private page per month: the owner's own messages, a line
+    each, media as "[photo]" and the like."""
+    import json
+    path = Path(path)
+    found = [f for f in importers._files(path)
+             if f[0].lower().endswith(".txt") and _WA.match(
+                 f[3](512).decode("utf-8-sig", "replace").lstrip("\ufeff").split("\n", 1)[0])
+             or f[0].lower().endswith(".json")]
+    if not found:
+        raise VaultError("invalid_argument", f"Found no WhatsApp chat (.txt) or Telegram "
+                         f"result.json in {path.name}.")
+
+    def items():
+        for name, _size, _mtime, read in found:
+            try:
+                raw = read()
+            except VaultError:
+                yield "over 5 MB"
+                continue
+            if name.lower().endswith(".txt"):
+                yield from _whatsapp(raw.decode("utf-8-sig", "replace"))
+                continue
+            try:
+                data = json.loads(raw.decode("utf-8-sig"))
+            except (ValueError, UnicodeDecodeError):
+                yield "malformed file"
+                continue
+            yield from _telegram(data)
+
+    return sources.Source("selfchat", "Notes to self", "file", items, default_tier=LOCAL,
+                          page="month", noun="messages", skips=SELF_SKIPS)
+
+
+SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source}

@@ -1064,7 +1064,8 @@ def import_cmd(path: Annotated[Path, typer.Argument(
              "My Clippings.txt, a Readwise or Pocket .csv) or sent mail (.mbox).")],
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
-                 "obsidian, notion, notes, calendar, docs, repos, highlights or mail.")] = None,
+                 "obsidian, notion, notes, calendar, docs, repos, highlights, mail or "
+                 "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages).")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(

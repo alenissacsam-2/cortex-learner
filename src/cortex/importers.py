@@ -36,7 +36,8 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
-           "repos": "repos", "highlights": "highlights", "mail": "mail"}
+           "repos": "repos", "highlights": "highlights", "mail": "mail",
+           "selfchat": "selfchat"}
 
 GUIDES = {
     "notes": {
@@ -108,6 +109,19 @@ GUIDES = {
                   "signatures and e-mail addresses are left out."],
         "wait": "hours to a day for Takeout; instant for a file",
         "pick": "the .mbox file (unzipped) or a folder of them"},
+    "selfchat": {
+        "name": "Notes to self (WhatsApp, Telegram)",
+        "link": "https://telegram.org/blog/export-and-more",
+        "steps": ["WhatsApp (phone): open the chat with yourself (Message yourself), tap the "
+                  "menu (or the chat's name on an iPhone), then More > Export chat > Without "
+                  "media, and save the .zip or .txt.",
+                  "Telegram Desktop: Settings > Advanced > Export Telegram data; tick Personal "
+                  "chats, choose Machine-readable JSON, Export, then use result.json.",
+                  "Only your own messages are kept, one line each; photos and other media "
+                  "become [photo] and the like, and are never copied. Forwarded messages are "
+                  "left out."],
+        "wait": "instant on WhatsApp; minutes for a Telegram export",
+        "pick": "the WhatsApp .txt or .zip, or Telegram's result.json"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
