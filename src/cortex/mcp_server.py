@@ -319,8 +319,8 @@ SAID = 0.6  # R3-2: the share of a line's content words one logged user turn mus
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
 SUPERSEDES_MAX = 3  # RR-4: claim ids one new line may replace
-SUPERSEDES_NEXT = ("The old line stays until the user picks in the Cortex app's Review; say so "
-                   "in one line. ")
+SUPERSEDES_NEXT = ("Until the user picks in the Cortex app's Review, prime serves the new line, "
+                   "not the old one; say so in one line. ")
 # PHASE4 V3 cortex_as_me
 AS_ME_TASK, AS_ME_ASKS = 300, 5
 AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach this "
@@ -1331,7 +1331,7 @@ class Cortex:
         hide = "profile" in self._withheld()
         claims_served = self._served_claims()
         summary = "" if hide else prime.profile_summary(self.vault, local_day(self._now()),
-                                                        claims_served)
+                                                        claims_served, self._held())
         put("Profile", summary or (WITHHELD.format(n=1) if hide
                                    else f"me/profile.md: {NOT_RECORDED}"),
             "me/profile" if summary else None, CONTEXT_CAPS["profile"])
@@ -1538,7 +1538,8 @@ class Cortex:
         if (allow := self._allow()) is not None:  # plan v9 item 8: the client's profile
             keeps = {p: k and (lambda h, k=k, p=p: k(h) and allow(p, h)) for p, k in keeps.items()}
         withheld = self._withheld()
-        xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"], lines)
+        xr = (prime.claim_ids(self.vault), xray.settings(self.vault)["mute"] | self._held(),
+              lines)
         got = {p: self._claim_sections(p, k, served, xr) if k and p not in withheld
                else ("", False) for p, k in keeps.items()}
         # server text, so outside the untrusted wrap; first, so caps never trim it
@@ -1557,6 +1558,10 @@ class Cortex:
             where =(f"the ## {want} section of "
                      if want and prime.me(self.vault, "preferences") else "")
             put("Preferences", f"{where}me/preferences.md: {NOT_RECORDED}")
+
+    def _held(self) -> set[str]:
+        """R3-3: the older lines of recorded pairs still waiting in Review (prime.held)."""
+        return prime.held(self.vault, self.log.iter_events(), local_day(self._now()))
 
     def _served_claims(self, events: list[dict] | None = None) -> dict:
         """cortex.prime.served_claims over `events`, else one read of the log."""
