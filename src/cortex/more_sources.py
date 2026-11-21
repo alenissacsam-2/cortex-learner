@@ -479,7 +479,7 @@ def _book_items(app: str, origin: str, mtime: float, rows) -> list:
         groups = defaultdict(list)
         for h in hs:
             groups[h[0][:7] if len(hs) > MANY else ""].append(h)
-        for month, g in sorted(groups.items()):
+        for i, (month, g) in enumerate(sorted(groups.items())):
             days = sorted(d for d, *_ in g if d)
             span = f", {days[0]} to {days[-1]}" if days else ""
             name = f"{title} ({month or 'undated'})" if len(groups) > 1 else title
@@ -490,7 +490,9 @@ def _book_items(app: str, origin: str, mtime: float, rows) -> list:
                              for d, q, note in g)
             out.append(sources.Item(name, days[-1] if days else _day(mtime),
                                     f"{head}\n\n{body}", origin,
-                                    key=f"highlights {app} {title} {author} {month}",
+                                    # the first part keeps the whole book's key: a book that
+                                    # grows past MANY rewrites its page, never leaves it stale
+                                    key=f"highlights {app} {title} {author} {month * bool(i)}",
                                     who=author))
     return out
 
