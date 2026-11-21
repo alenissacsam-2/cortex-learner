@@ -75,7 +75,7 @@ The first call of every chat. Needs no session, though a full prime first closes
 ### cortex_find
 | Arg | Type | Notes |
 |---|---|---|
-| query | string | full-text search over title, aliases, headings, body |
+| query | string | full-text search over title, aliases, headings, body; each word a prefix term, all required. A `"quoted span"` is an exact phrase and a leading `-word` leaves that word out (`index.fts_query(syntax=True)`; no stemming); a query with only exclusions, or one FTS5 refuses, falls back to the plain words |
 | kind | enum concept, area, domain, mistake, problem, assessment, application, resource, note, project, decision, journal, loop, due, ready, weak, resurface? | `due`, `ready` and `weak` ignore `query` if it is empty; `resurface` ignores it (see kind `resurface` below); `due` is the planner's due set (Needs refresh, or `next_due` today or earlier) |
 | limit | int 1–8 | default 8; 3 for `resurface` |
 

@@ -97,13 +97,46 @@ STOPWORDS = frozenset(
     "that the this to was what when where which who why will with you your".split())
 
 
-def fts_query(text: str, any_word: bool = False) -> str:
+_SYNTAX = re.compile(r'"([^"]*)"|(?<!\S)-(\w+)|(\w+)')
+
+
+def fts_query(text: str, any_word: bool = False, syntax: bool = False) -> str:
     """User text to a safe MATCH string: each word a quoted prefix term, ANDed. `any_word` ORs
-    the words and drops stopwords instead. '' if none."""
+    the words and drops stopwords instead. '' if none. With `syntax` (agent search, RR-33) a
+    "quoted span" is an exact phrase and a leading -word excludes that word; a query with no
+    positive term left, or one FTS5 refuses, falls back to the literal form."""
     words = re.findall(r"\w+", text or "")
-    if any_word:
-        return " OR ".join(f'"{t}"*' for t in words if t.lower() not in STOPWORDS)
-    return " ".join(f'"{t}"*' for t in words)
+    literal = " OR ".join(f'"{t}"*' for t in words if t.lower() not in STOPWORDS) if any_word \
+        else " ".join(f'"{t}"*' for t in words)
+    if not syntax or not any(c in (text or "") for c in '"-'):
+        return literal
+    pos, neg = [], []
+    for phrase, excl, word in _SYNTAX.findall(text):
+        if excl:
+            neg.append(f'"{excl}"')
+        elif word and not (any_word and word.lower() in STOPWORDS):
+            pos.append(f'"{word}"*')
+        elif toks := re.findall(r"\w+", phrase):
+            pos.append(f'"{" ".join(toks)}"')
+    if not pos:
+        return literal
+    q = (" OR " if any_word else " ").join(pos)
+    q = f"({q}) NOT ({' OR '.join(neg)})" if neg else q
+    return q if _fts_ok(q) else literal
+
+
+@functools.lru_cache(maxsize=256)
+def _fts_ok(match: str) -> bool:
+    """Does FTS5 parse `match`? Checked on an empty in-memory table."""
+    db = sqlite3.connect(":memory:")
+    try:
+        db.execute("CREATE VIRTUAL TABLE t USING fts5(a)")
+        db.execute("SELECT * FROM t WHERE t MATCH ?", (match,)).fetchall()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        db.close()
 
 
 # Look-alikes of an `untrusted_note` tag: each char's comparison key (NFKD, casefolded, marks,
@@ -421,7 +454,7 @@ class Index:
     # ---- find -------------------------------------------------------------
 
     def find(self, query: str = "", kind: str | None = None, limit: int = MAX_HITS,
-             any_word: bool = False) -> list[dict]:
+             any_word: bool = False, syntax: bool = False) -> list[dict]:
         if kind is not None and kind not in NOTE_KINDS + STATE_KINDS:
             raise VaultError("invalid_argument", f"kind must be one of "
                              f"{', '.join(NOTE_KINDS + STATE_KINDS)}.")
@@ -429,7 +462,7 @@ class Index:
             limit = max(1, min(MAX_HITS, int(limit)))
         except (TypeError, ValueError):
             limit = MAX_HITS
-        match = fts_query(query, any_word)
+        match = fts_query(query, any_word, syntax)
         if kind in STATE_KINDS:
             ids = self._state_ids(kind)
             if match:
@@ -451,11 +484,12 @@ class Index:
         args = (match, kind, limit) if kind else (match, limit)
         return [self._hit(*row) for row in self.db.execute(sql, args)]
 
-    def problems(self, query: str = "", limit: int = MAX_HITS) -> list[dict]:
+    def problems(self, query: str = "", limit: int = MAX_HITS, syntax: bool = False
+                 ) -> list[dict]:
         """Problems, todo first, then attempted, then solved. A query keeps the problems whose
         own text matches or that link a concept (`concepts:`) whose title or id matches."""
         ids = [i for i, n in self._notes.items() if n["kind"] == "problem"]
-        if match := fts_query(query):
+        if match := fts_query(query, syntax=syntax):
             hit = {r[0] for r in self.db.execute(
                 "SELECT id FROM fts WHERE fts MATCH ? AND kind = 'problem'", (match,))}
             hit |= {r[0] for r in self.db.execute(  # concepts by title, not body

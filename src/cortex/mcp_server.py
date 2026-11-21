@@ -1040,13 +1040,13 @@ class Cortex:
         if kind == "loop":  # open first; with no query, list them (FTS needs a query)
             rows = loops.loops(self.vault, None)
             if query:
-                keep = {h["id"] for h in self.index.find(query, kind, 8)}
+                keep = {h["id"] for h in self.index.find(query, kind, 8, syntax=True)}
                 rows = [r for r in rows if r["id"] in keep]
             hits = rows[:max(1, min(limit, 8))]
             return {**_find_out(hits), "next": self._next(
                 "Call cortex_read on an id for details." if hits else "No loops.")}
-        hits = self.index.problems(query, max(1, min(limit, 8))) if kind == "problem" else \
-            self.index.find(query, kind, limit)
+        hits = self.index.problems(query, max(1, min(limit, 8)), syntax=True) \
+            if kind == "problem" else self.index.find(query, kind, limit, syntax=True)
         return {**_find_out(hits), "next": self._next(
             "Call cortex_read on an id for details." if hits
             else "No hits; try other words, or cortex_add it if it is really new.")}
@@ -2870,7 +2870,8 @@ DESCRIPTIONS = {
                     "no transcript of (the Chat tab) it starts the chat's log and returns "
                     "`chat`: log each later turn with cortex_log(kind=chat_turn).",
     "cortex_find": "Search the learner's notes (concepts, mistakes, problems, resources, notes, "
-                   "projects, decisions...) or list due, ready or weak concepts. kind=problem: "
+                   "projects, decisions...) or list due, ready or weak concepts. A \"quoted "
+                   "phrase\" matches exactly; -word leaves a word out. kind=problem: "
                    "todo problems first; a query also matches their linked concepts. "
                    "kind=resurface: "
                    "ideas (permanent notes, decisions, summarised resources) due to be shown "
