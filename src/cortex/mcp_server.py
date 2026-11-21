@@ -13,7 +13,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as _version
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -79,7 +79,16 @@ from cortex.prime import (
     WITHHELD,
 )
 from cortex.reflect import UNCONFIRMED, reflect, unconfirmed
-from cortex.vault import ENUMS, ID_RE, Vault, VaultError, invalid, is_private, scan_secrets
+from cortex.vault import (
+    ENUMS,
+    ID_RE,
+    Vault,
+    VaultError,
+    check_day,
+    invalid,
+    is_private,
+    scan_secrets,
+)
 
 READY_WAIT = 120  # seconds a tool call waits for the start-up index build
 WARM_EMBEDDER = True  # load the embedding model after the handshake (tests: off, conftest)
@@ -363,6 +372,17 @@ def _find_out(hits: list[dict]) -> dict:
                      + (f"\n  {h['snippet']}" if h.get("snippet") else ""))
     return {"hits": [{k: h[k] for k in ("id", "kind", "state", "glyph") if k in h}
                      for h in hits], "text": _wrap("find", "\n".join(lines)) if hits else ""}
+
+
+# RR-31: an imported page's `Source: <label>` line near its top (sources.py, chat_import)
+SOURCE_LINE = re.compile(r"^(?:Timeline: .*?· )?Source: ([^\n·]+?)[ \t]*(?:·|$)", re.M)
+MINE = "mine"  # the `source` filter value for pages no import wrote
+
+
+def page_label(n: dict) -> str:
+    """The import `Source:` label of an index note (`Git`, `Notes`, `ChatGPT`), "" if none."""
+    m = SOURCE_LINE.search(n["body"][:600])
+    return m[1].strip() if m else ""
 
 
 def _update_of(u: dict | None, out: dict) -> dict:
@@ -1030,31 +1050,75 @@ class Cortex:
         self.index.states = planner.current_states(self.vault, self.index.day, self.catalog)[0]
         self.index.refresh()
 
+    def _day_of(self, id: str, n: dict, path) -> str:
+        """A page's day as Chat dates it (ask._note_day): its page date, else for a note or
+        resource its file's last change, read from the index's stat; "" when undated."""
+        from cortex.topics import page_date  # numpy: not at server import
+
+        if d := page_date(id, n["fields"], n["body"]):
+            return d
+        st = self.index._stats.get(path) if n["kind"] in ("note", "resource") else None
+        return local_day(datetime.fromtimestamp(st[0] / 1e9, UTC)) if st else ""
+
+    def _keep(self, since: str | None, until: str | None, source: str | None):
+        """RR-31: `keep(id)`, true for a page dated in [since, until] whose import label is
+        `source` (any case; MINE: no import wrote it), or None with no filter. An undated page
+        never passes a date filter. Bad input raises invalid_argument."""
+        for name, v in (("since", since), ("until", until)):
+            if v is not None:
+                check_day(name, v)
+        if since and until and since > until:
+            raise invalid("since must be on or before until.")
+        if source is not None and not (isinstance(source, str) and source.strip()):
+            raise invalid("source must be an import label such as Git, Notes or Highlights, "
+                          f"or '{MINE}' for pages no import wrote.")
+        if since is None and until is None and source is None:
+            return None
+        lo, hi = since or "", until or "9999"
+        want = source.strip().casefold() if source else None
+        notes, paths = self.index._notes, {i: p for p, i in self.index._ids.items()}
+
+        def keep(i: str) -> bool:
+            n = notes.get(i)
+            if n is None or want is not None and (page_label(n).casefold() or MINE) != want:
+                return False
+            if not (since or until):
+                return True
+            d = self._day_of(i, n, paths.get(i))
+            return bool(d) and lo <= d <= hi
+        return keep
+
     def cortex_find(self, query: str = "", kind: Literal[
             "concept", "area", "domain", "mistake", "problem", "assessment", "application",
             "resource", "note", "project", "decision", "journal", "loop", "due",
             "ready", "weak", "resurface"] | None = None,
-            limit: int | None = None, ctx: Context | None = None) -> dict[str, Any]:
+            limit: int | None = None, since: str | None = None, until: str | None = None,
+            source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
         if kind == "resurface":  # ideas due to be shown again; query is not used
             return self._resurface(3 if limit is None else limit)
         limit = 8 if limit is None else limit
         self._refresh_index()
+        keep = self._keep(since, until, source)
         if kind == "loop":  # open first; with no query, list them (FTS needs a query)
-            rows = loops.loops(self.vault, None)
+            rows = [r for r in loops.loops(self.vault, None) if keep is None or keep(r["id"])]
             if query:
-                keep = {h["id"] for h in self.index.find(query, kind, 8)}
-                rows = [r for r in rows if r["id"] in keep]
+                found = {h["id"] for h in self.index.find(query, kind, 8)}
+                rows = [r for r in rows if r["id"] in found]
             hits = rows[:max(1, min(limit, 8))]
             return {**_find_out(hits), "next": self._next(
                 "Call cortex_read on an id for details." if hits else "No loops.")}
-        hits = self.index.problems(query, max(1, min(limit, 8))) if kind == "problem" else \
-            self.index.find(query, kind, limit)
+        if kind == "problem":  # every problem in rank order, then the filter and the limit
+            hits = [h for h in self.index.problems(query, 10**6)
+                    if keep is None or keep(h["id"])][:max(1, min(limit, 8))]
+        else:
+            hits = self.index.find(query, kind, limit, keep=keep)
         return {**_find_out(hits), "next": self._next(
             "Call cortex_read on an id for details." if hits
             else "No hits; try other words, or cortex_add it if it is really new.")}
 
     def cortex_recall(self, query: str, limit: int = 8, hops: int = 1, check: bool = False,
-                      chats: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+                      chats: bool = False, since: str | None = None, until: str | None = None,
+                      source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
         from cortex import semantic  # numpy and the model load on first use, not at start
 
         if check:  # G1 Honest Double: check text written as the user against their levels
@@ -1063,8 +1127,15 @@ class Cortex:
                 raise invalid(f"check takes at most {CHECK_SENTENCES} sentences and "
                            f"{CHECK_CHARS:,} characters; check the text in parts.")
         self._refresh_index()
-        hits, notice = semantic.search(self.index, query, limit, hops, chats=chats,
-                                       quiet=self._quiet())
+        keep = self._keep(since, until, source)
+        # shortcut: a filter picks from recall's widest pool (MAX_LIMIT), so a match ranked
+        # past it is missed; filter inside semantic._rank if that shows up
+        hits, notice = semantic.search(self.index, query,
+                                       limit if keep is None else semantic.MAX_LIMIT, hops,
+                                       chats=chats, quiet=self._quiet())
+        if keep is not None:
+            hits = [h for h in hits if keep(h["id"])][:max(1, min(semantic.MAX_LIMIT,
+                                                                  int(limit)))]
         if not check:  # a check is a draft to vet, not a search: no eval row
             self._note_recall("cortex_recall", query, [h["id"] for h in hits])
         outside = session_mod.exposed_pages(self.log.iter_events()) if hits else set()
@@ -2892,13 +2963,17 @@ DESCRIPTIONS = {
     "cortex_find": "Search the learner's notes (concepts, mistakes, problems, resources, notes, "
                    "projects, decisions...) or list due, ready or weak concepts. kind=problem: "
                    "todo problems first; a query also matches their linked concepts. "
+                   "since/until (YYYY-MM-DD) and source (an import label such as Git, Notes "
+                   "or Highlights, or 'mine') narrow the hits. "
                    "kind=resurface: "
                    "ideas (permanent notes, decisions, summarised resources) due to be shown "
                    "again, most overdue first (limit, default 3; query unused); record what you "
                    "showed with cortex_log(kind=resurfaced).",
     "cortex_recall": "What the user knows or thinks about something: pages similar in meaning "
                      "(local embeddings) or by keyword, plus their linked pages; imported chat "
-                     "pages rank lower unless chats=true. Read-only; needs no session.",
+                     "pages rank lower unless chats=true. since/until (YYYY-MM-DD) and source "
+                     "(an import label such as Git, Notes or Highlights, or 'mine') narrow "
+                     "the hits. Read-only; needs no session.",
     "cortex_reflect": "action=pack (default): review pack for /cortex reflect: unconfirmed "
                       "about-me lines, emerging note clusters (propose a structure note), old "
                       "fleeting lines, the week summary, split proposals for big topic hubs. "

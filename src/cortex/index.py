@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import html
+import itertools
 import json
 import logging
 import re
@@ -421,7 +422,9 @@ class Index:
     # ---- find -------------------------------------------------------------
 
     def find(self, query: str = "", kind: str | None = None, limit: int = MAX_HITS,
-             any_word: bool = False) -> list[dict]:
+             any_word: bool = False, keep=None) -> list[dict]:
+        """FTS hits, or a state list; `keep(id)` (a date or source filter) is applied before
+        the limit."""
         if kind is not None and kind not in NOTE_KINDS + STATE_KINDS:
             raise VaultError("invalid_argument", f"kind must be one of "
                              f"{', '.join(NOTE_KINDS + STATE_KINDS)}.")
@@ -437,6 +440,7 @@ class Index:
                     "SELECT id, snippet(fts, 5, '', '', '…', 16) FROM fts WHERE fts MATCH ? "
                     "AND kind = 'concept'", (match,))}
                 ids = [i for i in ids if i in ranked]
+            ids = [i for i in ids if keep is None or keep(i)]
             hits = []
             for i in ids[:limit]:
                 n = self._notes[i]
@@ -447,9 +451,13 @@ class Index:
             return []
         sql = ("SELECT id, kind, title, snippet(fts, 5, '', '', '…', 16) FROM fts "
                "WHERE fts MATCH ?" + (" AND kind = ?" if kind else "") +
-               " ORDER BY bm25(fts, 0, 0, 10, 8, 3, 1) LIMIT ?")
-        args = (match, kind, limit) if kind else (match, limit)
-        return [self._hit(*row) for row in self.db.execute(sql, args)]
+               " ORDER BY bm25(fts, 0, 0, 10, 8, 3, 1)")
+        if keep is None:
+            sql += " LIMIT ?"
+        args = (match, kind) if kind else (match,)
+        rows = self.db.execute(sql, (*args, limit) if keep is None else args)
+        return [self._hit(*row) for row in itertools.islice(
+            (r for r in rows if keep is None or keep(r[0])), limit)]
 
     def problems(self, query: str = "", limit: int = MAX_HITS) -> list[dict]:
         """Problems, todo first, then attempted, then solved. A query keeps the problems whose
