@@ -180,20 +180,21 @@ def _private_hits(vault: Vault, idx: Index, question: str, k: int) -> list[dict]
     for _, rel, p, at in sorted(scored)[:k]:
         if (n := _page(vault, p, i := idx._ids[p])) is not None:
             out.append(_note(vault, i, n, rel, semantic._chunk_text(n, at),
-                             "chat" if semantic.is_chat(n) else "note", private=True))
+                             "chat" if semantic.is_chat(n) else "note", private=True, _at=at))
     return out
 
 
-def _span(body: str, text: str, title: str) -> tuple[int, int]:
+def _span(body: str, text: str, title: str, start: int = 0) -> tuple[int, int]:
     """(start, length) of passage `text` in its page's `body`. A chunk is cut from the body
     without empty headings and with its line ends made \\n (`semantic._filled`), after a title
     line (and chunk 0's summary), so both ends are looked up: the first line of 12+ characters
     after the title line, then the last line of 12+ characters (any last line when none is that
-    long) from there; (0, len(text)) when the start is not found."""
+    long) from there; (0, len(text)) when the start is not found. `start`: the chunk's start
+    in the filled body, never past its place in `body`, so a repeated line is found in it."""
     lines = [ln.strip() for ln in text.splitlines()]
     # the title line, or a deep chunk's header (`semantic._header`), is not body text
     lines = lines[1:] if lines and lines[0].startswith(" ".join(title.split())) else lines
-    at = next((a for s in lines if len(s) >= 12 and (a := body.find(s)) >= 0), -1)
+    at = next((a for s in lines if len(s) >= 12 and (a := body.find(s, start)) >= 0), -1)
     if at < 0:
         return 0, len(text)
     tail = [s for s in lines if s]
@@ -254,7 +255,8 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         n, p = idx._notes[h["id"]], paths[h["id"]]
         notes.append(_note(vault, h["id"], n, p, semantic._chunk_text(n, h.get("at", 0)),
                            "browse" if p.startswith("browse/") else
-                           "chat" if semantic.is_chat(n) else "note", title=h["title"]))
+                           "chat" if semantic.is_chat(n) else "note", title=h["title"],
+                           _at=h.get("at", 0)))
     private = _private_hits(vault, idx, question, want) if src["private"] else []
     searched = [p for p in chain.from_iterable(zip_longest(browse, notes, private))
                 if p and (between is None or between[0] <= p["day"] <= between[1])]
@@ -272,7 +274,7 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         seen.add(p["path"])
         p["text"] = p["text"][:min(PASSAGE, left)]
         if "_body" in p:  # a browse page's text is its body's own slice: at holds, len is it
-            p["at"], p["len"] = _span(p.pop("_body"), p["text"], p["title"])
+            p["at"], p["len"] = _span(p.pop("_body"), p["text"], p["title"], p.pop("_at", 0))
         else:
             p["len"] = len(p["text"])
         left -= len(p["text"])

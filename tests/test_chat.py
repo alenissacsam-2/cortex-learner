@@ -661,6 +661,23 @@ def test_a_citation_opens_its_exact_passage(vault):
             chat.passage(vault, bad, 0, 100, ask.SOURCES)
 
 
+def test_a_deep_passage_opens_at_its_own_copy_of_a_repeated_line(vault, monkeypatch):
+    """Audit 21 Nov C6: a line that repeats is placed in the chunk, not at its first copy."""
+    refrain = "Refrain: the same line repeats here."
+    head = f"# Deep\n\n{refrain}\n"
+    start = semantic.BODY_CHARS - semantic.CHUNK_OVERLAP  # the second chunk's start
+    filler = "".join(f"filler line {i:03} with some words.\n" for i in range(60))
+    filler = filler[:start - len(head) - 1] + "\n"
+    body = head + filler + refrain + "\nThe deep part goes on about gearboxes.\n" * 3
+    note(vault.root, "notes/deep.md", "title: Deep\n", body)
+    monkeypatch.setattr(semantic, "search", lambda idx, q, k, **kw: (
+        [{"id": "deep", "at": start, "title": "Deep"}], None))
+    p = next(x for x in ask._passages(vault, "gearboxes", 4, sources=ask.SOURCES)
+             if x["path"] == "notes/deep.md")
+    page = vault.read_path(vault.root / "notes/deep.md").body
+    assert page.find(refrain) < start and p["at"] == page.rindex(refrain)
+
+
 def test_the_passage_view_keeps_to_the_switches(vault):
     _secret(vault)
     on = dict(ask.SOURCES)
