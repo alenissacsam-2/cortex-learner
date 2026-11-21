@@ -207,7 +207,8 @@ def route(text: str, got, today: date) -> dict | None:
 # ---- reading the stores ----------------------------------------------------------------------
 
 def _matcher(ws: list[str]):
-    rxs = [re.compile(r"\b" + re.escape(w), re.I) for w in ws]
+    # whole words and their plurals ("clas" from "class": classes), so "java" is not JavaScript
+    rxs = [re.compile(r"\b" + re.escape(w) + r"(?:s|es|ses)?\b", re.I) for w in ws]
     return (lambda hay: all(rx.search(hay) for rx in rxs)), rxs
 
 
@@ -269,7 +270,7 @@ def _visits(vault, lo: str, hi: str, sources: dict, ws: list[str], match,
         return 0, []
     side = _sides(load_settings())
     hit, args = "1", [lo, hi]
-    if ws:  # LIKE first, cheap; then the word starts in Python
+    if ws:  # LIKE first, cheap; then the whole words in Python
         hay = "(title || ' ' || host || ' ' || COALESCE(search, ''))"
         hit = " AND ".join([f"{hay} LIKE ?"] * len(ws) + [f"cx_match({hay})"])
         args = [f"%{w}%" for w in ws] * 2 + args
