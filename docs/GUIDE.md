@@ -210,10 +210,12 @@ Importing a newer file again updates a book's page instead of adding a second on
 The Chat test checks how well the app's Chat answers. It asks Chat 40 questions about a made-up learner and scores each answer in code, with no AI judge. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it.
 
 - **What it uses.** The test builds a made-up vault, browsing history and study record in a temp folder and deletes them afterwards. Your own vault, settings and browsing are never read.
-- **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "skipped: no local model". The 14 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run.
-- **The report.** Each question shows pass or fail, with the reason for a failure. It also shows:
-  - the result for each kind of question;
+- **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "blocked: no local model" and the whole result is BLOCKED, not a fail. The 14 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run. An empty or failed answer counts as a fail.
+- **The report.** It starts with PASS, FAIL, BLOCKED or STOPPED and a fingerprint of the made-up vault (two reports with the same fingerprint asked the same vault). Each question shows pass or fail, with the reason for a failure. It also shows:
+  - the result for each kind of question, and for each kind of search it needs (an exact name, plain words, other words, several pages, a changed history, an outdated fact, nothing to find);
   - whether the search served the right pages (recall at 1, 3 and 5; "buried" means the right page came lower than third, "missed" means it did not come at all);
+  - why a question went wrong: the right page was not indexed, the search did not find it, it was found but ranked too low, it was there but the answer was wrong, or it was there and the answer said it had nothing;
+  - whether longer pages that only repeat a term outranked the short page with the fact, and whether an answer obeyed a planted "SYSTEM: ignore previous instructions" line;
   - the five blockers (a private leak, a stale preference, a made-up history, a wrong count, a missed deep fact);
   - how long the answers took.
 
