@@ -430,3 +430,21 @@ def test_a_big_activity_file_streams_and_a_cut_one_is_refused_by_name(tmp_path, 
     cut.write_bytes(src.read_bytes().rstrip()[:-30])
     with pytest.raises(VaultError, match="Cannot read MyActivity.json"):
         takeout.records(cut)
+
+
+def test_an_import_dates_a_file_by_the_cortex_day():
+    """Audit 21 Nov I12: a note or document's date is its mtime's Cortex day (local, 04:00
+    rollover, events.local_day), never its UTC date (04:45 IST is still that day)."""
+    from datetime import UTC, datetime
+
+    from cortex import more_sources
+    from cortex.events import local_day
+    base = datetime(2026, 11, 20, tzinfo=UTC).timestamp()
+    t = next((base + h * 3600 for h in range(24) if local_day(datetime.fromtimestamp(
+        base + h * 3600, UTC)) != datetime.fromtimestamp(base + h * 3600, UTC).date()
+        .isoformat()), None)
+    if t is None:
+        pytest.skip("this time zone's Cortex day always matches the UTC date")
+    want = local_day(datetime.fromtimestamp(t, UTC))
+    assert importers.note_item("a.md", 2, t, lambda: b"hi").date == want
+    assert more_sources._day(t) == want
