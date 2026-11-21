@@ -419,6 +419,7 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .fx-src { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
 .fx-chip { display: inline-flex; gap: 6px; align-items: baseline; font-variant-numeric: tabular-nums; }
 .fx-cov, .cov { color: var(--ink-3); font-size: 12px; margin: 6px 0 0; }
+.cov.qflag { color: var(--learning); }
 /* the exact passage a source stands for */
 .passage { max-width: 78ch; margin-top: 8px; padding: 8px 12px; background: var(--panel);
   border: 1px solid var(--edge); border-radius: 2px; }

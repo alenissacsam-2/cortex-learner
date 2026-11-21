@@ -294,6 +294,31 @@ def cites(answer: str) -> set[int]:
     return {int(n) for m in _CITE.findall(answer) for n in m.split(",")}
 
 
+QUOTE_MIN = 12  # shorter quoted words ("binary search") are names more than quotes
+_STRAIGHT = str.maketrans({"“": '"', "”": '"', "„": '"', "«": '"', "»": '"', "‘": "'",
+                           "’": "'"})
+_QUOTED = re.compile(r'“([^“”]{1,600})”|"([^"]{1,600})"')  # curly ones pair by direction
+
+
+def _fold(s: str) -> str:
+    """`s` for comparing quotes: straight quotes, no Markdown marks, one case, single spaces."""
+    return " ".join(re.sub(r"[*_`]", "", s.translate(_STRAIGHT)).casefold().split())
+
+
+def unquoted(answer: str, texts: list[str]) -> list[str]:
+    """The spans `answer` puts in double quotes (QUOTE_MIN characters or more once folded,
+    end punctuation aside) that none of `texts` holds: quotes a small model may have made up,
+    flagged under its answer."""
+    hay = [_fold(t) for t in texts]
+    out: list = []
+    for m in _QUOTED.finditer(answer):
+        span = " ".join((m[1] or m[2]).split())
+        q = _fold(span).strip(" .,;:!?'")
+        if len(q) >= QUOTE_MIN and not any(q in h for h in hay) and span not in out:
+            out.append(span)
+    return out
+
+
 def ask(vault: Vault, question: str, k: int = 8, runner=None, private: bool = False) -> dict:
     """{answer, sources: [{n, path, title}] (the passages the answer cites), model}, or
     {error, message} when there is no local model or no search model."""

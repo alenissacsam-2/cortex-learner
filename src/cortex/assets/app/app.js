@@ -623,7 +623,7 @@
       h('div', { class: 'msg-acts' }, btn('Open the page in Obsidian', () => post('/api/open', { what: 'page', path: s.path }), 'btn quiet'),
         btn('Close', close, 'btn quiet')));
   }
-  function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage}; returns the element and its updater
+  function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage, unquoted}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
     const open = async (s) => {
@@ -662,6 +662,9 @@
         shown ? passageView(shown, p, () => open(shown)) : '',
         cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}`
           + (cov.also && cov.also.length ? ` · also searched: ${cov.also.join(', ')}` : '') }) : '',
+        // quotes no cited passage holds: the model may have made them up
+        m.unquoted && m.unquoted.length && !streaming ? h('p', { class: 'ink-3 small cov qflag',
+          text: `Quote not found in a cited passage: ${m.unquoted.map((q) => `“${q}”`).join(', ')}` }) : '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
@@ -886,7 +889,7 @@
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'facts') m.facts = ev.facts;
-          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; }
+          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || []; }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }

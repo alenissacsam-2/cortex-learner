@@ -578,6 +578,17 @@ def test_reply_streams_cites_and_saves(vault, stream):
     assert ev[-2]["searched"] == [] and "searched" not in saved[1]
 
 
+def test_a_quote_no_passage_holds_is_flagged_and_saved(vault, stream):
+    s = stream("ollama", ["Your page says “automobile CAR motor\n basics.” and ",
+                          '"the motor runs on pure moonlight".'])
+    cid, ev = _turn(vault, None, "car motor", s.runner())
+    assert ev[-2]["unquoted"] == ["the motor runs on pure moonlight"]
+    assert chat.load(vault, cid)[1]["unquoted"] == ["the motor runs on pure moonlight"]
+    ok = stream("ollama", ['It says "Automobile car motor basics".'])
+    cid, ev = _turn(vault, None, "car motor", ok.runner())
+    assert "unquoted" not in ev[-2] and "unquoted" not in chat.load(vault, cid)[1]
+
+
 def test_an_answer_citing_nothing_lists_the_pages_searched(vault, stream):
     s = stream("ollama", ["Your forum page says so."])
     cid, ev = _turn(vault, None, "car motor", s.runner())

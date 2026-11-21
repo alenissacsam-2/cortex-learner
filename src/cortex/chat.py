@@ -826,7 +826,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
     matched, also (names `relatives` added, when any)} when passages were searched (how many
-    the model read of how many the search found; saved on the answer too)}; {"t": "text", "s"}
+    the model read of how many the search found; saved on the answer too), unquoted (quoted
+    spans no cited passage holds, `ask.unquoted`; saved too) when any}; {"t": "text", "s"}
     replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
     nothing is asked once more; still nothing, the answer is SAID_NOTHING with the pages it
     searched (saved with `unanswered`). Then {"t": "done", id, model, seconds, stopped,
@@ -985,6 +986,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 break
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
+    by_model = bool(answer)  # Cortex's own fallback words below quote nothing to check
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
         emit({"t": "tok", "s": answer})
@@ -1006,8 +1008,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     searched = [] if sources else [pill(p) for p in found[:SEARCHED]]
     coverage = {"read": len(found), "matched": stats["matched"],
                 **({"also": also} if also else {})} if "matched" in stats else None
+    # quote proof: a quoted span must be in a cited passage (any read one when none is cited)
+    unquoted = ask.unquoted(answer, [text, *(f"{p['title']}\n{p['text']}" for n, p in
+                                             enumerate(found, 1) if n in cited or not sources),
+                                     *(chat_facts._lines(facts, today) if facts else [])]
+                            ) if by_model else []
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
+                 **({"unquoted": unquoted} if unquoted else {}),
                  **({"facts": facts} if facts is not None else {}),
                  **({"coverage": coverage} if coverage else {}),
                  "model": model, "switches": dict(s["sources"]),
@@ -1015,6 +1023,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                  **({"stopped": True} if stopped else {})})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched,
+          **({"unquoted": unquoted} if unquoted else {}),
           **({"coverage": coverage} if coverage else {})})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1),

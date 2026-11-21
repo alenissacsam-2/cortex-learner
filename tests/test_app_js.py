@@ -246,7 +246,7 @@ const out = {};
     DATA.routes['/api/chat'] = { vault: true, missing: [], model: 'qwen3.5-2b', settings, chats: [] };
     DATA.routes['/api/chat/list'] = { chats };
     const ev = (o) => JSON.stringify(o) + '\n';
-    const line = ev({ t: 'src', sources: [{ n: 1, path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse', at: 12, len: 300 }], coverage: { read: 1, matched: 4, also: ['Asha Rao'] } });
+    const line = ev({ t: 'src', sources: [{ n: 1, path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse', at: 12, len: 300 }], coverage: { read: 1, matched: 4, also: ['Asha Rao'] }, unquoted: ['<b>made up</b> words'] });
     const facts = { kind: 'count', query: 'github', period: ['2026-11-10', '2026-11-16'], total: 1234, sources: { browsing: 1230, notes: 4 },
       rows: [], focus: null, unit: 'times', coverage: { read: 5000, matched: 1234, off: ['private'] } };
     DATA.routes['/api/chat/passage'] = { path: 'browse/private/browse-private-2026-11-17.md', title: 'Browsing 2026-11-17 (private)', kind: 'browse',
@@ -280,6 +280,7 @@ const out = {};
     out.list = $('chat-side').querySelectorAll('.chat-open').map((b) => [b.querySelector('.t').textContent, b.querySelector('.d').textContent, b.getAttribute('aria-current')]);
     out.facts = bot.querySelector('.facts').textContent;
     out.cov = bot.querySelector('.cov').textContent;
+    out.qflag = bot.querySelector('.qflag').textContent;
     bot.querySelector('.cite').fire('click');  // [1] opens its exact passage
     await tick();
     out.passageGet = fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path);
@@ -503,6 +504,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
                             "1,234mentionsbrowsing1,230notes4"
                             "Counted all 1,234 matches in 5,000 items read · switched off: private")
     assert out["cov"] == "Read 1 of 4 matches · also searched: Asha Rao"
+    assert out["qflag"] == "Quote not found in a cited passage: “<b>made up</b> words”"  # as text
     assert out["passageGet"] == ["/api/chat/passage?path=browse%2Fprivate%2Fbrowse-private-"
                                  "2026-11-17.md&at=12&len=300"]
     assert out["passage"] == "browsingBrowsing 2026-11-17 (private)› Topics"

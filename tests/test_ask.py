@@ -162,3 +162,12 @@ def test_each_passage_says_whose_words_it_holds(vault):
     assert block("Car article") == "imported from a saved source"
     assert "From: imported from your browsing" in user
     assert ask.origin("chat") == "imported from a saved AI chat"
+
+
+def test_a_quote_counts_only_when_a_passage_holds_it():
+    texts = ["# Engines\n\nThe **piston** moves in a  cylinder, said the manual."]
+    answer = ('It says “The piston moves in a\ncylinder.” and "the PISTON moves in a cylinder", '
+              'calls it "an engine" and "a crankshaft spins forever".')
+    assert ask.unquoted(answer, texts) == ["a crankshaft spins forever"]  # "an engine": short
+    assert ask.unquoted("“made up but long enough”", []) == ["made up but long enough"]
+    assert ask.unquoted("no quotes at all", []) == []
