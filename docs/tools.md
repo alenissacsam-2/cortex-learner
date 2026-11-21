@@ -175,10 +175,10 @@ With `items` the whole batch is validated before anything is written, each item 
 | key | string? | |
 
 Payloads:
-- **assessment_result:** `{assessment?, company?, assessment_kind?: oa|mock|interview|test, date?, outcome: pending|pass|fail|unknown, score?, felt_weak?: [concept or domain]}`. It creates the assessment note if it is missing, and does not move levels.
+- **assessment_result:** `{assessment?, company?, assessment_kind?: oa|mock|interview|test, date?, outcome: pending|pass|fail|unknown, score?, felt_weak?: [concept or domain]}`. It creates the assessment note if it is missing, and does not move levels. An unknown `felt_weak` name is resolved or created as in `taught`.
 - **self_report:** `{concept, verdict, hints?, note?}`.
 - **taught:** `{concept, summary≤300}`. The concept is marked "Taught, not yet checked".
-- **problem_status:** `{problem, status: todo|attempted|solved, hints?}` (`hints` a whole number 0-3, else `invalid_argument`). `solved` = a correct verdict on the problem's primary concept.
+- **problem_status:** `{problem, status: todo|attempted|solved, hints?, concepts?: [names]}` (`hints` a whole number 0-3, else `invalid_argument`). `solved` = a correct verdict on the problem's primary concept. `problem` is an id or a title; an unknown one (outside review mode) is created as a problem page with that title and `status`, its `concepts` resolved or created as below (a refused name is skipped); an existing problem with exactly that title is reused.
 
 - **journal:** `{text, mood?: 1-5, energy?: 1-5, date?: YYYY-MM-DD}`. Appends `- HH:MM <text> · mood N · energy N` under `## Log` of today's `journal/YYYY-MM-DD.md` (04:00 rollover; the page is created if missing). With a `date` before today (2000-01-01 or later; a future date is `invalid_argument`) the line goes to that day's page as `- — <text> (added <today>)`; session events keep the real day and time. Secret-scanned. Writes no event, so it never enters levels or the planner; `[[links]]` in the text become graph edges.
 - **need**, **need_skip**: removed on 21 Nov 2026 (R3-9). A call returns `invalid_argument` saying the kind was removed and writes nothing; an old vault's need events stay in the log and every fold ignores them.
@@ -192,7 +192,7 @@ Payloads:
 
 **Voice zone (`voice.py`).** `voice/` is no kind folder, so the index, `cortex_find`, `cortex_recall`, vectors, the dashboard, `index.md` and lint never see it, and `cortex_context` never serves it; it is committed like the rest of the vault. An old vault's `voice/drafts.jsonl` (drafts, since removed) is left as it is; only `cortex forget` still reads it. CLI: `cortex voice import <file> --audience X --act Y --channel Z` adds the messages of a file separated by `---` lines (all or none; CRLF read as LF); `cortex voice` prints sample counts per audience and channel.
 
-An unknown concept in `log` is recorded as `inbox:<slug>` and added to `inbox.md`.
+**Unknown concepts** (`taught`, `self_report`, `felt_weak`, `problem_status` concepts, an assessment's `fields.concepts`) go through `safety_net.Linker`, the safety net's own rule: a catalog id, title, alias or slug; else (embedder already in memory only, never loaded or downloaded) a concept page at cosine ≥ 0.85; else the catalog's near-duplicate "did you mean"; else a new concept, made like `cortex_add`, under the area most concepts this session touched or logged share, else the area most concepts under the name's (+ summary's) `topics.attach` hub share, else `From chats › Unsorted`, linked `related` to that hub. For taught and self_report the display line then starts "Created <title> under <domain> › <area>." and the result adds `id`; the session's Changed list shows the add. A junk, generic or secret-looking name (`safety_net.clean_name`, 2+ letters), a name matching a hidden concept (`planner.hidden`), and any unknown name in review mode is recorded as `inbox:<slug>` and added to `inbox.md` instead.
 
 **Returns** `{recorded, display_line, next}`.
 
@@ -242,7 +242,7 @@ An unknown concept in `log` is recorded as `inbox:<slug>` and added to `inbox.md
 | title | string | |
 | parent | string? | area for a concept, domain for an area |
 | areas | string[]? | concept only: extra areas besides `parent` (polyhierarchy). Stored as `areas: ["[[x]]"]` in the note and `areas` in catalog.yaml; exam expansion of `area:x` (or its domain) includes the concept, and the Map draws them as thin non-tree links |
-| fields | object? | whitelisted frontmatter fields; every non-catalog kind also takes `summary` (one line) |
+| fields | object? | whitelisted frontmatter fields; every non-catalog kind also takes `summary` (one line). assessment: `concepts: [names]` and the bare-name keys of `tests` (`{name: weight}`, or a list of names) are stored as `tests: {"<kind>:<id>": weight}` (weight 1 for `concepts`), unknown names resolved or created as for `cortex_log` taught (refused ones go to `inbox.md`); with no `application`, the first public application of the same company (equal `company`, or that company a whole word of the other's title) is linked. application: `assessment` and `assessments` become `[[id]]` links when the assessment exists (id or title slug), plus every public assessment of the same company. `tests`, `assessments` and `application` are graph edges |
 | raw_text | string? | resource only: pasted source text, saved once as `raw/<id>.md` (secret-scanned, never overwritten) and set as `source` |
 | force | bool | default false. If false and a near-duplicate exists, the call returns `duplicate_suggested`. For non-catalog kinds a near-duplicate is a page of the same kind whose title or aliases contain every word of the new title (prefix, any case; bodies are not searched), or the same slug |
 | key | string? | |

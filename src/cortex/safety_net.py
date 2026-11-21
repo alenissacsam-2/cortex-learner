@@ -10,14 +10,15 @@ A chat is skipped when:
 - it is private (`private: true`, or its category is not "cloud" in the browse privacy
   settings, as chat_import judges it); private chats never touch or create public pages;
 - its last turn is older than RECENT_DAYS (a first pass must not mark old chats taught today);
-- the chat model already recorded learning for it: any live `ask`, `grade` or `taught` event,
-  or a `touch`, `taught` or `self_report` log, not written by this module or an import, whose
-  `ts` falls between the chat's first turn less BEFORE and its last turn plus AFTER (turn times
-  are the page's `### YYYY-MM-DD HH:MM` lines); a page with no turn times uses its local day.
-  Live MCP logging carries no chat id, so the time span is the robust link; a learning event
-  from another chat in the same span also skips it (the safe side);
 - one of its names matches a hidden concept (planner.hidden): the chat is about a private
   subject, so nothing public is written from it.
+
+What the chat model already logged for a chat is never logged again: any live `ask`, `grade`
+or `taught` event, or a `touch`, `taught` or `self_report` log, not written by this module or
+an import, whose `ts` falls between the chat's first turn less BEFORE and its last turn plus
+AFTER (turn times are the page's `### YYYY-MM-DD HH:MM` lines; a page with none uses its local
+day). Live MCP logging carries no chat id, so the time span is the link. The ids those events
+name are left out of both layers; the rest of the chat is still recorded.
 
 Layer 1 (code only, always): concept titles and aliases (catalog) and topic hub titles and
 aliases (the index) found as whole words in the user's turns, plus the hub `topics.attach`
@@ -27,13 +28,16 @@ picks for the chat's vector (FLOOR) when an embedder is already in memory. The n
 Layer 2 (only with a runner whose model is already loaded; the app also needs the PC idle,
 browse.titles.may_run): the model names at most PER_CHAT concepts the chat explained (JSON,
 strict parse; junk, generic words and secrets refused, and a word of the name must occur in
-the chat). Each resolves to an existing concept (catalog id, title, alias or slug; then an
-embedding cosine >= MATCH_COS to a concept page; then the catalog's near-duplicate "did you
-mean") or is created like cortex_add (Catalog.add) under the area most of the chat's matched
-concepts share, else under DOMAIN > AREA, and linked (`related`) to the hub `topics.attach`
-picks for its name. Each gets one `taught` event per chat, at most TAUGHT_PER_DAY a Cortex
-day across chats (counted from the day's live events); a chat a pass reaches after the cap
-gets layer 1 only (no model call, no new concept; its touches are not capped by it).
+the chat). Each goes through `Linker` (shared with cortex_log taught/self_report and the
+concepts of an assessment or problem): it resolves to an existing concept (catalog id, title,
+alias or slug; then an embedding cosine >= MATCH_COS to a concept page; then the catalog's
+near-duplicate "did you mean") or is created like cortex_add (Catalog.add) under the area most
+of the matched concepts share, else the area most concepts filed under the name's hub share,
+else DOMAIN > AREA, and linked (`related`) to the hub `topics.attach` picks for its name. A
+name matching a hidden concept never resolves or creates. Each gets one `taught` event per
+chat, at most TAUGHT_PER_DAY a Cortex day across chats (counted from the day's live events); a
+chat a pass reaches after the cap gets layer 1 only (no model call, no new concept; its
+touches are not capped by it).
 
 Every event this writes has source SOURCE (server-stamped, never model output), session
 `import` and payload {"auto": SOURCE, "chat": <page id>}. Caps: MAX_CHATS chats and MAX_EVENTS
@@ -129,19 +133,25 @@ def chat_of(note) -> Chat | None:
     return Chat(note.id, title, turns, min(times, default=None), max(times, default=None), day)
 
 
-def recorded(chat: Chat, learning: list[dict]) -> bool:
-    """Did a chat model record learning during `chat` (the module docstring's rule)?"""
+def recorded(chat: Chat, learning: list[dict]) -> set[str]:
+    """The page ids a chat model already logged learning for during `chat` (the module
+    docstring's rule): event objects and touch ids."""
+    out: set[str] = set()
     for e in learning:
         if chat.start is not None:
             try:
                 t = parse_ts(e["ts"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if chat.start - BEFORE <= t <= chat.end + AFTER:
-                return True
-        elif e.get("day") == chat.day:
-            return True
-    return False
+            if not chat.start - BEFORE <= t <= chat.end + AFTER:
+                continue
+        elif e.get("day") != chat.day:
+            continue
+        if obj := str(e.get("object") or "").partition(":")[2]:
+            out.add(obj)
+        p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+        out.update(i for i in p.get("ids") or () if isinstance(i, str))
+    return out
 
 
 def _learning(events) -> list[dict]:
@@ -155,9 +165,9 @@ def _learning(events) -> list[dict]:
     return out
 
 
-def _usable(name: str) -> bool:
+def _usable(name: str, least: int = MIN_NAME) -> bool:
     words = name.casefold().split()
-    return len(name) >= MIN_NAME and not all(w in STOPWORDS or w in GENERIC for w in words)
+    return len(name) >= least and not all(w in STOPWORDS or w in GENERIC for w in words)
 
 
 def _pattern(names) -> re.Pattern | None:
@@ -166,15 +176,19 @@ def _pattern(names) -> re.Pattern | None:
     return re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)", re.I) if alts else None
 
 
-def clean_name(raw, text: str) -> str | None:
+def clean_name(raw, text: str | None = None) -> str | None:
     """A model's concept name, tidied, or None when it is junk: too short or long, generic,
-    markup or a link, a secret, or none of its longer words occurs in the chat `text`."""
+    markup or a link, a secret, or none of its longer words occurs in the chat `text`. With no
+    `text` (a chat model named it in a tool call) there is no chat check and 2 letters do."""
     if not isinstance(raw, str):
         return None
     name = " ".join(raw.split()).strip(" .,;:-'\"")
     if not name or len(name) > NAME_CHARS or len(name.split()) > NAME_WORDS or _BAD.search(raw) \
-            or not re.search(r"[^\W\d_]", name) or not _usable(name) or secret_pattern(name):
+            or not re.search(r"[^\W\d_]", name) or secret_pattern(name) \
+            or not _usable(name, 2 if text is None else MIN_NAME):
         return None
+    if text is None:
+        return name
     low = text.casefold()
     words = [w for w in re.findall(r"\w+", name.casefold()) if len(w) >= 4 and w not in GENERIC]
     return name if any(re.search(rf"(?<!\w){re.escape(w)}", low) for w in words) else None
@@ -221,6 +235,111 @@ def _todo(vault: Vault, ledger: dict, model: bool) -> list:
     return out
 
 
+class Linker:
+    """A concept name to an existing concept, or a new one made like cortex_add and linked to a
+    hub (the module docstring's layer-2 rules). Shared by the safety net, cortex_log taught and
+    self_report, and the concepts an assessment or problem names. `embed`: an embedder already
+    in memory, or None; the vectors are built on first use."""
+
+    def __init__(self, vault: Vault, catalog: Catalog, index: Index, hide: set[str], embed=None):
+        self.vault, self.catalog, self.index, self.hide, self.embed = \
+            vault, catalog, index, hide, embed
+        self.tree = topics.tree(index)
+        self.hidden = _pattern(n for e in catalog.entries.values() if e.kind == "concept"
+                               and e.id in hide for n in (e.title, *e.aliases))
+        self._vecs = None
+
+    def vectors(self):
+        """(hub centroids, (concept ids, head vectors) or None), or None with no embedder."""
+        if self.embed is None:
+            return None
+        if self._vecs is None:
+            stack = topics.head_stack(self.index, self.embed)
+            hv = topics.heads(stack)
+            ids = [c for c, e in self.catalog.entries.items()
+                   if e.kind == "concept" and c in hv and c not in self.hide]
+            self._vecs = (topics.centroids(self.index, self.tree, stack),
+                          (ids, [hv[c] for c in ids]) if ids else None)
+        return self._vecs
+
+    def vec(self, text: str):
+        from cortex import semantic
+        return semantic._embed(self.embed, [text])[0]
+
+    def hub(self, text: str) -> str | None:
+        """The hub `topics.attach` picks for `text`, or None (no embedder or no clear fit)."""
+        v = self.vectors()
+        return topics.attach(self.vec(text), self.tree, v[0]).hub if v is not None else None
+
+    def resolve(self, name: str) -> tuple[str, str | None]:
+        """("match", id), ("new", None) or ("drop", None: it names a hidden concept)."""
+        if self.hidden is not None and self.hidden.search(name):
+            return "drop", None
+        try:
+            cid = self.catalog.resolve(name)  # no skip: a hidden hit is dropped, never copied
+            return ("drop", None) if cid in self.hide else ("match", cid)
+        except VaultError as e:
+            if e.code != "unknown_concept":
+                raise
+        v = self.vectors()
+        if v is not None and v[1] is not None:
+            import numpy as np
+            ids, vs = v[1]
+            cos = np.asarray(vs) @ self.vec(name)
+            k = int(np.argmax(cos))
+            if float(cos[k]) >= MATCH_COS:
+                return "match", ids[k]
+        return "new", None
+
+    def area(self, matched: list[str], hub: str | None = None) -> str:
+        """The area most `matched` concepts share, else the one most concepts filed under `hub`
+        share, else DOMAIN > AREA (made once)."""
+        def common(ids):
+            areas = Counter(e.parent for c in ids if (e := self.catalog.entries.get(c))
+                            and e.kind == "concept" and c not in self.hide
+                            and e.parent and e.parent not in self.hide)
+            return areas.most_common(1)[0][0] if areas else None
+
+        aid = common(matched) or (hub and common(sorted(
+            topics.members(self.index, self.tree).get(hub, ()))))
+        if aid:
+            return aid
+        cat = self.catalog
+        did = slugify(DOMAIN)
+        if getattr(cat.entries.get(did), "kind", None) != "domain":
+            did = cat.add("domain", DOMAIN, force=True)
+        aid = f"{did}.{slugify(AREA)}"
+        if aid not in cat.entries:
+            aid = cat.add("area", AREA, did, force=True)
+        return aid
+
+    def create(self, name: str, matched: list[str], text: str = "") -> tuple[str | None, bool]:
+        """(concept id, created) for a name no concept matched; (None, False) when refused.
+        `text`: more words to place it by (a summary), embedded with the name."""
+        hub = self.hub(f"{name}\n{text}".strip())
+        try:
+            cid = self.catalog.add("concept", name, self.area(matched, hub))
+        except VaultError as e:
+            dups = e.did_you_mean or []
+            if e.code == "duplicate_suggested":  # cortex_add's "did you mean": the first one
+                ok = dups and not any(d in self.hide for d in dups)  # never near a hidden one
+                return (dups[0], False) if ok else (None, False)
+            if e.code in ("invalid_argument", "invalid_id", "secret_detected"):
+                return None, False
+            raise
+        if hub:
+            self.vault._edit_fields("concept", cid, {"related": [f"[[{hub}]]"]})
+        self.index.refresh()
+        return cid, True
+
+    def link(self, name: str, matched: list[str], text: str = "") -> tuple[str | None, bool]:
+        """(concept id, created), or (None, False) for a name refused or hidden."""
+        what, cid = self.resolve(name)
+        if what == "new":
+            return self.create(name, matched, text)
+        return cid, False
+
+
 class _Pass:
     def __init__(self, vault: Vault, runner, embed, dry_run: bool, now: datetime):
         self.vault, self.runner, self.embed, self.dry, self.now = vault, runner, embed, dry_run, now
@@ -228,6 +347,7 @@ class _Pass:
         self.catalog = Catalog.load(vault)
         self.index = Index(vault, self.catalog)
         self.hide = planner.hidden(vault, self.catalog)
+        self.link = Linker(vault, self.catalog, self.index, self.hide, embed)
         evs = live(self.evlog.iter_events())
         self.learning = _learning(evs)
         today = local_day(now)
@@ -239,43 +359,21 @@ class _Pass:
         self.taught_ids: list[str] = []
         self.events = 0
         self._names()
-        self._vectors()
 
     def _names(self) -> None:
         cat, notes = self.catalog.entries, self.index._notes
-        self.tree = topics.tree(self.index)
         self.by_name: dict[str, str] = {}  # casefolded name -> page id
-        hidden: list[str] = []
         for e in cat.values():
-            if e.kind != "concept":
-                continue
-            names = [e.title, *e.aliases]
-            if e.id in self.hide:
-                hidden += names
-            elif e.id in notes:
-                for n in names:
+            if e.kind == "concept" and e.id not in self.hide and e.id in notes:
+                for n in [e.title, *e.aliases]:
                     self.by_name.setdefault(" ".join(n.casefold().split()), e.id)
-        for h, title in self.tree.title.items():
+        for h, title in self.link.tree.title.items():
             if h == topics.ROOT or h not in notes:
                 continue
             al = notes[h]["fields"].get("aliases")
             for n in [title, *(al if isinstance(al, list) else [al] if al else [])]:
                 self.by_name.setdefault(" ".join(str(n).casefold().split()), h)
         self.public = _pattern(self.by_name)
-        self.hidden = _pattern(hidden)
-
-    def _vectors(self) -> None:
-        self.cents = self.heads = None
-        if self.embed is None:
-            return
-        from cortex import semantic
-        stack = topics.head_stack(self.index, self.embed)
-        self.cents = topics.centroids(self.index, self.tree, stack)
-        hv = topics.heads(stack)
-        ids = [c for c, e in self.catalog.entries.items()
-               if e.kind == "concept" and c in hv and c not in self.hide]
-        self.heads = (ids, [hv[c] for c in ids]) if ids else None
-        self._embed = lambda t: semantic._embed(self.embed, [t])[0]
 
     # ---- one chat ----
 
@@ -284,20 +382,17 @@ class _Pass:
             return "private"
         if chat.last_day() < (self.now - timedelta(days=RECENT_DAYS)).date().isoformat():
             return "old"
-        if self.hidden is not None and self.hidden.search(chat.text):
+        if self.link.hidden is not None and self.link.hidden.search(chat.text):
             return "hidden"
-        if recorded(chat, self.learning):
-            return "recorded"
         return None
 
     def layer1(self, chat: Chat) -> list[str]:
         ids = list(dict.fromkeys(self.by_name[" ".join(m[0].casefold().split())]
                                  for m in (self.public.finditer(chat.text) if self.public else ())))
-        if self.cents is not None:
-            hub = topics.attach(self._embed(chat.text[:EMBED_CHARS]), self.tree, self.cents).hub
-            if hub and hub not in ids:
-                ids.append(hub)
+        if (hub := self.link.hub(chat.text[:EMBED_CHARS])) and hub not in ids:
+            ids.append(hub)
         return ids
+
 
     def _append(self, kind: str, fields: dict, key: str) -> None:
         if not self.dry:
@@ -314,62 +409,13 @@ class _Pass:
         rec["touched"] += new
         self.counts["touches"] += len(new)
 
-    def resolve(self, name: str) -> tuple[str, str | None]:
-        """("match", id), ("new", None) or ("drop", None) for a model's concept name."""
-        try:
-            cid = self.catalog.resolve(name)  # no skip: a hidden hit is dropped, never copied
-            return ("drop", None) if cid in self.hide else ("match", cid)
-        except VaultError as e:
-            if e.code != "unknown_concept":
-                raise
-        if self.heads is not None:
-            import numpy as np
-            ids, vs = self.heads
-            cos = np.asarray(vs) @ self._embed(name)
-            k = int(np.argmax(cos))
-            if float(cos[k]) >= MATCH_COS:
-                return "match", ids[k]
-        return "new", None
-
-    def area(self, matched: list[str]) -> str:
-        """The area most of the chat's matched concepts share, else DOMAIN > AREA (made once)."""
-        areas = Counter(e.parent for c in matched if (e := self.catalog.entries.get(c))
-                        and e.kind == "concept" and e.parent and e.parent not in self.hide)
-        if areas:
-            return areas.most_common(1)[0][0]
-        cat = self.catalog
-        did = slugify(DOMAIN)
-        if getattr(cat.entries.get(did), "kind", None) != "domain":
-            did = cat.add("domain", DOMAIN, force=True)
-        aid = f"{did}.{slugify(AREA)}"
-        if aid not in cat.entries:
-            aid = cat.add("area", AREA, did, force=True)
-        return aid
-
-    def create(self, name: str, matched: list[str]) -> tuple[str | None, bool]:
-        """(concept id, created) for a name no concept matched; (None, False) when refused."""
-        try:
-            cid = self.catalog.add("concept", name, self.area(matched))
-        except VaultError as e:
-            dups = e.did_you_mean or []
-            if e.code == "duplicate_suggested":  # cortex_add's "did you mean": the first one
-                ok = dups and not any(d in self.hide for d in dups)  # never near a hidden one
-                return (dups[0], False) if ok else (None, False)
-            if e.code in ("invalid_argument", "invalid_id", "secret_detected"):
-                return None, False
-            raise
-        if self.cents is not None and (hub := topics.attach(
-                self._embed(name), self.tree, self.cents).hub):
-            self.vault._edit_fields("concept", cid, {"related": [f"[[{hub}]]"]})
-        return cid, True
-
-    def layer2(self, chat: Chat, matched: list[str], rec: dict) -> None:
+    def layer2(self, chat: Chat, matched: list[str], rec: dict, done: set[str]) -> None:
         if self.taught_today >= TAUGHT_PER_DAY:
             return  # the day's cap: no model call, no new concept
         for name in ask_model(self.runner, chat):
             if self.taught_today >= TAUGHT_PER_DAY:
                 break
-            what, cid = self.resolve(name)
+            what, cid = self.link.resolve(name)
             if what == "drop":
                 continue
             made = False
@@ -378,15 +424,14 @@ class _Pass:
                     self.counts["new"] += 1
                     self.new_ids.append(slugify(name))
                     continue
-                cid, made = self.create(name, matched)
+                cid, made = self.link.create(name, matched)
                 if cid is None:
                     continue
-            if cid in rec["taught"]:
-                continue
             if made:
                 self.counts["new"] += 1
                 self.new_ids.append(cid)
-                self.index.refresh()
+            elif cid in rec["taught"] or cid in done:  # the chat model logged it already
+                continue
             matched.append(cid)
             self._append("taught", {"object": f"concept:{cid}", "payload": {
                 "kind": "taught", "auto": SOURCE, "chat": chat.id}},
@@ -402,10 +447,12 @@ class _Pass:
             return {**rec, "what": why, "l2": None}
         rec = {"touched": [], "taught": [], **rec, "what": "done"}
         self.counts["chats"] += 1
+        done = recorded(chat, self.learning)
         ids = self.layer1(chat)
-        self.touch(chat, h, ids, rec)
+        self.touch(chat, h, [i for i in ids if i not in done], rec)
         if self.runner is not None:
-            self.layer2(chat, [i for i in ids if i in self.catalog.entries], rec)
+            self.layer2(chat, [i for i in dict.fromkeys([*ids, *sorted(done)])
+                               if i in self.catalog.entries], rec, done)
         rec["l2"] = self.runner is not None
         return rec
 

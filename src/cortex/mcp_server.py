@@ -43,7 +43,7 @@ from cortex import (
 from cortex import lint as lint_mod
 from cortex import session as session_mod
 from cortex.catalog import KINDS as CATALOG_KINDS
-from cortex.catalog import Catalog, inbox_add, resolve_or_inbox, slugify
+from cortex.catalog import Catalog, inbox_add, slugify
 from cortex.catalog import sync as catalog_sync
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.events import (
@@ -124,8 +124,9 @@ def _code_changed(fresh: bool = False) -> bool:
 ADD_FIELDS = {
     "problem": {"url", "platform", "difficulty", "concepts", "status", "solved_on", "summary"},
     "assessment": {"company", "kind", "date", "outcome", "score", "application", "tests",
-                   "tested_concepts", "summary"},
-    "application": {"company", "role", "status", "applied_on", "ctc", "assessments", "summary"},
+                   "tested_concepts", "summary", "concepts"},
+    "application": {"company", "role", "status", "applied_on", "ctc", "assessments", "assessment",
+                    "summary"},
     "mistake": {"concepts", "summary"},
     # docs/design/phase4-wiki.md §2: wiki kinds; not catalog kinds, never in the FSRS queue
     "resource": {"resource_type", "url", "source", "status", "covers", "summary", "related",
@@ -146,6 +147,22 @@ WIKI_DEFAULTS = {
     "decision": {"status": "proposed", "related": []},
     "loop": {"loop_type": "commitment", "status": "open", "related": []},
 }
+
+
+def _same_company(a: dict, b: dict) -> bool:
+    """Do two pages' fields name one company: equal `company`, or one's company a whole word of
+    the other's title ("Hyland" and "Hyland OA")?"""
+    def co(f):
+        return " ".join(str(f.get("company") or "").casefold().split())
+
+    def within(c, f):
+        return bool(c) and re.search(rf"(?<!\w){re.escape(c)}(?!\w)",
+                                     str(f.get("title") or "").casefold()) is not None
+
+    ca, cb = co(a), co(b)
+    return bool(ca) and ca == cb or within(ca, b) or within(cb, a)
+
+
 LINK_FIELDS = ("related", "covers", "applies", "decisions")
 DECISION_BODY = ("\n\n## Context\n\n## Options\n\n## Decision\n\n## Consequences\n"
                  "\n## Outcome\n\n## Lesson\n")
@@ -2122,17 +2139,17 @@ class Cortex:
         if kind == "assessment_result":
             line = self._log_assessment(p, key)
         elif kind == "self_report":
-            obj = self._log_concept(p, "self_report")
             if p.get("verdict") not in VERDICTS:
                 raise invalid("self_report needs verdict: correct, partial or wrong.")
+            h = p.get("hints")
+            if h is not None and (isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3):
+                raise invalid("hints must be a whole number from 0 to 3.")
+            obj, made = self._log_concept(p, "self_report")  # after the checks: it may create
             pl = {"kind": "self_report", "concept": obj.split(":", 1)[1],
                   "verdict": p["verdict"]}
             for name in ("hints", "note"):
                 if p.get(name) is not None:
                     pl[name] = p[name]
-            h = pl.get("hints", 0)
-            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
-                raise invalid("hints must be a whole number from 0 to 3.")
             cid = obj.split(":", 1)[1] if obj.startswith("concept:") else None
             sp = None
             if cid:  # server-stamped like ask and grade, so eval learning can pair it
@@ -2142,10 +2159,10 @@ class Cortex:
                          source="self")
             line = f"{render.esc(self._title(cid) if cid else p['concept'])}: {p['verdict']}"
         elif kind == "taught":
-            obj = self._log_concept(p, "taught")
             summary = str(p.get("summary") or "")
             if len(summary) > 300:
                 raise invalid("summary must be 300 characters or fewer.")
+            obj, made = self._log_concept(p, "taught")  # after the check: it may create
             pl = {"kind": "taught", **({"summary": summary} if summary else {})}
             self._append("taught", {"object": obj, "payload": pl}, key)
             cid = obj.split(":", 1)[1] if obj.startswith("concept:") else None
@@ -2176,8 +2193,12 @@ class Cortex:
         else:
             line = self._log_problem(p, key)
         if kind in ("self_report", "taught") and cid is None:
-            line += (" (added to inbox.md; not a concept yet: cortex_add(kind='concept', "
-                     "title=…, parent=…) it, then log it again)")
+            line += " (added to inbox.md, not linked to a concept)"
+        elif kind in ("self_report", "taught") and made:
+            e = self.catalog.entries[cid]
+            where = " › ".join(self._title(i) for i in (e.domain, e.parent) if i)
+            line = f"Created {render.esc(e.title)} under {render.esc(where)}. " + line
+            extra["id"] = cid
         hint = self.sessions.note("logged", cid, log_kind=kind)
         return {"recorded": 1, **extra, "display_line": line,
                 "next": self._next(MORE_NEXT) + hint}
@@ -2442,11 +2463,53 @@ class Cortex:
         return {"recorded": 1, "display_line": f"Journal {day}: logged",
                 "next": self._next(MORE_NEXT) + hint}
 
-    def _log_concept(self, p: dict, what: str) -> str:
+    def _log_concept(self, p: dict, what: str) -> tuple[str, bool]:
+        """(object, created): 'concept:<id>' for a known or newly made concept (_link_names),
+        else 'inbox:<slug>' (a refused or hidden name, parked in inbox.md)."""
         if not p.get("concept"):
             raise invalid(f"{what} needs payload.concept.")
-        return resolve_or_inbox(self.vault, self.catalog, str(p["concept"]), f"cortex_log {what}",
-                                skip=self._hidden())
+        [(name, cid, made)] = self._link_names([p["concept"]],
+                                               text=str(p.get("summary") or p.get("note") or ""))
+        if cid:
+            return f"concept:{cid}", made
+        return inbox_add(self.vault, name, f"cortex_log {what}"), False
+
+    def _matched(self) -> list[str]:
+        """The concepts this session touched or logged: a new concept's area comes from them."""
+        return sorted(c for c in {*self.session.touched, *self.touched}
+                      if getattr(self.catalog.entries.get(c), "kind", None) == "concept")
+
+    def _link_names(self, names: list, hide: set[str] | None = None,
+                    text: str = "") -> list[tuple[str, str | None, bool]]:
+        """(name, concept id or None, created) per concept name: a known concept, else one made
+        under the area this session's concepts share and linked to a hub (safety_net.Linker).
+        None for a junk, secret or hidden name, and for any unknown name in review mode. The
+        embedder is used only when already loaded; nothing is loaded or downloaded."""
+        from cortex import safety_net, semantic
+        hide = self._hidden() if hide is None else hide
+        matched, linker, out = self._matched(), None, []
+        for raw in names:
+            name = " ".join(str(raw).split())
+            try:
+                cid, made = self.catalog.resolve(name, skip=hide), False
+            except VaultError as e:
+                if e.code != "unknown_concept":
+                    raise
+                clean = safety_net.clean_name(name)
+                if clean is None or self.session.mode == "review":
+                    out.append((name, None, False))
+                    continue
+                linker = linker or safety_net.Linker(self.vault, self.catalog, self.index, hide,
+                                                     semantic._embedder)
+                cid, made = linker.link(clean, matched, text)
+            if made:
+                self.sessions.note("added", cid, change={"tool": "add", "id": cid,
+                                                         "kind": "concept", "op": "create",
+                                                         "target": None})
+            if cid:
+                matched.append(cid)
+            out.append((name, cid, made))
+        return out
 
     def _log_assessment(self, p: dict, key: str | None) -> str:
         outcome = p.get("outcome")
@@ -2468,8 +2531,9 @@ class Cortex:
                 continue
             try:
                 weak.append(self.catalog.resolve(name, CATALOG_KINDS))
-            except VaultError:
-                weak.append(inbox_add(self.vault, name, "felt weak in an assessment"))
+            except VaultError:  # an unknown name becomes a concept, as in taught
+                [(_, cid, _)] = self._link_names([name])
+                weak.append(cid or inbox_add(self.vault, name, "felt weak in an assessment"))
         log_assessment(self.log, session=self.session.id, source="tutor", assessment=str(aid),
                        outcome=outcome, score=p.get("score"), company=p.get("company"),
                        kind=akind, date=p.get("date"), felt_weak=weak or None, key=key,
@@ -2477,21 +2541,50 @@ class Cortex:
         return f"Assessment {render.esc(aid)}: {outcome}"
 
     def _log_problem(self, p: dict, key: str | None) -> str:
-        pid, status = str(p.get("problem") or ""), p.get("status")
+        status, h = p.get("status"), p.get("hints")
         if not isinstance(status, str) or status not in ENUMS[("problem", "status")]:
             raise invalid("status must be todo, attempted or solved.")
-        obj = self._problem(pid)
+        if h is not None and (isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3):
+            raise invalid("hints must be a whole number from 0 to 3.")
+        pid = self._problem_id(p, status)
+        obj = f"problem:{pid}"
         pl = {"kind": "problem_status", "problem": pid, "status": status}
-        if p.get("hints") is not None:
-            h = p["hints"]
-            if isinstance(h, bool) or not isinstance(h, int) or not 0 <= h <= 3:
-                raise invalid("hints must be a whole number from 0 to 3.")
-            pl["hints"] = p["hints"]
+        if h is not None:
+            pl["hints"] = h
         self._append("log", {"object": obj, "payload": pl}, key)
         self.vault.set_field("problem", pid, "status", status)
         if status == "solved":
             self.vault.set_field("problem", pid, "solved_on", local_day(self._now()))
         return f"Problem {render.esc(pid)}: {status}"
+
+    def _problem_id(self, p: dict, status: str) -> str:
+        """The problem page payload.problem names (an id or a title). An unknown one is created
+        with that title, linked to payload.concepts (names, through _link_names); never in review
+        mode, which keeps the unknown_id error."""
+        name = " ".join(str(p.get("problem") or "").split())
+        for i in (name, slugify(name)):
+            if i and ID_RE.fullmatch(i) and self.vault.path_for("problem", i).is_file():
+                return i
+        if not slugify(name) or self.session.mode == "review":
+            return self._problem(name).partition(":")[2]  # unknown_id with a hint
+        cs = p.get("concepts")
+        names = [cs] if isinstance(cs, str) else cs if isinstance(cs, list) else []
+        linked = [f"[[{c}]]" for _, c, _ in self._link_names(names, text=name) if c]
+        fields = {"status": status, **({"concepts": linked} if linked else {})}
+        try:
+            pid = self._add_note("problem", name, None, fields, False)
+        except VaultError as e:
+            if e.code != "duplicate_suggested":
+                raise
+            same = [d for d in e.did_you_mean or [] if self.vault.path_for("problem", d).is_file()
+                    and str(self.vault.read("problem", d).fields.get("title") or "").casefold()
+                    == name.casefold()]
+            if same:
+                return same[0]
+            pid = self._add_note("problem", name, None, fields, True)  # only a similar title
+        self.sessions.note("added", change={"tool": "add", "id": pid, "kind": "problem",
+                                            "op": "create", "target": None})
+        return pid
 
     def _note_ref(self, ref: str) -> tuple[str, str]:
         """'me/profile', 'concepts/x' or a bare id or concept name -> (kind, id)."""
@@ -3060,6 +3153,10 @@ class Cortex:
                 (raw_text is not None and (raw / f"{nid}.md").exists()):
             nid = f"{base[:78].rstrip('-.')}-{n}"
             n += 1
+        if kind == "assessment":  # after the duplicate check: these may create concepts
+            fields = self._assessment_links(title, fields)
+        elif kind == "application":
+            fields = self._application_links(title, fields)
         body = f"# {title}\n\n## Notes\n"
         if kind == "decision":
             body = f"# {title}{DECISION_BODY}"
@@ -3077,6 +3174,59 @@ class Cortex:
                                                "source": f"raw/{nid}.md"}, body)
             self.vault.write_text(raw / f"{nid}.md", raw_text)
         return nid
+
+    def _assessment_links(self, title: str, fields: dict) -> dict:
+        """fields.concepts (names) and the names in fields.tests become `tests` weights on
+        `<kind>:<id>` (a known domain, area or concept, else a concept made by _link_names; a
+        refused name goes to inbox.md), so the planner and the graph see them. With no
+        `application`, the public application of the same company is linked."""
+        fields, hide = dict(fields), self._hidden()
+        cs, tests = fields.pop("concepts", None), fields.get("tests")
+        names = [cs] if isinstance(cs, str) else cs if isinstance(cs, list) else []
+        if isinstance(tests, list):
+            names, tests = [*tests, *names], {}
+        out, todo = {}, []
+        for k, w in (tests.items() if isinstance(tests, dict) else ()):
+            try:
+                i = self.catalog.resolve(_target(k) or str(k), CATALOG_KINDS, skip=hide)
+                out[f"{self.catalog.entries[i].kind}:{i}"] = w
+            except VaultError:
+                if ":" in str(k):
+                    out[k] = w  # an id key Cortex does not know (yet): kept as written
+                else:
+                    todo.append((str(k), w))
+        todo += [(str(n), 1) for n in names]
+        for (name, w), (_, cid, _) in zip(todo, self._link_names([n for n, _ in todo], hide),
+                                          strict=True):
+            if cid:
+                out.setdefault(f"concept:{cid}", w)
+            else:
+                inbox_add(self.vault, name, "tested by an assessment")
+        if out or tests is not None:
+            fields["tests"] = out
+        if not fields.get("application"):
+            me = {**fields, "title": title}
+            apps = [n.id for n in self.vault.iter_notes("application")
+                    if not is_private(n) and _same_company(me, n.fields)]
+            if apps:
+                fields["application"] = f"[[{apps[0]}]]"
+        return fields
+
+    def _application_links(self, title: str, fields: dict) -> dict:
+        """fields.assessment(s) as `[[id]]` links when the page exists (by id or title slug),
+        plus every public assessment of the same company."""
+        fields = dict(fields)
+        one, v = fields.pop("assessment", None), fields.get("assessments")
+        names = [*([v] if isinstance(v, str) else v if isinstance(v, list) else []),
+                 *([one] if one else [])]
+        found = {n.id: n for n in self.vault.iter_notes("assessment") if not is_private(n)}
+        me = {**fields, "title": title}
+        links = [f"[[{t}]]" if (t := _target(n) or slugify(str(n))) in found else str(n)
+                 for n in names]
+        links += [f"[[{i}]]" for i, n in found.items() if _same_company(me, n.fields)]
+        if links:
+            fields["assessments"] = list(dict.fromkeys(links))
+        return fields
 
     def _wiki_fields(self, kind: str, fields: dict, raw_text: str | None) -> dict:
         """Defaults, [[link]] form and the §2a rules for a new resource/note/project/decision."""
@@ -3214,7 +3364,9 @@ DESCRIPTIONS = {
     "cortex_log": "Record evidence outside a live question. payload by kind: assessment_result "
                   "{assessment?|company+assessment_kind+date, outcome, score?, felt_weak?}; "
                   "self_report {concept, verdict, hints?, note?}; taught {concept, summary}; "
-                  "problem_status {problem, status, hints?}; capture {resource, pages[]} "
+                  "an unknown concept (or felt_weak name) is created and linked; "
+                  "problem_status {problem, status, hints?, concepts?} (an unknown problem is "
+                  "created, linked to concepts); capture {resource, pages[]} "
                   "after ingesting a source (log.md line only); journal {text, mood?, energy?} "
                   "(1-5) adds a line to today's journal; chat_saved {source: "
                   + "|".join(chats.SOURCES) + ", chat_id, title, pages[], again?} after "
@@ -3247,7 +3399,9 @@ DESCRIPTIONS = {
                   "resource, note, project, decision or loop (fields.loop_type commitment|question|"
                   "idea, due, status open|done|dropped); give fields.summary (one line). A "
                   "resource can save pasted source text once with raw_text. note_type fleeting "
-                  "goes to inbox.md; permanent needs fields.related. Near-duplicates return "
+                  "goes to inbox.md; permanent needs fields.related. An assessment's "
+                  "fields.concepts (names) become its tested concepts (unknown ones created); "
+                  "an application links the same company's assessments. Near-duplicates return "
                   "duplicate_suggested; force=true overrides. person (fields.relation tag, "
                   "tier close|work|public, private: false makes it searchable) makes a page "
                   "people/<slug>, private by default.",
