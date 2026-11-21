@@ -691,7 +691,12 @@ class App:
         """RR-9: a decision-like commit subject approved becomes a decision page (status
         accepted, the commit's day, linked to the repo page; private when that page is)."""
         x = self._decision(body)
+        from datetime import date, timedelta
+
+        from cortex import loops  # follow up REVIEW_DAYS from the approve day, not the commit's
+        due = date.fromisoformat(self._today()) + timedelta(days=loops.REVIEW_DAYS)
         fields = {"date": x["date"], "status": "accepted", "related": [x["page"]],
+                  "review_on": due.isoformat(),
                   "summary": f"From my commit {x['hash'][:7]} in {x['project']} "
                              f"(\"{x['word']}\")."}
         if x["private"]:

@@ -6,6 +6,7 @@ import io
 import os
 import subprocess
 import zipfile
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,8 @@ def test_review_approves_and_dismisses_commit_decisions(root, tmp_path):
     page = (root / "decisions" / f"{c['target']}.md").read_text("utf-8")
     assert 'title: "Replace pickle with JSON in the cache"' in page and "private: true" in page
     assert 'date: "2026-03-15"' in page and 'status: "accepted"' in page
+    due = date.fromisoformat(server.App._today()) + timedelta(days=21)  # from the approve day
+    assert f'review_on: "{due.isoformat()}"' in page
     assert "[[repo-planner]]" in page and "planner" in page
     assert app.review_decision_dismiss({"key": second["key"]})["decisions"] == []
     with pytest.raises(server.NotFound):
