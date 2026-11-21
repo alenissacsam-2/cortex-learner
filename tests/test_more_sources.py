@@ -5,6 +5,7 @@ pypdf, a .docx with zipfile, a git repo under a test identity."""
 import io
 import os
 import subprocess
+import sys
 import zipfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -91,6 +92,53 @@ def test_docs_pages_skips_and_dedupe(root_plain, tmp_path):
         p.read_text("utf-8") for p in (root_plain / "resources").glob("docs-*.md"))
     again = sources.run(v, more_sources.docs_source(d), C)
     assert again["imported"] == 0 and again["duplicate"] == 3
+
+
+def test_folder_rules_match_whole_segments_and_fold_case_on_windows(monkeypatch):
+    """RR-37: a rule names whole folders; hidden and tool folders are always left out."""
+    sf = more_sources.skip_folder
+    assert sf("School/Archive", ("Archive",)) and sf("Archive/x", ("/Archive/",))
+    assert not sf("School/Archived", ("Archive",)) and not sf("MyArchive", ("Archive",))
+    assert sf("a/School/Old/b", ("School/Old",)) and not sf("School/b/Old", ("School/Old",))
+    for d in ("node_modules", "x/.git", ".venv", "src/__pycache__", "a/.obsidian/b"):
+        assert sf(d)
+    assert not sf("") and not sf("node_modules_old") and not sf("git")
+    monkeypatch.setattr(more_sources, "FOLD_CASE", True)
+    assert sf("School/ARCHIVE", ("archive",)) and sf("Node_Modules")
+    monkeypatch.setattr(more_sources, "FOLD_CASE", False)
+    assert not sf("School/ARCHIVE", ("archive",)) and not sf("Node_Modules")
+
+
+def test_docs_skip_tool_folders_rules_and_shortcuts(root_plain, tmp_path, monkeypatch):
+    d = tmp_path / "docs"
+    for rel in ("node_modules/pkg/readme.md", ".git/notes.md", "Archive/old.md",
+                "Archived/kept.md", "top.md"):
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_text(f"# {rel}\n\nText of {rel}.\n", encoding="utf-8")
+    for name in ("Report.gdoc", "Site.url", "Thesis.lnk"):
+        (d / name).write_text("{}", encoding="utf-8")
+    seen = []
+    real = more_sources.skip_folder
+    monkeypatch.setattr(more_sources, "skip_folder",
+                        lambda rel, rules=(): seen.append(rel) or real(rel, rules))
+    r = sources.run(Vault(root_plain), more_sources.docs_source(d, skip=("Archive",)), C)
+    assert r["imported"] == 2 and r["reasons"]["a shortcut, not the file"] == 3
+    assert r["read"] == 5  # pruned folders are never listed, so never counted
+    assert not any(s.startswith("node_modules/") for s in seen)  # pruned, not walked
+
+
+def test_a_parse_that_hangs_or_crashes_is_a_skip(tmp_path, monkeypatch):
+    """RR-37: the child is killed after PARSE_TIMEOUT; a crashed child is "unreadable"."""
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "a.pdf").write_bytes(_pdf("first"))
+    (d / "b.pdf").write_bytes(_pdf("second"))
+    monkeypatch.setattr(more_sources, "PARSE_TIMEOUT", 1.0)
+    monkeypatch.setattr(more_sources, "_CHILD", [sys.executable, "-c",
+                                                  "import time; time.sleep(60)"])
+    assert list(more_sources.docs_source(d).items()) == ["parse timed out"] * 2
+    monkeypatch.setattr(more_sources, "_CHILD", [sys.executable, "-c", "pass"])
+    assert list(more_sources.docs_source(d).items()) == ["unreadable"] * 2
 
 
 def test_docs_reuse_an_earlier_notes_import(root_plain, tmp_path):

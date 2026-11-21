@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import re
 import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -103,12 +105,15 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _ESC = re.compile(r"\\([\\;,nN])")
 
 
-def _files(path: Path) -> list[tuple[str, int, float, partial]]:
+def _files(path: Path, skip_dir: Callable[[str], bool] | None = None,
+           errors: list[OSError] | None = None) -> list[tuple[str, int, float, partial]]:
     """(relative name, size, mtime, read) of every file in a .zip (and in zips inside it, one
     level: Notion nests its export parts), a folder, or one file. The one reader every
     importer and `detect` use. `read()` refuses a file over MAX_ENTRY (MAX_BYTES for a note)
     or past MAX_TOTAL for the whole call, before it decompresses it; `read(n)` reads only the
-    first n bytes; `read(items=True)` streams a JSON list up to MAX_STREAM (json_value)."""
+    first n bytes; `read(items=True)` streams a JSON list up to MAX_STREAM (json_value).
+    In a folder, `skip_dir(relative folder path)` prunes a folder before it is walked
+    (node_modules is never listed), and a subfolder that cannot be read goes to `errors`."""
     path, left = Path(path), [MAX_TOTAL]
     try:
         if path.suffix.lower() == ".zip":
@@ -117,11 +122,24 @@ def _files(path: Path) -> list[tuple[str, int, float, partial]]:
             return [(p.relative_to(path).as_posix(), p.stat().st_size, p.stat().st_mtime,
                      partial(_read, p.relative_to(path).as_posix(), p.stat().st_size,
                              partial(p.open, "rb"), left))
-                    for p in sorted(path.rglob("*")) if p.is_file()]
+                    for p in _walk(path, skip_dir, [] if errors is None else errors)
+                    if p.is_file()]
         return [(path.name, path.stat().st_size, path.stat().st_mtime,
                  partial(_read, path.name, path.stat().st_size, partial(path.open, "rb"), left))]
     except (OSError, zipfile.BadZipFile) as e:
         raise VaultError("invalid_argument", f"Cannot read {path.name}: {e}") from None
+
+
+def _walk(root: Path, skip_dir: Callable[[str], bool] | None, errors: list) -> list[Path]:
+    """Every path under `root`, sorted, minus the folders `skip_dir` prunes; unreadable
+    folders are appended to `errors` instead of stopping the walk."""
+    out = []
+    for d, dirs, names in os.walk(root, onerror=errors.append):
+        rel = Path(d).relative_to(root)
+        if skip_dir:
+            dirs[:] = [x for x in dirs if not skip_dir((rel / x).as_posix())]
+        out += [Path(d, n) for n in names]
+    return sorted(out)
 
 
 def _zip_files(z: zipfile.ZipFile, left: list[int], nested: bool = False) -> list:
