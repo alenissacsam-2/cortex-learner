@@ -125,6 +125,21 @@ def test_undo_an_ai_apps_session_then_404(root, monkeypatch):
         app.tonight_undo({"session": g["session"]})
 
 
+def test_undo_of_a_session_still_open_says_so(root):
+    async def body(call):  # no cortex_end: the session is open, nothing committed yet
+        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+                                  "parent": "dsa.arrays"})
+
+    run(root, body)
+    assert not [e for e in EventLog(Vault(root)).iter_events() if e["kind"] == "close"]
+    app = server.App(root)
+    (g,) = app.tonight()["learned"]  # what it saved is still shown
+    with pytest.raises(ValueError, match="still open"):
+        app.tonight_undo({"session": g["session"]})
+    assert not app.jobs.running() and "sliding-window" in (root / "catalog.yaml").read_text(
+        "utf-8")
+
+
 @pytest.mark.parametrize(("hh", "mm", "night"), [(19, 59, False), (20, 0, True),
                                                  (3, 59, True), (4, 0, False)])
 def test_the_app_opens_on_tonight_in_the_evening(root, hh, mm, night):

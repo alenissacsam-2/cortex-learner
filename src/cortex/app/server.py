@@ -913,12 +913,18 @@ class App:
     def tonight_undo(self, body: dict) -> dict:
         """Undo one AI app's session shown under "What AI apps learned today", as `cortex
         undo <session>` does (the CLI's own code, as a job). A session not shown there
-        (unknown, or already undone: its events went with it) is 404."""
+        (unknown, or already undone: its events went with it) is 404. A session still open
+        has no commit yet, so it is refused rather than "undone" with nothing reverted."""
         from cortex import cli
+        from cortex.events import EventLog
         sid, root = body.get("session"), self.need_root()
         if not isinstance(sid, str) or sid not in {
                 g["session"] for g in self.tonight()["learned"]}:
             raise NotFound
+        if not any(e.get("session") == sid and e.get("kind") == "close"
+                   for e in EventLog(self._vault()).iter_events()):
+            raise ValueError("This AI app's session is still open, so nothing is saved to undo "
+                             "yet. Undo works once the session closes.")
 
         def run(job):
             try:
