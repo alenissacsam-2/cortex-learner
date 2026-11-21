@@ -174,7 +174,9 @@ def test_import_reads_user_turns_only_and_once(root, tmp_path, monkeypatch):
     tool = {"type": "user", "timestamp": ts, "cwd": "D:\\x", "message": {"role": "user",
             "content": [{"type": "tool_result", "tool_use_id": "t0",
                          "content": "//pref: from a tool output"}]}}
-    lines = [turn("user", "Plan my week\n//fact: I play the violin"),
+    (root / "me/preferences.md").write_text(PREFS, encoding="utf-8")
+    lines = [turn("user", "Plan my week\n//fact: I play the violin\n"
+                          "//forget: tabs for indentation"),
              turn("assistant", "//pref: an assistant line"), tool]
     p = _transcript(code, lines)
     chat_import.run(Vault(root))
@@ -182,6 +184,11 @@ def test_import_reads_user_turns_only_and_once(root, tmp_path, monkeypatch):
     assert profile.count("I play the violin") == 1
     assert not prefs.exists() or "assistant line" not in prefs.read_text(encoding="utf-8")
     assert "tool output" not in json.dumps(events(root))
+    # an imported forget may predate the line it matches: a Review card, never a retire
+    assert "## Coding\n\n- Uses tabs for indentation" in _me(root, "preferences")
+    (card,) = review.view(Vault(root), EventLog(Vault(root)).iter_events(),
+                          local_day_now())["forget"]
+    assert card["text"] == "tabs for indentation"
     p.write_text(p.read_text(encoding="utf-8") + json.dumps(turn("user", "thanks")) + "\n",
                  encoding="utf-8")  # the chat grows: a re-import
     os.utime(p, (time.time() - 3500,) * 2)

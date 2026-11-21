@@ -47,24 +47,28 @@ def key(tag: str, text: str, day: str) -> str:
     return "tag:" + hashlib.sha1(f"{tag}\n{claims.norm(text)}\n{day}".encode()).hexdigest()[:16]
 
 
-def apply(core, items, said: bool = True) -> list[str]:
+def apply(core, items, said: bool = True, forget_said: bool = True) -> list[str]:
     """Act on (tag, text, day) items through `core` (an mcp_server.Cortex): each one through
     its `_call`, so roles, the excluded folder, an ambient session and the key dedupe all
     apply. `said`: the caller knows these are the owner's typed words (the hook, an import);
-    a session that read outside text still only proposes. Returns a line per tag acted on."""
+    a session that read outside text still only proposes. `forget_said=False` (an import: an
+    old chat's forget may predate the line it matches) sends every forget to the Review.
+    Returns a line per tag acted on."""
     lines = []
     for tag, text, day in items:
         k = key(tag, text, day)
         if core.log.has_key(k):  # before _call, which would open a session for nothing
             continue
-        out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": said,
+        ok = said and (forget_said or tag != "forget")
+        out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": ok,
                                                      "key": k})
         if "error" not in out and not out.get("duplicate"):
             lines.append(out["summary"])
     return lines
 
 
-def apply_in(vault, items, log: EventLog | None = None) -> list[str]:
+def apply_in(vault, items, log: EventLog | None = None, forget_said: bool = True
+             ) -> list[str]:
     """`apply` outside the MCP server (the prime hook, chat_import): a Cortex of its own, built
     only when an item is new (`log`: an EventLog to check keys with), whose session is closed
     (and committed) at once."""
@@ -76,7 +80,7 @@ def apply_in(vault, items, log: EventLog | None = None) -> list[str]:
 
     core = Cortex(vault)
     try:
-        return apply(core, items)
+        return apply(core, items, forget_said=forget_said)
     finally:
         if core.sessions.current is not None:
             core.sessions.close(summary="Saved //tags the user typed")
