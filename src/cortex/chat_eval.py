@@ -185,7 +185,7 @@ def forget(root: Path) -> None:
     """Drop the caches Chat keeps per vault root (the vault is about to be deleted)."""
     from cortex.browse import sites
 
-    for cache in (chat._INDEX, chat._DAYS, chat_study._STATES, sites._LEAN):
+    for cache in (chat._INDEX, chat._DAYS, chat_study._STATES, sites._LEAN, ask._PRIVATE):
         cache.pop(root, None)
 
 

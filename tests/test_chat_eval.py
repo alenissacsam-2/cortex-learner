@@ -141,6 +141,15 @@ def test_a_compares_page_passages_are_recorded_as_served(root):
     assert [p["path"] for p in got] == ["concepts/two-pointers.md"]
 
 
+def test_forget_drops_the_private_page_cache(tmp_path):
+    """Audit 21 Nov C15: the run's deleted vault leaves no private pages in memory."""
+    from cortex import ask
+
+    ask._PRIVATE[tmp_path] = {"notes/x.md": ("memo",)}
+    chat_eval.forget(tmp_path)
+    assert tmp_path not in ask._PRIVATE
+
+
 def test_the_answer_folds_tok_and_text_events_in_order(monkeypatch):
     """Audit 21 Nov C1: after a cleared first try, the retry's words are the answer."""
     def reply(vault, convo, text, runner, emit, cancel, settings, today):
