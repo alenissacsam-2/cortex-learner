@@ -26,12 +26,13 @@ MAX_CHARS = 200
 MIN_CHATS, CORE_CHATS = 2, 3
 SHOWN = 5
 _START = re.compile(r"^(?:(?:no|nope|again)\b[\s,.!:;-]*)?(?:please\s+)?(?:don't|dont|do not|"
-                    r"stop|always|never|i (?:already )?said|i told you)\b|^please use\b", re.I)
+                    r"stop|always|never(?!\s+mind)|i (?:already )?said|i told you)\b"
+                    r"|^please use\b", re.I)
 _SOFT = re.compile(r"^(?:i(?:'d| would)? prefer|from now on|(?:(?:that's|that is|it's|this is|"
                    r"way|much) )?too long|(?:(?:that's|that is|this is) )?not what i meant|"
                    r"actually)\b", re.I)
-_CORE = re.compile(r"^(?:(?:no|nope|again)\b[\s,.!:;-]*)?(?:please\s+)?(?:always|never|"
-                   r"from now on)\b", re.I)
+_CORE = re.compile(r"^(?:(?:no|nope|again)\b[\s,.!:;-]*)?(?:please\s+)?(?:always|"
+                   r"never(?!\s+mind)|from now on)\b", re.I)
 
 
 def is_correction(turn: str) -> bool:

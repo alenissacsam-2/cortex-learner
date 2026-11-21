@@ -259,7 +259,8 @@ def test_is_correction():
         assert corrections.is_correction(t), t
     for t in ("don't you think so?", "use the function above", "how do I stop a thread",
               "x" * 201, "Why don't you try", "", "actually is that right?", "actuallyx",
-              "the list is too long"):
+              "the list is too long",
+              "never mind, let's do graphs", "Never mind that", "no, never mind"):  # audit M8
         assert not corrections.is_correction(t), t
 
 
