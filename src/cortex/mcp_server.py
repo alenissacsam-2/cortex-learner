@@ -1525,7 +1525,7 @@ class Cortex:
             self.sessions.close(summary="auto-closed: new chat")
             self.session = None
             self._reset()
-        tagged = self._tags(prompt)
+        tagged = self._tags(prompt, hooked=related_only)
         parts, xr, hits = self._prime_select(prompt, related_only)
         context = "\n\n".join(parts)
         xray.record(self.vault, "cortex_prime", self.sessions.client, xr["served"],
@@ -2436,10 +2436,16 @@ class Cortex:
         return {"recorded": 1, "chat": cid, **tagged, "display_line": "Chat logged",
                 "next": f"Continue; log the next turn the same way (chat '{cid}')." + more}
 
-    def _tags(self, user: str) -> list[str]:
-        """R3-5: act on the //tags in a user turn (cortex.tags); the display lines."""
+    def _tags(self, user: str, hooked: bool = False) -> list[str]:
+        """R3-5: act on the //tags in a user turn (cortex.tags); the display lines. `hooked`
+        (cortex_prime related_only): the prime hook saved them moments ago, maybe before the
+        04:00 day change, so an hour ago's day key counts as saved too."""
         found = tags.find(user)
-        day = local_day(self._now())
+        now = self._now()
+        if hooked:
+            before = local_day(now - timedelta(hours=1))
+            found = [(t, x) for t, x in found if not self.log.has_key(tags.key(t, x, before))]
+        day = local_day(now)
         return tags.apply(self, [(t, x, day) for t, x in found]) if found else []
 
     def _tag(self, tag: str, text: str, said: bool, key: str | None = None) -> dict[str, Any]:

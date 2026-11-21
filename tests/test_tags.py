@@ -149,6 +149,29 @@ def test_prime_hook_saves_tags_on_every_prompt_once(root, monkeypatch):
     assert _me(root, "preferences").count("Replies in British English") == 1
 
 
+def test_a_hooked_tag_across_the_4am_day_change_is_saved_once(root, monkeypatch):
+    """Audit 21 Nov M6: the hook saved a //tag at 03:59 (yesterday's Cortex day); the app's
+    cortex_prime(related_only=true) of the same prompt at 04:00 keyed it on the new day and
+    saved it a second time."""
+    import datetime as dt
+
+    from cortex import session
+
+    now = dt.datetime.now().astimezone().replace(hour=4, minute=0, second=30, microsecond=0)
+    before = local_day((now - dt.timedelta(minutes=2)).astimezone(dt.UTC))
+    assert before != local_day(now.astimezone(dt.UTC))
+    tags.apply_in(Vault(root), [("pref", "Replies in British English", before)])  # the hook
+    monkeypatch.setattr(session.SessionManager, "_now", lambda self: now.astimezone(dt.UTC))
+
+    async def body(call):
+        out = await call("cortex_prime", {"prompt": "//pref: Replies in British English",
+                                          "related_only": True})
+        assert "tags" not in out
+
+    run(root, body)
+    assert _me(root, "preferences").count("Replies in British English") == 1
+
+
 def _transcript(code, lines):
     p = code / "D--Dev-proj" / "s1.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
