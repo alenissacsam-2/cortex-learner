@@ -520,10 +520,18 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         prefix = src.prefix or src.id
         nid = f"{prefix}-private-{month}" if hidden else f"{prefix}-{month}"
         p = vault.path_for("resource", nid)
-        have = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
-        add = sorted(lines - have)
-        # a per-day summary line ("- YYYY-MM-DD: …", photos and location) replaces that day's
-        old = {m.group(1): ln for ln in have if (m := _DAY_LINE.match(ln))}
+        # the other tier's page of the month too: a tier made stricter (or looser) since then
+        # never writes the same line twice
+        twin = vault.path_for("resource", f"{prefix}-{month}" if hidden
+                              else f"{prefix}-private-{month}")
+        mine = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
+        theirs = set(twin.read_text("utf-8").splitlines()) if twin.is_file() else set()
+        add = sorted(lines - mine - theirs)
+        # a per-day summary line ("- YYYY-MM-DD: …", photos and location) replaces that day's,
+        # never in a public page from a private import
+        if hidden and theirs and not _was_private(vault, twin):
+            theirs = set()
+        old = {m.group(1): ln for ln in mine | theirs if (m := _DAY_LINE.match(ln))}
         swap = {old[m.group(1)]: ln for ln in add
                 if (m := _DAY_LINE.match(ln)) and m.group(1) in old}
         add = [ln for ln in add if ln not in swap.values()]
@@ -533,11 +541,12 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         if dry_run or not (add or swap):
             continue
         heading = src.noun.capitalize()
-        if swap:
-            vault.update_text(p, lambda t, s=swap: "".join(
-                s.get(x.rstrip("\r\n"), x.rstrip("\r\n")) + x[len(x.rstrip("\r\n")):]
-                for x in t.splitlines(keepends=True)))
-        if have:
+        for q in (p, twin) if swap else ():  # in whichever page holds the day's line
+            if q.is_file() and (q == p or theirs):
+                vault.update_text(q, lambda t, s=swap: "".join(
+                    s.get(x.rstrip("\r\n"), x.rstrip("\r\n")) + x[len(x.rstrip("\r\n")):]
+                    for x in t.splitlines(keepends=True)))
+        if mine or not add:
             # shortcut: later imports append, so a month is sorted within each import only
             if add:
                 vault.append_to_section("resource", nid, heading, "\n".join(add))
