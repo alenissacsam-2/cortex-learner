@@ -248,16 +248,18 @@ def test_auto_imported_chats_show_on_their_import_day_private_ones_unlocked(root
     assert "secret-chat" in {i["id"] for i in hc.get(private=True)["feed"]["today"]}
 
 
-# ---- retention half-life per subject ----
+# ---- how long each subject stays sharp (the 90% recall horizon) ----
 
 
-def test_keep_line_rounds_to_days_or_weeks_and_needs_three_concepts():
+def test_sharp_line_rounds_to_days_weeks_or_months_and_needs_three_concepts():
     assert home._keep([5.0, 6.0]) == {"n": 2, "days": None, "text": "Not enough checks yet"}
-    assert home._keep([0.2, 0.5, 0.9])["text"] == "You keep this under a day"
-    assert home._keep([1.0, 1.2, 0.9])["text"] == "You keep this about 1 day"
+    assert home._keep([0.2, 0.5, 0.9])["text"] == "Stays sharp under a day"
+    assert home._keep([1.0, 1.2, 0.9])["text"] == "Stays sharp about 1 day"
     assert home._keep([10.0, 12.2, 40.0]) == {"n": 3, "days": 12.2,
-                                               "text": "You keep this about 12 days"}
-    assert home._keep([20.0, 30.0, 400.0])["text"] == "You keep this about 4 weeks"
+                                               "text": "Stays sharp about 12 days"}
+    assert home._keep([20.0, 30.0, 400.0])["text"] == "Stays sharp about 4 weeks"
+    assert home._keep([60.0, 62.0, 90.0])["text"] == "Stays sharp about 9 weeks"
+    assert home._keep([63.0, 90.0, 120.0])["text"] == "Stays sharp about 3 months"
 
 
 HASHING = """          - id: "hashing"
@@ -277,22 +279,22 @@ def _add_hashing(root: Path, verdict: str, at: datetime, **fields) -> None:
     _grade(root, "hashing", verdict, at)
 
 
-def test_each_subject_gets_its_median_half_life_private_left_out(root):
-    """The median over a subject's concepts with a stability; under 3 shows no number. The
+def test_each_subject_gets_its_median_stability_private_left_out(root):
+    """The median FSRS stability over a subject's concepts; under 3 shows no number. The
     private concept in dsa never counts, so dsa needs a third public concept."""
-    from cortex import levels, planner
+    from cortex import planner
     _grade(root, "secret-diary", "correct", NOW - timedelta(days=3))
     keep = {g["subject"]["id"]: g["keep"] for g in _cache(root).get()["next_up"] if g["subject"]}
     assert keep["domain:dsa"] == {"n": 2, "days": None, "text": "Not enough checks yet"}
     assert keep["domain:sys"]["n"] == 1 and keep["domain:sys"]["days"] is None
     _add_hashing(root, "correct", NOW - timedelta(days=4))
     states, _ = planner.current_states(Vault(root), local_day(NOW))
-    want = statistics.median(levels.half_life(states[c].stability)
+    want = statistics.median(states[c].stability
                              for c in ("arrays-basics", "two-pointers", "hashing"))
     g = next(g for g in _cache(root).get()["next_up"]
              if (g["subject"] or {}).get("id") == "domain:dsa")
     assert g["keep"]["n"] == 3 and g["keep"]["days"] == round(want, 1)
-    assert g["keep"]["text"].startswith("You keep this ")
+    assert g["keep"]["text"].startswith("Stays sharp ")
     assert "secret-diary" not in json.dumps(g)
 
 

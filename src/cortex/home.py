@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cortex import brainmap, dashboard, levels, planner, recall_log, semantic, topics
+from cortex import brainmap, dashboard, planner, recall_log, semantic, topics
 from cortex.access import Audience, audience_of_note, audience_of_study, may_see
 from cortex.browse import store
 from cortex.catalog import CATALOG
@@ -49,7 +49,7 @@ WEEK_DAYS = 7  # Today plus the six days before it
 FEED_CAP = 200  # items in each of Today and This week
 PER_GROUP = 20  # items of one kind for one subject on one day (an import adds hundreds)
 NEXT_SUBJECTS, NEXT_ITEMS = 8, 5
-KEEP_MIN = 3  # concepts with a stability a subject needs before its half-life shows
+KEEP_MIN = 3  # concepts with a stability a subject needs before its sharp line shows a number
 KEEP = 5  # homes kept per Private setting, for deltas
 # the brain stem's websites: the STEM_TOP most visited, then up to STEM_RECENT more visited in
 # the last STEM_DAYS days (the rest stay in the browsing store; the legend says how many)
@@ -584,7 +584,7 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
 def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
     """Subjects by their latest activity, each with its next steps: the plan's items, then
     the due reviews the plan had no room for; no dates. Private subjects are left out. Each
-    subject's `keep` is its retention half-life line (`_keep`) over its shown concepts."""
+    subject's `keep` is its stays-sharp line (`_keep`) over its shown concepts."""
     look = _Lookup(data, parts)
     states, hidden = parts["states"], parts["hidden"]
     steps = []
@@ -605,17 +605,17 @@ def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
         i = _obj(e) or (str(c.get("id")) if isinstance(c, dict) and c.get("id") else None)
         if i and (s := look.subject(i)):
             last[s["id"]] = max(last.get(s["id"], ""), e.get("ts", ""))
-    lives: dict = {}  # subject id -> half-lives (days) of its shown concepts with a stability
+    sharp: dict = {}  # subject id -> FSRS stabilities (days) of its shown concepts
     for c, st in states.items():
         if st.stability is not None and c not in hidden and c in look.catalog.entries \
                 and look.audience(c) is Audience.CLOUD and (subj := look.subject(c)):
-            lives.setdefault(subj["id"], []).append(levels.half_life(st.stability))
+            sharp.setdefault(subj["id"], []).append(st.stability)
     groups: dict = {}
     for s in steps:
         subj = look.subject(s["id"])
         sid = (subj or {}).get("id")
         g = groups.setdefault(sid, {"subject": subj, "items": [],
-                                    "keep": _keep(lives.get(sid, [])) if subj else None})
+                                    "keep": _keep(sharp.get(sid, [])) if subj else None})
         if len(g["items"]) < NEXT_ITEMS:
             g["items"].append(s)
     order = sorted(groups.values(), key=lambda g: last.get((g["subject"] or {}).get("id"), ""),
@@ -623,19 +623,22 @@ def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
     return order[:NEXT_SUBJECTS]
 
 
-def _keep(lives: list[float]) -> dict:
-    """A subject's retention half-life line: the median over its concepts, or no number with
-    fewer than KEEP_MIN of them. `days` and `n` stay in the data; the page shows `text` only."""
-    n = len(lives)
+def _keep(stabilities: list[float]) -> dict:
+    """A subject's stays-sharp line: the median FSRS stability of its concepts, the days until
+    recall falls to 9 in 10 (R(S) = 0.9 by definition), or no number with fewer than KEEP_MIN
+    of them. `days` and `n` stay in the data; the page shows `text` only."""
+    n = len(stabilities)
     if n < KEEP_MIN:
         return {"n": n, "days": None, "text": "Not enough checks yet"}
-    d = statistics.median(lives)
+    d = statistics.median(stabilities)
     if d < 1:
-        text = "You keep this under a day"
+        text = "Stays sharp under a day"
     elif d < 14:
-        text = f"You keep this about {round(d)} day" + ("s" if round(d) != 1 else "")
+        text = f"Stays sharp about {round(d)} day" + ("s" if round(d) != 1 else "")
+    elif d < 63:
+        text = f"Stays sharp about {round(d / 7)} weeks"
     else:
-        text = f"You keep this about {round(d / 7)} weeks"
+        text = f"Stays sharp about {round(d / 30)} months"
     return {"n": n, "days": round(d, 1), "text": text}
 
 
