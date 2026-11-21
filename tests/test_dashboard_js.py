@@ -772,6 +772,103 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     assert leak["connected"] and leak["lost"] is not True, leak
 
 
+COLD_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const $ = (id) => document.getElementById(id);
+  const out = {};
+  for (let i = 0; i < 200 && !$('cold-open'); i++) await sleep(50);
+  const opener = $('cold-open');
+  out.opener = opener ? [opener.textContent, opener.getAttribute('aria-label')] : null;
+  opener.focus();
+  opener.click();
+  for (let i = 0; i < 200 && !document.querySelector('.cold-item'); i++) await sleep(50);
+  const items = [...document.querySelectorAll('.cold-item')];
+  const clock = document.querySelector('.cold-timer');
+  out.titles = items.map((x) => x.querySelector('h3').textContent);
+  out.ids = items.length;
+  out.timer = [clock.getAttribute('role'), clock.textContent];
+  out.focus = document.activeElement.getAttribute('aria-label');
+  const first = items[0], sum = first.querySelector('.cold-sum');
+  out.before = [sum.hidden, first.querySelector('.cold-acts').hidden];
+  first.querySelector('.btn').click();  // Reveal
+  out.sum = [sum.hidden, sum.textContent, sum.children.length];
+  const acts = [...first.querySelectorAll('.cold-acts button')];
+  out.labels = acts.map((b) => [b.type, b.textContent, b.getAttribute('aria-label')]);
+  out.focusAfter = document.activeElement.textContent;
+  acts[1].click();  // Shaky
+  const said = first.querySelector('p.muted');
+  for (let i = 0; i < 200 && !said.textContent; i++) await sleep(50);
+  out.said = said.textContent;
+  out.disabled = acts.map((b) => b.disabled);
+  await sleep(1200);
+  out.ticked = clock.textContent;
+  const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+  document.activeElement.dispatchEvent(esc);
+  out.closed = !document.querySelector('.board.cold');
+  out.back = document.activeElement.id;
+  return out;
+})()
+"""
+
+
+def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
+    """`/` on the app server with three concepts due: the 90-second check opens on Home, hides
+    each summary until Reveal (shown as text, its link and image stripped), records Shaky
+    through the app (one grade, confidence 2, the app as client), counts down as text, and Esc
+    closes it with focus back on its button."""
+    from datetime import timedelta
+
+    from test_app import _serve
+    from test_home import FIXTURES as HOME_FIXTURES
+    from test_home import NOW as HOME_NOW
+    from test_home import _cold_vault, _grade
+
+    from cortex import localllm
+    from cortex.app import server
+    from cortex.events import EventLog
+
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(localllm, "_request", no_runner)
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    root = tmp_path / "vault"
+    shutil.copytree(HOME_FIXTURES / "vault_mini", root)
+    (root / ".cortex").mkdir()
+    _grade(root, "two-pointers", "wrong", HOME_NOW - timedelta(days=3))
+    _grade(root, "arrays-basics", "wrong", HOME_NOW - timedelta(days=3, hours=1))
+    _cold_vault(root)
+    log = EventLog(Vault(root))
+    before = {e["id"] for e in log.iter_events()}
+    srv, app = _serve(root)
+    try:
+        out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   probe=COLD_PROBE)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == []
+    p = out["probe"]
+    assert p["opener"] == ["90-second check", "Start a 90-second check of what is due"]
+    assert p["titles"][0] == "Hashing" and p["ids"] == 3
+    assert p["timer"][0] == "timer" and p["timer"][1] in ("1:30 left", "1:29 left")
+    assert p["focus"] == "Reveal what you wrote about Hashing"
+    assert p["before"] == [True, True]
+    assert p["sum"] == [False, "Keys to slots via a hash fast", 0]
+    assert p["labels"] == [["button", "Forgot", "Forgot: Hashing"],
+                           ["button", "Shaky", "Shaky: Hashing"],
+                           ["button", "Knew it", "Knew it: Hashing"]]
+    assert p["focusAfter"] == "Forgot"
+    assert p["said"] == "Saved: Shaky." and p["disabled"] == [True, True, True]
+    assert p["ticked"].endswith(" left") and p["ticked"] != p["timer"][1]
+    assert p["closed"] and p["back"] == "cold-open"
+    grades = [e for e in log.iter_events() if e["id"] not in before and e["kind"] == "grade"]
+    assert [(g["object"], g["verdict"], g["confidence"], g["grader"]) for g in grades] == [
+        ("concept:hashing", "correct", 2, {"client": "cortex-app", "model": "self"})]
+
+
 def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, home,  # noqa: F811
                                                                  monkeypatch):
     """The live home's brain with a synthetic browsing store: websites in the stem, a chosen

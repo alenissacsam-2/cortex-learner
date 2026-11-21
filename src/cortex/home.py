@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import sqlite3
+import statistics
 import threading
 from collections import OrderedDict
 from datetime import UTC, date, datetime, time, timedelta
@@ -48,6 +49,7 @@ WEEK_DAYS = 7  # Today plus the six days before it
 FEED_CAP = 200  # items in each of Today and This week
 PER_GROUP = 20  # items of one kind for one subject on one day (an import adds hundreds)
 NEXT_SUBJECTS, NEXT_ITEMS = 8, 5
+KEEP_MIN = 3  # concepts with a stability a subject needs before its sharp line shows a number
 KEEP = 5  # homes kept per Private setting, for deltas
 # the brain stem's websites: the STEM_TOP most visited, then up to STEM_RECENT more visited in
 # the last STEM_DAYS days (the rest stay in the browsing store; the legend says how many)
@@ -330,7 +332,9 @@ class HomeCache:
             data = dashboard.build_data(served, now=now, auto_relayout=False, memo=self._memo)
             parts = self._memo["parts"]
             self._data = {**data, "next_up": _next_up(data, parts, scan["day"]),
-                          "exams": [a for a in data["assessments"] if a["date"]]}
+                          "exams": [a for a in data["assessments"] if a["date"]],
+                          "cold_check": bool(cold_due(parts["states"], parts["catalog"],
+                                                      parts["hidden"], scan["day"]))}
         elif any(scan[k] != old.get(k) for k in ("vectors", "vectors_wal", "layout")):
             self._data = {**self._data, "brain": brainmap.build(
                 served, self._data["pages"], self._data["clusters"], auto_relayout=False,
@@ -579,7 +583,8 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
 
 def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
     """Subjects by their latest activity, each with its next steps: the plan's items, then
-    the due reviews the plan had no room for; no dates. Private subjects are left out."""
+    the due reviews the plan had no room for; no dates. Private subjects are left out. Each
+    subject's `keep` is its stays-sharp line (`_keep`) over its shown concepts."""
     look = _Lookup(data, parts)
     states, hidden = parts["states"], parts["hidden"]
     steps = []
@@ -600,15 +605,82 @@ def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
         i = _obj(e) or (str(c.get("id")) if isinstance(c, dict) and c.get("id") else None)
         if i and (s := look.subject(i)):
             last[s["id"]] = max(last.get(s["id"], ""), e.get("ts", ""))
+    sharp: dict = {}  # subject id -> FSRS stabilities (days) of its shown concepts
+    for c, st in states.items():
+        if st.stability is not None and c not in hidden and c in look.catalog.entries \
+                and look.audience(c) is Audience.CLOUD and (subj := look.subject(c)):
+            sharp.setdefault(subj["id"], []).append(st.stability)
     groups: dict = {}
     for s in steps:
         subj = look.subject(s["id"])
-        g = groups.setdefault((subj or {}).get("id"), {"subject": subj, "items": []})
+        sid = (subj or {}).get("id")
+        g = groups.setdefault(sid, {"subject": subj, "items": [],
+                                    "keep": _keep(sharp.get(sid, [])) if subj else None})
         if len(g["items"]) < NEXT_ITEMS:
             g["items"].append(s)
     order = sorted(groups.values(), key=lambda g: last.get((g["subject"] or {}).get("id"), ""),
                    reverse=True)  # stable: subjects never touched keep the plan's order
     return order[:NEXT_SUBJECTS]
+
+
+def _keep(stabilities: list[float]) -> dict:
+    """A subject's stays-sharp line: the median FSRS stability of its concepts, the days until
+    recall falls to 9 in 10 (R(S) = 0.9 by definition), or no number with fewer than KEEP_MIN
+    of them. `days` and `n` stay in the data; the page shows `text` only."""
+    n = len(stabilities)
+    if n < KEEP_MIN:
+        return {"n": n, "days": None, "text": "Not enough checks yet"}
+    d = statistics.median(stabilities)
+    if d < 1:
+        text = "Stays sharp under a day"
+    elif d < 14:
+        text = f"Stays sharp about {round(d)} day" + ("s" if round(d) != 1 else "")
+    elif d < 63:
+        text = f"Stays sharp about {round(d / 7)} weeks"
+    else:
+        text = f"Stays sharp about {round(d / 30)} months"
+    return {"n": n, "days": round(d, 1), "text": text}
+
+
+# ---- the 90-second check -------------------------------------------------------------------
+
+COLD_N = 3  # concepts in one 90-second check
+
+
+def cold_due(states: dict, catalog, hidden: set[str], day: str) -> list[str]:
+    """Concepts the check may offer: cloud-visible, due today or tomorrow (planner.is_due),
+    most overdue (earliest next_due) first."""
+    tomorrow = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    due = [c for c, st in states.items() if c in catalog.entries
+           and audience_of_study([c], hidden) is Audience.CLOUD and planner.is_due(st, tomorrow)]
+    return sorted(due, key=lambda c: (states[c].next_due or "", c))
+
+
+def _summary(vault: Vault, cid: str) -> str | None:
+    """A concept page's one line: its `summary`, else its first body line that is not a
+    heading; plain text (links, images and markup stripped)."""
+    try:
+        n = vault.read("concept", cid)
+    except VaultError:
+        return None
+    s = str(n.fields.get("summary") or "")
+    if not s.strip():
+        s = next((ln for ln in n.body.splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")), "")
+        s = s.strip().lstrip("-*+> ").strip()
+    return plain(s, 200) or None
+
+
+def cold_check(vault: Vault, now: datetime) -> list[dict]:
+    """The 90-second check's items: up to COLD_N `cold_due` concepts with their titles and
+    one-line summaries. Never a private concept."""
+    from cortex.catalog import Catalog
+    day = local_day(now)
+    catalog = Catalog.load(vault)
+    states, _ = planner.current_states(vault, day, catalog)
+    ids = cold_due(states, catalog, planner.hidden(vault, catalog), day)[:COLD_N]
+    return [{"id": c, "title": plain(catalog.entries[c].title) or c,
+             "summary": _summary(vault, c)} for c in ids]
 
 
 def _brain_diff(old: dict, new: dict) -> dict:
