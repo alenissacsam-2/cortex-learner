@@ -36,7 +36,7 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
-           "repos": "repos", "highlights": "highlights"}
+           "repos": "repos", "highlights": "highlights", "mail": "mail"}
 
 GUIDES = {
     "notes": {
@@ -94,6 +94,20 @@ GUIDES = {
                   "Pocket: the export .csv (or its .zip), if you saved one."],
         "wait": "instant",
         "pick": "My Clippings.txt, the Readwise .csv, or the Pocket .csv or .zip"},
+    "mail": {
+        "name": "Sent mail (Gmail or any .mbox)",
+        "link": "https://takeout.google.com",
+        "steps": ["Gmail: open takeout.google.com, click Deselect all, tick Mail, click All "
+                  "Mail data included, untick Include all messages in Mail, tick only Sent, "
+                  "then OK.",
+                  "Click Next step and Create export; download the .zip from Google's email "
+                  "and unzip it.",
+                  "Other mail apps (Thunderbird, Apple Mail): export the Sent folder as .mbox.",
+                  "Each month becomes one page of the mail you sent: the date, subject, the "
+                  "names you wrote to and your own words. Quoted replies, forwarded parts, "
+                  "signatures and e-mail addresses are left out."],
+        "wait": "hours to a day for Takeout; instant for a file",
+        "pick": "the .mbox file (unzipped) or a folder of them"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -259,6 +273,8 @@ def detect(path: Path) -> list[str]:
         return ["repos"]
     files = _files(path)
     names = [n.lower() for n, *_ in files]
+    if any(n.endswith(".mbox") for n in names):
+        return ["mail"]
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
     heads = {n: read(takeout.HEAD) for n, (_, _, _, read) in zip(names, files, strict=True)
              if takeout.activity_file(n) == "html"}

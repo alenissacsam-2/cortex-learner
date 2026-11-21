@@ -1153,7 +1153,7 @@
   }
 
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'browser'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
@@ -1163,6 +1163,7 @@
     docs: 'A folder of PDFs, Word documents and text files.',
     repos: 'Your own git projects: READMEs, languages and your commit messages, never the code.',
     highlights: 'Kindle clippings, a Readwise export or a Pocket list.',
+    mail: 'The mail you sent, from an .mbox file: your own words, never addresses.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
@@ -1230,7 +1231,7 @@
         h('div', { class: 'inline' }, btn('I have the file', () => { guide.step = 2; load('setup'); }, 'btn lit'))];
     }
     if (s === 2) {
-      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics,.csv,.pdf,.docx', disabled: !!guide.busy });
+      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics,.csv,.pdf,.docx,.mbox', disabled: !!guide.busy });
       file.addEventListener('change', () => { if (file.files[0]) upload(file.files[0]); });
       const drop = h('div', { class: 'drop' }, h('strong', { text: guide.busy || 'Drop the file here' }),
         guide.busy && guide.sent ? [h('progress', { id: 'up-bar', max: guide.sent.total || 1, value: guide.sent.loaded, 'aria-label': 'Upload progress' }),

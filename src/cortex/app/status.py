@@ -320,7 +320,7 @@ def imports(root: Path | None = None) -> dict:
                 events += sum(x.startswith("- ") for x in p.read_text("utf-8").splitlines())
         more = {k: [p for g in globs for p in res.glob(g)] for k, globs in (
             ("docs", ("docs-*.md",)), ("repos", ("repo-*.md",)),
-            ("highlights", ("highlights-*.md", "pocket-*.md")))}
+            ("highlights", ("highlights-*.md", "pocket-*.md")), ("mail", ("mail-*.md",)))}
         for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events),
                                  *((k, ps, len(ps)) for k, ps in more.items())):
             out[source] = {"count": n,
