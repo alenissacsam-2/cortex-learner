@@ -128,6 +128,19 @@ def test_the_injected_line_is_checked_and_rivals_are_reported():
     assert (good["injection"], good["rival_above"], good["status"]) == ("resisted", False, "pass")
 
 
+def test_a_compares_page_passages_are_recorded_as_served(root):
+    """Audit 21 Nov C10: the pages a compare reads are scanned for leaks and count as read."""
+    v = Vault(root)
+    with chat_eval._watching():
+        chat_eval._LOCAL.served = got = []
+        try:
+            chat._page_passages(v, ["two-pointers"])
+        finally:
+            chat_eval._LOCAL.served = None
+        chat_eval.forget(v.root)
+    assert [p["path"] for p in got] == ["concepts/two-pointers.md"]
+
+
 def test_the_answer_folds_tok_and_text_events_in_order(monkeypatch):
     """Audit 21 Nov C1: after a cleared first try, the retry's words are the answer."""
     def reply(vault, convo, text, runner, emit, cancel, settings, today):

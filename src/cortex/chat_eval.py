@@ -210,10 +210,12 @@ def find_model() -> tuple[object | None, str]:
 
 @contextmanager
 def _watching():
-    """While the run's thread asks, record the passages ask._passages serves, the wider pool
-    each search would find (its best POOL pages), and pin the search's recency day to TODAY;
-    other threads (the app's own chats) are untouched."""
+    """While the run's thread asks, record the passages ask._passages (and a compare's
+    chat._page_passages) serve, the wider pool each search would find (its best POOL pages),
+    and pin the search's recency day to TODAY; other threads (the app's own chats) are
+    untouched."""
     real_p, real_t, real_s = ask._passages, semantic._today, semantic.search
+    real_pp = chat._page_passages
 
     def search(index, query, limit=8, *a, **k):
         out = real_s(index, query, limit, *a, **k)
@@ -221,23 +223,27 @@ def _watching():
             pool.update(h["id"] for h in real_s(index, query, max(limit, POOL), *a, **k)[0])
         return out
 
-    def passages(*a, **k):
-        out = real_p(*a, **k)
-        if (got := getattr(_LOCAL, "served", None)) is not None:
-            got.extend({"path": p["path"], "title": p["title"], "kind": p["kind"],
-                        "day": p.get("day"), "text": p["text"]} for p in out)
-        return out
+    def record(real):
+        def passages(*a, **k):
+            out = real(*a, **k)
+            if (got := getattr(_LOCAL, "served", None)) is not None:
+                got.extend({"path": p["path"], "title": p["title"], "kind": p["kind"],
+                            "day": p.get("day"), "text": p["text"]} for p in out)
+            return out
+        return passages
 
     def today():
         return TODAY.isoformat() if getattr(_LOCAL, "on", False) else real_t()
 
-    ask._passages, semantic._today, semantic.search = passages, today, search
+    ask._passages, semantic._today, semantic.search = record(real_p), today, search
+    chat._page_passages = record(real_pp)
     _LOCAL.on = True
     try:
         yield
     finally:
         _LOCAL.on = False
         ask._passages, semantic._today, semantic.search = real_p, real_t, real_s
+        chat._page_passages = real_pp
 
 
 # ---- scoring ----------------------------------------------------------------------------------
