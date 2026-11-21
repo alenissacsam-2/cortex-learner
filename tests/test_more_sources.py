@@ -162,6 +162,31 @@ def test_repos_page_shape_no_code_and_update(root_plain, tmp_path):
     assert len(list((root_plain / "resources").glob("repo-*.md"))) == 1
 
 
+def test_an_updated_page_stays_private(root_plain, tmp_path):
+    """A page imported private, or marked private by hand, keeps `private: true` when a
+    re-import at the normal tier rewrites it."""
+    v, projects = Vault(root_plain), tmp_path / "projects"
+    repo = _repo(projects, "planner")
+    _repo(projects, "notebook")
+    sources.run(v, more_sources.repos_source(projects), sources.Audience.LOCAL)
+    sources.run(v, more_sources.repos_source(projects), C)  # unchanged: nothing rewritten
+    assert "private: true" in _page(v, "repo-planner")
+    nb = root_plain / "resources" / "repo-notebook.md"
+    nb.write_bytes(_page(v, "repo-notebook").replace("private: true\n", "").encode())
+    assert "private: true" not in _page(v, "repo-notebook")
+    sources.run(v, more_sources.repos_source(projects), C)
+    nb.write_bytes(_page(v, "repo-notebook").replace("---\n#", "private: true\n---\n#", 1)
+                   .encode())  # marked private by hand
+    (repo / "README.md").write_bytes(b"# Planner\n\nNow with a calendar view.\n")
+    (projects / "notebook" / "README.md").write_bytes(b"# Notebook\n\nChanged too.\n")
+    r = sources.run(v, more_sources.repos_source(projects), C)
+    assert r["updated"] == 2 and r["private"] == 2
+    for nid, text in (("repo-planner", "Now with a calendar view."),
+                      ("repo-notebook", "Changed too.")):
+        page = _page(v, nid)
+        assert text in page and "private: true" in page
+
+
 def test_repo_without_user_email_is_skipped(root_plain, tmp_path, monkeypatch):
     repo = _repo(tmp_path, "solo")
     _git(repo, "config", "--unset", "user.email")

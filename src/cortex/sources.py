@@ -50,7 +50,7 @@ from ruamel.yaml.comments import CommentedMap
 from cortex import chats
 from cortex.access import Audience
 from cortex.catalog import slugify
-from cortex.vault import Vault, _dump_fm, _to_yaml
+from cortex.vault import Vault, VaultError, _dump_fm, _to_yaml, is_private
 
 TIERS_FILE = ".cortex/import-tiers.json"  # {source id: "local" | "cloud" | "skip"}
 WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.SKIP}
@@ -229,8 +229,9 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             r["duplicate"] += 1
             continue
         seen.add(h)
-        if old:  # `updates`: compared with its page below
-            todo.append((old.stem, it, h, private or it.private, old))
+        if old:  # `updates`: compared with its page below; a private page stays private
+            todo.append((old.stem, it, h, private or it.private or _was_private(vault, old),
+                          old))
             continue
         # the id comes from the filtered title, so a key in a title never reaches a file name
         slug = slugify(scrub(it.title, src)) or "untitled"
@@ -275,8 +276,18 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             r["duplicate"] += 1
             continue
         r["updated"] += 1
+        r["private"] += hidden
         if not dry_run:
             vault.update_text(old, lambda _, t=text: t)
+
+
+def _was_private(vault: Vault, page: Path) -> bool:
+    """Whether a page an `updates` import rewrites is private now (set by an earlier private
+    import or by hand); a page that does not parse counts as private (fail closed)."""
+    try:
+        return is_private(vault.read_path(page))
+    except VaultError:
+        return True
 
 
 def _note_text(nid: str, fields: dict, body: str) -> str:
