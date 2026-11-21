@@ -103,7 +103,7 @@ def _items(vault: Vault, lo: str, hi: str) -> list[tuple]:
         c = obj[8:]
         e = catalog.entries.get(c)
         title = chat_study._title(e.title if e else c) or c
-        private = c in hide or any(a in hide for a in ev.get("also") or [])
+        private = c in hide or any(str(a).split(":", 1)[-1] in hide for a in ev.get("also") or [])
         out.append((d, "study", c, title, 1, str(ev.get("verdict") or ""), private))
     return out
 
