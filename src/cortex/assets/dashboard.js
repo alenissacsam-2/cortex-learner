@@ -27,6 +27,10 @@
     s.hidden = !err;
   }
   async function fetchHome() {
+    // the app builds the home once after it starts (a minute on a big vault): say so, never a blank page
+    const s = document.getElementById('stale');
+    s.textContent = '· Loading your notes (up to a minute after Cortex starts)';
+    s.hidden = false;
     for (;;) {
       try { const d = await api('/api/home'); offline(null); return d; } catch (e) { offline(e); }
       await new Promise((r) => setTimeout(r, 3000));
