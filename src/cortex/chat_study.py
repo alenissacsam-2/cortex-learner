@@ -45,12 +45,19 @@ _ASKS = {
     ],
     "weak": [
         r"what are my weak(?:est)? (?:topics|areas|concepts|spots|points|subjects)",
-        r"(?:which|what) (?:topics|areas|concepts|subjects) am i weak(?:est)? (?:at|in|on)",
+        r"(?:which|what) (?:topics|areas|concepts|subjects) am i weak(?:est)? (?:at|in|on)"
+        r"(?: or (?:need|have) to (?:refresh|review|revise))?",
         r"where am i weak(?:est)?|what am i weak(?:est)? (?:at|in|on)",
         r"what are my weak(?:ness|nesse)s|what am i bad at|what do i struggle with",
         r"what mistakes do i keep making|what do i keep getting wrong",
         r"what (?:are|were) my (?:(?:common|recurring|repeated|frequent|open|recent|usual) )?"
         r"mistakes",
+        r"what (?:open )?mistakes do i (?:still )?(?:need|have) to fix",
+    ],
+    # "which concepts are solid?": the concepts the fold puts in one state (_STATE_WORD)
+    "state": [
+        r"(?:which|what) (?:topics|concepts|subjects) (?:are|am i) (?:solid|learning|unverified"
+        r"|not started|due for a refresh|in need of a refresh)",
     ],
     "progress": [
         r"how am i (?:doing|progressing)(?: (?:with|in|on) (?:my )?(?:studies|studying|learning"
@@ -85,7 +92,9 @@ _RECENT = timedelta(days=366)  # a digest ends within the last year; older is hi
 NO_STUDY = "Cortex has no study recorded"
 STEP = {"plan":"Reading your study plan", "due": "Reading your due reviews",
         "weak": "Reading your weak spots and mistakes", "range": "Reading what you studied",
-        "progress": "Reading your progress"}
+        "progress": "Reading your progress", "state": "Reading your learning states"}
+_STATE_WORD = {"solid": "solid", "learning": "learning", "unverified": "unverified",
+               "not started": "not_started", "refresh": "needs_refresh"}
 
 
 def _norm(text: str) -> str:
@@ -203,12 +212,14 @@ def study_answer(vault: Vault, text: str, got, today: date, first: bool = True,
     if k == "due" and got:
         got = _ahead(text, got, today)
         got = (got[0], _due_by(text, got), got[2])
-    return None if k in (None, "digest") else answer(vault, k, got, today, private)
+    return None if k in (None, "digest") else answer(vault, k, got, today, private, text)
 
 
-def answer(vault: Vault, k: str, got, today: date, private: bool = False) -> str:
+def answer(vault: Vault, k: str, got, today: date, private: bool = False,
+           text: str = "") -> str:
     """The answer for study question kind `k` (see `kind`) as of local day `today`. `private`
-    (Chat's switch, for the local model only) names private subjects and mistakes too."""
+    (Chat's switch, for the local model only) names private subjects and mistakes too. `text`:
+    the question, which names the state a "state" question asks about."""
     day = today.isoformat()
     catalog = Catalog.load(vault)
     log = EventLog(vault)
@@ -268,6 +279,17 @@ def answer(vault: Vault, k: str, got, today: date, private: bool = False) -> str
         if len(due) > SHOWN:
             lines.append(f"- and {len(due) - SHOWN} more")
         return "\n".join(lines)
+
+    if k == "state":
+        s = next(v for w, v in _STATE_WORD.items() if w in _norm(text))
+        names = sorted(name(c) for c in (e.id for e in catalog.entries.values()
+                                         if e.kind == "concept" and e.id not in hide)
+                       if (states[c].state if c in states else "not_started") == s)
+        if not names:
+            return f"No concepts are {levels.LABEL[s]} right now."
+        return "\n".join([f"**{_plural(len(names), 'concept')}** {levels.GLYPH[s]} "
+                          f"{levels.LABEL[s]}:", "", *[f"- **{n}**" for n in names[:SHOWN]],
+                          *([f"- and {len(names) - SHOWN} more"] if len(names) > SHOWN else [])])
 
     notes = list(vault.iter_notes("mistake"))
     # D1 unless `private`: private mistakes and, OQ-22, those about a private subject

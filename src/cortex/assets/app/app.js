@@ -357,6 +357,7 @@
     if (j.section === 'connect' && r.rows) out.push(r.rows.length ? changeList(r.rows) : note('Nothing changed.'));
     if (desktopChanged(j)) out.push(row('Next: restart Claude Desktop', null, RESTART_DESKTOP, null));
     if (r.kind === 'scan') out.push(r.rows.length ? scanTable(r.rows) : note('No browser history found on this computer.'));
+    if (r.kind === 'chat_eval') out.push(...chatEvalNodes(r));
     if (r.counts) out.push(Object.keys(r.counts).length ? countsTable(r.counts) : note('Nothing to count.'));
     if (r.answer) out.push(row('Answer', `${r.answer} in ${r.seconds} s`, r.runner, null));
     if (r.admin) out.push(row('Install Git for everyone on this computer', null, r.admin,
@@ -364,6 +365,17 @@
     if (r.need === 'embed') out.push(row('Search model needed', null, r.lines[0], [btn('Download the search model', () => job('/api/setup/embed', {}), 'btn lit')]));
     else if (r.lines && r.lines.length) out.push(h('pre', { class: 'out', text: r.lines.join('\n') }));
     return out;
+  }
+  // the Chat test's summary (server.chat_eval): score, blockers, failures; all text, no markup
+  function chatEvalNodes(r) {
+    const skipped = r.skipped ? `${r.skipped} skipped${r.model ? '' : ` (${r.model_note})`}` : 'none skipped';
+    return [
+      row('Score', `${r.passed} of ${r.ran} passed`, `${skipped} · the bar is ${r.bar} of ${r.total}${r.model ? ` · model ${r.model}` : ''}${r.stopped ? ' · stopped early' : ''}`, null),
+      row('Blockers', null, r.blockers.map((b) => `${b.state}: ${b.name}`).join(' · '), null),
+      r.failures.length
+        ? h('ul', { class: 'pad' }, r.failures.map((f) => h('li', { text: `${f.id} ${f.question} · ${f.why} · Answer: ${f.answer}` })))
+        : note('No question failed.'),
+    ];
   }
   function outputBoard(s) {
     const o = outputs[s];
@@ -710,7 +722,10 @@
         h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Search in' }), ...srcs),
         h('div', { class: 'field' }, h('label', { class: 'check', for: 'chat-keep' }, keep, h('span', { text: 'Keep chat history' })),
           h('p', { class: 'help', text: 'Off: new chats are forgotten when the app stops; nothing is written.' })),
-        h('div', { class: 'field' }, btn('Delete all chats', wipe))));
+        h('div', { class: 'field' }, btn('Delete all chats', wipe)),
+        h('div', { class: 'field' }, btn('Run Chat test', () => job('/api/chat/eval', {})),
+          h('p', { class: 'help', text: 'Asks Chat 40 questions about a made-up vault and scores the answers. Your own notes and browsing are not used.' }),
+          ...(outputs.chat ? outputs.chat.nodes : []))));
     det.addEventListener('toggle', () => { chatS.setOpen = det.open; });
     return det;
   }

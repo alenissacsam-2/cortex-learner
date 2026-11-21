@@ -2121,6 +2121,42 @@ def _parts(p: dict) -> str:
     return "  ".join(out)
 
 
+chat_app = typer.Typer(help="Cortex's Chat, from the command line.")
+app.add_typer(chat_app, name="chat")
+
+
+@chat_app.command("eval")
+def chat_eval_cmd(
+        out: Annotated[Path | None, typer.Option(
+            "--out", help="Also write the full report (answers, served passages) as JSON.")]
+        = None,
+        keep: Annotated[Path | None, typer.Option(
+            "--keep", help="Build the made-up vault in this new folder and leave it there.")]
+        = None,
+        no_model: Annotated[bool, typer.Option(
+            "--no-model", help="Run only the questions Cortex answers with no model.")] = False,
+        served: Annotated[bool, typer.Option(
+            "--served", help="List the passages each answer was given.")] = False) -> None:
+    """Chat's offline test: 40 questions on a made-up vault in a temp folder, scored in code.
+    Questions that need a model run only when a 2B local model is already loaded; nothing is
+    loaded or downloaded, and your vault, settings and browsing are not used."""
+    from cortex import chat_eval
+
+    if keep is not None and keep.exists():
+        typer.echo(f"error: {keep} already exists; --keep needs a new folder.", err=True)
+        raise typer.Exit(1)
+    try:
+        r = chat_eval.run(use_model=not no_model, keep=keep,
+                          progress=lambda d, n, qid: typer.echo(f"{d}/{n} {qid}", err=True))
+    except RuntimeError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(render.term(chat_eval.summary(r, served)))
+    if out is not None:
+        out.write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
+        typer.echo(f"Report written to {out}")
+
+
 @eval_app.callback(invoke_without_command=True)
 def eval_main(ctx: typer.Context, k: int = 8, vault: VaultOpt = None) -> None:
     """Measure ranking on logged usage; bare `cortex eval` runs `all`."""

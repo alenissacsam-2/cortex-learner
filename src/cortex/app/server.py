@@ -303,6 +303,7 @@ class App:
             "/api/browse/auto": self.auto_settings,
             "/api/chat": None,  # do_POST streams it
             "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
+            "/api/chat/eval": self.chat_eval,
             "/api/browse/login": self.login,
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
@@ -980,6 +981,24 @@ class App:
     def chat_settings(self, body: dict) -> dict:
         from cortex import chat
         return chat.save_settings(body)
+
+    def chat_eval(self, body: dict) -> dict:
+        """Run Chat's offline test (cortex.chat_eval) as a job: a made-up vault in a temp
+        folder, never the owner's; the result is the score, blockers and failures."""
+        from cortex import chat_eval
+
+        def run(job):
+            r = chat_eval.run(cancel=job.cancelled, progress=lambda d, n, qid: job.progress(
+                1, 1, d, n, f"Question {qid}"))
+            return {"kind": "chat_eval", "passed": r["passed"], "ran": r["ran"],
+                    "skipped": r["skipped"], "total": r["total"], "bar": r["pass_bar"],
+                    "model": r["model"], "model_note": r["model_note"], "stopped": r["stopped"],
+                    "blockers": [{k: b[k] for k in ("name", "state")} for b in r["blockers"]],
+                    "failures": [{"id": q["id"], "question": q["question"],
+                                  "why": "; ".join(q["why"]), "answer": q["answer"][:300]}
+                                 for q in r["questions"] if q["status"] == "fail"],
+                    "recall": r["retrieval"]["recall"], "median_s": r["latency"]["median"]}
+        return self.jobs.start("Running the Chat test", "chat", run, cancellable=True)
 
     def login(self, body: dict) -> dict:
         on, root = _bool(body, "on"), self.need_root()

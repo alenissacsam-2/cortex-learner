@@ -976,7 +976,8 @@ SENDS = {
         "chat-k": [["/api/chat/settings", {"passages": 4}]],
         **{f"chat-src-{k}": [["/api/chat/settings", {"sources": {k: False}}]]
            for k in ("notes", "chats", "browsing", "private")},
-        "chat-keep": [["/api/chat/settings", {"history": False}]]},
+        "chat-keep": [["/api/chat/settings", {"history": False}]],
+        "Run Chat test": [["/api/chat/eval", {}]]},
     "setup": {
         "Use this folder": [["/api/setup/vault", {"path": "<vault>"}]],
         "Skip: Connect AI apps": [["/api/setup/skip", {"skipped": True}]],

@@ -176,6 +176,8 @@ _RULES = [  # first match wins
     (r"\blast\s+month\b", lambda m, t: _month(_MONTHS[(t.month - 2) % 12],
                                               str(t.year - (t.month == 1)), t)),
     (rf"\bin\s+({_M})(?:\s+(\d{{4}}))?(?![\w-])", lambda m, t: _month(m[1], m[2], t)),
+    (rf"\b(?:the\s+)?week\s+of\s+({_DATE})",  # Monday to Sunday of that day's week
+     lambda m, t: (_monday(_day(m[1], t)), _monday(_day(m[1], t)) + 6 * _D)),
     (rf"\b(?:on\s+)?({_DATE})", lambda m, t: (_day(m[1], t), _day(m[1], t))),
 ]
 _RULES = [(re.compile(p, re.I), f) for p, f in _RULES]
@@ -226,6 +228,8 @@ _PICKS_ONE = re.compile(
     r"\b(?:first|second|third|last|other|previous|which)\s+ones?\b|\bones?\W*$", re.I)
 # "the algorithms that I know": a relative clause, not "that" pointing back
 _RELATIVE_THAT = re.compile(r"\bthat\s+(?:i|you|we|they|he|she|my|your|our|their)\b", re.I)
+# "this year" is a date (chat_facts reads years; _when does not), never "this" pointing back
+_THIS_YEAR = re.compile(r"\bthis\s+year\b", re.I)
 
 
 def follow_up(text: str, got=None) -> bool:
@@ -234,7 +238,7 @@ def follow_up(text: str, got=None) -> bool:
     searched alone, so a new subject is not mixed with the last one. `got`: its date phrase,
     whose words ("this month") never point back."""
     own = text[:got[2][0]] + " " + text[got[2][1]:] if got else text
-    own = _RELATIVE_THAT.sub(" ", own)
+    own = _THIS_YEAR.sub(" ", _RELATIVE_THAT.sub(" ", own))
     if _OPENS_FOLLOW_UP.match(text) or _PICKS_ONE.search(own) \
             or _POINTS_BACK & set(re.findall(r"[\w']+", own.lower())):
         return True
@@ -423,7 +427,8 @@ def asks_sites(text: str, today: date | None = None) -> bool:
     b = _BROWSER.search(text)
     rest = text[:b.start()] + " " + text[b.end():] if b else text
     dated = _when(rest, today or _today())
-    return not set(topic(rest, dated[2] if dated else (0, 0)).split()) - _LIST_WORDS
+    words = {w for w in topic(rest, dated[2] if dated else (0, 0)).split() if not w.isdigit()}
+    return not words - _LIST_WORDS  # "top 3 sites": a number is no topic
 
 
 def site_list(vault: Vault, text: str, got, sources: dict,

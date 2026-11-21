@@ -1531,6 +1531,36 @@ def chat_stream(app, body, *, token=True, origin=None):
     return r.status, r, [json.loads(line) for line in raw.decode().splitlines() if line]
 
 
+def test_chat_test_runs_as_a_job_on_a_click(app, monkeypatch):
+    from cortex import chat_eval
+
+    asked = []
+    q = {"id": "Q01", "question": "How many?", "status": "fail", "why": ["missing '23'"],
+         "answer": "<b>22</b>"}
+    rep = {"passed": 13, "ran": 14, "skipped": 26, "total": 40, "pass_bar": 35, "model": None,
+           "model_note": "no local model", "stopped": False,
+           "blockers": [{"name": "Private leak", "ids": ["Q35"], "state": "ok", "failed": []}],
+           "questions": [q, {**q, "id": "Q02", "status": "pass", "why": []}],
+           "retrieval": {"recall": {"@1": "no data"}}, "latency": {"median": 0.1}}
+
+    def run(**k):
+        asked.append(k)
+        k["progress"](1, 40, "Q01")
+        return rep
+    monkeypatch.setattr(chat_eval, "run", run)
+    assert call(app, "POST", "/api/chat/eval", {}, token=False)[0] == 401
+    assert call(app, "POST", "/api/chat/eval", {})[0] == 200
+    job = wait_job(app)
+    assert (job["section"], job["error"]) == ("chat", None)
+    assert asked and set(asked[0]) == {"cancel", "progress"}  # with whatever model is loaded
+    r = job["result"]
+    assert (r["kind"], r["passed"], r["ran"], r["model_note"]) == (
+        "chat_eval", 13, 14, "no local model")
+    assert r["failures"] == [{"id": "Q01", "question": "How many?", "why": "missing '23'",
+                              "answer": "<b>22</b>"}]  # app.js shows it as text
+    assert r["blockers"] == [{"name": "Private leak", "state": "ok"}]
+
+
 def test_chat_needs_the_key_and_the_origin(app):
     assert chat_stream(app, {"text": "x"}, token=False)[0] == 401
     assert chat_stream(app, {"text": "x"}, origin="http://evil.example")[0] == 403
