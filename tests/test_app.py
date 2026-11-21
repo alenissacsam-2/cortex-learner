@@ -390,7 +390,15 @@ def test_first_run_without_a_vault():
         srv.server_close()
 
 
-def test_run_prints_the_link_and_quits(vault):
+def daytime(monkeypatch):
+    """Noon for start_url: by night the link is /manage?t=…#tonight (test_tonight covers it)."""
+    import functools
+    monkeypatch.setattr(server, "start_url", functools.partial(
+        server.start_url, now=datetime(2026, 11, 20, 12)))
+
+
+def test_run_prints_the_link_and_quits(vault, monkeypatch):
+    daytime(monkeypatch)
     lines: list[str] = []
     t = threading.Thread(target=server.run, args=(vault,),
                          kwargs={"open_browser": False, "echo": lines.append}, daemon=True)
@@ -2757,6 +2765,7 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
     """A11: ~/.cortex/app.json names the running app; a stale file is ignored. The browser app
     has no window to show, so a second launch opens its page in the browser."""
     from cortex.app import desktop, launch
+    daytime(monkeypatch)
     lines: list[str] = []
     t = threading.Thread(target=server.run, args=(vault,),
                          kwargs={"open_browser": False, "echo": lines.append}, daemon=True)

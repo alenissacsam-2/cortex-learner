@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import note
-from test_app import call
+from test_app import call, daytime
 from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or opens)
 from test_app import vault as vault  # noqa: F401 (fixture)
 
@@ -160,6 +160,7 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     the window, ends the loop, stops the tray, removes app.json and remembers the place."""
     monkeypatch.setattr(server, "IDLE_S", 0)  # the browser app would stop at once
     monkeypatch.setattr(server, "WATCH_S", 0.05)
+    daytime(monkeypatch)
     ran = []
     monkeypatch.setattr(desktop, "first_run", lambda echo: ran.append("first_run"))
     seen = {}

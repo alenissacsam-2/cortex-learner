@@ -189,7 +189,9 @@ def test_second_job_refused_and_cancel_leaves_no_upload(app, home, monkeypatch):
     release.set()
 
 
-def test_quit_deletes_uploads_never_imported(vault, home):
+def test_quit_deletes_uploads_never_imported(vault, home, monkeypatch):
+    from test_app import daytime
+    daytime(monkeypatch)  # by night the link ends in #tonight
     lines, done = [], threading.Event()
 
     def serve():
