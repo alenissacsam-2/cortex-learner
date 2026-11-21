@@ -715,7 +715,9 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
     cat, audience = ctx.judge(page.text)
     if audience == "skip":
         return "skipped_category", rec
-    if c.tags:  # R3-5: an imported chat's //tags are the owner's typed words, so said
+    # R3-5: an imported chat's //tags are the owner's typed words, so said; a private
+    # (local-only) chat's stay in its private page, off the shared me/* pages
+    if c.tags and audience != "local":
         try:
             tags.apply_in(vault, [tuple(t) for t in c.tags], evlog, forget_said=False)
         except (OSError, ValueError, VaultError) as e:  # the page is still written

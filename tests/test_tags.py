@@ -196,3 +196,23 @@ def test_import_reads_user_turns_only_and_once(root, tmp_path, monkeypatch):
     assert _me(root, "profile").count("I play the violin") == 1
     day = local_day(chat_import._when(ts))
     assert EventLog(Vault(root)).has_key(tags.key("fact", "I play the violin", day))
+
+
+def _import_one(root, tmp_path, monkeypatch, text):
+    code, exp = tmp_path / "projects", tmp_path / "exports"
+    code.mkdir()
+    exp.mkdir()
+    monkeypatch.setenv("CORTEX_CHATS_DIR", str(code))
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(exp))
+    _transcript(code, [{"type": "user", "timestamp": "2026-11-10T09:00:00Z", "cwd": "D:\\x",
+                        "message": {"role": "user", "content": text}}])
+    return chat_import.run(Vault(root))
+
+
+def test_a_private_chats_tags_never_reach_the_shared_me_pages(root, tmp_path, monkeypatch):
+    """Audit 21 Nov I2: a health chat is imported as a private page; its //fact stays in it."""
+    out = _import_one(root, tmp_path, monkeypatch,
+                      "what do these symptoms mean\n//fact: I have epilepsy")
+    assert out == {"saved": 1}
+    profile = root / "me" / "profile.md"
+    assert not profile.exists() or "epilepsy" not in profile.read_text(encoding="utf-8")

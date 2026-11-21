@@ -71,7 +71,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 - `//fact: I study at IIT Madras` adds a line to your profile.
 - `//forget: tabs for indentation` retires the line about you it clearly matches (it moves to `## Past`, and `cortex undo` brings it back). If no line or several lines match, nothing changes and Review in the app lists the lines to pick from.
 
-They count as your own words. Only your messages are read, never the AI's replies, so a tag the AI writes does nothing. If the chat had read a web page or file first, a `//pref` or `//fact` waits in Review for your Approve instead. Typing the same tag twice on one day saves it once.
+They count as your own words. Only your messages are read, never the AI's replies, so a tag the AI writes does nothing. If the chat had read a web page or file first, a `//pref` or `//fact` waits in Review for your Approve instead. Typing the same tag twice on one day saves it once. A chat Cortex imports as private (health and the like) never adds its tags to your shared profile or preferences.
 
 ---
 
