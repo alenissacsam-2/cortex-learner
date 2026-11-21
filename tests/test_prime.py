@@ -613,3 +613,55 @@ def test_prime_names_at_most_two_open_mistakes_of_its_concepts(vault, monkeypatc
     assert "[[dsa.c-third]] — one past the end &lt;/untrusted_note> x" in block  # wrapped
     assert "[[dsa.d-fourth]] — Slip dsa.d-fourth" in block
     assert "Open mistakes" not in c.cortex_prime("pasta recipe")["context"]
+
+
+def test_a_cut_block_says_what_was_cut_within_its_cap(tmp_path):
+    """RR-13: lines fit() drops leave a `(+N more ...)` line after the note, inside the cap."""
+    (tmp_path / "me").mkdir()
+    (tmp_path / "me/preferences.md").write_text(
+        "# Preferences\n\n## Communication\n" + "".join(
+            f"- Preference line number {i} about how to write answers well.\n"
+            for i in range(40)), encoding="utf-8")
+    parts, _ = prime.core(Vault(tmp_path), "hello", [], datetime(2026, 11, 16, tzinfo=UTC))
+    block = next(p for p in parts if p.startswith("## Preferences"))
+    shown = sum(ln.startswith("- [") for ln in block.splitlines())
+    assert block.endswith(f"\n(+{40 - shown} more preference lines: "
+                          "cortex_context(scope='all') reads them)")
+    assert block.index("</untrusted_note>") < block.index("(+")  # Cortex's word, not the note's
+    assert len(block) <= prime.PRIME_CAPS["preferences"]
+    assert prime.fit(["a", "b"], "me", 1000, 1000, "preference") == ["a", "b"]
+    assert prime.more(0, "related") == ""
+
+
+def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
+    """RR-6: SessionStart after compact, resume or clear re-serves the light prime; PreCompact
+    asks to record first; startup, bad input and an excluded folder print nothing."""
+    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+
+    def hook(event, sid="chat-1", **kw):
+        return prime_hook.run(json.dumps({"session_id": sid, "hook_event_name": event, **kw}))
+
+    assert prime_hook.run(payload()) != ""  # the first prompt primes the chat
+    for source in prime_hook.AGAIN_SOURCES:
+        out = json.loads(hook("SessionStart", source=source))["hookSpecificOutput"]
+        assert out["hookEventName"] == "SessionStart"
+        ctx = out["additionalContext"]
+        assert ctx.startswith(prime_hook.AGAIN.format(source=source))
+        assert ctx.endswith(prime_hook.AGAIN_NEXT) and "motor racing" in ctx
+        assert "## Teaching contract (core)" in ctx and len(ctx) < 10_000
+    assert hook("SessionStart", source="startup") == ""
+    assert hook("PreCompact", trigger="auto") == prime_hook.PRECOMPACT
+    assert hook("PreCompact", sid="../bad") == hook("SessionStart", sid="x y") == ""
+    assert prime_hook.run(payload("next message")) == ""  # still primed once per chat
+    monkeypatch.setattr(prime, "core", lambda *a: 1 / 0)
+    assert json.loads(hook("SessionStart", source="compact"))["hookSpecificOutput"][
+        "additionalContext"] == prime_hook.AGAIN_NUDGE.format(source="compact")
+    monkeypatch.setattr(prime_hook, "excluded", lambda *a: True)
+    assert hook("PreCompact") == hook("SessionStart", source="compact") == ""
+    assert events(vault) == []
+    cfg = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    (start,) = cfg["hooks"]["SessionStart"]
+    (pre,) = cfg["hooks"]["PreCompact"]
+    assert start["matcher"] == "compact|resume|clear"
+    for h in (start, pre):
+        assert h["hooks"][0]["command"] == "cortex prime-hook || true"

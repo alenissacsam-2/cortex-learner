@@ -429,6 +429,25 @@ _HEAD_LINE = re.compile(r"^(#{1,6})[ \t][^\n]*", re.M)
 _TURN = re.compile(r"\n(?:### [^\n]*\n)?\*\*Me:\*\*|\n### ")
 
 
+PASSAGE = 300  # RR-12: characters of a recall hit's best passage
+
+
+def passage(n: dict, at: int, query: str) -> tuple[int, str]:
+    """RR-12: (offset in the page body, at a line start; the best passage, one line of at
+    most PASSAGE characters) from the best chunk's start `at` (an offset in the filled body),
+    else the first line holding a query word, else the body's start."""
+    body = n["body"]
+    probe = _filled(body.strip())[at:at + 60] if at else ""
+    pos = body.find(probe) if probe.strip() else -1
+    if pos < 0:
+        low = body.lower()
+        found = [i for t in re.findall(r"\w+", query.lower())
+                 if len(t) > 2 and t not in STOPWORDS and (i := low.find(t)) >= 0]
+        pos = min(found) if found else len(body) - len(body.lstrip())
+    pos = body.rfind("\n", 0, pos) + 1
+    return pos, _one_line(body[pos:pos + 2 * PASSAGE], PASSAGE)
+
+
 def _chunk_text(n: dict, at: int) -> str:
     """The text of the chunk starting at `at`, as embedded; chunk 0 when there is none."""
     return next((t for s, t in _chunks(n) if s == at), _text(n)) if at else _text(n)
