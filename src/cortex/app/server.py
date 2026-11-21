@@ -447,8 +447,10 @@ class App:
         from cortex import chat
         cid = (query.get("id") or [None])[0]
         if cid is None:
-            return {"id": None, "messages": []}
-        return {"id": cid, "messages": chat.load(self._vault(), cid)}  # load checks the id
+            return {"id": None, "messages": [], "remembers": 0}
+        msgs = chat.load(self._vault(), cid)  # load checks the id
+        return {"id": cid, "messages": msgs,  # where the model's memory starts, for its line
+                "remembers": chat.remembers(msgs, chat.get_settings()["sources"])}
 
     def chat_passage(self, query: dict) -> dict:
         """The passage an answer cited (?path=&at=&len=), under Chat's source switches of now

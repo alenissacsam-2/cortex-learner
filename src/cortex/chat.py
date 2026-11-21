@@ -673,32 +673,49 @@ def history(msgs: list, sources: dict | None = None) -> list:
     now), an answer made with a switch now off is left out with the question(s) before it, so
     a private site listed earlier never reaches the model after Private is turned off. A turn
     the model never answered (`unanswered`: Cortex's note, not the model's words) is left out."""
-    msgs = [m for m in msgs if not m.get("unanswered")]
+    out: list = []
+    for _, m in _sent(msgs, sources):
+        text = m["text"].strip()
+        if out and out[-1]["role"] == m["role"]:
+            out[-1]["content"] += "\n\n" + text
+        else:
+            out.append({"role": m["role"], "content": text})
+    return out
+
+
+def _sent(msgs: list, sources: dict | None) -> list:
+    """[(index in `msgs`, message)] of the messages `history` sends, oldest first."""
+    pairs = [(i, m) for i, m in enumerate(msgs) if not m.get("unanswered")]
     if sources is not None:
         kept: list = []
-        for m in msgs:
+        for i, m in pairs:
             if m["role"] == "assistant" and _made_with_off(m, sources):
-                while kept and kept[-1]["role"] == "user":
+                while kept and kept[-1][1]["role"] == "user":
                     kept.pop()
                 continue
-            kept.append(m)
-        msgs = kept
+            kept.append((i, m))
+        pairs = kept
     out, left = [], HISTORY_BUDGET
-    for m in reversed(msgs[-TURNS:]):
+    for i, m in reversed(pairs[-TURNS:]):
         text = m["text"].strip()
         if not text:
             continue
         if len(text) > left:
             break
         left -= len(text)
-        if out and out[-1]["role"] == m["role"]:
-            out[-1]["content"] = text + "\n\n" + out[-1]["content"]
-        else:
-            out.append({"role": m["role"], "content": text})
+        out.append((i, m))
     out.reverse()
-    while out and out[0]["role"] != "user":
+    while out and out[0][1]["role"] != "user":
         out.pop(0)
     return out
+
+
+def remembers(msgs: list, sources: dict | None = None) -> int:
+    """The index of the oldest message of `msgs` the model still gets on the next turn
+    (`history`), for the Chat page's "The model remembers from here" line: 0 when it gets them
+    all (no line), len(msgs) when it gets none."""
+    sent = _sent(msgs, sources)
+    return sent[0][0] if sent else len(msgs)
 
 
 _HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
@@ -812,11 +829,11 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     the model read of how many the search found; saved on the answer too)}; {"t": "text", "s"}
     replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
     nothing is asked once more; still nothing, the answer is SAID_NOTHING with the pages it
-    searched (saved with `unanswered`). Then {"t": "done", id,
-    model, seconds, stopped}; or {"t": "err", code (not_set_up, no_local_model, no_answer),
-    message}. A set `cancel` stops the stream;
-    the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
-    `localllm.Runner` or None; never a cloud one."""
+    searched (saved with `unanswered`). Then {"t": "done", id, model, seconds, stopped,
+    remembers (`remembers` of the chat now)}; or {"t": "err", code (not_set_up,
+    no_local_model, no_answer), message}. A set `cancel` stops the stream; the partial answer
+    is saved with `stopped: true`. Returns the chat id. `runner` is a local `localllm.Runner`
+    or None; never a cloud one."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"Type a message (up to {MAX_TEXT:,} characters).")
     s = settings or get_settings()
@@ -1000,5 +1017,6 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     emit({"t": "src", "sources": sources, "searched": searched,
           **({"coverage": coverage} if coverage else {})})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
-          "seconds": round(time.monotonic() - t0, 1)})
+          "seconds": round(time.monotonic() - t0, 1),
+          "remembers": remembers(msgs, s["sources"])})
     return convo_id

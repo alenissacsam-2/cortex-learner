@@ -477,6 +477,30 @@ def test_history_keeps_the_last_turns_within_budget(monkeypatch):
     assert two == [{"role": "user", "content": "a\n\nb"}]
 
 
+def test_remembers_marks_the_oldest_message_the_model_still_gets(monkeypatch):
+    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "text": f"m{i}"} for i in range(4)]
+    assert chat.remembers([]) == 0 and chat.remembers(msgs) == 0  # all of them: no line
+    msgs += [{"role": "user" if i % 2 == 0 else "assistant", "text": f"m{i}"}
+             for i in range(4, 10)]
+    assert chat.remembers(msgs) == 10 - chat.TURNS
+    assert chat.history(msgs)[0]["content"] == msgs[chat.remembers(msgs)]["text"]
+    monkeypatch.setattr(chat, "HISTORY_BUDGET", 3)
+    assert chat.remembers(msgs) == 10  # not even the last fits: the line goes below them all
+    off = [{"role": "user", "text": "q"}, {"role": "assistant", "text": "a", "switches": {
+        **ask.SOURCES, "private": True}}, {"role": "user", "text": "q2"},
+        {"role": "assistant", "text": "a2", "switches": {**ask.SOURCES, "private": False}}]
+    monkeypatch.setattr(chat, "HISTORY_BUDGET", 3000)
+    assert chat.remembers(off, {**ask.SOURCES, "private": False}) == 2
+
+
+def test_the_done_event_says_where_the_memory_starts(vault, stream):
+    s = stream("ollama", ["Answer [1]."])
+    cid = None
+    for q in ("car motor", "car motor torque", "car motor gearbox", "car motor oil"):
+        cid, ev = _turn(vault, cid, q, s.runner())
+    assert ev[-1]["t"] == "done" and ev[-1]["remembers"] == 8 - chat.TURNS
+
+
 def test_ids_are_strict_ulids(vault):
     for bad in ("../x", "..\\..\\config", "01ARZ3NDEKTSV4RRFFQ69G5FA", "01arz3ndektsv4rrffq69g5fav",
                 "01ARZ3NDEKTSV4RRFFQ69G5FAV/../x", None, 5, "01ARZ3NDEKTSV4RRFFQ69G5FAU"):
