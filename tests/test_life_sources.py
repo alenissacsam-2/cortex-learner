@@ -257,3 +257,55 @@ def test_location_city_per_day_and_no_coordinates(tmp_path, root_plain):
         assert "Road" not in text and "Cafe" not in text and "Linden" not in text
     r = sources.run(v, life_sources.location_source(z), C)
     assert r["imported"] == 0 and _pages(v, "location") == pages
+
+
+# ---- photos ----
+
+def _jpeg(path, taken: str | None, gps: bool = True) -> None:
+    from PIL import Image
+    e = Image.Exif()
+    if taken:
+        e[0x8769] = {36867: taken}
+    if gps:
+        e[0x8825] = {1: "N", 2: (12.0, 58.0, 17.0), 3: "E", 4: (77.0, 35.0, 40.0)}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (4, 4)).save(path, "JPEG", exif=e)
+
+
+def test_photos_counts_per_day_with_albums_and_no_gps(tmp_path, root_plain):
+    import os
+    pics = tmp_path / "Pictures"
+    _jpeg(pics / "Goa trip" / "a.jpg", "2024:03:12 10:00:00")
+    _jpeg(pics / "Goa trip" / "b.JPG", "2024:03:12 11:00:00")
+    _jpeg(pics / "Camera" / "c.jpg", "2024:03:12 12:00:00")
+    _jpeg(pics / "d.jpg", None)  # no capture date: the file's date
+    (pics / "Camera" / "broken.jpg").write_bytes(b"not an image")
+    (pics / "Camera" / "clip.mp4").write_bytes(b"video")
+    (pics / "Camera" / "c.jpg.json").write_text('{"geoData": {"latitude": 12.97}}')
+    _jpeg(pics / ".thumbs" / "t.jpg", "2024:03:12 10:00:00")
+    stamp = 1714557600  # 2024-05-01 10:00 UTC; the page uses the local day
+    for f in ("d.jpg", "Camera/broken.jpg"):
+        os.utime(pics / f, (stamp, stamp))
+    v = Vault(root_plain)
+    src = life_sources.photos_source(pics)
+    assert src.default_tier is sources.Audience.CLOUD
+    r = sources.run(v, src, C)
+    assert r["reasons"]["not a photo"] == 2 and r["imported"] == 2
+    pages = _pages(v, "photos")
+    assert "- 2024-03-12: 3 photos (Camera, Goa trip)" in pages["photos-2024-03"]
+    may = pages["photos-2024-05"]
+    assert re.search(r"- 2024-0[45]-\d\d: 2 photos \(Camera, Pictures\)", may)
+    for text in pages.values():
+        assert "12.97" not in text and "58" not in text and "77" not in text
+        assert ".jpg" not in text and "thumbs" not in text
+    r = sources.run(v, life_sources.photos_source(pics), C)
+    assert r["imported"] == 0 and _pages(v, "photos") == pages
+
+
+def test_cli_imports_photos(tmp_path, root_plain):
+    _jpeg(tmp_path / "Pictures" / "Camera" / "a.jpg", "2024:03:12 10:00:00")
+    r = runner.invoke(app, ["import", str(tmp_path / "Pictures"), "--source", "photos",
+                            "--vault", str(root_plain)])
+    assert r.exit_code == 0, r.output
+    assert "Photos: tier normal (the default" in r.output
+    assert (root_plain / "resources" / "photos-2024-03.md").is_file()

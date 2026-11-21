@@ -321,7 +321,8 @@ def imports(root: Path | None = None) -> dict:
         more = {k: [p for g in globs for p in res.glob(g)] for k, globs in (
             ("docs", ("docs-*.md",)), ("repos", ("repo-*.md",)),
             ("highlights", ("highlights-*.md", "pocket-*.md")), ("mail", ("mail-*.md",)),
-            ("selfchat", ("selfchat-*.md",)), ("location", ("location-*.md",)))}
+            ("selfchat", ("selfchat-*.md",)), ("location", ("location-*.md",)),
+            ("photos", ("photos-*.md",)))}
         for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events),
                                  *((k, ps, len(ps)) for k, ps in more.items())):
             out[source] = {"count": n,

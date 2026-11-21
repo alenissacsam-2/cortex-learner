@@ -37,7 +37,7 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
-           "selfchat": "selfchat", "location": "location"}
+           "selfchat": "selfchat", "location": "location", "photos": "photos"}
 
 GUIDES = {
     "notes": {
@@ -136,6 +136,17 @@ GUIDES = {
                   "address is left out (phone exports often have none)."],
         "wait": "hours to a day for Takeout; instant on the phone",
         "pick": "the Takeout .zip as it is, or Timeline.json"},
+    "photos": {
+        "name": "Photo dates and albums",
+        "link": "",
+        "steps": ["Nothing to export: pick the folder that holds your photos, such as "
+                  "C:\\Users\\you\\Pictures. Subfolders count as albums.",
+                  "Each month becomes one page: per day, how many photos you took and in which "
+                  "albums (folder names). The date comes from the photo's EXIF capture date, "
+                  "else the file's date. Images, thumbnails, GPS and other EXIF data are never "
+                  "kept."],
+        "wait": "seconds to minutes",
+        "pick": "paste the full path of the photo folder"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")

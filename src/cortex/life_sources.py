@@ -531,4 +531,65 @@ def location_source(path: Path) -> sources.Source:
                           page="month", noun="places", coarse_place=True, skips=LOC_SKIPS)
 
 
-SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source}
+# ---- photo dates and albums ----
+
+PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff", ".dng",
+                  ".gif")
+ALBUMS = 5  # album names per day, then "and N more"
+
+
+def photo_day(p: Path) -> str:
+    """The day a photo was taken: EXIF DateTimeOriginal (else DateTime) when Pillow can read
+    it, else the file's modified date. Only those two tags are read: never GPS or any other."""
+    try:
+        from PIL import Image
+    except ImportError:  # Pillow is optional (it comes with pystray on Windows)
+        Image = None
+    if Image is not None:
+        try:
+            with Image.open(p) as im:
+                exif = im.getexif()
+                raw = exif.get_ifd(0x8769).get(36867) or exif.get(306)
+            if m := re.match(r"(\d{4}):(\d\d):(\d\d)", str(raw or "")):
+                return date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+        except Exception:  # noqa: BLE001 - Pillow raises many types on a damaged image
+            pass
+    from datetime import datetime
+    return datetime.fromtimestamp(p.stat().st_mtime).date().isoformat()
+
+
+def photos_source(path: Path) -> sources.Source:
+    """A photo folder into month pages of `- YYYY-MM-DD: N photos (albums)`, the album being
+    each photo's folder name. Images are never stored or copied; no thumbnails, no GPS."""
+    root = Path(path)
+    if not root.is_dir():
+        raise VaultError("invalid_argument", f"{root.name} is not a folder of photos.")
+
+    def items():
+        days = defaultdict(Counter)
+        for p in importers._walk(root, lambda rel: any(
+                x.startswith(".") for x in rel.split("/")), []):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            if p.suffix.lower() not in PHOTO_SUFFIXES:
+                yield "not a photo"
+                continue
+            try:
+                day = photo_day(p)
+            except (OSError, ValueError, OverflowError):
+                yield "unreadable"
+                continue
+            days[day][p.parent.name if p.parent != root else root.name] += 1
+        for day, albums in sorted(days.items()):
+            n, names = sum(albums.values()), sorted(albums)
+            more = len(names) - ALBUMS
+            yield sources.Item(day, day, f"{day}: {n} photo{_s(n)} ("
+                               + ", ".join(names[:ALBUMS])
+                               + (f" and {more} more" if more > 0 else "") + ")")
+
+    return sources.Source("photos", "Photos", "folder", items, page="month", noun="days",
+                          coarse_place=True, skips=("not a photo", "unreadable"))
+
+
+SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source,
+             "photos": photos_source}

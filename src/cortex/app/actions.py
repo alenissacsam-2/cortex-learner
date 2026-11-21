@@ -372,10 +372,11 @@ KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity ca
         "highlights": ("reading highlights", "the Reading highlights card"),
         "mail": ("sent mail (.mbox)", "the Sent mail card"),
         "selfchat": ("notes to yourself", "the Notes to self card"),
-        "location": ("a location history", "the Location card")}
+        "location": ("a location history", "the Location card"),
+        "photos": ("a photo folder", "the Photos card")}
 TIERED = ("notes", "calendar", "docs", "repos", "highlights", "mail", "selfchat",
-          "location")  # imports that ask the tier
-OWN_CHECK = ("docs", "repos", "mail", "selfchat", "location")  # the source checks the path itself
+          "location", "photos")  # imports that ask the tier
+OWN_CHECK = ("docs", "repos", "mail", "selfchat", "location", "photos")  # checks the path
 
 
 def _kind(source: str, path: Path) -> str:

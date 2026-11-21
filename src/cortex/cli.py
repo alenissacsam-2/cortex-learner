@@ -1066,8 +1066,8 @@ def import_cmd(path: Annotated[Path, typer.Argument(
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
                  "obsidian, notion, notes, calendar, docs, repos, highlights, mail, "
-                 "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages) or "
-                 "location (Google Timeline).")] = None,
+                 "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages), "
+                 "location (Google Timeline) or photos (a photo folder).")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
