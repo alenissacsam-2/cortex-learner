@@ -476,10 +476,11 @@ def edited_pages(vault: Vault, events) -> list[dict]:
     instead. {key, page, new, title, private}, at most SHOWN_EDITED; Dismiss (a `dismiss`
     change on id `imports` holding the key) closes one. Nothing is stored: a fold over the
     header lines."""
-    from cortex import importers, review  # they import modules that import this one
+    from cortex import importers, review, voice_memos  # they import modules that import this
     events = list(events)
     groups = defaultdict(list)
-    notes = set(importers.LABELS.values())  # by_origin's labels: an `updates` page has no -2
+    # by_origin sources' labels (notes, voice memos): an `updates` page has no -2
+    notes = {*importers.LABELS.values(), voice_memos.LABEL}
     for p in sorted((vault.root / "resources").glob("*.md")):
         text = p.read_text("utf-8", errors="replace")
         if (m := HEADER.search(text)) and m.group(3) and m.group(1) in notes:

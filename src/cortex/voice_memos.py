@@ -37,6 +37,7 @@ from cortex import importers, sources
 from cortex._proc import NO_WINDOW
 from cortex.vault import Vault, VaultError
 
+LABEL = "Voice memos"  # the pages' header label; sources.edited_pages lists them
 AUDIO = (".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac")
 MODEL = "base"
 SIZE = "about 150 MB"
@@ -270,7 +271,7 @@ def voice_source(path: Path, job=None) -> sources.Source:
                 title = " ".join(speech.split()[:TITLE_WORDS]).rstrip(".,!?;:")
                 yield sources.Item(f"{day} {title}", day, text, str(p), key=key, summary=first)
 
-    src = sources.Source("voice-memos", "Voice memos", "folder", items,
+    src = sources.Source("voice-memos", LABEL, "folder", items,
                          default_tier=sources.Audience.LOCAL, prefix="voice", by_origin=True,
                          skips=SKIPS)
     return src
