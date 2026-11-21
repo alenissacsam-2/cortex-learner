@@ -106,6 +106,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |
+| `cortex chat eval` | The Chat test: 40 questions on a made-up vault, scored in code ([below](#the-chat-test)) |
 | `cortex backup` | Zips the whole vault, private browsing and its stored visit history included (not chat history; see [PRIVACY.md](PRIVACY.md#your-data)). Keep the zip as private as the vault |
 | `cortex exclude add <folder>` | Turns Cortex off in a folder (e.g. a work repo) |
 | `cortex kill` | Emergency stop for anything that acts as you |
@@ -193,6 +194,21 @@ Gemini's export has no conversation ids, so prompts become one chat until 30 min
 3. Pocket: the export .csv (or its .zip), if you saved one. It holds the articles you saved, not highlights, so each month becomes one page listing them.
 
 Importing a newer file again updates a book's page instead of adding a second one.
+
+### The Chat test
+
+The Chat test checks how well the app's Chat answers. It asks Chat 40 questions about a made-up learner and scores each answer in code, with no AI judge. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it.
+
+- **What it uses.** The test builds a made-up vault, browsing history and study record in a temp folder and deletes them afterwards. Your own vault, settings and browsing are never read.
+- **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "skipped: no local model". The 14 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run.
+- **The report.** Each question shows pass or fail, with the reason for a failure. It also shows:
+  - the result for each kind of question;
+  - whether the search served the right pages (recall at 1, 3 and 5; "buried" means the right page came lower than third, "missed" means it did not come at all);
+  - the five blockers (a private leak, a stale preference, a made-up history, a wrong count, a missed deep fact);
+  - how long the answers took.
+
+  A metric with no questions behind it says "no data". The pass bar is 35 of 40.
+- **Terminal options.** `--served` lists the pages each answer was given, `--out report.json` saves everything (answers and passage text), `--no-model` runs only the 14 data questions, and `--keep <new folder>` leaves the made-up vault there for a look.
 
 ---
 

@@ -74,7 +74,8 @@ _LEAD_FILL = frozenset(
     "read watch watched talk talked chat chatted ask asked write wrote mention mentioned "
     "study studied studying learn learned learnt learning practise practised practice "
     "practiced work worked working on about with at to the a an my of hear heard see saw "
-    "think thought get got ever really".split())
+    "think thought get got ever really review reviewed reviewing revise revised revising"
+    .split())
 _TAIL_FILL = re.compile(r"(?: (?:did|do|have|had) i(?: \w+)?| i (?:have|had|made|wrote|saved)"
                         r"| in total| so far| ever| altogether| overall| in my archive"
                         r"| in cortex| at all| before| then| now)+$")

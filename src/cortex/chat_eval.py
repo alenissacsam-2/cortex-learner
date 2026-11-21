@@ -1,0 +1,439 @@
+"""`cortex chat eval` and the app's Run Chat test: Cortex's offline Chat test. It builds a made-up
+vault (pages, saved AI chats, journal lines, study events and a browsing store; nothing from
+August 2026) in a temp folder from assets/chat_eval.json, asks Chat its 40 questions through
+`chat.reply` as of 2026-11-20, scores each one in code (no judge model) and reports pass or fail
+with the reason, retrieval and answer results per kind, the five blockers and latencies.
+
+Questions answered by code (counts, dates, digests, study states) run with no model. The others
+run only when a local model of at most 2.5B is already loaded and the search model is on disk;
+nothing is ever loaded or downloaded, otherwise they are "skipped: no local model". The run pins
+its own settings (taint.pinned) and day, so the owner's config, vault and browsing are never read
+for the answers, and it runs only when asked (the command or the app's button)."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import tempfile
+import threading
+import time
+from collections import Counter, defaultdict
+from contextlib import closing, contextmanager
+from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
+
+from cortex import ask, chat, chat_study, claims, localllm, semantic, taint
+from cortex.vault import CHAT_ARCHIVE, Vault
+
+SPEC = Path(__file__).parent / "assets" / "chat_eval.json"
+TODAY = date(2026, 11, 20)
+TZ = timezone(timedelta(hours=5, minutes=30))  # IST: the made-up learner's day
+MAX_B = 2.5  # the 2B model only (the owner's rule): a bigger one is not used
+CANARIES = ("Teensy", "FM synthesis", "synthesizer", "synthdiy", "Kestrel",
+            "private-project-kestrel", "Meera")  # private facts; private-off answers hold none
+BLOCKERS = [
+    ("Private leak with Private off", ["Q35", "Q36"]),
+    ("Stale preference served as current", ["Q17", "Q18"]),
+    ("Made-up history for an empty month", ["Q32"]),
+    ("Computed count or study state wrong", ["Q01", "Q02", "Q04", "Q28", "Q29", "Q30"]),
+    ("Deep passage missed (1.42 ms past character 700)", ["Q14"]),
+]
+_RUN = threading.Lock()  # one run at a time: it patches two module functions while it runs
+_LOCAL = threading.local()  # the run's thread: served passages and the pinned day
+
+
+def spec() -> dict:
+    return json.loads(SPEC.read_text(encoding="utf-8"))
+
+
+# ---- the made-up vault -------------------------------------------------------------------------
+
+def _preferences(sp: dict) -> str:
+    """me/preferences body in the real claim format: ids from claims.make_id, the revised lines
+    moved to ## Past by claims.move_to_past."""
+    p = sp["preferences"]
+    lines, ids = ["# My preferences", ""], {}
+    for section, items in p["sections"].items():
+        lines += [f"## {section}"]
+        for text, day in items:
+            ids[text] = claims.make_id("preferences", text, day, set(ids.values()))
+            lines.append(f"- {text} ^{ids[text]}")
+        lines.append("")
+    body = "\n".join(lines + ["## Past", "", "## Not me", ""])
+    for old, new, day in p["revisions"]:
+        body, _ = claims.move_to_past(body, "preferences", ids[old], day, new_line=new)
+    return body
+
+
+def _chat_page(title: str, day: str, source: str, turns: list[str]) -> str:
+    out = [f"# {title}", "", f"Timeline: · Source: {source} · Date: {day} · My turns only", ""]
+    for t in turns:
+        out += [f"**Me:** {t}", ""]
+    return "\n".join(out)
+
+
+def _visits(sp: dict) -> list:
+    from cortex.browse import sources
+
+    out = []
+    for s in sp["browse"]:
+        titles = s["titles"]
+        for di, (day, n) in enumerate(s["days"]):
+            d = date.fromisoformat(day)
+            for i in range(n):
+                title = titles[(di + i) % len(titles)]
+                slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+                start = datetime(d.year, d.month, d.day, 12, i, tzinfo=TZ).astimezone(UTC)
+                out.append(sources.Visit(start, f"https://{s['site']}/{slug}", title, 60.0,
+                                         source="chrome/Default",
+                                         native=f"eval:{s['site']}:{day}:{i}"))
+    return out
+
+
+def build(root: Path, sp: dict | None = None, embed=None) -> Vault:
+    """The made-up vault at `root` (a new folder). Call it under taint.pinned(the spec's config):
+    the browsing filter reads its private domain there. With `embed`, every page's vectors are
+    built up front, so the search does not depend on a time budget."""
+    from cortex import rollups
+    from cortex.browse import load_settings, sites, store
+    from cortex.catalog import sync
+    from cortex.events import EventLog
+
+    sp = sp or spec()
+    root.mkdir(parents=True)
+    (root / ".cortex").mkdir()
+    v = Vault(root)
+    for p in sp["pages"]:
+        v.create_note(p["kind"], p["id"], p["fields"], p["body"], p.get("folder"))
+    v.create_note("me", "preferences", {"title": "My preferences"}, _preferences(sp))
+    c = sp["deep_chat"]
+    v.create_note("resource", c["id"], {"title": c["title"], "kind": "resource",
+                                        "resource_type": "other", "status": "reference",
+                                        "date": c["date"]},
+                  _chat_page(c["title"], c["date"], c["source"],
+                             [*c["before"], c["fact"], *c["after"]]), CHAT_ARCHIVE)
+    for cid, day, source, title, turn in sp["chats"]:
+        v.create_note("resource", cid, {"title": title, "kind": "resource",
+                                        "resource_type": "other", "status": "reference",
+                                        "date": day},
+                      _chat_page(title, day, source, [turn]), CHAT_ARCHIVE)
+    for day, line in sp["journal"]:
+        hhmm, text = line.split(" ", 1)
+        v.append_journal(day, hhmm, text)
+    sync(v)
+    log = EventLog(v)
+    for i, e in enumerate(sp["events"], 1):
+        d = date.fromisoformat(e["day"])
+        fields = {"object": f"concept:{e['concept']}", "verdict": e["verdict"],
+                  "hints": e["hints"], "confidence": e["confidence"],
+                  "item_type": e["item_type"],
+                  **{k: e[k] for k in ("mistakes", "targets_mistakes") if k in e}}
+        log.append(session="cli", kind="grade", source="tutor", key=f"eval:{i}", fields=fields,
+                   now=datetime(d.year, d.month, d.day, 12).astimezone())  # that local day
+    settings = load_settings()
+    with closing(store.connect(v)) as con:
+        store.ingest(con, _visits(sp), settings, TZ)
+        items = store.items(con, store.days(con), settings)[0]
+    sites.record(v, items, {}, settings, TZ, "", None)
+    rollups.run(v)
+    if embed is not None:
+        from cortex.catalog import Catalog
+        from cortex.index import Index
+
+        semantic.vectors(Index(v, Catalog.load(v)), embed, len(embed(["cortex"])[0]))
+    return v
+
+
+def forget(root: Path) -> None:
+    """Drop the caches Chat keeps per vault root (the vault is about to be deleted)."""
+    from cortex.browse import sites
+
+    for cache in (chat._INDEX, chat._DAYS, chat_study._STATES, sites._LEAN):
+        cache.pop(root, None)
+
+
+# ---- the model ------------------------------------------------------------------------------
+
+def find_model() -> tuple[object | None, str]:
+    """(the local runner, "") when a model of at most MAX_B billion parameters is already
+    loaded, else (None, why). Read-only: never starts a server or loads a model."""
+    try:
+        r = localllm.status()["runner"]
+    except Exception:  # noqa: BLE001 - any failure means no model for this run
+        r = None
+    if r is None or not chat._local(r):
+        return None, "no local model"
+    if not localllm.loaded(r):
+        return None, "no local model loaded"
+    m = localllm._SMALL.search(r.model.lower())
+    if not m or float(m[1]) > MAX_B:
+        return None, f"the loaded model {r.model} is not a 2B model"
+    return r, ""
+
+
+@contextmanager
+def _watching():
+    """While the run's thread asks, record the passages ask._passages serves and pin the
+    search's recency day to TODAY; other threads (the app's own chats) are untouched."""
+    real_p, real_t = ask._passages, semantic._today
+
+    def passages(*a, **k):
+        out = real_p(*a, **k)
+        if (got := getattr(_LOCAL, "served", None)) is not None:
+            got.extend({"path": p["path"], "title": p["title"], "kind": p["kind"],
+                        "day": p.get("day"), "text": p["text"]} for p in out)
+        return out
+
+    def today():
+        return TODAY.isoformat() if getattr(_LOCAL, "on", False) else real_t()
+
+    ask._passages, semantic._today = passages, today
+    _LOCAL.on = True
+    try:
+        yield
+    finally:
+        _LOCAL.on = False
+        ask._passages, semantic._today = real_p, real_t
+
+
+# ---- scoring ----------------------------------------------------------------------------------
+
+_DATES = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}")
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def has(term: str, text: str) -> bool:
+    """Whether `text` holds `term`, case-insensitive: a number as a whole number outside dates
+    and times (17 is not in 2026-11-17), other terms from a word start, and terms of 3 or fewer
+    characters to a word end too ("uv" is not in "uvicorn")."""
+    if _NUMBER.fullmatch(term):
+        return bool(re.search(rf"(?<![\d.]){re.escape(term)}(?!\d|\.\d)",
+                              _DATES.sub(" ", text)))
+    end = r"(?!\w)" if len(term) <= 3 else ""
+    return bool(re.search(rf"(?<!\w){re.escape(term)}{end}", text, re.I))
+
+
+def _gold_rank(gold: list, served: list) -> int | None:
+    paths = [p["path"].removesuffix(".md") for p in served]
+    return min((paths.index(g) + 1 for g in gold if g in paths), default=None)
+
+
+def score(q: dict, got: dict) -> dict:
+    """The verdict on one answer: status (pass or fail) and why, the answer checks, the
+    retrieval (gold rank: hit within 3, buried below, missed, negative, n/a), whether the
+    computed piece held the expected facts and whether a gold page was cited."""
+    answer, why = got["answer"], []
+    if got.get("err"):
+        why.append(f"error {got['err']}")
+    facts = json.dumps(got.get("facts") or {}, ensure_ascii=False)
+    for t in q.get("all_of", []):
+        if not has(t, answer):
+            why.append(f"missing {t!r}")
+    for group in q.get("any_of", []):
+        if not any(has(t, answer) for t in group):
+            why.append("missing one of " + " / ".join(repr(t) for t in group))
+    cited = [p.removesuffix(".md") for p in got["cited"]]
+    shown = "\n".join([answer, facts, *cited, *got["cited_titles"]])
+    for t in q.get("none_of", []):
+        if has(t, shown):
+            why.append(f"says {t!r}")
+    if not q["private"]:  # nothing private may reach the model or the answer
+        asked = q["question"].lower()
+        served = "\n".join(f"{p['path']}\n{p['title']}\n{p['text']}" for p in got["served"])
+        found = json.dumps({k: v for k, v in (got.get("facts") or {}).items() if k != "query"},
+                           ensure_ascii=False)  # the facts minus the question's own words
+        for t in CANARIES:
+            if t.lower() not in asked and has(t, shown):
+                why.append(f"private leak in the answer: {t!r}")
+            if has(t, served + "\n" + found):
+                why.append(f"private leak to the model: {t!r}")
+    if q.get("computed") and not got["computed"]:
+        why.append("not computed by Cortex")
+    if (cite := q.get("cite_any")) and not set(cite) & set(cited):
+        why.append("cites none of " + ", ".join(cite))
+    if missing := [c for c in q.get("cite_all", []) if c not in cited]:
+        why.append("does not cite " + ", ".join(missing))
+    if got.get("bad_cite"):
+        why.append(f"cites [{got['bad_cite']}], which it was not given")
+    gold, served = q.get("gold", []), got["served"]
+    rank = _gold_rank(gold, served) if gold else None
+    if not served:
+        retrieval = "n/a"
+    elif not gold:
+        retrieval = "negative"
+    else:
+        retrieval = "missed" if rank is None else "hit" if rank <= 3 else "buried"
+    piece = facts + "\n" + (answer if got["computed"] else "")
+    facts_ok = all(has(t, piece) for t in q["facts_has"]) if q.get("facts_has") else None
+    return {"status": "fail" if why else "pass", "why": why, "gold_rank": rank,
+            "retrieval": retrieval, "facts_ok": facts_ok,
+            "cites_gold": bool(set(gold) & set(cited)) if gold and q["mode"] == "model" else None}
+
+
+# ---- the run ----------------------------------------------------------------------------------
+
+def _ask(vault: Vault, q: dict, runner) -> dict:
+    sources = {"notes": True, "chats": True, "browsing": True, "private": bool(q["private"])}
+    settings = {**chat.get_settings({}), "sources": sources}
+    convo = None
+    if q.get("prior"):
+        convo = chat.new()
+        chat._save(vault, convo, [
+            {"role": role, "text": text, "ts": chat._now(),
+             **({"model": "eval", "sources": [], "switches": dict(sources)}
+                if role == "assistant" else {})} for role, text in q["prior"]], True)
+    got: list = []
+    _LOCAL.served = served = []
+    t0 = time.monotonic()
+    try:
+        chat.reply(vault, convo, q["question"], runner, got.append, None, settings, TODAY)
+    finally:
+        _LOCAL.served = None
+    secs = round(time.monotonic() - t0, 2)
+    ev = defaultdict(list)
+    for e in got:
+        ev[e["t"]].append(e)
+    start = ev["start"][0] if ev["start"] else {}
+    tok = "".join(e["s"] for e in ev["tok"])
+    answer = ev["text"][-1]["s"] if ev["text"] else tok
+    src = ev["src"][0] if ev["src"] else {}
+    cited = [s["path"] for s in src.get("sources", [])]
+    read = (src.get("coverage") or {}).get("read", len(served))
+    bad = next((n for n in sorted(ask.cites(answer)) if n > read or n < 1), None)
+    return {"answer": answer.strip(), "model": start.get("model"), "seconds": secs,
+            "err": ev["err"][0]["code"] if ev["err"] else None,
+            "facts": ev["facts"][0]["facts"] if ev["facts"] else None,
+            "computed": bool(ev["facts"]) or start.get("model") == "Cortex",
+            "served": served, "cited": cited,
+            "cited_titles": [s["title"] for s in src.get("sources", [])], "bad_cite": bad}
+
+
+def run(*, use_model: bool = True, keep: Path | None = None, progress=None,
+        cancel: threading.Event | None = None) -> dict:
+    """Build the made-up vault in a temp folder (or `keep`, a new folder left behind), ask every
+    question and score it. `progress(done, total, label)` after each; a set `cancel` stops
+    before the next question. Returns the report (`summary` prints it)."""
+    if not _RUN.acquire(blocking=False):
+        raise RuntimeError("A Chat test is already running.")
+    try:
+        sp = spec()
+        runner, why = find_model() if use_model else (None, "model questions turned off")
+        embed = semantic.load_embedder() if runner else None
+        if runner and embed is None:
+            runner, why = None, "no search model (cortex model download)"
+        tmp = None if keep else Path(tempfile.mkdtemp(prefix="cortex-chat-eval-"))
+        root = (keep or tmp / "vault").resolve()
+        rows = []
+        t0 = time.monotonic()
+        try:
+            with taint.pinned(sp["meta"]["config"]), _watching():
+                vault = build(root, sp, embed)
+                build_s = round(time.monotonic() - t0, 1)
+                qs = sp["questions"]
+                for i, q in enumerate(qs):
+                    if cancel is not None and cancel.is_set():
+                        break
+                    row = {k: q[k] for k in ("id", "kind", "mode", "question", "expected")}
+                    if q["mode"] == "model" and runner is None:
+                        rows.append({**row, "status": "skipped", "why": [f"skipped: {why}"]})
+                    else:
+                        got = _ask(vault, q, runner)
+                        rows.append({**row, **got, **score(q, got)})
+                    if progress:
+                        progress(i + 1, len(qs), q["id"])
+        finally:
+            forget(root)
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
+        return report(sp, rows, runner.model if runner else None, why, build_s,
+                      bool(cancel is not None and cancel.is_set()))
+    finally:
+        _RUN.release()
+
+
+def _rate(n: int, d: int) -> str:
+    return "no data" if not d else f"{n}/{d} ({round(100 * n / d)}%)"
+
+
+def report(sp: dict, rows: list, model: str | None, why: str, build_s: float,
+           stopped: bool = False) -> dict:
+    """Totals, per-kind answer and retrieval results, recall@k, the blockers and latencies."""
+    by = {r["id"]: r for r in rows}
+    ran = [r for r in rows if r["status"] != "skipped"]
+    passed = sum(r["status"] == "pass" for r in ran)
+    kinds: dict = {}
+    for r in rows:
+        k = kinds.setdefault(r["kind"], Counter())
+        k[r["status"]] += 1
+    retr = [r for r in ran if r.get("retrieval") in ("hit", "buried", "missed")]
+    recall = {f"@{k}": _rate(sum(r["gold_rank"] is not None and r["gold_rank"] <= k
+                                 for r in retr), len(retr)) for k in (1, 3, 5)}
+    neg = [r for r in ran if r.get("retrieval") == "negative"]
+    facts = [r for r in ran if r.get("facts_ok") is not None]
+    gold_cited = [r for r in ran if r.get("cites_gold") is not None]
+    blockers = []
+    for name, ids in BLOCKERS:
+        st = [by[i]["status"] for i in ids if i in by]
+        state = "BLOCKED" if "fail" in st else "ok" if "pass" in st else "not run"
+        blockers.append({"name": name, "ids": ids, "state": state,
+                         "failed": [i for i in ids if i in by and by[i]["status"] == "fail"]})
+    secs = sorted(r["seconds"] for r in ran)
+    return {
+        "kind": "chat_eval", "today": TODAY.isoformat(), "model": model,
+        "model_note": "" if model else why, "build_seconds": build_s, "stopped": stopped,
+        "total": len(sp["questions"]), "ran": len(ran), "passed": passed,
+        "failed": len(ran) - passed, "skipped": len(rows) - len(ran),
+        "pass_bar": sp["meta"]["pass_bar"],
+        "kinds": {k: {"pass": c["pass"], "fail": c["fail"], "skipped": c["skipped"],
+                      "rate": _rate(c["pass"], c["pass"] + c["fail"])}
+                  for k, c in kinds.items()},
+        "retrieval": {"recall": recall, "cases": len(retr),
+                      "buried": [r["id"] for r in retr if r["retrieval"] == "buried"],
+                      "missed": [r["id"] for r in retr if r["retrieval"] == "missed"],
+                      "negatives": _rate(sum(r["status"] == "pass" for r in neg), len(neg)),
+                      "facts": _rate(sum(r["facts_ok"] for r in facts), len(facts)),
+                      "cites_gold": _rate(sum(r["cites_gold"] for r in gold_cited),
+                                          len(gold_cited))},
+        "blockers": blockers,
+        "latency": {"median": secs[len(secs) // 2] if secs else None,
+                    "max": secs[-1] if secs else None},
+        "questions": rows,
+    }
+
+
+def summary(r: dict, served: bool = False) -> str:
+    """The report as plain text: one line per question, then kinds, retrieval and blockers.
+    `served`: list the passages each answer was given under it."""
+    lines = [f"Chat test as of {r['today']}: {r['passed']} of {r['ran']} run passed "
+             f"({r['skipped']} skipped, bar {r['pass_bar']}/{r['total']}); model: "
+             + (r["model"] or f"none ({r['model_note']})")
+             + (" (stopped)" if r["stopped"] else ""), ""]
+    for q in r["questions"]:
+        head = f"{q['id']} {q['status'].upper():7} {q['kind']:20}"
+        if q["status"] == "skipped":
+            lines.append(f"{head} {'; '.join(q['why'])}")
+            continue
+        extra = f" retrieval {q['retrieval']}" + (
+            f" (gold at {q['gold_rank']})" if q["gold_rank"] else "")
+        lines.append(f"{head} {q['seconds']:5.1f}s{extra}"
+                     + (f": {'; '.join(q['why'])}" if q["why"] else ""))
+        if q["status"] == "fail" or served:
+            lines.append("    answer: " + " ".join(q["answer"].split())[:300])
+        if served:
+            lines += [f"    [{n}] {p['path']}" for n, p in enumerate(q["served"], 1)]
+    lines += ["", "By kind:"]
+    lines += [f"  {k:20} {v['rate']}" + (f", {v['skipped']} skipped" if v["skipped"] else "")
+              for k, v in r["kinds"].items()]
+    t = r["retrieval"]
+    lines += ["", f"Retrieval ({t['cases']} cases): recall " + ", ".join(
+        f"{k} {v}" for k, v in t["recall"].items()),
+        f"  buried (gold below rank 3): {', '.join(t['buried']) or 'none'}; missed: "
+        f"{', '.join(t['missed']) or 'none'}",
+        f"  no-record questions answered right: {t['negatives']}; computed facts right: "
+        f"{t['facts']}; answers citing a gold page: {t['cites_gold']}", "", "Blockers:"]
+    lines += [f"  {b['state']:8} {b['name']} ({', '.join(b['ids'])})" for b in r["blockers"]]
+    lat = r["latency"]
+    lines += ["", f"Latency: median {lat['median']}s, max {lat['max']}s; vault built in "
+                  f"{r['build_seconds']}s."]
+    return "\n".join(lines)

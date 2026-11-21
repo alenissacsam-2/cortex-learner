@@ -14,6 +14,8 @@ import re
 import sys
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 MARKER = ".cortex/taint"
@@ -31,8 +33,26 @@ def _config_path() -> Path:
     return Path.home() / ".cortex" / "config.yaml"
 
 
+# a config pinned for one thread's work (cortex.chat_eval): config() returns it there instead of
+# the file, and write_config refuses, so a made-up run never reads or changes the owner's settings
+_PINNED: ContextVar[dict | None] = ContextVar("cortex_pinned_config", default=None)
+
+
+@contextmanager
+def pinned(data: dict):
+    """Within the block, in this thread (and context) only, config() is a copy of `data`."""
+    token = _PINNED.set(data)
+    try:
+        yield
+    finally:
+        _PINNED.reset(token)
+
+
 def config() -> dict:
-    """~/.cortex/config.yaml as a dict ({} when missing or broken)."""
+    """~/.cortex/config.yaml as a dict ({} when missing or broken); `pinned`'s dict within it."""
+    if (p := _PINNED.get()) is not None:
+        import copy
+        return copy.deepcopy(p)
     from ruamel.yaml import YAML, YAMLError  # cortex.vault loads it anyway
     try:
         data = YAML(typ="safe").load(_config_path().read_text(encoding="utf-8")) or {}
@@ -55,6 +75,8 @@ def write_config(data: dict | Callable[[dict], dict]) -> Path:
 
     from cortex.vault import LOCK_STALE_S, REPLACE_TRIES, VaultError
 
+    if _PINNED.get() is not None:
+        raise VaultError("invalid_argument", "Settings cannot change during a pinned run.")
     path = _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_name("config.lock")
