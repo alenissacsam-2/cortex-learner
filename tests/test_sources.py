@@ -153,3 +153,47 @@ def test_cli_asks_once_per_source_in_a_terminal(root_plain, tmp_path, monkeypatc
     (notes / "Two.md").write_bytes(b"# Two\n\nsecond\n")
     out = _cli(root_plain, notes).output  # remembered: not asked again
     assert "who may read" not in out and "tier private (your last choice" in out
+
+
+# ---- RR-2: the quality gate, for every source -------------------------------------------
+
+PROSE = ("I spent the evening reading about B-trees and why databases like them: every node "
+         "holds many keys, so a lookup touches only a few disk pages. Tomorrow I will try to "
+         "write one in Python and compare it with a plain sorted list.\n")
+CODE = ("def merge(a, b):\n    out, i, j = [], 0, 0\n    while i < len(a) and j < len(b):\n"
+        "        if a[i] <= b[j]:\n            out.append(a[i]); i += 1\n        else:\n"
+        "            out.append(b[j]); j += 1\n    return out + a[i:] + b[j:]\n")
+HINDI = ("आज मैंने डेटा संरचनाओं के बारे में पढ़ा। बाइनरी सर्च ट्री में हर नोड की बाईं ओर छोटी "
+         "और दाईं ओर बड़ी कुंजियाँ होती हैं, इसलिए खोज तेज़ होती है। कल मैं इसे खुद लिखकर "
+         "देखूँगा और सूची से तुलना करूँगा।\n")
+
+
+@pytest.mark.parametrize("text, why", [
+    ("Notes on graphs " + "�" * 30 + PROSE, "garbled"),
+    ("|=+-*/#@!{}[]<>~^%$&;:" * 12 + "ok", "mostly symbols"),
+    ("".join(f"- https://example.com/articles/{i}/a-long-slug-here\n" for i in range(8))
+     + "Links I saved\n", "link list"),
+    ("same line again and again\n" * 12 + "one\ntwo\n", "repetitive"),
+    (PROSE, None), (CODE * 2, None), (HINDI, None),
+    ("�" * 50, None), ("https://example.com/x\n" * 5, None),  # short: never judged
+])
+def test_unreadable(text, why):
+    assert sources.unreadable(text) == why
+
+
+def test_garbage_items_are_skipped_and_counted_in_the_report(root_plain):
+    from cortex import importers
+    v = Vault(root_plain)
+    links = "".join(f"https://example.com/page/{i}/with/a/long/path\n" for i in range(10))
+    r = sources.run(v, _src(sources.Item("Bad", "2026-11-02", "x" + "�" * 250),
+                            sources.Item("Worse", "2026-11-02", "�" * 300),
+                            sources.Item("Links", "2026-11-02", links),
+                            sources.Item("Good", "2026-11-02", PROSE),
+                            sources.Item("Hindi", "2026-11-02", HINDI)))
+    assert r["imported"] == 2 and r["read"] == 5
+    assert r["unreadable"] == {"garbled": 2, "link list": 1}
+    assert not (root_plain / "resources" / "test-bad.md").exists()
+    assert importers.report_line("Test", r).endswith(
+        "skipped 0. Skipped 3 as unreadable (2 garbled, 1 link list)")
+    clean = sources.run(v, _src(sources.Item("Fine", "2026-11-03", PROSE + "more")))
+    assert "unreadable" not in importers.report_line("Test", clean)

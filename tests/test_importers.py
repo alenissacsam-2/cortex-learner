@@ -32,7 +32,7 @@ def _folder_zip(src: Path, dest: Path) -> Path:
                        for p in sorted(src.rglob("*")) if p.is_file()})
 
 
-REPORT = ("read", "imported", "private", "duplicate", "reasons")
+REPORT = importers.REPORT
 
 
 def _counts(r: dict) -> dict:

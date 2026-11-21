@@ -2,7 +2,8 @@
 
 A `Source` says what it is (id, label, what it reads, its default tier) and yields `Item`s, or a
 reason string for each entry it skips. `run` does the rest, the same for every source: the
-never-capture filter (`scrub`), secret redaction, the tier, dedupe, the page write through the
+never-capture filter (`scrub`), secret redaction, the quality gate (`unreadable`: garbled,
+symbol, link-list and repeated text is kept out), the tier, dedupe, the page write through the
 vault, the dry run and the report counts (`importers.report_line` prints them).
 
 Two page shapes. `page="item"`: one `resource` page per item, `<prefix>-<title slug>`, deduped by
@@ -40,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -67,6 +69,10 @@ _FORWARDED = re.compile(r"^[ \t]*-{2,}[ \t]*(?:Original Message|Forwarded messag
 # shortcut: only "lat, lon" pairs with 4+ decimals (about 10 m); a source that reads a location
 # history (item 14) reduces its own places to a city per day
 _COORDS = re.compile(r"(?<![\d.])(-?\d{1,2}\.\d{4,})(\s*,\s*)(-?\d{1,3}\.\d{4,})(?![\d.])")
+# the quality gate (`unreadable`): an item under GATE_MIN characters is never judged
+GATE_MIN = 200
+UNREADABLE = ("garbled", "mostly symbols", "link list", "repetitive")  # the report's order
+_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
 
 
 @dataclass
@@ -174,6 +180,29 @@ def scrub(text: str, src: Source | None = None) -> str:
     return chats.redact(text)
 
 
+def unreadable(text: str) -> str | None:
+    """Why an item's text is garbage (an UNREADABLE reason), or None when it reads as text:
+    U+FFFD over 5% of its non-space characters (a bad decode), letters, digits and marks under
+    25% of them, over 60% of its non-empty lines mostly a URL, or 10+ lines of which under 30%
+    are distinct. Text under GATE_MIN characters always passes."""
+    chars = [c for c in text if not c.isspace()]
+    if len(text) < GATE_MIN or not chars:
+        return None
+    if text.count("�") > 0.05 * len(chars):
+        return "garbled"
+    # a mark counts: a Devanagari or Tamil vowel sign is a mark, not a letter
+    if sum(c.isalnum() or unicodedata.category(c)[0] == "M" for c in chars) < 0.25 * len(chars):
+        return "mostly symbols"
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    links = sum(2 * sum(len(u) for u in _URL.findall(ln)) > len(ln.replace(" ", ""))
+                for ln in lines)
+    if links > 0.6 * len(lines):
+        return "link list"
+    if len(lines) >= 10 and len(set(lines)) < 0.3 * len(lines):
+        return "repetitive"
+    return None
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -201,9 +230,11 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
     """Import `src` at `tier`. The report: `read` (entries, skipped ones too), `imported` (new
     pages for item sources, new lines for month sources), `private`, `duplicate`, `reasons`
     (skip reason -> count), `items` (items read), `pages` (pages they belong on) and `updated`
-    (pages rewritten by a source that `updates`)."""
+    (pages rewritten by a source that `updates`) and `unreadable` (quality-gate reason ->
+    count: the items `unreadable` kept out, for every source)."""
     r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
-         "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value}
+         "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value,
+         "unreadable": {}}
     if tier is Audience.SKIP:
         return r
     (_items if src.page == "item" else _months)(vault, src, tier is Audience.LOCAL, dry_run, r)
@@ -215,6 +246,8 @@ def _read(src: Source, r: dict):
         r["read"] += 1
         if isinstance(it, str):
             r["reasons"][it] = r["reasons"].get(it, 0) + 1
+        elif bad := unreadable(it.text):
+            r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
         else:
             r["items"] += 1
             yield it
