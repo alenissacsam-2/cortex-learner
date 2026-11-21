@@ -262,6 +262,7 @@ CONTEXT_CAPS = {"profile": 400, "topic": 700, "projects": 500,
                 "related": 500, "personality": 400, "goals": 200}  # preferences get the rest
 # cortex_prime's Related part; the light blocks and PRIME_MAX, PRIME_CAPS are in cortex.prime
 PRIME_POOL, PRIME_RECALLS, PRIME_MISTAKES = 8, 3, 2
+READ_SIMILAR = 3  # RR-23: meaning-neighbours cortex_read lists, from head vectors in memory
 # RR-21: pages changed or touched in the last LATELY_DAYS, a hint at what the user is up to
 PRIME_LATELY, LATELY_DAYS = 3, 7
 LATELY_HEAD = "Lately (recent, use only if relevant)"
@@ -1153,10 +1154,38 @@ class Cortex:
                 self.sessions.expose()
         out["fields"] = _wrap_fields(out["id"], out["fields"])
         out["title"] = render.plain(out["title"], 120)  # outside <untrusted_note>
+        if similar := self._similar(out["id"]):
+            out["similar"] = similar
         out["next"] = self._next("Ask one closed-book question on it (cortex_ask) before "
                                  "teaching." if out["kind"] == "concept"  # dogfood r4 #13
                                  else "Use it as context; cite it as [[id]] where it helps.")
         return out
+
+    def _similar(self, id: str) -> list[dict]:
+        """RR-23: up to READ_SIMILAR pages whose head vector is within semantic.MIN_COS of
+        `id`'s, not linked to it either way, as {id, title (plain)}. Only vectors this process
+        already holds: never loads or downloads the embedder, so [] until a recall built them.
+        `_notes` holds no private, hidden or withheld page."""
+        import numpy as np
+
+        from cortex import semantic
+
+        notes = self.index._notes
+        cache = semantic._MEM.get(self.vault.root, (None, {}, None))[1]
+        heads = {i: e[3][e[2] == 0] for i, e in cache.items() if i in notes}
+        mine = heads.pop(id, None)
+        if mine is None or not len(mine):
+            return []
+        linked = {r[0] for r in self.index.db.execute(
+            "SELECT dst FROM edges WHERE src = ?1 UNION SELECT src FROM edges WHERE dst = ?1",
+            (id,))}
+        ids = [i for i, v in heads.items() if len(v) and i not in linked]
+        if not ids:
+            return []
+        cos = np.stack([heads[i][0] for i in ids]) @ mine[0]
+        best = [ids[k] for k in np.argsort(-cos, kind="stable") if cos[k] >= semantic.MIN_COS]
+        return [{"id": i, "title": render.plain(notes[i]["title"], 120)}
+                for i in best[:READ_SIMILAR]]
 
     def _note_recall(self, tool: str, query: str, ids: list[str]) -> None:
         from cortex import recall_log
