@@ -74,6 +74,44 @@ def test_week_month_and_year_pages(vault):
         assert len(_read(vault, name)) <= 2500
 
 
+def test_a_week_page_has_fixed_sections_and_fits(vault):  # R3-6
+    rollups.run(vault)
+    week = _read(vault, "rollup-2026-w47")
+    heads = [ln[3:] for ln in week.splitlines() if ln.startswith("## ")]
+    assert heads == [s for s, _ in rollups.WEEK_SECTIONS]
+    assert "## Projects and decisions\n- none\n" in week  # empty, never padded
+    # a busy week: every list cut until the page fits, the cut said
+    its = [("2026-11-16", "notes", f"n{i}", "A rather long note title number " + str(i), 1,
+            "project" if i % 3 else "note", False) for i in range(40)]
+    its += [("2026-11-17", "journal", f"09:{i:02d} A journal line about the day {i}", "", 1,
+             "", False) for i in range(30)]
+    its += [("2026-11-18", "calendar", f"2026-11-18 10:{i:02d} · Meeting {i}", "", 1, "",
+             False) for i in range(20)]
+    its += [("2026-11-18", "people", "asha", "Asha Rao", 1, "", False)]
+    page = rollups.render_week("rollup-2026-w47", "2026-11-16", "2026-11-22", its, False)
+    assert 1200 <= len(page) <= rollups.WEEK_MAX
+    assert "more" in page and "[[asha]] Asha Rao" in page and "Meeting" in page
+
+
+def test_people_and_calendar_on_the_week(vault, root):  # R3-6
+    note(root, "people/asha.md", "title: Asha Rao\nkind: person\nprivate: false\n", "# Asha Rao\n")
+    note(root, "people/ravi.md", "title: Ravi Iyer\nkind: person\n", "# Ravi Iyer\n")  # private
+    note(root, "notes/sync.md", "title: Sync\ndate: 2026-11-19\n",
+         "# Sync\n\nMet Asha Rao and Ravi Iyer.")
+    note(root, "resources/calendar-2026-11.md",
+         "title: Calendar 2026-11\nkind: resource\ndate: 2026-11-01\n",
+         "# Calendar 2026-11\n\nSource: Calendar · Date: 2026-11-01\n\n## Events\n"
+         "- 2026-11-20 10:00 · Exam · Hall 2\n- 2026-11-03 09:00 · Lab\n")
+    chat._INDEX.pop(vault.root, None)
+    rollups.run(vault)
+    week = _read(vault, "rollup-2026-w47")
+    assert "- [[asha]] Asha Rao" in week and "- 2026-11-20 10:00 · Exam · Hall 2" in week
+    assert "Lab" not in week and "[[calendar-2026-11]]" not in week  # its events, not the page
+    assert "ravi" not in "".join(p.read_text(encoding="utf-8")  # a private person: on no page
+                                 for p in (vault.root / "rollups").glob("*.md"))
+    assert "Lab" in _read(vault, "rollup-2026-w45")
+
+
 def test_private_material_only_in_the_private_variant(vault):
     rollups.run(vault)
     public = "".join(p.read_text(encoding="utf-8")

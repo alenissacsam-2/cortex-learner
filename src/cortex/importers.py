@@ -317,6 +317,18 @@ def _is_private(front: str) -> bool:
     return any(str(t).strip().lstrip("#").casefold() == "private" for t in tags)
 
 
+def _summary(front: str) -> str:
+    """R3-6: a note's own one-line `summary:` or `description:` from its frontmatter, else ""."""
+    from ruamel.yaml import YAML, YAMLError
+    try:
+        fm = YAML(typ="safe").load(front)
+    except (YAMLError, ValueError):
+        return ""
+    if not isinstance(fm, dict):
+        return ""
+    return next((v for k in ("summary", "description") if isinstance(v := fm.get(k), str)), "")
+
+
 def report_line(label: str, r: dict) -> str:
     """The line every import ends with: counts read, imported, private, duplicate and
     skipped, with the reason for each skip; then the items the quality gate kept out
@@ -379,7 +391,8 @@ def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
     return sources.Item(PurePosixPath(rel).stem,
                         datetime.fromtimestamp(mtime, UTC).date().isoformat(),
                         text[fm.end():] if fm else text, rel,
-                        private=bool(fm and _is_private(fm.group(1))), key=text)
+                        private=bool(fm and _is_private(fm.group(1))), key=text,
+                        summary=_summary(fm.group(1)) if fm else "")
 
 
 def _tier(private: bool, tier: str | None) -> sources.Audience:

@@ -103,6 +103,8 @@ def test_an_ordinary_chat_page_holds_my_turns_only_redacted(root_committed, dirs
     assert got == {"saved": 2}
     body = page(root_committed, "claude-code", "D--Dev-proj/sess1")
     assert body.count("**Me:**") == 2 and "How do heaps work?\nsecond line" in body
+    assert "\nWhen: 20" in body and "\nWho: me and Claude Code\n" in body  # R3-6
+    assert "Where:" not in body
     assert "[redacted]" in body and KEY not in body
     for gone in ("ASSISTANT", "SIDECHAIN", "META-LINE", "SUMMARY-OF", "/cortex"):
         assert gone not in body, gone
@@ -155,6 +157,9 @@ def test_a_coding_session_is_a_capped_summary_without_code(root_committed, dirs)
     assert "- `src/f0.py`" in body and "- …and 5 more" in body  # 30 of 35
     assert "- Add the parser" in body and "- Fix the heap" in body
     assert 'related: ["[[proj]]"]' in body
+    # R3-6: the fact header under the Timeline line: the span, who, the project
+    assert "\nWhen: 2026-11-10\nWho: me and Claude Code\nWhere: [[proj|proj]]\n" \
+        in body
     assert 'title: "proj: request 0: do thing 0"' in body
 
 

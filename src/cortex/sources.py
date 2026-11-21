@@ -88,6 +88,8 @@ class Item:
     tags: list[str] = field(default_factory=list)
     private: bool = False  # the item itself asks to be private (a note's frontmatter)
     key: str = ""  # what dedupe hashes when it is not `text` (a note: with its frontmatter)
+    who: str = ""  # R3-6: the person the item is by or with, when the source knows (an author)
+    summary: str = ""  # R3-6: the item's own summary, when it has one (a note's frontmatter)
 
 
 @dataclass
@@ -381,7 +383,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         if hidden:
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
-        mark = f" · body: {_sha(body.strip())}" if src.by_origin else ""
+        body = f"{facts(it, src)}\n\n{body}".strip()
+        mark = f" · body: {_sha(body)}" if src.by_origin else ""  # the facts are body too
         page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin}{mark}"
                 f" · sha: {h}\n\n{body}\n")
         if old is None:
@@ -400,6 +403,23 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         r["private"] += hidden
         if not dry_run:  # a page edited since the check keeps its edit
             vault.update_text(old, lambda cur, t=text: cur if untouched(cur) is False else t)
+
+
+SUMMARY_CHARS = 200
+
+
+def facts(it: Item, src: Source) -> str:
+    """R3-6: the fact header an item page's body starts with, so the page's first passage
+    answers alone: `When:` (the item's date), then `Who:` and `Summary:` only when the source
+    knows them (a book's author; a note's own `summary:` or `description:`), cut at a word.
+    Nothing is inferred. The `Source:` header line above it is unchanged."""
+    out = [f"When: {it.date}"]
+    for name, value in (("Who", it.who), ("Summary", it.summary)):
+        if value := " ".join(value.split()):
+            if len(value) > SUMMARY_CHARS:
+                value = value[:SUMMARY_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+            out.append(f"{name}: {scrub(value, src)}")
+    return "\n".join(out)
 
 
 def untouched(text: str) -> bool | None:
