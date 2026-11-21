@@ -185,7 +185,7 @@ def forget(root: Path) -> None:
     """Drop the caches Chat keeps per vault root (the vault is about to be deleted)."""
     from cortex.browse import sites
 
-    for cache in (chat._INDEX, chat._DAYS, chat_study._STATES, sites._LEAN):
+    for cache in (chat._INDEX, chat._DAYS, chat_study._STATES, sites._LEAN, ask._PRIVATE):
         cache.pop(root, None)
 
 
@@ -210,10 +210,12 @@ def find_model() -> tuple[object | None, str]:
 
 @contextmanager
 def _watching():
-    """While the run's thread asks, record the passages ask._passages serves, the wider pool
-    each search would find (its best POOL pages), and pin the search's recency day to TODAY;
-    other threads (the app's own chats) are untouched."""
+    """While the run's thread asks, record the passages ask._passages (and a compare's
+    chat._page_passages) serve, the wider pool each search would find (its best POOL pages),
+    and pin the search's recency day to TODAY; other threads (the app's own chats) are
+    untouched."""
     real_p, real_t, real_s = ask._passages, semantic._today, semantic.search
+    real_pp = chat._page_passages
 
     def search(index, query, limit=8, *a, **k):
         out = real_s(index, query, limit, *a, **k)
@@ -221,23 +223,27 @@ def _watching():
             pool.update(h["id"] for h in real_s(index, query, max(limit, POOL), *a, **k)[0])
         return out
 
-    def passages(*a, **k):
-        out = real_p(*a, **k)
-        if (got := getattr(_LOCAL, "served", None)) is not None:
-            got.extend({"path": p["path"], "title": p["title"], "kind": p["kind"],
-                        "day": p.get("day"), "text": p["text"]} for p in out)
-        return out
+    def record(real):
+        def passages(*a, **k):
+            out = real(*a, **k)
+            if (got := getattr(_LOCAL, "served", None)) is not None:
+                got.extend({"path": p["path"], "title": p["title"], "kind": p["kind"],
+                            "day": p.get("day"), "text": p["text"]} for p in out)
+            return out
+        return passages
 
     def today():
         return TODAY.isoformat() if getattr(_LOCAL, "on", False) else real_t()
 
-    ask._passages, semantic._today, semantic.search = passages, today, search
+    ask._passages, semantic._today, semantic.search = record(real_p), today, search
+    chat._page_passages = record(real_pp)
     _LOCAL.on = True
     try:
         yield
     finally:
         _LOCAL.on = False
         ask._passages, semantic._today, semantic.search = real_p, real_t, real_s
+        chat._page_passages = real_pp
 
 
 # ---- scoring ----------------------------------------------------------------------------------
@@ -372,8 +378,10 @@ def _ask(vault: Vault, q: dict, runner) -> dict:
     for e in got:
         ev[e["t"]].append(e)
     start = ev["start"][0] if ev["start"] else {}
-    tok = "".join(e["s"] for e in ev["tok"])
-    answer = ev["text"][-1]["s"] if ev["text"] else tok
+    answer = ""
+    for e in got:  # as app.js: tok appends, text replaces (a retry clears with text "")
+        if e["t"] in ("tok", "text"):
+            answer = (answer if e["t"] == "tok" else "") + e["s"]
     src = ev["src"][0] if ev["src"] else {}
     cited = [s["path"] for s in src.get("sources", [])]
     read = (src.get("coverage") or {}).get("read", len(served))
@@ -462,8 +470,8 @@ def report(sp: dict, rows: list, model: str | None, why: str, build_s: float,
     gold_cited = [r for r in ran if r.get("cites_gold") is not None]
     blockers = []
     for name, ids in BLOCKERS:
-        st = [by[i]["status"] for i in ids if i in by]
-        state = "BLOCKED" if "fail" in st else "ok" if "pass" in st else "not run"
+        st = [by[i]["status"] if i in by else "blocked" for i in ids]  # absent: never asked
+        state = "BLOCKED" if "fail" in st else "ok" if set(st) == {"pass"} else "not run"
         blockers.append({"name": name, "ids": ids, "state": state,
                          "failed": [i for i in ids if i in by and by[i]["status"] == "fail"]})
     secs = sorted(r["seconds"] for r in ran)

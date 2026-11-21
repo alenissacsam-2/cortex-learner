@@ -204,10 +204,14 @@ def _preview(body: str) -> str:
 
 def _offset(body: str, at) -> int:
     """RR-12: where `at` starts in a note body: an offset (an int or digits, moved back to
-    its line start) or a heading's text (with or without #s, any case)."""
+    its line start when that is under WINDOW_MIN back) or a heading's text (with or without #s,
+    any case)."""
     if isinstance(at, int) or str(at).strip().isdigit():
         off = max(0, min(len(body), int(at)))
-        return body.rfind("\n", 0, off) + 1
+        start = body.rfind("\n", 0, off) + 1
+        # a next_at cut mid-line is at least a window past its line start: snapping back
+        # to it would re-read the same text forever (audit 21 Nov C5)
+        return start if off - start < WINDOW_MIN else off
     want = str(at).lstrip("#").strip().casefold()
     pos = 0
     for line in body.splitlines(keepends=True):

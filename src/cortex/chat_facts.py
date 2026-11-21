@@ -103,6 +103,8 @@ _OF_MONTH = re.compile(rf"\b(?:of|for|during|over)\s+({_MONTH})\b\.?(?:\s+(\d{{4
 _FOCUS = {"chat": "chats", "conversation": "chats", "note": "notes", "journal": "journal",
           "visit": "browsing", "searche": "browsing"}
 _BROWSING_VERB = re.compile(r"^(?:visit\w*|brows\w*|search\w*|watch\w*|go|went|open\w*)\b")
+# concept events that are the log's bookkeeping, not studying (also rollups' study rows)
+BOOKKEEPING = ("void", "remap", "open", "resume", "close", "change")
 
 
 # ---- routing ----------------------------------------------------------------------------------
@@ -134,12 +136,15 @@ def route(text: str, got, today: date) -> dict | None:
     `route` answers from Cortex's data, or None (the passages answer it). `got` is
     chat._when's (first day, last day, span) of `text`'s own date phrase. No date: all days, or
     the last 7 for a timeline. Ranges stop at today."""
-    if not got and (y := _YEAR.search(text)):  # chat._when has no years: they are ours only
-        year = int(y[2]) if y[2] else today.year - (y[1].lower() == "last")
-        got = (date(year, 1, 1), date(year, 12, 31), y.span())
-    if not got and (m := _OF_MONTH.search(text)):  # "timeline of October": chat's "in October"
-        from cortex import chat
-        got = (*chat._month(m[1], m[2], today), m.span())
+    try:  # a year date() refuses ("in 0000", "of December 9999"): no route, not a crash
+        if not got and (y := _YEAR.search(text)):  # chat._when has no years: ours only
+            year = int(y[2]) if y[2] else today.year - (y[1].lower() == "last")
+            got = (date(year, 1, 1), date(year, 12, 31), y.span())
+        if not got and (m := _OF_MONTH.search(text)):  # "timeline of October": chat's "in"
+            from cortex import chat
+            got = (*chat._month(m[1], m[2], today), m.span())
+    except ValueError:
+        return None
     rest = chat_study._norm(text[:got[2][0]] + " " + text[got[2][1]:] if got else text)
     lo, hi = (got[0].isoformat(), min(got[1], today).isoformat()) if got else (FIRST_DAY,
                                                                                today.isoformat())
@@ -205,7 +210,9 @@ def route(text: str, got, today: date) -> dict | None:
 # ---- reading the stores ----------------------------------------------------------------------
 
 def _matcher(ws: list[str]):
-    rxs = [re.compile(r"\b" + re.escape(w), re.I) for w in ws]
+    # whole words, their plurals ("clas" from "class": classes) and a version (python3), so
+    # "java" is not JavaScript
+    rxs = [re.compile(r"\b" + re.escape(w) + r"(?:s|es|ses)?\d*\b", re.I) for w in ws]
     return (lambda hay: all(rx.search(hay) for rx in rxs)), rxs
 
 
@@ -213,7 +220,8 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
            titles: dict) -> tuple[int, list]:
     """(items read, matches) of notes, saved AI chats and journal lines dated in [lo, hi]
     under Chat's switches (`chat._pages_in`). An item: (day, ts, source, title, n, mentions,
-    site). `titles` gets {casefolded title: (id, title, kind, day)} of every page read."""
+    site), a page's id last. `titles` gets {casefolded title: (id, title, kind, day)} of
+    every page read."""
     from cortex import chat
 
     read, out = 0, []
@@ -235,7 +243,8 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
         read += 1
         hay = f"{title}\n{body}"
         if match(hay):
-            out.append((d, 0.0, src, title, 1, sum(len(rx.findall(hay)) for rx in rxs), ""))
+            out.append((d, 0.0, src, title, 1, sum(len(rx.findall(hay)) for rx in rxs), "",
+                        _id))
     return read, out
 
 
@@ -267,7 +276,7 @@ def _visits(vault, lo: str, hi: str, sources: dict, ws: list[str], match,
         return 0, []
     side = _sides(load_settings())
     hit, args = "1", [lo, hi]
-    if ws:  # LIKE first, cheap; then the word starts in Python
+    if ws:  # LIKE first, cheap; then the whole words in Python
         hay = "(title || ' ' || host || ' ' || COALESCE(search, ''))"
         hit = " AND ".join([f"{hay} LIKE ?"] * len(ws) + [f"cx_match({hay})"])
         args = [f"%{w}%" for w in ws] * 2 + args
@@ -314,9 +323,12 @@ def _study(vault, lo: str, hi: str, sources: dict, match) -> tuple[int, list]:
     hide = set() if sources.get("private") else planner.hidden(vault, catalog)
     names: dict = {}
     read, out = 0, []
-    for ev in EventLog(vault).iter_events():
+    events = list(EventLog(vault).iter_events())
+    voided = {e.get("ref") for e in events if e.get("kind") == "void"}
+    for ev in events:
         obj, d = str(ev.get("object") or ""), str(ev.get("day") or "")
-        if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("kind") == "void":
+        if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("id") in voided \
+                or ev.get("kind") in BOOKKEEPING:
             continue
         c = obj[8:]
         if c in hide:
@@ -418,14 +430,14 @@ def _compare(vault, q: dict, sources: dict) -> dict:
     and sources of both sides."""
     rows, read, off = [], 0, []
     for side in q["sides"]:
-        r, found, off, titles = _gather(vault, {**q, "term": side, "focus": None}, sources)
+        r, found, off, _ = _gather(vault, {**q, "term": side, "focus": None}, sources)
         read = max(read, r)  # both sides read the same items
         top = max((it for it in found if it[2] in ("notes", "chats")),
                   key=lambda it: (it[5], it[0]), default=None)
         rows.append({"term": side, "total": sum(it[4] for it in found),
                      "sources": _counts(found),
                      "page": None if top is None else {
-                         "id": titles.get(top[3].casefold(), ("",))[0], "title": top[3],
+                         "id": top[7], "title": top[3],
                          "day": top[0], "source": top[2]}})
     by = {s: sum(r["sources"].get(s, 0) for r in rows) for s in SOURCES}
     total = sum(r["total"] for r in rows)

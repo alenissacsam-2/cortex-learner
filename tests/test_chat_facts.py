@@ -69,6 +69,7 @@ def test_typed_questions_are_routed(q, kind, term):
     "how many times will I visit github tomorrow?",
     "should I use postgres vs mysql?", "compare it and that", "rust vs rust",
     "what am I missing?", "what is missing from this list?",
+    "how many notes in 0000?", "timeline of December 9999",  # audit 21 Nov C11: no crash
 ])
 def test_ordinary_questions_go_to_the_passages(q):
     assert _route(q) is None
@@ -238,6 +239,16 @@ def test_compare_counts_each_side_with_its_top_page(vault):
         'I found nothing about "zebra vs okapi" in your archive.')
 
 
+def test_compare_top_page_keeps_its_own_id_when_titles_repeat(vault):
+    """Audit 21 Nov C4: two pages titled "New chat": the top one's id, not the first's."""
+    note(vault.root, "notes/chat-a.md", "title: New chat\ndate: 2026-11-01\n",
+         "# New chat\n\nOne zebra.")
+    note(vault.root, "notes/chat-b.md", "title: New chat\ndate: 2026-11-05\n",
+         "# New chat\n\nZebra, zebra, zebra.")
+    zebra, _ = chat_facts.facts(vault, _route("zebra vs helm"), ALL_ON)["rows"]
+    assert zebra["page"]["id"] == "chat-b" and zebra["page"]["day"] == "2026-11-05"
+
+
 def test_compare_reads_each_top_page_with_its_written_on_line(vault):
     s = Stream("ollama", ["Kubernetes has more [1]."])
     try:
@@ -303,6 +314,35 @@ def test_a_private_subject_is_counted_only_under_the_private_switch(vault):
     assert hidden["total"] == 0 and "Private" not in json.dumps(hidden)
     about = chat_facts.facts(vault, _route("what do I know about secret diary?"), OFF)
     assert about["page"] is None
+
+
+@pytest.mark.parametrize("term, hay, hit", [
+    ("java", "Java streams", True), ("java", "JavaScript closures", False),
+    ("git", "git rebase", True), ("git", "GitHub actions", False),
+    ("c++", "C++ templates", True), ("c++", "cooking curry", False),
+    ("pointers", "two-pointers drill", True), ("pointer", "Pointers again", True),
+    ("process", "child processes", True), ("class", "classes in Python", True),
+    ("node.js", "Node.js streams", True), ("kubernetes", "kubernetes/kubernetes", True),
+    ("python", "python3 venv", True), ("java", "java8 lambdas", True)])
+def test_terms_match_whole_words_with_a_plural(term, hay, hit):
+    """Audit 21 Nov C3: "java" is not JavaScript, "git" not GitHub, "c" not every c-word."""
+    assert chat_facts._matcher(chat_facts.words(term))[0](hay) is hit
+
+
+def test_study_counts_skip_voided_and_bookkeeping_events(vault):
+    """Audit 21 Nov C2: a voided grade and a remap are not study."""
+    from cortex.events import EventLog
+
+    log = EventLog(vault)
+    noon = datetime(2026, 11, 18, 12).astimezone()
+    g = log.append(session="cli", kind="grade", source="tutor", now=noon,
+                   fields={"object": "concept:two-pointers", "verdict": "correct"})
+    log.append(session="cli", kind="void", source="tutor", now=noon,
+               fields={"ref": g["id"], "payload": {"reason": "x"}})
+    log.append(session="cli", kind="remap", source="external", now=noon,
+               fields={"object": "concept:two-pointers", "ref": "concept:old-pointers"})
+    q = _route("how many times did I study two pointers?")
+    assert chat_facts.facts(vault, q, ALL_ON)["sources"] == {"study": 2}
 
 
 # ---- the stream ------------------------------------------------------------------------------
@@ -390,6 +430,18 @@ def test_everything_about_adds_cited_passages(vault, fake):
     assert user.index('<untrusted_note id="facts">') < user.index('<untrusted_note id="1">')
     src = next(e for e in ev if e["t"] == "src")["sources"]
     assert [x["n"] for x in src] == [1]
+
+
+def test_everything_about_in_a_period_reads_passages_from_it(vault):
+    """Audit 21 Nov C12: "about X last week" reads no page written outside that week."""
+    s = Stream("ollama", ["Helm deploys it [1]."])
+    try:
+        _turn(vault, "tell me everything about kubernetes last week", s.runner())
+    finally:
+        s.close()
+    user = s.bodies[0]["messages"][1]["content"]
+    assert "Date: 2026-11-12" in user  # Helm charts, in the week
+    assert "Date: 2026-09-01" not in user and "Date: 2026-11-03" not in user
 
 
 def test_a_follow_up_and_the_older_answers_keep_their_routes(vault, fake):

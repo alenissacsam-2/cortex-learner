@@ -128,6 +128,40 @@ def test_the_injected_line_is_checked_and_rivals_are_reported():
     assert (good["injection"], good["rival_above"], good["status"]) == ("resisted", False, "pass")
 
 
+def test_a_compares_page_passages_are_recorded_as_served(root):
+    """Audit 21 Nov C10: the pages a compare reads are scanned for leaks and count as read."""
+    v = Vault(root)
+    with chat_eval._watching():
+        chat_eval._LOCAL.served = got = []
+        try:
+            chat._page_passages(v, ["two-pointers"])
+        finally:
+            chat_eval._LOCAL.served = None
+        chat_eval.forget(v.root)
+    assert [p["path"] for p in got] == ["concepts/two-pointers.md"]
+
+
+def test_forget_drops_the_private_page_cache(tmp_path):
+    """Audit 21 Nov C15: the run's deleted vault leaves no private pages in memory."""
+    from cortex import ask
+
+    ask._PRIVATE[tmp_path] = {"notes/x.md": ("memo",)}
+    chat_eval.forget(tmp_path)
+    assert tmp_path not in ask._PRIVATE
+
+
+def test_the_answer_folds_tok_and_text_events_in_order(monkeypatch):
+    """Audit 21 Nov C1: after a cleared first try, the retry's words are the answer."""
+    def reply(vault, convo, text, runner, emit, cancel, settings, today):
+        for e in ({"t": "start", "model": "qwen3.5-2b"}, {"t": "tok", "s": "<|im_end|>"},
+                  {"t": "text", "s": ""}, {"t": "tok", "s": "Real "},
+                  {"t": "tok", "s": "answer."}, {"t": "src", "sources": []}):
+            emit(e)
+    monkeypatch.setattr(chat, "reply", reply)
+    got = chat_eval._ask(None, {"private": False, "question": "?"}, None)
+    assert got["answer"] == "Real answer."
+
+
 def test_no_model_means_blocked_not_failed():
     rows = [{"id": "Q01", "kind": "counts", "query": "exact_id", "status": "pass",
              "seconds": 0.1, "why": [], "retrieval": "n/a", "gold_rank": None, "answer": "23"},
@@ -137,6 +171,21 @@ def test_no_model_means_blocked_not_failed():
     assert (r["result"], r["ran"], r["blocked"], r["failed"]) == ("BLOCKED", 1, 1, 0)
     out = chat_eval.summary(r)
     assert out.startswith("Chat test as of 2026-11-20: BLOCKED") and "f" * 64 in out
+
+
+def test_a_blocker_with_a_blocked_question_is_not_ok():
+    """Audit 21 Nov C8: one pass and one blocked (not run) is not "ok"."""
+    def row(i, status):
+        return {"id": i, "kind": "k", "query": "lexical", "status": status, "seconds": 0.1,
+                "why": [], "retrieval": "n/a", "gold_rank": None, "answer": ""}
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass"), row("Q36", "blocked")],
+                         None, "no local model", 0.0)
+    assert r["blockers"][0]["state"] == "not run"
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass")], None, "stopped", 0.0)
+    assert r["blockers"][0]["state"] == "not run"  # Q36 never asked
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass"), row("Q36", "pass")],
+                         "qwen3.5-2b", "", 0.0)
+    assert r["blockers"][0]["state"] == "ok"
 
 
 def test_an_empty_report_says_no_data_not_zero():
@@ -259,7 +308,9 @@ def test_the_made_up_vault_end_to_end(tmp_path, monkeypatch):
     assert r["manifest"] == chat_eval.manifest(tmp_path / "vault")
     assert re.fullmatch(r"[0-9a-f]{64}", r["manifest"])
     assert {b["name"]: b["state"] for b in r["blockers"]} == {
-        "Private leak with Private off": "ok", "Stale preference served as current": "not run",
+        # Q35 passes, Q36 needs the model: not run, not ok (audit 21 Nov C8)
+        "Private leak with Private off": "not run",
+        "Stale preference served as current": "not run",
         "Made-up history for an empty month": "ok",
         "Computed count or study state wrong": "ok",
         "Deep passage missed (1.42 ms past character 700)": "not run"}

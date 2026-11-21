@@ -919,7 +919,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         else:
             emit({"t": "facts", "facts": facts})
             if fq["kind"] == "about" and semantic.load_embedder() is not None:
-                found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats)
+                found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats,
+                                      between=None if fq["lo"] == chat_facts.FIRST_DAY
+                                      else (fq["lo"], fq["hi"]),  # the period the facts cover
+                                      topic=fq["term"])
             elif fq["kind"] == "compare":  # each side's top page, read from its start
                 found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
                                                if r["page"] and r["page"]["id"]])
@@ -986,7 +989,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 break
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
-    by_model = bool(answer)  # Cortex's own fallback words below quote nothing to check
+    # only the model's words: Cortex's own (a digest, a site list, its fallbacks) quote titles
+    by_model = bool(answer) and messages is not None
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
         emit({"t": "tok", "s": answer})

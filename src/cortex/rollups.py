@@ -98,12 +98,12 @@ def _items(vault: Vault, lo: str, hi: str) -> list[tuple]:
     for ev in events:
         obj, d = str(ev.get("object") or ""), str(ev.get("day") or "")
         if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("id") in voided \
-                or ev.get("kind") in ("void", "remap", "open", "resume", "close", "change"):
+                or ev.get("kind") in chat_facts.BOOKKEEPING:
             continue
         c = obj[8:]
         e = catalog.entries.get(c)
         title = chat_study._title(e.title if e else c) or c
-        private = c in hide or any(a in hide for a in ev.get("also") or [])
+        private = c in hide or any(str(a).split(":", 1)[-1] in hide for a in ev.get("also") or [])
         out.append((d, "study", c, title, 1, str(ev.get("verdict") or ""), private))
     return out
 

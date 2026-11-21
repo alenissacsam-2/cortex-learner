@@ -286,3 +286,21 @@ def test_one_link_target_rule_for_alias_heading_and_block_refs():
 def test_wrap_escapes_id():
     from cortex.index import _wrap
     assert _wrap('a"b>', "x").startswith('<untrusted_note id="a&quot;b&gt;">')
+
+
+def test_read_pages_through_one_long_line(vault):
+    """Audit 21 Nov C5: a body with no newline in the window still advances next_at."""
+    vault.create_note("problem", "oneline", {"title": "One line"}, "x" * 10_000)
+    idx = Index(vault, Catalog.load(vault))
+    at, reads = 0, 0
+    while True:
+        r = idx.read("oneline", at=at, window=1000)
+        if "next_at" not in r:
+            break
+        assert r["next_at"] > at
+        at, reads = r["next_at"], reads + 1
+        assert reads < 20
+    assert at >= 9000
+    # no window: the cap cuts mid-line, and reading on still advances
+    r = idx.read("oneline")
+    assert idx.read("oneline", at=r["next_at"]).get("next_at", 10_000) > r["next_at"]

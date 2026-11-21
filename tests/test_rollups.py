@@ -130,6 +130,21 @@ def test_private_material_only_in_the_private_variant(vault):
     assert "rollup-2026-w47" in idx._notes and "rollup-2026-w47-private" not in idx._notes
 
 
+def test_study_also_on_a_private_subject_is_private(vault):
+    """Audit 21 Nov C9: an event whose `also` names a private concept goes on the private page."""
+    from datetime import datetime
+
+    from cortex.events import EventLog
+
+    EventLog(vault).append(session="cli", kind="grade", source="tutor",
+                           now=datetime(2026, 11, 12, 12).astimezone(),
+                           fields={"object": "concept:arrays-basics", "verdict": "correct",
+                                   "also": ["concept:secret-diary"]})
+    rollups.run(vault)
+    assert "arrays-basics" not in _read(vault, "rollup-2026-w46")
+    assert "arrays-basics" in _read(vault, "rollup-2026-w46-private")
+
+
 def test_no_rewrite_when_nothing_changed(vault):
     rollups.run(vault)
     page = vault.root / "rollups" / "rollup-2026-11.md"
