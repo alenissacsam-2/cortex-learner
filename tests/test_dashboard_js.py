@@ -687,13 +687,19 @@ def test_today_selects_every_page_of_the_day(tmp_path, demo_vault):
         p["updated"] = "2000-01-01"
     taught, saved, week = [p["id"] for p in pages[:3]], pages[3], pages[4]["id"]
     saved["updated"] = data["day"]
-    data["feed"] = {"today": [{"id": i, "day": data["day"]} for i in [*taught, taught[0], None]],
+    data["today_ids"] = [saved["id"]]  # the build's pages the owner saved today
+    # chats the automatic import brought in today: only one whose chat is dated today (or undated)
+    old_chat, new_chat = pages[5], pages[6]
+    old_chat["date"], new_chat["date"] = "2000-01-01", data["day"]
+    data["feed"] = {"today": [{"id": i, "day": data["day"]} for i in [*taught, taught[0], None]]
+                    + [{"id": c["id"], "day": data["day"], "kind": "chat"}
+                       for c in (old_chat, new_chat)],
                     "week": [{"id": week, "day": "2000-01-01"}]}
     page = tmp_path / "today.html"
     page.write_text(dashboard.render_html(data), encoding="utf-8")
     p = _run(tmp_path, page, probe=TODAY_FEED_PROBE)["probe"]
-    assert p["today"] == [*taught, saved["id"]] and p["selected"] is None
-    assert p["drawn"] == [{"a": 255, "ring": 153}] * 4
+    assert p["today"] == [*taught, new_chat["id"], saved["id"]] and p["selected"] is None
+    assert p["drawn"] == [{"a": 255, "ring": 153}] * 5
 
 
 def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):

@@ -1763,7 +1763,7 @@ void main() {
     const keys = document.createElement('p'), keysId = 'brain-keys-' + Math.random().toString(36).slice(2);
     keys.id = keysId;
     keys.hidden = true;
-    keys.textContent = 'Arrows turn, + and − zoom, [ and ] step through the chosen page\'s connections, Backspace goes to the '
+    keys.textContent = 'Arrows turn (in Today, Left and Right step through today\'s pages), + and − zoom, [ and ] step through the chosen page\'s connections, Backspace goes to the '
       + 'previous page, Esc goes back a level, F frames the selection, 0 resets the view, A M G switch mode, S spins.'
       + (opts.keyHelp ? ' ' + opts.keyHelp : '') + ' The outline in the side rail lists every page.';
     box.tabIndex = 0;
@@ -2056,6 +2056,8 @@ void main() {
           if (src >= 0 && own) { a = still ? 0.8 : 0.6; w = sim ? 0.6 : 1; }
           else if (spot && (spot[i] || spot[j])) {
             a = sim ? 0.3 : 0.7; w *= 1.4;  // Today or the growth moment: every fibre of its pages stays lit
+            // Today: fibres between two of today's pages read clearly brighter than those leaving today
+            if (todaySet) { if (spot[i] && spot[j]) { a = sim ? 0.5 : 0.95; w *= 1.3; } else { a = sim ? 0.14 : 0.34; w /= 1.4; } }
           } else if (src >= 0) a *= V3 ? DIM_FIB : DIM;  // round 2: thin, like v3's
           else if (spot) a *= SPOT_DIM;
           else if (focus >= 0) {
@@ -2145,6 +2147,21 @@ void main() {
         for (const j of ls) if (!V3 || fibreOf(src, j) < 0) out.push({ p: arcPts(src, j, 16), n: 16, c: link, a: 0.5, w: 1.2, dash: false });
         if (!V3 && src === selected && hover < 0) {
           for (const j of nearOf(src)) if (!linked.has(j)) out.push({ p: arcPts(src, j, 16), n: 16, c: link, a: 0.45, w: 1, dash: true });
+        }
+      }
+      if (todaySet) {
+        // Today: the links no fibre draws, each pair once; between two of today's pages clearly brighter
+        // than to a page outside today (at most 8 of those a page)
+        const seen = new Set();
+        for (const i of todayList) {
+          let out8 = 0;
+          for (const j of linksOf(i).shown) {
+            const both = todaySet[j], key = Math.min(i, j) * N + Math.max(i, j);
+            if (i === src || j === src || !COL[j * 4 + 3] || seen.has(key) || (!both && out8++ >= 8) || (V3 && fibreOf(i, j) >= 0)) continue;
+            seen.add(key);
+            const c = V3 && LOBE[i] < L ? LC[LOBE[i]] : rgb(colors.link);
+            out.push({ p: arcPts(i, j, 16), n: 16, c, a: both ? 0.8 : 0.22, w: both ? 1.6 : 1, dash: false });
+          }
         }
       }
       if (focus >= 0 && !V3) {
@@ -2537,6 +2554,20 @@ void main() {
           if (!fits(r)) continue;
           boxes.push(r);
           setPlate(pagePl[pj++], text, q[0] + 9, q[1], false, 12.5, i === selected ? 1 : 0.85, pageFill(i));
+        }
+      } else if (lm !== 'none' && hover < 0 && selected < 0 && todaySet) {
+        // Today with none chosen: the titles of up to 12 of today's pages (newest first), below the
+        // breadcrumb, which sits under the page's toolbar; the rest show when stepped to or pointed at
+        const top = (parseFloat(getComputedStyle(crumbNav).top) || 10) + 34;
+        for (const i of todayList) {
+          if (pj >= PAGE_LABELS) break;
+          const q = COL[i * 4 + 3] ? at(i) : null;
+          if (!q || q[0] < 0 || q[1] < top || q[1] > H - 8) continue;
+          const text = trunc(PG[i].title, 28), w = textW(text, 12.5);
+          const r = [q[0] + 3, q[1] - 10, q[0] + w + 18, q[1] + 10];
+          if (r[2] > W || !fits(r)) continue;
+          boxes.push(r);
+          setPlate(pagePl[pj++], text, q[0] + 9, q[1], false, 12.5, 0.9, pageFill(i));
         }
       } else if (lm === 'atlas' && cam.dist < zoomIn && hover < 0) {
         // Zoomed into a lobe: titles of its top pages, beside their points. v3: the selected page's
@@ -3307,8 +3338,8 @@ void main() {
         anim = null; goal = null; selOrbit = false;
         if (reduced) { cam.yaw += dx * 5; cam.pitch = clampPitch(cam.pitch + dy * 5); } else { vel[0] += dx; vel[1] += dy; }
       };
-      if (k === 'ArrowLeft') turn(0.03, 0);
-      else if (k === 'ArrowRight') turn(-0.03, 0);
+      if (k === 'ArrowLeft') { if (!todayStep(-1)) turn(0.03, 0); }  // in Today, Left and Right step
+      else if (k === 'ArrowRight') { if (!todayStep(1)) turn(-0.03, 0); }
       else if (k === 'ArrowUp') turn(0, 0.024);
       else if (k === 'ArrowDown') turn(0, -0.024);
       else if (k === '+' || k === '=') zoomBy(0.85);
@@ -3507,7 +3538,7 @@ void main() {
         todayList = src;
         for (const i of src) todaySet[i] = 1;
         reticle = -1;
-        restyle();
+        restyle(); relines();
         if (quiet) {
           const f = idIndex.get(String(selectedId));
           if (f !== undefined) select(f, false);

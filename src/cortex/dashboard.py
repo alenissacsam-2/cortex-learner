@@ -50,6 +50,8 @@ SHOWN_PROPS = 30  # list items and characters below are capped too, to keep the 
 REPO = Path(__file__).resolve().parents[2]  # a source checkout; installed, assets/help instead
 GLOSSARY = "The names, in plain words"  # the GUIDE heading after its number
 _NAME_RE = re.compile(r"\*\*Name:\*\*\s*(\S+)")
+# an import's header (doctor._IMPORT_HEAD): `Source: <label> · Date:`, maybe on a Timeline line
+_IMPORTED = re.compile(r"^(?:Timeline: [^\n]*?)?Source: [^·\n]+? · Date: ", re.M)
 UNFILED = "unfiled"
 GROUP_TITLES = {"journal": "Journal", "you": "About you", "sessions": "Study sessions",
                 "placements": "Tests and applications",
@@ -289,6 +291,8 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                                 auto_relayout=auto_relayout,
                                 memo=None if memo is None else memo.setdefault("brain", {})),
         "counts_by_kind": dict(Counter(p["kind"] for p in pages)),
+        # pages the owner worked on today, for the brain's Today (the feed adds the events)
+        "today_ids": _today_ids(pages, notes["note"], day),
         "loops": [_plained(r, "title", "summary", "loop_type")
                   | {"created": created(loop_notes[r["id"]]).isoformat()}
                   for r in loops.loops(parsed)],
@@ -501,6 +505,18 @@ def _row(vault: Vault, n) -> tuple[dict, list[str], tuple]:
         "date": topics.page_date(n.id, f, n.body) or None,
         "source": plain(topics.page_source(n.body)) or None,
         "cluster": None}, list(dict.fromkeys(link_targets(text))), facts
+
+
+def _today_ids(pages: list[dict], notes: list, day: str) -> list[str]:
+    """The shown pages the owner worked on today, not ones a Cortex job rewrote: never a
+    rollup or a topic hub (Cortex builds and rewrites those); an imported page (a `Source:`
+    line) or a browse page only when its own item is dated today, since an import rewrites
+    the file; any other page by the Cortex day it was last saved."""
+    hubs = {n.id for n in notes if topics.is_hub({"kind": n.kind, "fields": n.fields})}
+    return [p["id"] for p in pages
+            if p["kind"] != "rollup" and p["id"] not in hubs
+            and (p["date"] if p["source"] or p["kind"] == "browse" or _IMPORTED.search(p["body"])
+                 else p["updated"]) == day]
 
 
 def _ord(day) -> int:
