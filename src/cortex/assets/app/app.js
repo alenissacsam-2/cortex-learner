@@ -1431,7 +1431,13 @@
         row(`You told ${x.chats} chats: ${x.text}`, 'Core', null, [
           btn('Approve', () => act('/api/review/rule/approve', { key: x.key }, 'Added to your core lines.'), 'btn lit', { 'aria-label': `Approve: ${x.text}` }),
           btn('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, { 'aria-label': `Dismiss: ${x.text}` })])),
-      'No repeated corrections found.')));
+      'No repeated corrections found.')),
+      board('Lines you asked to forget', { note: String((d.forget || []).length) }, ...list((d.forget || []).flatMap((x) => [
+        row(`//forget: ${x.text}`, x.candidates.length ? 'Retire the line you meant' : 'No line matched', null, [
+          btn('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, { 'aria-label': `Dismiss: ${x.text}` })]),
+        ...x.candidates.map((c) => row(c.text, where(c), null, [
+          btn('Retire', () => act('/api/review/retire', { id: c.id }, 'Retired.'), null, { 'aria-label': `Retire: ${c.text}` })]))]),
+      'Nothing to forget.')));
   }
 
   /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come

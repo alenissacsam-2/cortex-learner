@@ -49,7 +49,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from cortex import chat_archive, chats, render, taint, topics
+from cortex import chat_archive, chats, render, tags, taint, topics
 from cortex.browse import privacy
 from cortex.catalog import slugify
 from cortex.events import EventLog, live, local_day
@@ -94,6 +94,7 @@ EXPORT = chats.EXPORT_DIRS["claude"]  # (folder, source) of claude.ai export con
 # first call or a skewed clock, while two chats opening alike that close are rare (and ambiguous)
 SAME_CHAT = timedelta(minutes=15)
 OPENING = 200  # characters of the first message compared
+TAGS = 50  # //tags kept per chat (R3-5)
 
 
 def enabled() -> bool:
@@ -199,6 +200,7 @@ class Chat:
     coding: bool = False
     files: dict = field(default_factory=dict)  # each path a tool wrote, in order, up to PATHS
     commits: dict = field(default_factory=dict)  # each commit subject, in order, up to SUBJECTS
+    tags: list = field(default_factory=list)  # [tag, text, day] of the user's //tags, up to TAGS
 
     def dump(self) -> dict:
         return {**asdict(self), "files": list(self.files), "commits": list(self.commits)}
@@ -210,7 +212,13 @@ class Chat:
         return c
 
     def turn(self, ts: str, text: str) -> None:
-        t = chats.redact(text)[:chats.LINE_CHARS + 1]  # redact, then cut
+        r = chats.redact(text)
+        t = r[:chats.LINE_CHARS + 1]  # redact, then cut
+        w = _when(ts)
+        for tag, x in tags.find(r):  # R3-5: the owner's own words; `one` acts on them
+            item = [tag, x, local_day(w) if w else ""]
+            if len(self.tags) < TAGS and item not in self.tags:
+                self.tags.append(item)
         self.n += 1
         self.first = self.first or ts
         if self.n == 1:
@@ -668,6 +676,12 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
     audience = ctx.audience(page.text)
     if audience == "skip":
         return "skipped_category", rec
+    if c.tags:  # R3-5: an imported chat's //tags are the owner's typed words, so said
+        try:
+            tags.apply_in(vault, [tuple(t) for t in c.tags], evlog)
+        except (OSError, ValueError, VaultError) as e:  # the page is still written
+            log.warning("chat import: the //tags of %s not saved (%s)", cid,
+                        getattr(e, "code", type(e).__name__))
     pid = _pid(had)
     if pid is None and source != "claude-code" and (old := ctx.duplicate(source, c, page.day)):
         # kept in STATE only, not the event log: thousands of these would each cost an append

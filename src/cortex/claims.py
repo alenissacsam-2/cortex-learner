@@ -222,7 +222,8 @@ def tiers(vault, events, log=None, today: str | None = None) -> list[dict]:
     With no baseline yet, the current lines are the baseline; with `log` it is recorded once.
     A `confirmed` row's `confirm` (idea 11) is `clicked` when the user ticked yes in Cortex's
     own dialog or clicked Approve or Still true in the Cortex app (plan 5a: the strongest tier,
-    never a late relay), `reflected` for a yes in a clean reflect (a `promote` reconfirm), else
+    never a late relay), `reflected` for a yes in a clean reflect (a `promote` reconfirm),
+    `tagged` for a //pref or //fact line the user typed (cortex.tags; never a late relay), else
     `relayed` (the model's word, as every yes before the dialog)."""
     all_rows = rows(vault)
     events = list(events)
@@ -268,7 +269,7 @@ def tiers(vault, events, log=None, today: str | None = None) -> list[dict]:
             tier, sid, day, how = wrote.get((r["page"], r["id"])) or (
                 "legacy" if r["id"] in base.get(r["page"], ()) else "typed", None, None, None)
             if tier == "confirmed":  # `reflected` is only stamped by the promote branch above
-                how = how if how in ("clicked", "reflected") else "relayed"
+                how = how if how in ("clicked", "reflected", "tagged") else "relayed"
             else:
                 how = None
             out.append({**r, "tier": tier, "confirm": how, "session": sid, "day": day})
