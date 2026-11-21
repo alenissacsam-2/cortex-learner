@@ -64,6 +64,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `undo <session>` / `void` | Revert one chat's changes / cancel one record |
 | `backup` | Zip the whole vault |
 | `doctor` / `lint` / `relink` | Health check / vault problems / fix Obsidian links |
+| `agent-text` | Every fixed text Cortex shows an AI app, with its size per app |
 | `rollups` (`--since YYYY-MM`) | Write the week, month and year summary pages (code only, no model) |
 | `eval` (`all`, `learning`, `recall`) | How well search and the study forecasts are doing |
 | `topics` (`status`, `attach`, `build`, `eval`, `split`) | The topic tree |
