@@ -32,7 +32,7 @@ NOTE_KINDS = ("concept", "area", "domain", "mistake", "problem", "assessment", "
               "resource", "note", "project", "decision", "journal", "loop")
 STATE_KINDS = ("due", "weak", "ready")
 EDGE_KEYS = ("parent", "areas", "requires", "related", "mistakes", "concepts", "tests", "covers",
-             "applies", "decisions", "project")
+             "applies", "decisions", "project", "assessments", "application")
 SNAPSHOT = ".cortex/index-snapshot.json"  # parsed notes keyed by (mtime_ns, size); JSON only
 SNAPSHOT_SCHEMA = 1
 SNAPSHOT_MIN = 50  # a refresh that parsed at least this many files saves the snapshot

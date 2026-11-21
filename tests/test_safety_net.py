@@ -1,5 +1,5 @@
 """The chat safety net (cortex.safety_net) on vault_mini with synthetic chat pages, a fake
-runner and a fake embedder: the skip rules (recorded learning, private, hidden, old), layer 1
+runner and a fake embedder: the skip rules (private, hidden, old), what was logged already, layer 1
 touches, layer 2 (match, create under a hub or in From chats, caps, junk), no model loaded,
 the ledger's no-op second pass, undo, dry run and the CLI. Nothing real runs or loads."""
 
@@ -96,13 +96,18 @@ def test_layer1_touches_once_and_a_second_pass_is_a_no_op(root):
     assert len(mine(root)) == 1
 
 
-def test_a_chat_with_recorded_learning_is_skipped(root):
-    chat(root, "c1", "Teach me two pointers")
+def test_a_chat_with_some_learning_logged_still_gets_the_rest(root):
+    chat(root, "c1", "Teach me two pointers, then heap sort and array basics")
     EventLog(Vault(root)).append(session="cli", kind="taught", source="tutor",
                                  fields={"object": "concept:two-pointers"},
                                  now=AT + timedelta(minutes=10))
-    assert go(root) == {"skipped_recorded": 1}
-    assert mine(root) == []
+    out = go(root, Runner({"concepts": ["Two pointers", "Heap sort"]}))
+    assert out["chats"] == 1 and out["taught"] == 1 and out["new_ids"] == ["heap-sort"]
+    [touch] = [e for e in mine(root) if e["kind"] == "log"]
+    assert touch["payload"]["ids"] == ["arrays-basics"]  # two-pointers was logged already
+    assert [e["object"] for e in mine(root) if e["kind"] == "taught"] == ["concept:heap-sort"]
+    cat = Catalog.load(Vault(root))
+    assert cat.entries["heap-sort"].parent == "dsa.arrays"  # logged + matched concepts' area
 
 
 def test_learning_outside_the_chat_span_does_not_skip(root):

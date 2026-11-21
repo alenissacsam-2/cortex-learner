@@ -972,8 +972,8 @@ def safety_net_cmd(
         vault: VaultOpt = None) -> None:
     """Record what the chat model forgot: topic touches for concepts and topics named in your
     recent chat pages, and (with a local model already loaded) the concepts a chat explained,
-    as taught. Chats with recorded learning, private chats and hidden subjects are skipped.
-    The app runs it after each chat import."""
+    as taught. Private chats and hidden subjects are skipped; what a chat model logged is not
+    repeated. The app runs it after each chat import."""
     from cortex import safety_net
 
     v = _vault(vault)

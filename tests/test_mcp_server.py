@@ -420,11 +420,12 @@ def test_unknown_concept_did_you_mean(root):
         assert out["error"] == "unknown_concept" and "two-pointers" in out["did_you_mean"]
         logged = await call("cortex_log", {"kind": "taught",
                                            "payload": {"concept": "Segment trees"}})
-        assert "inbox.md" in logged["display_line"]
+        assert logged["display_line"].startswith("Created Segment trees under From chats")
 
     run(root, body)
-    assert "Segment trees" in (root / "inbox.md").read_text(encoding="utf-8")
-    assert [e["kind"] for e in events(root)] in (["open", "taught", "close"], ["open", "taught"])
+    assert (root / "concepts" / "segment-trees.md").exists()
+    assert [e["kind"] for e in events(root)] in (["open", "change", "taught", "close"],
+                                                 ["open", "change", "taught"])  # change: the add
 
 
 def test_unknown_concept_and_parentless_concept_show_where_to_add(root):
@@ -515,8 +516,9 @@ def test_felt_weak_as_a_string_is_one_name_and_none_is_nothing(root):
 
     run(root, body)
     inbox = (root / "inbox.md").read_text(encoding="utf-8")
-    assert "- [ ] Segment trees (felt weak" in inbox
     assert "- [ ] N (" not in inbox and "None (" not in inbox
+    assert (root / "concepts" / "segment-trees.md").exists()  # one name, made a concept
+    assert not (root / "concepts" / "s.md").exists()
 
 
 def test_patch_me_profile_and_missing_heading(root):
@@ -747,7 +749,7 @@ def test_self_report_gets_server_stamped_predicted_p(root):
         await call("cortex_log", {"kind": "self_report", "payload": {
             "concept": "arrays-basics", "verdict": "correct", "predicted_p": 0.01}})
         await call("cortex_log", {"kind": "self_report", "payload": {
-            "concept": "never-heard-of-it", "verdict": "wrong"}})
+            "concept": "programming", "verdict": "wrong"}})  # refused: inbox
 
     run(root, body)
     reports = [e for e in events(root) if e.get("source") == "self"]
