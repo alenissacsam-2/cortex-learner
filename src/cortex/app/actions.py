@@ -9,6 +9,8 @@ import contextlib
 import io
 import re
 import subprocess
+import sys
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -41,22 +43,56 @@ class _Lines(io.TextIOBase):
             self.buf = ""
 
 
+_target = threading.local()  # .out: where this thread's prints go while `capture` runs it
+
+
+class _Route(io.TextIOBase):
+    """sys.stdout/sys.stderr: a thread inside `capture` writes to its job, others to the
+    original stream. No fileno or buffer, so click.echo writes through it, not around it."""
+
+    def __init__(self, orig):
+        self.orig = orig
+
+    def _to(self):
+        return getattr(_target, "out", None) or self.orig
+
+    def write(self, s):
+        to = self._to()
+        return len(s) if to is None else to.write(s)  # None: a GUI app has no console
+
+    def flush(self) -> None:
+        if (to := self._to()) is not None:
+            to.flush()
+
+    def isatty(self) -> bool:
+        to = self._to()
+        return to is not None and to.isatty()
+
+
 def capture(job, fn, *args, **kwargs) -> dict:
     """Run a `cortex` CLI command function in-process, its printed lines going to the job's
-    progress line; {"ok", "lines"}. (The app runs one job at a time, so redirecting the
-    process's stdout is safe.)"""
+    progress line; {"ok", "lines"}. Only this thread's output is taken: other threads (the
+    HTTP server, the update check, Chat) keep printing to the console. None of the commands
+    run here print from threads of their own."""
     import typer
     from click.exceptions import Exit
 
+    if not isinstance(sys.stdout, _Route):
+        sys.stdout = _Route(sys.stdout)
+    if not isinstance(sys.stderr, _Route):
+        sys.stderr = _Route(sys.stderr)
     lines: list[str] = []
     out = _Lines(lambda s: (lines.append(s), job.say(s)))
     ok = True
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+    _target.out = out
+    try:
         try:
             fn(*args, **kwargs)
         except (Exit, typer.Exit) as e:
             ok = getattr(e, "exit_code", 1) == 0
         out.flush()
+    finally:
+        _target.out = None
     return {"ok": ok, "lines": lines[-300:]}
 
 
