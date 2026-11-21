@@ -138,7 +138,7 @@ def test_revise_retire_reject_and_not_me(root):
         g = await call("cortex_patch", {"id": "me/goals", "op": "revise", "target": goal,
                                         "text": "Pass the OA with 3/3"})
         assert ID.match(g["claim"])
-        no = await call("cortex_patch", {"id": "me/setup", "op": "retire", "target": vim})
+        no = await call("cortex_patch", {"id": "me/portrait", "op": "retire", "target": vim})
         assert no["error"] == "invalid_argument"
         q = {"id": "me/preferences", "op": "append_to_section", "target": "Personal",
              "text": "Night owl"}
@@ -406,3 +406,38 @@ def test_act_grade():
     assert claims.act_grade({"tier": "typed"}, "") and claims.act_grade({"tier": "confirmed"}, "")
     assert not claims.act_grade({"tier": "agent"}, "")
     assert not claims.act_grade({"tier": "confirmed"}, " (ask)")
+
+
+def test_an_old_setup_page_becomes_a_claim_page_and_keeps_every_line(root):
+    """G2: me/setup.md from before it was a claim page (no ids, no `## Past` / `## Not me`)
+    loads as is: every line gets a distinct id and is served, and a retire adds the tail."""
+    old = ("---\nsummary: My setup\n---\n\n# My setup\n\n## Hardware\n- Laptop with an RTX 4060\n"
+           "- 16 GB RAM\n- 16 GB RAM\n\n## Software\n- Windows 11 and VS Code\n")
+    write(root, "me/setup.md", old)
+    rows = [r for r in claims.rows(Vault(root)) if r["page"] == "setup"]
+    assert [r["text"] for r in rows] == ["Laptop with an RTX 4060", "16 GB RAM", "16 GB RAM",
+                                         "Windows 11 and VS Code"]
+    assert len({r["id"] for r in rows}) == 4 and all(ID.match(r["id"]) for r in rows)
+    assert all(r["status"] == "live" for r in rows) and read(root, "me/setup.md") == old
+    assert {t: tier for t, tier in tiers(root).items() if t in old} == {
+        "Laptop with an RTX 4060": "legacy", "16 GB RAM": "legacy",
+        "Windows 11 and VS Code": "legacy"}  # no recorded baseline: the lines as they are
+
+    async def body(call):
+        ctx = (await call("cortex_context", {"scope": "environment"}))["context"]
+        assert "RTX 4060" in ctx and "Windows 11" in ctx and "^c-" not in ctx
+        prime = (await call("cortex_prime", {"prompt": "my laptop GPU"}))["context"]
+        assert "- [Hardware] Laptop with an RTX 4060" in prime
+        out = await call("cortex_patch", {"id": "me/setup", "op": "retire",
+                                          "target": rows[0]["id"]})
+        assert out["claim"] == rows[0]["id"]
+
+    run(root, body)
+    text = read(root, "me/setup.md")
+    assert text.startswith(old.split("## Hardware")[0])  # front matter and title untouched
+    assert "## Hardware\n- 16 GB RAM\n- 16 GB RAM\n\n## Software\n- Windows 11 and VS Code\n" \
+        in text
+    assert f"## Past\n- Laptop with an RTX 4060 (until {today()}) ^{rows[0]['id']}\n" in text
+    left = [r["id"] for r in claims.rows(Vault(root)) if r["page"] == "setup"
+            and r["status"] == "live"]
+    assert left == [r["id"] for r in rows[1:]]  # the untouched lines keep their ids

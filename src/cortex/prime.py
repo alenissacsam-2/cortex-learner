@@ -351,7 +351,7 @@ def similarity(prompt: str, texts: list[str]) -> list[float] | None:
 def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[str],
               withheld: set[str] = frozenset(), allow=None, ids: dict | None = None,
               xs: dict | None = None) -> list[list]:
-    """The preference and personality lines as prime ranks them for `prompt`, best first:
+    """The preference, setup and personality lines as prime ranks them for `prompt`, best first:
     [-match, situational?, -served score, "- [Section] line", labelled?, "Section: text", id].
     Never a `pinned` line again, a `withheld` page, a section `allow(page, heading)` (an
     agent profile, access.scope_section) refuses, or an X-ray muted claim; X-ray pins lead.
@@ -363,7 +363,7 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
     terms |= {x for w in words for x in ABBREVIATIONS.get(w, ())}
     rows = []  # [-prompt match, situational?, -served score, line, labelled, text, id]; stable
     seen = {claims.norm(ln) for ln in pinned}  # a pinned line is not repeated
-    for page, keep in (("preferences", lambda h: True),
+    for page, keep in (("preferences", lambda h: True), ("setup", lambda h: True),
                        ("personality", lambda h: h in PERSONALITY_HEADINGS["all"])):
         if page in withheld:
             continue
