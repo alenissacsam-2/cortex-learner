@@ -112,7 +112,8 @@ def _sig(text: str) -> str:
 def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
           gone: dict[str, set[str]]) -> Counter:
     """Take the rule's keys and rows out of the stored site counts, out of the site-days.json
-    backup `legacy.migrate` left (`.migrated`) and the torn copies set aside (`.bad-*`:
+    backup `legacy.migrate` left (`.migrated`) or a site-days.json it failed to read in, and
+    the torn copies set aside (`.bad-*`:
     unreadable, so they cannot be filtered). `gone[day]`: the `_sig` of every title and search
     term that went, so the day page's lines go too, whatever matched."""
     from cortex.browse import legacy
@@ -124,11 +125,11 @@ def _days(vault: Vault, rule: Rule, llm: dict, gone_titles: set[str],
         c["site_days_torn"] += vault.remove(torn)
     if changed := _scrub(days, rule, llm, gone_titles, gone, c):
         sites._put_days(vault, {d: days.get(d) or {} for d in changed}, checkpoint=True)
-    old: Counter = Counter()
-    kept = sites.DAYS + legacy.DONE
-    if _scrub(backup := sites._load(vault, kept), rule, llm, gone_titles, gone, old):
-        sites._save(vault, kept, backup)
-        c["site_days_backup"] += old["site_keys"] + old["site_rows"]
+    for kept in (sites.DAYS + legacy.DONE, sites.DAYS):  # the latter: a migrate that failed
+        old: Counter = Counter()
+        if _scrub(backup := sites._load(vault, kept), rule, llm, gone_titles, gone, old):
+            sites._save(vault, kept, backup)
+            c["site_days_backup"] += old["site_keys"] + old["site_rows"]
     return c
 
 
@@ -485,6 +486,9 @@ def purge(vault: Vault, rule: Rule, *, settings: Settings | None = None,
     passes False and does those itself. Counts only."""
     with sites.busy(vault, FORGET_WAIT_S):  # an import or deepen pass would undo it
         say = say or (lambda s: None)
+        from cortex.browse import legacy
+
+        legacy.migrate(vault)  # else an old site-days.json read in later brings the site back
         gone_titles: set[str] = set()
         gone: dict[str, set[str]] = defaultdict(set)
         llm = sites.load_cache(vault)["llm"]

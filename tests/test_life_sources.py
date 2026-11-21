@@ -91,6 +91,33 @@ def test_mail_reimport_is_a_no_op_and_bad_file_is_counted(tmp_path, root_plain):
     assert r["reasons"]["not an mbox file"] == 1 and r["imported"] == 0
 
 
+def test_an_inbox_top_sender_is_never_taken_as_you(tmp_path, root_plain):
+    """Audit 21 Nov I4: who you are comes from Sent mail across all boxes, never from a box's
+    most common sender (a newsletter in an Inbox)."""
+    news = "".join(_mail("News <news@example.test>", "me@example.test",
+                         f"Mon, 0{d} Mar 2026 09:00:00 +0000", f"Issue {d}", f"newsletter {d}",
+                         labels="Inbox") for d in range(1, 4))
+    (tmp_path / "Inbox.mbox").write_text(news, encoding="utf-8")
+    (tmp_path / "Sent.mbox").write_text(MBOX, encoding="utf-8")
+    v = Vault(root_plain)
+    r = sources.run(v, life_sources.mail_source(tmp_path), C)
+    assert r["imported"] == 2 and r["reasons"]["not sent by you"] == 4
+    assert "newsletter" not in "".join(_pages(v, "mail").values())
+    # an Inbox alone, labelled or not: no owner, nothing imported
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "Inbox.mbox").write_text(news.replace("X-Gmail-Labels: Inbox\n", ""),
+                                      encoding="utf-8")
+    for box in (tmp_path / "Inbox.mbox", plain / "Inbox.mbox"):
+        r = sources.run(v, life_sources.mail_source(box), C)
+        assert r["imported"] == 0 and r["reasons"]["not sent by you"] == 3, box
+    # a Sent folder from a mail app (no Gmail labels) is still yours
+    (plain / "Sent.mbox").write_text(news.replace("X-Gmail-Labels: Inbox\n", "")
+                                     .replace("news@", "me2@"), encoding="utf-8")
+    r = sources.run(v, life_sources.mail_source(plain / "Sent.mbox"), C)
+    assert r["imported"] + r["updated"] == 1 and not any(r["reasons"].values()), r
+
+
 def test_own_text_cuts():
     assert life_sources.own_text("Mine.\n> theirs\nmore mine") == "Mine.\nmore mine"
     assert life_sources.own_text("Mine.\nFrom: Asha\nSent: Monday\ntheirs") == "Mine."
@@ -367,3 +394,26 @@ def test_spotify_year_pages_from_either_shape(tmp_path, root_plain):
     assert '1. "Song 1" by Band A: 3.0 hours\n2. "Song 2" by Band B: 1.0 hours' in y24
     assert "203.0.113.7" not in y24 and "android" not in y24 and "IN" not in y24.split()
     assert "2024-01-02" not in y24.split("\n\n", 2)[2]  # nothing per play
+
+
+def test_a_partial_export_never_shrinks_a_year_or_month(tmp_path, root_plain):
+    """Audit 21 Nov I6: a slice of a Spotify history or of a Sent folder, imported after the
+    whole one, leaves the bigger year or month page as it is."""
+    import json
+    v = Vault(root_plain)
+    full, part = tmp_path / "full", tmp_path / "part"
+    for d, rows in ((full, EXTENDED), (part, EXTENDED[1:2])):
+        d.mkdir()
+        (d / "Streaming_History_Audio_2024.json").write_text(json.dumps(rows), "utf-8")
+    sources.run(v, life_sources.spotify_source(full), C)
+    before = _pages(v, "listening")
+    r = sources.run(v, life_sources.spotify_source(part), C)
+    assert r["updated"] == 0 and _pages(v, "listening") == before
+    (full / "Sent.mbox").write_text(MBOX, encoding="utf-8")
+    april = "From 1234@xxx" + MBOX.split("From 1234@xxx")[2]  # one of April's two messages
+    (part / "Sent.mbox").write_text(april, encoding="utf-8")
+    sources.run(v, life_sources.mail_source(full / "Sent.mbox"), C)
+    before = _pages(v, "mail")
+    assert "2 messages" in before["mail-sent-mail-2026-04"]
+    sources.run(v, life_sources.mail_source(part / "Sent.mbox"), C)
+    assert _pages(v, "mail") == before

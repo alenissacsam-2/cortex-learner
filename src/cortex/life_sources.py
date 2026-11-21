@@ -161,54 +161,62 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + " …"
 
 
-def _mail_box(path: Path, months: dict, seen: set):
-    """Skip reasons for one .mbox, filling `months` (month -> [(day, section)]). The owner is
-    who sent the messages in a Sent label, else the most common From address."""
+def _open_box(path: Path):
+    """(the open mbox, {key: its headers or None when malformed}); None when not an mbox."""
     import mailbox
     try:
         box = mailbox.mbox(path, create=False)
         keys = list(box.iterkeys())
     except (OSError, mailbox.Error, ValueError):
+        return None
+    heads = {}
+    for k in keys:
+        try:
+            heads[k] = _head(box, k)
+        except Exception:  # noqa: BLE001 - email raises many types on a malformed message
+            heads[k] = None
+    return box, heads
+
+
+def _sent_from(path: Path, heads: dict) -> set[str]:
+    """The owner's addresses in one box: the senders of its messages labelled Sent; in a box
+    with no Gmail labels (a mail app's export), every sender when the box is a Sent folder."""
+    heads = [h for h in heads.values() if h]
+    if any(h.get("X-Gmail-Labels") for h in heads):
+        return {_addr(h["From"]) for h in heads if "sent" in _labels(h)}
+    return {_addr(h["From"]) for h in heads} if re.search(r"\bsent\b", path.stem, re.I) \
+        else set()
+
+
+def _mail_box(box, heads: dict, owners: set[str], months: dict, seen: set):
+    """Skip reasons for one open .mbox, filling `months` (month -> [(day, section)]). Only
+    mail from `owners` (`_sent_from` across all the boxes) is the owner's."""
+    if not heads:
         yield "not an mbox file"
-        return
-    try:
-        heads = {}
-        for k in keys:
-            try:
-                heads[k] = _head(box, k)
-            except Exception:  # noqa: BLE001 - email raises many types on a malformed message
-                heads[k] = None
-        sent = Counter(_addr(h["From"]) for h in heads.values() if h and "sent" in _labels(h))
-        every = Counter(_addr(h["From"]) for h in heads.values() if h)
-        owners = set(sent) or {a for a, _ in every.most_common(1)}
-        if not heads:
-            yield "not an mbox file"
-        for k, h in heads.items():
-            if h is None:
-                yield "malformed message"
-                continue
-            labels = _labels(h)
-            if "draft" in labels or "drafts" in labels:
-                yield "a draft"
-                continue
-            if _addr(h["From"]) not in owners:
-                yield "not sent by you"
-                continue
-            mid = str(h["Message-ID"] or "").strip()
-            if mid and mid in seen:
-                yield "the same message twice"
-                continue
-            seen.add(mid)
-            try:
-                got = _message(box.get_bytes(k))
-            except Exception:  # noqa: BLE001 - a broken charset, header or MIME part
-                got = "malformed message"
-            if isinstance(got, str):
-                yield got
-            else:
-                months[got[0][:7]].append(got)
-    finally:
-        box.close()
+    for k, h in heads.items():
+        if h is None:
+            yield "malformed message"
+            continue
+        labels = _labels(h)
+        if "draft" in labels or "drafts" in labels:
+            yield "a draft"
+            continue
+        if _addr(h["From"]) not in owners:
+            yield "not sent by you"
+            continue
+        mid = str(h["Message-ID"] or "").strip()
+        if mid and mid in seen:
+            yield "the same message twice"
+            continue
+        seen.add(mid)
+        try:
+            got = _message(box.get_bytes(k))
+        except Exception:  # noqa: BLE001 - a broken charset, header or MIME part
+            got = "malformed message"
+        if isinstance(got, str):
+            yield got
+        else:
+            months[got[0][:7]].append(got)
 
 
 def mail_source(path: Path) -> sources.Source:
@@ -225,8 +233,21 @@ def mail_source(path: Path) -> sources.Source:
 
     def items():
         months, seen = defaultdict(list), set()
-        for box in boxes:
-            yield from _mail_box(box, months, seen)
+        opened = []
+        try:
+            for p in boxes:
+                opened.append(_open_box(p))
+                if not opened[-1]:
+                    yield "not an mbox file"
+            owners = set().union(*(_sent_from(p, o[1]) for p, o in zip(boxes, opened, strict=True)
+                                   if o))
+            for o in opened:
+                if o:
+                    yield from _mail_box(*o, owners, months, seen)
+        finally:
+            for o in opened:
+                if o:
+                    o[0].close()
         for month, msgs in sorted(months.items()):
             msgs.sort(key=lambda m: m[0])
             n = len(msgs)
@@ -236,14 +257,23 @@ def mail_source(path: Path) -> sources.Source:
                                str(boxes[0] if len(boxes) == 1 else path), key=f"mail {month}")
 
     return sources.Source("mail", "Sent mail", "file", items, default_tier=LOCAL,
-                          prefix="mail", strips_quotes=True, updates=True, skips=MAIL_SKIPS)
+                          prefix="mail", strips_quotes=True, updates=True, skips=MAIL_SKIPS,
+                          size=_figure(r"My sent mail in [\d-]+: (\d+) message"))
+
+
+def _figure(pattern: str):
+    """A page's figure for `Source.size`: the first group of `pattern`, else 0."""
+    def size(text: str) -> float:
+        m = re.search(pattern, text)
+        return float(m.group(1).replace(",", "")) if m else 0.0
+    return size
 
 
 # ---- notes to self (WhatsApp, Telegram) ----
 
 CHAT_CHARS = 2000  # one message on a month line
 SELF_SKIPS = ("not a chat with yourself", "a system line", "deleted", "forwarded",
-              "not yours", "empty", "malformed file", "over 5 MB")
+              "not yours", "empty", "malformed file", "over 200 MB")
 # Android "12/03/2024, 09:15 - Name: text"; iOS "[12/03/24, 9:15:23 AM] Name: text"
 _WA = re.compile(r"^[\u200e\u200f]?\[?(\d{1,2})[./-](\d{1,2})[./-](\d{2,4}),?\s+"
                  r"(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s?([AaPp]\.?\s?[Mm]\.?)?\]?\s(?:-\s)?(.*)$")
@@ -399,10 +429,10 @@ def selfchat_source(path: Path) -> sources.Source:
 
     def items():
         for name, _size, _mtime, read in found:
-            try:
-                raw = read()
+            try:  # a WhatsApp .txt is not a note: an export's cap, not a note's
+                raw = read(cap=importers.MAX_ENTRY)
             except VaultError:
-                yield "over 5 MB"
+                yield "over 200 MB"
                 continue
             if name.lower().endswith(".txt"):
                 yield from _whatsapp(raw.decode("utf-8-sig", "replace"))
@@ -706,7 +736,8 @@ def spotify_source(path: Path) -> sources.Source:
                                key=f"spotify {year}")
 
     return sources.Source("spotify", "Spotify", "file", items, prefix="listening",
-                          updates=True, skips=SPOTIFY_SKIPS)
+                          updates=True, skips=SPOTIFY_SKIPS,
+                          size=_figure(r"My Spotify listening in \d{4}: ([\d,.]+) hours"))
 
 
 SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source,

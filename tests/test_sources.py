@@ -258,3 +258,65 @@ def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
     assert out["lines"] == ["Nothing was imported: you chose Don't save.",
                             '1 page from Notes is still in your vault; to forget them, delete '
                             'the pages in resources/ that say "Source: Notes" under their title.']
+
+
+def test_a_changed_day_line_replaces_the_old_one(root_plain):
+    """Audit 21 Nov I8: a per-day summary line (photos, location) whose count changed replaces
+    that day's line instead of adding a second one; other lines stay."""
+    v = Vault(root_plain)
+
+    def run(*texts):
+        return sources.run(v, _src(*(sources.Item(t[:10], t[:10], t) for t in texts),
+                                   page="month"), C)
+    run("2026-11-02: 3 photos (Trip)", "2026-11-03: 1 photo (Home)")
+    r = run("2026-11-02: 5 photos (Trip)", "2026-11-04: 2 photos (Home)")
+    page = _page(v, "test-2026-11")
+    assert page.count("2026-11-02:") == 1 and "- 2026-11-02: 5 photos (Trip)" in page
+    assert "- 2026-11-03: 1 photo (Home)" in page and "- 2026-11-04: 2 photos" in page
+    assert (r["imported"], r["updated"], r["duplicate"]) == (1, 1, 0)
+
+
+def test_a_month_made_private_is_not_written_again_beside_it(root_plain):
+    """Audit 21 Nov I9: after a calendar is made private, a re-import at the private tier
+    writes no copy of its events to the private month page."""
+    v = Vault(root_plain)
+    src = _src(sources.Item("Talk", "2026-11-02", "2026-11-02 10:00 · Talk"),
+               sources.Item("Day", "2026-11-05", "2026-11-05: 3 photos (Trip)"), page="month")
+    sources.run(v, src, C)
+    sources.pick_tier(v, src, "private")
+    r = sources.run(v, src, L)
+    assert r["imported"] == 0 and r["duplicate"] == 2
+    assert not (root_plain / "resources" / "test-private-2026-11.md").exists()
+    src.items = lambda: [sources.Item("Day", "2026-11-05", "2026-11-05: 4 photos (Trip)")]
+    r = sources.run(v, src, L)
+    assert r["updated"] == 1 and "- 2026-11-05: 4 photos" in _page(v, "test-2026-11")
+    assert not (root_plain / "resources" / "test-private-2026-11.md").exists()
+    # a public page (never made private) is not changed by a private import
+    pub = _src(sources.Item("Day", "2026-11-05", "2026-11-05: 3 photos (Trip)"), id="pub",
+               page="month")
+    sources.run(v, pub, C)
+    pub.items = lambda: [sources.Item("Day", "2026-11-05", "2026-11-05: 9 photos (Trip)")]
+    sources.run(v, pub, L)
+    assert "9 photos" not in _page(v, "pub-2026-11")
+    assert "9 photos" in _page(v, "pub-private-2026-11")
+
+
+def test_an_unchanged_reimport_keeps_the_owners_tags_and_lines(root_plain):
+    """Audit 21 Nov I5: an `updates` source (Kindle highlights, by key) re-imported unchanged
+    leaves the page alone; a changed one rewrites it and keeps the owner's fields."""
+    v = Vault(root_plain)
+
+    def src(text):
+        return _src(sources.Item("Book", "2026-11-02", text, "clips.txt", key="book"),
+                    updates=True)
+    sources.run(v, src("- first highlight"), C)
+    v._edit_fields("resource", "test-book", {"tags": ["mine"]})
+    p = root_plain / "resources" / "test-book.md"
+    p.write_text(p.read_text("utf-8") + "\nMy own line.\n", encoding="utf-8")
+    before = _page(v, "test-book")
+    r = sources.run(v, src("- first highlight"), C)
+    assert (r["updated"], r["duplicate"]) == (0, 1)
+    assert _page(v, "test-book") == before
+    r = sources.run(v, src("- first highlight\n- second highlight"), C)
+    page = _page(v, "test-book")
+    assert r["updated"] == 1 and "second highlight" in page and 'tags: ["mine"]' in page

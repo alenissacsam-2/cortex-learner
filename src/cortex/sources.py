@@ -12,7 +12,8 @@ month, `<prefix>-YYYY-MM` (`<prefix>-private-YYYY-MM` when private, so private i
 public page), a line per item, deduped by the line (calendars; location, photo dates and Spotify
 fit here). Both carry a `Source: <label> · Date: …` line (see importers' docstring). An item
 source that sets `updates` dedupes by `key` (a repo's path, a book) and rewrites that page when
-a re-import brings a changed text, instead of adding a second page.
+a re-import brings a changed text (the header's `body:` sha), keeping the owner's frontmatter,
+instead of adding a second page; an unchanged text leaves the page alone.
 
 Tiers reuse `access.Audience`: `--tier private|normal|skip` is LOCAL (pages `private: true`),
 CLOUD (normal pages) or SKIP (nothing imported). The last choice per source is kept in TIERS_FILE.
@@ -59,6 +60,7 @@ WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.S
 CODE_LEFT_OUT = "[code left out]"
 
 _HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
+_DAY_LINE = re.compile(r"- (\d{4}-\d\d-\d\d): ")  # a month page's per-day summary line
 # an item page's header line: label, date, origin, and (RR-18, by_origin sources) a body sha
 HEADER = re.compile(r"^Source: (.+?) · Date: (\S+)(?: · From: (.*?))?"
                     r"(?: · body: ([0-9a-f]{16}))? · sha: [0-9a-f]{16}$", re.M)
@@ -108,6 +110,9 @@ class Source:
     strips_quotes: bool = False  # mail: other people's quoted text is dropped
     coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
     updates: bool = False  # a known `key` rewrites its page when the text changed (repos)
+    # `updates`: a page's figure (Spotify hours, mail messages); a re-import with a smaller one
+    # (a partial export) leaves the page as it is
+    size: Callable[[str], float] | None = None
     # RR-18 (notes): a changed file at a known `From:` origin rewrites that page when its body
     # is as the import wrote it (the header's `body:` sha); `walk_errors` (folders the walk
     # could not read) keeps the report from counting pages as gone from the folder
@@ -325,6 +330,7 @@ def _read(src: Source, r: dict, walked: set[str] | None = None):
             continue
         if walked is not None:  # every origin the walk saw, a gated item's too
             walked.add(scrub(it.origin, src))
+        it.text = it.text.replace("\r\n", "\n")  # as `untouched` reads a page back
         if bad := unreadable(it.text):
             r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
         else:
@@ -386,25 +392,35 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
         body = f"{facts(it, src)}\n\n{body}".strip()
-        mark = f" · body: {_sha(body)}" if src.by_origin else ""  # the facts are body too
+        # the facts are body too
+        mark = f" · body: {_sha(body)}" if src.by_origin or src.updates else ""
         page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin}{mark}"
                 f" · sha: {h}\n\n{body}\n")
         if old is None:
             if not dry_run:
                 vault.create_note("resource", nid, fields, page)
             continue
-        if src.by_origin:  # the owner's tags, links and status stay; the import's own keys move
-            fields = {**_fields(vault, old), **{k: fields[k] for k in ("title", "date",
-                                                                       "summary")},
-                      **({"private": True} if hidden else {})}
+        cur = old.read_text("utf-8", errors="replace")
+        if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
+            r["duplicate"] += 1  # `updates`: the same text as last time; the owner's edits stay
+            continue
+        if src.size and src.size(body) < src.size(cur):
+            r["reasons"]["less than the page already has"] = \
+                r["reasons"].get("less than the page already has", 0) + 1
+            continue
+        # the owner's tags, links and status stay; the import's own keys move
+        fields = {**(_fields(vault, old) or fields),
+                  **{k: fields[k] for k in ("title", "date", "summary")},
+                  **({"private": True} if hidden else {})}
         text = _note_text(nid, fields, page)
-        if old.read_text("utf-8", errors="replace") == text:
+        if cur == text:
             r["duplicate"] += 1
             continue
         r["updated"] += 1
         r["private"] += hidden
-        if not dry_run:  # a page edited since the check keeps its edit
-            vault.update_text(old, lambda cur, t=text: cur if untouched(cur) is False else t)
+        if not dry_run:  # by_origin: a page edited since the check keeps its edit
+            vault.update_text(old, lambda cur, t=text: cur if src.by_origin
+                              and untouched(cur) is False else t)
 
 
 SUMMARY_CHARS = 200
@@ -460,12 +476,13 @@ def edited_pages(vault: Vault, events) -> list[dict]:
     instead. {key, page, new, title, private}, at most SHOWN_EDITED; Dismiss (a `dismiss`
     change on id `imports` holding the key) closes one. Nothing is stored: a fold over the
     header lines."""
-    from cortex import review  # it imports modules that import this one
+    from cortex import importers, review  # they import modules that import this one
     events = list(events)
     groups = defaultdict(list)
+    notes = set(importers.LABELS.values())  # by_origin's labels: an `updates` page has no -2
     for p in sorted((vault.root / "resources").glob("*.md")):
         text = p.read_text("utf-8", errors="replace")
-        if (m := HEADER.search(text)) and m.group(3):
+        if (m := HEADER.search(text)) and m.group(3) and m.group(1) in notes:
             groups[m.group(1), m.group(3)].append(((m.group(2), len(p.stem), p.stem), p, text))
     out = []
     for pages in groups.values():
@@ -505,16 +522,36 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         prefix = src.prefix or src.id
         nid = f"{prefix}-private-{month}" if hidden else f"{prefix}-{month}"
         p = vault.path_for("resource", nid)
-        have = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
-        add = sorted(lines - have)
+        # the other tier's page of the month too: a tier made stricter (or looser) since then
+        # never writes the same line twice
+        twin = vault.path_for("resource", f"{prefix}-{month}" if hidden
+                              else f"{prefix}-private-{month}")
+        mine = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
+        theirs = set(twin.read_text("utf-8").splitlines()) if twin.is_file() else set()
+        add = sorted(lines - mine - theirs)
+        # a per-day summary line ("- YYYY-MM-DD: …", photos and location) replaces that day's,
+        # never in a public page from a private import
+        if hidden and theirs and not _was_private(vault, twin):
+            theirs = set()
+        old = {m.group(1): ln for ln in mine | theirs if (m := _DAY_LINE.match(ln))}
+        swap = {old[m.group(1)]: ln for ln in add
+                if (m := _DAY_LINE.match(ln)) and m.group(1) in old}
+        add = [ln for ln in add if ln not in swap.values()]
         r["imported"] += len(add)
+        r["updated"] += len(swap)
         r["private"] += len(add) if hidden else 0
-        if dry_run or not add:
+        if dry_run or not (add or swap):
             continue
         heading = src.noun.capitalize()
-        if have:
+        for q in (p, twin) if swap else ():  # in whichever page holds the day's line
+            if q.is_file() and (q == p or theirs):
+                vault.update_text(q, lambda t, s=swap: "".join(
+                    s.get(x.rstrip("\r\n"), x.rstrip("\r\n")) + x[len(x.rstrip("\r\n")):]
+                    for x in t.splitlines(keepends=True)))
+        if mine or not add:
             # shortcut: later imports append, so a month is sorted within each import only
-            vault.append_to_section("resource", nid, heading, "\n".join(add))
+            if add:
+                vault.append_to_section("resource", nid, heading, "\n".join(add))
             continue
         fields = {"title": f"{src.label} {month}", "kind": "resource", "resource_type": "other",
                   "status": "reference", "covers": [], "related": [], "date": f"{month}-01",
@@ -524,4 +561,4 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         vault.create_note("resource", nid, fields, f"# {src.label} {month}\n\nSource: "
                           f"{src.label} · Date: {month}-01\n\n## {heading}\n" + "\n".join(add)
                           + "\n")
-    r["duplicate"] = r["items"] - r["imported"]
+    r["duplicate"] = r["items"] - r["imported"] - r["updated"]

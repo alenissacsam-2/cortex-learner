@@ -368,6 +368,42 @@ POCKET = ("title,url,time_added,cursor,tags,status\n"
           "Bad row,https://example.org/x,,,,unread\n")
 
 
+def test_a_kindle_or_whatsapp_txt_past_the_note_cap_still_imports(root_plain, tmp_path,
+                                                                   monkeypatch):
+    """Audit 21 Nov I10: My Clippings.txt and WhatsApp exports are .txt but not notes: the
+    note cap (MAX_BYTES, made tiny here) does not refuse them."""
+    from cortex import life_sources
+    monkeypatch.setattr(importers, "MAX_BYTES", 100)
+    v = Vault(root_plain)
+    clip = tmp_path / "My Clippings.txt"
+    clip.write_bytes(CLIPPINGS.encode("utf-8"))
+    assert sources.run(v, more_sources.highlights_source(clip), C)["imported"] == 2
+    chat = tmp_path / "WhatsApp Chat with Me.txt"
+    chat.write_text("13/03/2024, 09:15 - Me: " + "buy milk and bread " * 20 + "\n",
+                    encoding="utf-8")
+    assert sources.run(v, life_sources.selfchat_source(chat), C)["imported"] == 1
+
+
+def test_a_book_crossing_many_highlights_keeps_one_page_per_part(root_plain, tmp_path,
+                                                                  monkeypatch):
+    """Audit 21 Nov I11: a book that grows past MANY highlights splits by month without
+    leaving its old whole-book page beside the new ones."""
+    monkeypatch.setattr(more_sources, "MANY", 2)
+    v = Vault(root_plain)
+    clip = tmp_path / "My Clippings.txt"
+    clip.write_bytes(CLIPPINGS.encode("utf-8"))
+    sources.run(v, more_sources.highlights_source(clip), C)
+    clip.write_bytes((CLIPPINGS + "Deep Work (Cal Newport)\r\n- Your Highlight on page 30 | "
+                      "Added on Thursday, 10 April 2025 10:00:00\r\n\r\nShallow work is easy."
+                      "\r\n==========\r\n").encode("utf-8"))
+    r = sources.run(v, more_sources.highlights_source(clip), C)
+    pages = sorted(p.stem for p in (root_plain / "resources").glob("highlights-deep-work*"))
+    assert pages == ["highlights-deep-work", "highlights-deep-work-2025-04"], pages
+    assert (r["imported"], r["updated"]) == (1, 1)
+    assert "Shallow work" not in _page(v, "highlights-deep-work")
+    assert "Clarity about what matters" in _page(v, "highlights-deep-work")
+
+
 def test_kindle_and_readwise_pages(root_plain, tmp_path):
     v = Vault(root_plain)
     clip = tmp_path / "My Clippings.txt"

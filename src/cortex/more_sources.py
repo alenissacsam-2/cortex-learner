@@ -479,7 +479,7 @@ def _book_items(app: str, origin: str, mtime: float, rows) -> list:
         groups = defaultdict(list)
         for h in hs:
             groups[h[0][:7] if len(hs) > MANY else ""].append(h)
-        for month, g in sorted(groups.items()):
+        for i, (month, g) in enumerate(sorted(groups.items())):
             days = sorted(d for d, *_ in g if d)
             span = f", {days[0]} to {days[-1]}" if days else ""
             name = f"{title} ({month or 'undated'})" if len(groups) > 1 else title
@@ -490,7 +490,9 @@ def _book_items(app: str, origin: str, mtime: float, rows) -> list:
                              for d, q, note in g)
             out.append(sources.Item(name, days[-1] if days else _day(mtime),
                                     f"{head}\n\n{body}", origin,
-                                    key=f"highlights {app} {title} {author} {month}",
+                                    # the first part keeps the whole book's key: a book that
+                                    # grows past MANY rewrites its page, never leaves it stale
+                                    key=f"highlights {app} {title} {author} {month * bool(i)}",
                                     who=author))
     return out
 
@@ -517,7 +519,7 @@ def highlights_source(path: Path) -> sources.Source:
         raise VaultError("invalid_argument", f"Found no Kindle clippings, Readwise or Pocket "
                          f"export in {path.name}.")
     pocket = all(k == "pocket" for _, k in found)
-    skips = ("bookmark or empty", "no readable date", "over 5 MB",
+    skips = ("bookmark or empty", "no readable date", "over 200 MB",
              "a Pocket list (import it on its own)")
 
     def items():
@@ -525,10 +527,10 @@ def highlights_source(path: Path) -> sources.Source:
             if kind == "pocket" and not pocket:
                 yield skips[3]
                 continue
-            try:
-                text = read().decode("utf-8-sig", "replace")
+            try:  # My Clippings.txt is a .txt but not a note: an export's cap, not a note's
+                text = read(cap=importers.MAX_ENTRY).decode("utf-8-sig", "replace")
             except VaultError:
-                yield "over 5 MB"
+                yield "over 200 MB"
                 continue
             if kind == "pocket":
                 yield from _pocket(text)

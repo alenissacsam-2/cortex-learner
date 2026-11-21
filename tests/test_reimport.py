@@ -66,6 +66,21 @@ def test_a_hand_edited_page_keeps_its_text_and_gets_a_review_card(root_plain, tm
         app.review_import_dismiss({"key": "nope"})
 
 
+def test_a_crlf_note_counts_as_untouched(root_plain, tmp_path):
+    """Audit 21 Nov I7: a note saved with Windows line endings is not taken as hand-edited:
+    a changed one rewrites its page, with no -2 page and no Review card."""
+    v, d = Vault(root_plain), tmp_path / "n"
+    d.mkdir()
+    (d / "Plan.md").write_bytes(b"First plan.\r\nStep two.\r\n")
+    importers.import_notes(v, d)
+    assert sources.untouched(_page(root_plain, "notes-plan")) is True
+    (d / "Plan.md").write_bytes(b"Second plan.\r\nStep two.\r\n")
+    r = importers.import_notes(v, d)
+    assert (r["new"], r["updated"]) == (0, 1)
+    assert "Second plan." in _page(root_plain, "notes-plan")
+    assert sources.edited_pages(v, []) == []
+
+
 def test_a_page_imported_before_body_shas_is_not_overwritten(root_plain, tmp_path):
     v, d = Vault(root_plain), _notes(tmp_path / "n", Plan="First plan.\n")
     importers.import_notes(v, d)

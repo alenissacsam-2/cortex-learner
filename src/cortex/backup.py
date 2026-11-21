@@ -11,8 +11,9 @@ private browsing: keep it as private as the vault. The last KEEP zips are kept.
 `private=False` (`cortex backup --no-private`) also leaves out what Claude and cloud apps may
 never see: private pages and pages under a private subject (`ask.private_pages`, the access
 gate's LOCAL audience), the raw sources of private resources, browse/private/, the browse
-store in .cortex/browse (its visits mix private browsing in), and .git, whose history holds
-every private page."""
+store in .cortex/browse (its visits mix private browsing in), the chat import's state
+(.cortex/chat-import.sqlite: the raw turns of private chats too), and .git, whose history
+holds every private page."""
 
 from __future__ import annotations
 
@@ -61,7 +62,10 @@ def backup(root: Path, dest_dir: Path | None = None, private: bool = True) -> Pa
     skip_files = {tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
                   browse / "lock", browse / "token",
                   *(Path(f"{db}{s}") for db in dbs for s in ("", "-wal", "-shm")),
-                  *(() if private else private_files(root))}
+                  *(() if private else private_files(root)),
+                  # chat_import.STATE: raw text of imported chat turns, private ones too
+                  *(() if private else (root / f".cortex/chat-import.sqlite{s}"
+                                        for s in ("", "-wal", "-shm")))}
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
             for dirpath, dirnames, filenames in os.walk(root):

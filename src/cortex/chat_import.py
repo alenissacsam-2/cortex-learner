@@ -215,7 +215,10 @@ class Chat:
         r = chats.redact(text)
         t = r[:chats.LINE_CHARS + 1]  # redact, then cut
         w = _when(ts)
-        for tag, x in tags.find(r):  # R3-5: the owner's own words; `one` acts on them
+        # R3-5: the owner's own words; `one` acts on them. Only a tag that starts a line: one
+        # mid-line in an old chat is usually quoted or pasted text
+        typed = "\n".join(x for x in r.splitlines() if x.lstrip().startswith("//"))
+        for tag, x in tags.find(typed):
             item = [tag, x, local_day(w) if w else ""]
             if len(self.tags) < TAGS and item not in self.tags:
                 self.tags.append(item)
@@ -715,7 +718,9 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
     cat, audience = ctx.judge(page.text)
     if audience == "skip":
         return "skipped_category", rec
-    if c.tags:  # R3-5: an imported chat's //tags are the owner's typed words, so said
+    # R3-5: an imported chat's //tags are the owner's typed words, so said; a private
+    # (local-only) chat's stay in its private page, off the shared me/* pages
+    if c.tags and audience != "local":
         try:
             tags.apply_in(vault, [tuple(t) for t in c.tags], evlog, forget_said=False)
         except (OSError, ValueError, VaultError) as e:  # the page is still written
