@@ -432,6 +432,18 @@ def test_everything_about_adds_cited_passages(vault, fake):
     assert [x["n"] for x in src] == [1]
 
 
+def test_everything_about_in_a_period_reads_passages_from_it(vault):
+    """Audit 21 Nov C12: "about X last week" reads no page written outside that week."""
+    s = Stream("ollama", ["Helm deploys it [1]."])
+    try:
+        _turn(vault, "tell me everything about kubernetes last week", s.runner())
+    finally:
+        s.close()
+    user = s.bodies[0]["messages"][1]["content"]
+    assert "Date: 2026-11-12" in user  # Helm charts, in the week
+    assert "Date: 2026-09-01" not in user and "Date: 2026-11-03" not in user
+
+
 def test_a_follow_up_and_the_older_answers_keep_their_routes(vault, fake):
     _, ev = _turn(vault, "which sites did I visit last week?", fake.runner())
     assert not [e for e in ev if e["t"] == "facts"]  # the site list, as before

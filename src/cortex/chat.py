@@ -919,7 +919,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         else:
             emit({"t": "facts", "facts": facts})
             if fq["kind"] == "about" and semantic.load_embedder() is not None:
-                found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats)
+                found = ask._passages(vault, fq["term"], 4, sources=s["sources"], stats=stats,
+                                      between=None if fq["lo"] == chat_facts.FIRST_DAY
+                                      else (fq["lo"], fq["hi"]),  # the period the facts cover
+                                      topic=fq["term"])
             elif fq["kind"] == "compare":  # each side's top page, read from its start
                 found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
                                                if r["page"] and r["page"]["id"]])
