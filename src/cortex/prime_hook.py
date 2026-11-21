@@ -123,7 +123,7 @@ def _light(root, prompt: str) -> str | None:
     global pending
     from datetime import UTC, datetime
 
-    from cortex import prime, profiles, xray
+    from cortex import access, prime, profiles, xray
     from cortex.events import EventLog
     from cortex.vault import Vault
 
@@ -133,8 +133,12 @@ def _light(root, prompt: str) -> str | None:
     def work() -> None:
         try:
             xr: dict = {}
+            # the owner's profile for Claude Code, as cortex_prime applies it over MCP
+            scopes = profiles.scopes_for(profiles.load(vault), "claude-code")
+            allow = None if scopes is None else (
+                lambda p, h: access.scope_section(scopes, p, h))
             parts, _ = prime.core(vault, prompt, list(EventLog(vault).iter_events()),
-                                  datetime.now(UTC), profiles.withheld(vault, None), xr)
+                                  datetime.now(UTC), profiles.withheld(vault, scopes), xr, allow)
             out = "\n\n".join(parts)
             # before `out` is handed over: the process may exit as soon as it is
             xray.record(vault, "prime-hook", "claude-code", xr["served"], xr["trimmed"],

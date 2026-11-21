@@ -389,3 +389,20 @@ def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
     assert "CANARY-PERS-4Q" not in hook and "Python first" not in hook
     core = mcp_server.Cortex(Vault(vroot))  # in-process (the app): private me pages too
     assert core._withheld() == {"preferences", "profile"}
+
+
+def test_the_claude_code_hook_applies_its_profile(vroot):
+    """Audit 21 Nov: the prime hook ignored per-agent profiles; a Claude Code profile limited
+    to the core still got coding preferences, personality and the journal from the hook."""
+    from cortex import prime_hook
+
+    prompt = "help me write python code and walk"
+    assert "Python first" in (prime_hook._light(vroot, prompt) or "")  # default: everything
+    v = Vault(vroot)
+    data = profiles.load(v)
+    data["profiles"].insert(0, {"match": "claude-code", "scopes": ["core"]})
+    profiles.save(v, data)
+    hook = prime_hook._light(vroot, prompt) or ""
+    assert "Call me Sam." in hook
+    for canary in ("Python first", "CANARY-PERS-4Q", "CANARY-THNK-4Q", "CANARY-JRNL-4Q"):
+        assert canary not in hook, canary
