@@ -1383,7 +1383,27 @@
       row('Process now', null, 'Turns new browser history into your private day pages.', [btn('Process now', () => job('/api/browse/process', {}))]),
       row('Self-test', null, 'Runs the whole import on made-up history in a temp folder; your vault and browsers are not touched.', [btn('Run self-test', () => job('/api/browse/selftest', {}))]),
       row('Private pages', null, 'Your browsing pages are for you only: open them in Obsidian.', [btn('Open private folder in Obsidian', () => post('/api/open', { what: 'private' }, noObsidian))]));
-    put('browse', ...parts, ...(d.cloud ? cloudBoard(d.cloud) : []), past, recv, acts);
+    put('browse', ...parts, privateChatsBoard(), ...(d.cloud ? cloudBoard(d.cloud) : []), past, recv, acts);
+  }
+  // imported AI chats the import made private for a sensitive category (server.private_chats): titles, never chat text
+  function privateChatsBoard() {
+    const body = h('tbody', {}), box = h('div', {}, note('Loading…'));
+    const more = btn('Show more', () => page(body.children.length), null, { 'aria-label': 'Show more: Chats kept private' });
+    const page = async (at) => {
+      try {
+        const r = await api('/api/browse/private-chats?offset=' + at);
+        if (!r.total) { box.replaceChildren(note('No imported chat was made private.')); return; }
+        body.append(...r.rows.map((c) => h('tr', {}, h('td', { text: c.title }), h('td', { text: c.app }),
+          h('td', { text: c.date }), h('td', { text: CATEGORY_NAMES[c.category] || c.category }))));
+        more.hidden = body.children.length >= r.total;
+        if (!at) box.replaceChildren(h('div', { class: 'table-scroll' }, h('table', {},
+          h('thead', {}, h('tr', {}, ['Chat', 'App', 'Date', 'Category'].map((t) => h('th', { text: t })))), body)),
+        h('div', { class: 'pad' }, more));
+      } catch (e) { if (!dead) box.replaceChildren(note(e.message)); }
+    };
+    page(0);
+    return board('Chats kept private', { note: 'newest first' },
+      note('Imported AI chats that Cortex saved as private pages because they fall in a sensitive category set to Local AI only. Only models on this computer read them.'), box);
   }
 
   /* Dashboard and vault */
