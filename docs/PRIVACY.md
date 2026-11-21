@@ -22,7 +22,7 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 - `cortex browse serve`, the receiver, opens no port since 0.3.2: it only imports new history from your browsers in the background.
 - The MCP server (`cortex mcp`) talks to Claude through standard input and output, not the network.
 
-**Local model calls.** When you turn on a local model, Cortex talks to Ollama (127.0.0.1:11434) or LM Studio on this computer only. It refuses any address that is not loopback, ignores proxy settings, and refuses cloud models that a local runner can forward to (Ollama `-cloud` models, for example).
+**Local model calls.** When you turn on a local model, Cortex talks to Ollama (127.0.0.1:11434) or LM Studio on this computer only. It refuses any address that is not loopback, sends `localhost` to 127.0.0.1, ignores proxy settings, and refuses cloud models that a local runner can forward to (Ollama `-cloud` models, for example).
 
 Searches, topic filing (`cortex topics`), the dashboard, the Claude Code hooks and every tool run offline.
 

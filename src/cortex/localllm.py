@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 _REFUSED = "localllm: only a loopback runner is allowed"
 _CLOUD = "localllm: a cloud model is refused; browsing never leaves this machine"
@@ -50,7 +50,8 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 
 
 def _check_url(url: str) -> str:
-    """Return url when it points at loopback over http(s); raise ValueError otherwise."""
+    """Return url when it points at loopback over http(s), with `localhost` as 127.0.0.1 (a
+    hosts file can point the name elsewhere); raise ValueError otherwise."""
     if not isinstance(url, str) or any(c in url for c in "\\ \t\r\n\x00") or "@" in url:
         raise ValueError(_REFUSED)
     try:
@@ -68,11 +69,13 @@ def _check_url(url: str) -> str:
                 raise ValueError(_REFUSED)
         except ValueError:
             raise ValueError(_REFUSED) from None
-    return url
+        return url
+    port = f":{parts.port}" if parts.port is not None else ""
+    return urlunsplit(parts._replace(netloc="127.0.0.1" + port))
 
 
 def _request(url: str, body: dict | None, timeout: float) -> dict:
-    _check_url(url)
+    url = _check_url(url)
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"} if data else {})
@@ -549,8 +552,7 @@ def _find(config: dict, cfg: dict, wanted: str | None) -> Runner | None:
     if lms_first and (got := ensure_lmstudio(wanted, config=config)):
         url = url or got
     if url:
-        _check_url(str(url))  # fail loudly on a non-loopback config
-        base = str(url).rstrip("/")
+        base = _check_url(str(url)).rstrip("/")  # fails loudly on a non-loopback config
         probes = [("ollama", base, "/api/tags"), ("openai", base, "/v1/models")] + probes
     for kind, base, path in probes:
         if r := _probe(kind, base, path, wanted):
