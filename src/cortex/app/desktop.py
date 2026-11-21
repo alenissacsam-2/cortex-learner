@@ -230,12 +230,18 @@ class Desktop:
         self.app, self.url = app, url
         self.win = self.tray = None
         self.quitting, self.state = False, "normal"  # normal | minimized | maximized
+        self.fresh = False  # started hidden and never shown: the first show loads start_url
 
     def show(self) -> bool:
-        """Bring the window up (Open Cortex, a second launch); with no window, the browser."""
+        """Bring the window up (Open Cortex, a second launch); with no window, the browser.
+        The page is the one for now (server.start_url: Tonight in the evening) in a new tab or
+        on the first show after a hidden start; a window already seen keeps its page."""
         if self.win is None:
-            server._open(self.url)
+            server._open(server.start_url(self.app))
             return True
+        if self.fresh:
+            self.fresh = False
+            self.win.load_url(server.start_url(self.app))
         self.win.show()
         if self.state == "minimized":
             self.win.restore()
@@ -386,6 +392,7 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     srv, app, url = server.start(root, port=port, echo=echo, idle=False)
     d = app.desktop = Desktop(app, url)
+    d.fresh = hidden
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True,
                      name="cortex-app-http").start()
     try:
