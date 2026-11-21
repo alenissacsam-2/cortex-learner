@@ -70,3 +70,48 @@ def test_an_empty_or_weak_result_says_what_was_searched(vault, monkeypatch):
     out = c.cortex_context(topic="zebra crossing")
     assert out["searched"]["pages"] == s["pages"] and out["next"].startswith("Not found")
     assert "searched" not in c.cortex_context(topic="car motor")
+
+
+LONG = ("# Garage log\n\nIntro line.\n\n## Week 1\n" + "Changed oil and filters today.\n" * 60
+        + "\n## Week 2\nThe motor made a car vehicle noise.\n" + "Washed it.\n" * 40
+        + "\n## Week 3\nSold the bike.\n")
+
+
+def test_top_recall_hits_carry_where_and_a_passage(vault, monkeypatch):
+    """RR-12: `at` (an offset cortex_read takes) and at most 300 characters, wrapped."""
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    note(vault, "notes/garage.md", "title: Garage log\n", LONG)
+    c = Cortex(Vault(vault))
+    out = c.cortex_recall("motor", limit=8)
+    assert all("passage" in h and "at" in h for h in out["hits"][:3])
+    assert all("passage" not in h for h in out["hits"][3:])
+    for h in out["hits"][:3]:
+        assert h["passage"].startswith(f'<untrusted_note id="{h["id"]}">')
+        assert len(h["passage"].split("\n")[1]) <= semantic.PASSAGE
+    g = next(h for h in out["hits"] if h["id"] == "garage")
+    assert "motor" in g["passage"] and "Changed oil" not in g["passage"]
+    read = c.cortex_read("garage", at=g["at"], window=300)
+    assert "The motor made" in read["text"] and "Intro line" not in read["text"]
+    assert "with a hit's at=" in out["next"]
+
+
+def test_windowed_read_and_reading_on(vault, monkeypatch):
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    note(vault, "notes/garage.md", "title: Garage log\nsummary: my car diary\n", LONG)
+    c = Cortex(Vault(vault))
+    first = c.cortex_read("garage", window=400)
+    assert first["text"].startswith('<untrusted_note id="garage">\nSummary: my car diary')
+    assert "## Week 2" not in first["text"].split("[truncated")[0]
+    tail = first["text"].split("[truncated: ")[1]
+    assert "the rest's headings:]\n## Week 2\n## Week 3" in tail  # the outline of the rest
+    assert f"at={first['next_at']})" in first["next"]
+    on = c.cortex_read("garage", at=first["next_at"], window=400)
+    assert on["text"].split("\n")[1].startswith("Changed oil")  # a whole line, no summary
+    assert on["next_at"] > first["next_at"]
+    wk3 = c.cortex_read("garage", at="week 3")
+    assert wk3["text"].split("\n")[1].rstrip() == "## Week 3" and "next_at" not in wk3
+    assert "The page goes on" not in wk3["next"]
+    for bad in ({"at": "Week 9"}, {"window": "big"}, {"at": 0, "sections": ["Week 1"]}):
+        with pytest.raises(VaultError) as e:
+            c.cortex_read("garage", **bad)
+        assert e.value.code == "invalid_argument", bad

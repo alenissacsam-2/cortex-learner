@@ -40,6 +40,8 @@ MAX_HITS = 8
 SNIPPET = 120
 READ_CAP_CHARS = 1200 * 4  # ~1.2k tokens at chars/4
 TRUNCATED = "\n[truncated]"
+WINDOW_MIN = 200  # cortex_read(window=): the smallest window, in characters
+OUTLINE = 8  # headings a cut read lists of the rest
 WIKILINK_RE = re.compile(r"^\[\[([^\]|#^]+)(?:[|#^][^\]]*)?\]\]$")
 LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")  # a [[link]] anywhere in text
 FENCE_RE = re.compile(r"^(```|~~~).*?^\1[^\n]*$", re.M | re.S)
@@ -165,6 +167,33 @@ def _wrap(id: str, text: str) -> str:
 
 def _preview(body: str) -> str:
     return " ".join(ln for ln in body.splitlines() if not HEADING_RE.match(ln))
+
+
+def _offset(body: str, at) -> int:
+    """RR-12: where `at` starts in a note body: an offset (an int or digits, moved back to
+    its line start) or a heading's text (with or without #s, any case)."""
+    if isinstance(at, int) or str(at).strip().isdigit():
+        off = max(0, min(len(body), int(at)))
+        return body.rfind("\n", 0, off) + 1
+    want = str(at).lstrip("#").strip().casefold()
+    pos = 0
+    for line in body.splitlines(keepends=True):
+        m = HEADING_RE.match(line.rstrip("\r\n"))
+        if m and m.group(2).casefold() == want:
+            return pos
+        pos += len(line)
+    raise VaultError("invalid_argument", f"Heading '{str(at)[:80]}' is not in the note; pass "
+                     "an existing heading or an offset.")
+
+
+def _rest(body: str, cut: int) -> str:
+    """RR-12: the end of a read cut at `cut`: how much is left and the rest's headings."""
+    heads = [ln.strip() for ln in body[cut:].splitlines() if HEADING_RE.match(ln)]
+    more = len(body.rstrip()) - cut
+    return (f"\n[truncated: {more:,} more characters"
+            + ("; the rest's headings:]\n" + "\n".join(heads[:OUTLINE])
+               + (f"\n(+{len(heads) - OUTLINE} more headings)" if len(heads) > OUTLINE else "")
+               if heads else "]"))
 
 
 def _one_line(text: str, n: int = SNIPPET) -> str:
@@ -530,21 +559,41 @@ class Index:
             "WHERE e.dst = ? AND e.type = ? AND n.kind = ?", id, "concepts", "mistake")
             if m not in mistakes]
 
-    def read(self, id: str, sections: list[str] | None = None) -> dict:
+    def read(self, id: str, sections: list[str] | None = None, at: int | str | None = None,
+             window: int | None = None) -> dict:
+        """A note within READ_CAP_CHARS. `at` (an offset in the body, or a heading) and
+        `window` (characters) read a part of it (RR-12). A read cut short ends with the rest's
+        headings and gives `next_at`, the offset to read on from (not for `sections`)."""
         id = self._resolve(str(id))
         n = self._notes[id]
         body = n["body"]
+        end = len(body.rstrip())
+        lo = None  # where the shown text starts in the body; None for sections
         if sections:
+            if at is not None or window is not None:
+                raise VaultError("invalid_argument", "Pass sections, or at/window, not both.")
             lines = body.splitlines(keepends=True)
             parts = []
             for h in sections:
-                start, end = _section(lines, h)
-                parts.append("".join(lines[start - 1 : end]).rstrip())
+                start, stop = _section(lines, h)
+                parts.append("".join(lines[start - 1 : stop]).rstrip())
             text = "\n\n".join(parts)
         else:
-            text = body.strip()
-        if n["fields"].get("summary"):  # shown first, so the cap never cuts it
-            text = f"Summary: {n['fields']['summary']}\n\n{text}"
+            lo = _offset(body, at) if at is not None else len(body) - len(body.lstrip())
+            hi = end
+            if window is not None:
+                try:
+                    size = max(WINDOW_MIN, min(READ_CAP_CHARS, int(window)))
+                except (TypeError, ValueError):
+                    raise VaultError("invalid_argument", "window must be a number of "
+                                     "characters.") from None
+                if lo + size < end:  # end at a line end when one is in the window's second half
+                    nl = body.rfind("\n", lo + size // 2, lo + size)
+                    hi = nl if nl > 0 else lo + size
+            text = body[lo:hi]
+        # shown first, so the cap never cuts it; a later window of the page goes without
+        head = f"Summary: {n['fields']['summary']}\n\n" if n["fields"].get("summary") \
+            and at is None else ""
         out_of = "SELECT dst FROM edges WHERE src = ? AND type = ?"
         into = "SELECT e.src FROM edges e JOIN nodes n ON n.id = e.src " \
                "WHERE e.dst = ? AND e.type = ? AND n.kind = ?"
@@ -567,11 +616,24 @@ class Index:
             "open_mistakes": [str(m) for m in getattr(st, "open_mistakes", None) or []],
             "next_refresh": _plain(next_due) if next_due is not None else None,
         }
-        result["text"] = _wrap(id, text)
-        over = len(json.dumps(result, ensure_ascii=False)) - READ_CAP_CHARS
+        def show(shown: str, cut: bool) -> int:
+            """Set the text and `next_at`; returns the JSON size over the cap."""
+            nxt = None if lo is None or not (cut or lo + len(shown) < end) else lo + len(shown)
+            rest = _rest(body, nxt) if nxt is not None else TRUNCATED if cut else ""
+            result["text"] = _wrap(id, head + shown.rstrip() + rest)
+            result.pop("next_at", None)
+            if nxt is not None:
+                result["next_at"] = nxt
+            return len(json.dumps(result, ensure_ascii=False)) - READ_CAP_CHARS
+
+        over = show(text, False)
         while over > 0 and text:
-            # JSON escapes make the size non-linear in the cut, so trim until it fits
-            text = text[: max(0, len(text) - over - len(TRUNCATED))].rstrip()
-            result["text"] = _wrap(id, text + TRUNCATED)
-            over = len(json.dumps(result, ensure_ascii=False)) - READ_CAP_CHARS
+            # JSON escapes make the size non-linear in the cut, so trim until it fits, at a
+            # line end when one is in the kept half (the next read starts on a whole line);
+            # halved while far over, since escapes make `over` count more than the text holds
+            text = text[: len(text) // 2 if over > len(text) // 2
+                        else max(0, len(text) - over - len(TRUNCATED))]
+            nl = text.rfind("\n")
+            text = text[:nl] if nl > len(text) // 2 else text
+            over = show(text, True)
         return result

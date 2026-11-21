@@ -125,7 +125,9 @@ def test_read_respects_cap(vault):
                       "# Big\n\n## Notes\n" + ('line "quoted"\n' * 2000))
     r = Index(vault, Catalog.load(vault)).read("big")
     assert len(json.dumps(r, ensure_ascii=False)) <= READ_CAP_CHARS
-    assert "[truncated]" in r["text"] and r["text"].endswith("</untrusted_note>")
+    assert r["text"].endswith("</untrusted_note>") and r["text"].count('line "quoted"') > 100
+    # RR-12: the rest's size and headings, and where to read on from (a line start)
+    assert "\n[truncated: " in r["text"] and r["next_at"] > 0
 
 
 def test_read_sections(idx):
