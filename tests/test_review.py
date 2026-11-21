@@ -248,7 +248,9 @@ def test_the_badge_and_the_review_page(tmp_path):
                            "word": "switch to", "subject": "<s>Switch to uv</s>",
                            "private": True}],
             "forget": [{"key": "f1", "text": "<s>tabs</s>", "candidates": [
-                {"page": "preferences", "id": "c-ddddd", "text": "Uses tabs"}]}], "count": 4}
+                {"page": "preferences", "id": "c-ddddd", "text": "Uses tabs"}]}],
+            "imports": [{"key": "i1", "page": "notes-plan", "new": "notes-plan-2",
+                         "title": "<i>Plan</i>", "private": False}], "count": 4}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
@@ -258,12 +260,13 @@ def test_the_badge_and_the_review_page(tmp_path):
     assert out["boards"] == ["Waiting for your approval", "Past their end date", "Still true?",
                              "Lines that may conflict", "Corrections you repeat",
                              "Decisions in your commits",
-                             "Lines you asked to forget"]
+                             "Lines you asked to forget", "Imported notes you edited"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
                            ["Studies CS", ["Still true", "Retire"]],
                            ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
                            ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]],
                            ["<s>Switch to uv</s>", ["Approve", "Dismiss"]],
-                           ["//forget: <s>tabs</s>", ["Dismiss"]], ["Uses tabs", ["Retire"]]]
+                           ["//forget: <s>tabs</s>", ["Dismiss"]], ["Uses tabs", ["Retire"]],
+                           ["<i>Plan</i>", ["Dismiss"]]]
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
-    assert out["after"] == ["3", False, 6]
+    assert out["after"] == ["3", False, 7]

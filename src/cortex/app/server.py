@@ -332,6 +332,7 @@ class App:
             "/api/review/decision/approve": self.review_decision_approve,
             "/api/review/decision/dismiss": self.review_decision_dismiss,
             "/api/review/forget/dismiss": self.review_forget_dismiss,
+            "/api/review/import/dismiss": self.review_import_dismiss,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute}
 
     def touch(self) -> None:
@@ -724,6 +725,17 @@ class App:
             raise NotFound
         return self._click("cortex_patch", "_dismiss", {
             "page": "forget", "section": "Forget", "text": key, "waiting": False})
+
+    def review_import_dismiss(self, body: dict) -> dict:
+        """RR-18: a card for a hand-edited imported page dismissed: a `dismiss` change on id
+        `imports` holding its key; both pages stay as they are."""
+        from cortex import sources
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        if not any(x["key"] == key for x in sources.edited_pages(v, EventLog(v).iter_events())):
+            raise NotFound
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "imports", "section": "Imports", "text": key, "waiting": False})
 
     # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
     def xray(self) -> dict:

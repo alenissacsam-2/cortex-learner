@@ -1462,7 +1462,11 @@
           btn('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, { 'aria-label': `Dismiss: ${x.text}` })]),
         ...x.candidates.map((c) => row(c.text, where(c), null, [
           btn('Retire', () => act('/api/review/retire', { id: c.id }, 'Retired.'), null, { 'aria-label': `Retire: ${c.text}` })]))]),
-      'Nothing to forget.')));
+      'Nothing to forget.')),
+      board('Imported notes you edited', { note: String((d.imports || []).length) }, ...list((d.imports || []).map((x) =>
+        row(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [
+          btn('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, { 'aria-label': `Dismiss: ${x.title}` })])),
+      'No edited imports.')));
   }
 
   /* Agent X-ray (v9 item 6): what cortex_prime and cortex_context served each AI app. Ids come

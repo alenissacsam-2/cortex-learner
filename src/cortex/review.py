@@ -13,7 +13,9 @@
 - decisions (RR-9): decision-like commit subjects of imported git repos
   (more_sources.decision_proposals); Approve makes a decision page, Dismiss drops it;
 - forget (R3-5): a `//forget:` the user typed that matched no line or several, with its
-  candidate lines (cortex.tags.forget_cards; Retire a line, or Dismiss).
+  candidate lines (cortex.tags.forget_cards; Retire a line, or Dismiss);
+- imports (RR-18): an imported page edited by hand whose file changed, so the re-import wrote
+  a newer page beside it (cortex.sources.edited_pages; Dismiss).
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -297,7 +299,10 @@ def view(vault, events, today: str) -> dict:
     forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
                "candidates": [side(c) for c in x["candidates"]]}
               for x in tags.forget_cards(vault, events, today)]
+    from cortex import sources
+    imports = [{**x, "title": plain(x["title"], SHOWN)}
+               for x in sources.edited_pages(vault, events)]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
-            "rules": rules, "decisions": decisions, "forget": forget,
+            "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions) + len(forget)}
+            + len(decisions) + len(forget) + len(imports)}

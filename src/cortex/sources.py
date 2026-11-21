@@ -59,6 +59,10 @@ WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.S
 CODE_LEFT_OUT = "[code left out]"
 
 _HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
+# an item page's header line: label, date, origin, and (RR-18, by_origin sources) a body sha
+HEADER = re.compile(r"^Source: (.+?) · Date: (\S+)(?: · From: (.*?))?"
+                    r"(?: · body: ([0-9a-f]{16}))? · sha: [0-9a-f]{16}$", re.M)
+SHOWN_EDITED = 5  # Review cards of hand-edited imported pages shown at a time
 _WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 # "On Tue, 3 Nov 2026 at 09:30, Asha <her address> wrote:", which mail clients may wrap once
@@ -102,6 +106,11 @@ class Source:
     strips_quotes: bool = False  # mail: other people's quoted text is dropped
     coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
     updates: bool = False  # a known `key` rewrites its page when the text changed (repos)
+    # RR-18 (notes): a changed file at a known `From:` origin rewrites that page when its body
+    # is as the import wrote it (the header's `body:` sha); `walk_errors` (folders the walk
+    # could not read) keeps the report from counting pages as gone from the folder
+    by_origin: bool = False
+    walk_errors: list = field(default_factory=list)
 
 
 def tier(value: str | Audience) -> Audience:
@@ -287,8 +296,10 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
     """Import `src` at `tier`. The report: `read` (entries, skipped ones too), `imported` (new
     pages for item sources, new lines for month sources), `private`, `duplicate`, `reasons`
     (skip reason -> count), `items` (items read), `pages` (pages they belong on) and `updated`
-    (pages rewritten by a source that `updates`) and `unreadable` (quality-gate reason ->
-    count: the items `unreadable` kept out, for every source)."""
+    (pages rewritten by a source that `updates` or `by_origin`), `unreadable` (quality-gate
+    reason -> count: the items `unreadable` kept out, for every source) and, for a `by_origin`
+    source, `gone` (earlier pages whose file was not in this walk: counted, never deleted, and
+    not counted when the walk had errors)."""
     r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
          "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value,
          "unreadable": {}}
@@ -298,12 +309,15 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
     return r
 
 
-def _read(src: Source, r: dict):
+def _read(src: Source, r: dict, walked: set[str] | None = None):
     for it in src.items():
         r["read"] += 1
         if isinstance(it, str):
             r["reasons"][it] = r["reasons"].get(it, 0) + 1
-        elif bad := unreadable(it.text):
+            continue
+        if walked is not None:  # every origin the walk saw, a gated item's too
+            walked.add(scrub(it.origin, src))
+        if bad := unreadable(it.text):
             r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
         else:
             r["items"] += 1
@@ -312,7 +326,8 @@ def _read(src: Source, r: dict):
 
 def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
     known, seen, taken, todo = _known_hashes(vault), set(), set(), []
-    for it in _read(src, r):
+    origins, walked = (_by_origin(vault, src), set()) if src.by_origin else ({}, None)
+    for it in _read(src, r, walked):
         h = _sha(it.key or it.text)
         old = known.get(h)
         if h in seen or (h in known and not (src.updates and old)):
@@ -323,10 +338,17 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             todo.append((old.stem, it, h, private or it.private or _was_private(vault, old),
                           old))
             continue
+        at = origins.get(scrub(it.origin, src)) if it.origin else None
+        if at and untouched(at[1]):  # RR-18: a hand-edited page keeps its text: a new page
+            todo.append((at[0].stem, it, h, private or it.private or _was_private(vault, at[0]),
+                         at[0]))
+            continue
         # the id comes from the filtered title, so a key in a title never reaches a file name
         slug = slugify(scrub(it.title, src)) or "untitled"
         nid = _free_id(vault, f"{src.prefix or src.id}-{slug}"[:81].rstrip("-."), taken)
         todo.append((nid, it, h, private or it.private, None))
+    if walked is not None and not src.walk_errors:
+        r["gone"] = sum(o not in walked for o in origins)
     new = [t for t in todo if t[4] is None]
     r["imported"], r["pages"] = len(new), len(todo)
     r["private"] = sum(t[3] for t in new)
@@ -355,20 +377,82 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         if hidden:
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
-        page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin} · "
-                f"sha: {h}\n\n{body}\n")
+        mark = f" · body: {_sha(body.strip())}" if src.by_origin else ""
+        page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin}{mark}"
+                f" · sha: {h}\n\n{body}\n")
         if old is None:
             if not dry_run:
                 vault.create_note("resource", nid, fields, page)
             continue
+        if src.by_origin:  # the owner's tags, links and status stay; the import's own keys move
+            fields = {**_fields(vault, old), **{k: fields[k] for k in ("title", "date",
+                                                                       "summary")},
+                      **({"private": True} if hidden else {})}
         text = _note_text(nid, fields, page)
         if old.read_text("utf-8", errors="replace") == text:
             r["duplicate"] += 1
             continue
         r["updated"] += 1
         r["private"] += hidden
-        if not dry_run:
-            vault.update_text(old, lambda _, t=text: t)
+        if not dry_run:  # a page edited since the check keeps its edit
+            vault.update_text(old, lambda cur, t=text: cur if untouched(cur) is False else t)
+
+
+def untouched(text: str) -> bool | None:
+    """RR-18: whether an imported page's body is as its import wrote it (the header's `body:`
+    sha); None for a page with no body sha (imported before RR-18, or by another source)."""
+    m = HEADER.search(text)
+    if not m or not m.group(4):
+        return None
+    return _sha(text[m.end():].replace("\r\n", "\n").strip()) == m.group(4)
+
+
+def _by_origin(vault: Vault, src: Source) -> dict[str, tuple[Path, str]]:
+    """RR-18: origin -> (the newest page an earlier import of `src`'s labels wrote for it, its
+    text); newest by header Date, then id length and id (`x-2` is newer than `x`)."""
+    labels, best = _labels(src), {}
+    for p in source_pages(vault, src):
+        text = p.read_text("utf-8", errors="replace")
+        m = HEADER.search(text)
+        if m and m.group(3) and m.group(1) in labels:
+            rank = (m.group(2), len(p.stem), p.stem)
+            if m.group(3) not in best or rank > best[m.group(3)][0]:
+                best[m.group(3)] = (rank, p, text)
+    return {o: (p, text) for o, (_, p, text) in best.items()}
+
+
+def _fields(vault: Vault, page: Path) -> dict:
+    try:
+        return {k: v for k, v in vault.read_path(page).fields.items() if k != "id"}
+    except VaultError:
+        return {}
+
+
+def edited_pages(vault: Vault, events) -> list[dict]:
+    """RR-18's Review cards: an imported page edited by hand (its body no longer matches its
+    `body:` sha) that a later import of the same file left alone, writing a newer page
+    instead. {key, page, new, title, private}, at most SHOWN_EDITED; Dismiss (a `dismiss`
+    change on id `imports` holding the key) closes one. Nothing is stored: a fold over the
+    header lines."""
+    from cortex import review  # it imports modules that import this one
+    events = list(events)
+    groups = defaultdict(list)
+    for p in sorted((vault.root / "resources").glob("*.md")):
+        text = p.read_text("utf-8", errors="replace")
+        if (m := HEADER.search(text)) and m.group(3):
+            groups[m.group(1), m.group(3)].append(((m.group(2), len(p.stem), p.stem), p, text))
+    out = []
+    for pages in groups.values():
+        pages.sort()
+        newest = pages[-1][1]
+        for _, p, text in pages[:-1]:
+            key = review.text_hash(f"{p.stem} {newest.stem}")
+            if untouched(text) is False and not review.dismissed(events, "imports", key):
+                f = _fields(vault, p)
+                out.append({"key": key, "page": p.stem, "new": newest.stem,
+                            "title": str(f.get("title") or p.stem),
+                            "private": _was_private(vault, p)})
+    return out[:SHOWN_EDITED]
 
 
 def _was_private(vault: Vault, page: Path) -> bool:
