@@ -1233,6 +1233,18 @@ def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch)
         "Putting together your week from 16 Nov to 18 Nov"]
 
 
+def test_cortexs_own_answer_gets_no_quote_check(vault, monkeypatch):
+    """Audit 21 Nov C7: a quoted title in the digest is not flagged "Quote not found"."""
+    note(vault.root, "notes/ddia.md",
+         'title: \'Notes on "Designing Data-Intensive Apps"\'\ndate: 2026-11-17\n',
+         "# DDIA\n\nReplication.")
+    monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
+    cid, events = _turn(vault, None, "What did I do yesterday?", None)
+    text = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert '"Designing Data-Intensive Apps"' in text
+    assert "unquoted" not in events[-2] and "unquoted" not in chat.load(vault, cid)[1]
+
+
 @pytest.mark.parametrize("q,caught", [
     ("which sites did I visit yesterday?", True), ("list all the unique sites I visited", True),
     ("what websites did I go to?", True), ("sites I've been on this week", True),

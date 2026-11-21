@@ -986,7 +986,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 break
     answer = "".join(parts).strip()
     stopped = cancel is not None and cancel.is_set()
-    by_model = bool(answer)  # Cortex's own fallback words below quote nothing to check
+    # only the model's words: Cortex's own (a digest, a site list, its fallbacks) quote titles
+    by_model = bool(answer) and messages is not None
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
         emit({"t": "tok", "s": answer})
