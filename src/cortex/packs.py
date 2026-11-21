@@ -72,9 +72,11 @@ def pack(vault: Vault, name: str, now: datetime | None = None) -> str:
     return "\n".join(out) if len(out) > 1 else ""
 
 
-def rule_block(vault: Vault | None, now: datetime | None = None) -> str:
-    """The Markdown block for agent rule files: the pinned core and the prime line."""
-    core = lines(vault, frozenset(("core",)), now)[0] if vault is not None else []
+def rule_block(vault: Vault | None, now: datetime | None = None, scopes=None) -> str:
+    """The Markdown block for agent rule files: the pinned core and the prime line. `scopes`:
+    the app's profile (cortex.profiles; None: all); without `core` in it, the prime line only."""
+    core = lines(vault, frozenset(("core",)), now)[0] \
+        if vault is not None and access.scope_page(scopes, "core") else []
     # a line may not close the block's HTML-comment markers early
     core = [ln.replace("<!--", "<!-").replace("-->", "->") for ln in core]
     return "\n".join([BLOCK_HEAD, *core] if core else ["## Cortex"]) + "\n" + PRIME_LINE + "\n"
