@@ -36,7 +36,9 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 # --source value -> the importer it forces
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
-           "repos": "repos", "highlights": "highlights"}
+           "repos": "repos", "highlights": "highlights", "mail": "mail",
+           "selfchat": "selfchat", "location": "location", "photos": "photos",
+           "spotify": "spotify"}
 
 GUIDES = {
     "notes": {
@@ -94,6 +96,69 @@ GUIDES = {
                   "Pocket: the export .csv (or its .zip), if you saved one."],
         "wait": "instant",
         "pick": "My Clippings.txt, the Readwise .csv, or the Pocket .csv or .zip"},
+    "mail": {
+        "name": "Sent mail (Gmail or any .mbox)",
+        "link": "https://takeout.google.com",
+        "steps": ["Gmail: open takeout.google.com, click Deselect all, tick Mail, click All "
+                  "Mail data included, untick Include all messages in Mail, tick only Sent, "
+                  "then OK.",
+                  "Click Next step and Create export; download the .zip from Google's email "
+                  "and unzip it.",
+                  "Other mail apps (Thunderbird, Apple Mail): export the Sent folder as .mbox.",
+                  "Each month becomes one page of the mail you sent: the date, subject, the "
+                  "names you wrote to and your own words. Quoted replies, forwarded parts, "
+                  "signatures and e-mail addresses are left out."],
+        "wait": "hours to a day for Takeout; instant for a file",
+        "pick": "the .mbox file (unzipped) or a folder of them"},
+    "selfchat": {
+        "name": "Notes to self (WhatsApp, Telegram)",
+        "link": "https://telegram.org/blog/export-and-more",
+        "steps": ["WhatsApp (phone): open the chat with yourself (Message yourself), tap the "
+                  "menu (or the chat's name on an iPhone), then More > Export chat > Without "
+                  "media, and save the .zip or .txt.",
+                  "Telegram Desktop: Settings > Advanced > Export Telegram data; tick Personal "
+                  "chats, choose Machine-readable JSON, Export, then use result.json.",
+                  "Only your own messages are kept, one line each; photos and other media "
+                  "become [photo] and the like, and are never copied. Forwarded messages are "
+                  "left out."],
+        "wait": "instant on WhatsApp; minutes for a Telegram export",
+        "pick": "the WhatsApp .txt or .zip, or Telegram's result.json"},
+    "location": {
+        "name": "Location (Google Timeline)",
+        "link": "https://takeout.google.com",
+        "steps": ["Older exports: open takeout.google.com, click Deselect all, tick Location "
+                  "History (Timeline), then Next step and Create export; download the .zip.",
+                  "Timeline kept on your phone: on Android open Settings > Location > Location "
+                  "services > Timeline > Export Timeline data (on an iPhone, Google Maps' "
+                  "Timeline settings offer the same export), and save Timeline.json or "
+                  "location-history.json.",
+                  "Each day keeps one city, from the addresses in the export. Coordinates, "
+                  "street addresses and raw location points never reach a page; a day with no "
+                  "address is left out (phone exports often have none)."],
+        "wait": "hours to a day for Takeout; instant on the phone",
+        "pick": "the Takeout .zip as it is, or Timeline.json"},
+    "photos": {
+        "name": "Photo dates and albums",
+        "link": "",
+        "steps": ["Nothing to export: pick the folder that holds your photos, such as "
+                  "C:\\Users\\you\\Pictures. Subfolders count as albums.",
+                  "Each month becomes one page: per day, how many photos you took and in which "
+                  "albums (folder names). The date comes from the photo's EXIF capture date, "
+                  "else the file's date. Images, thumbnails, GPS and other EXIF data are never "
+                  "kept."],
+        "wait": "seconds to minutes",
+        "pick": "paste the full path of the photo folder"},
+    "spotify": {
+        "name": "Spotify listening",
+        "link": "https://www.spotify.com/account/privacy/",
+        "steps": ["Open spotify.com/account/privacy (signed in) and request your Account data "
+                  "(about 5 days, the last year) or your Extended streaming history (up to 30 "
+                  "days, every year).",
+                  "Download the .zip from Spotify's email.",
+                  "Each year becomes one page: total hours, your top 20 artists and top 20 "
+                  "tracks by time, and your top podcasts. Nothing per play is kept."],
+        "wait": "about 5 days for account data; up to 30 days for the extended history",
+        "pick": "Spotify's .zip as it is, or its folder"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -259,6 +324,12 @@ def detect(path: Path) -> list[str]:
         return ["repos"]
     files = _files(path)
     names = [n.lower() for n, *_ in files]
+    from cortex import life_sources
+    # Sources B decide only when nothing else does, so a full Takeout keeps its old kinds
+    life = next((k for k, hit in (("mail", lambda n: n.endswith(".mbox")),
+                                  ("location", life_sources.location_file),
+                                  ("spotify", life_sources.spotify_file))
+                 if any(map(hit, names))), None)
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
     heads = {n: read(takeout.HEAD) for n, (_, _, _, read) in zip(names, files, strict=True)
              if takeout.activity_file(n) == "html"}
@@ -269,7 +340,8 @@ def detect(path: Path) -> list[str]:
                   heads[n] if n in heads else read(4096))))]
     head = next((read(300).lstrip() for n, _, _, read in files if n.endswith(".md")), b"")
     pplx = head.startswith(b"<img") and b"perplexity" in head  # its export starts with a logo
-    json1 = len(names) == 1 and names[0].endswith(".json") and "myactivity" not in names[0]
+    json1 = len(names) == 1 and names[0].endswith(".json") and "myactivity" not in names[0] \
+        and not life
     kinds = ["chats"] if gemini or pplx or json1 or any(
         n.rsplit("/", 1)[-1].startswith("conversations") and n.endswith(".json")
         for n in names) else []
@@ -277,6 +349,8 @@ def detect(path: Path) -> list[str]:
         kinds.append("takeout")
     if any(n.endswith(".ics") for n in names):
         kinds.append("calendar")
+    if not kinds and life:
+        kinds.append(life)
     if not kinds and heads:
         raise VaultError("invalid_argument", f"{Path(path).name} holds HTML activity but no "
                          "Search, YouTube, Chrome or Gemini Apps rows Cortex can read. "

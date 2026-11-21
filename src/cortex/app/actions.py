@@ -369,15 +369,23 @@ KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity ca
         "calendar": ("a calendar", "the Calendar card"),
         "docs": ("a folder of documents", "the Documents card"),
         "repos": ("a folder of git projects", "the code projects card"),
-        "highlights": ("reading highlights", "the Reading highlights card")}
-TIERED = ("notes", "calendar", "docs", "repos", "highlights")  # imports that ask the tier
+        "highlights": ("reading highlights", "the Reading highlights card"),
+        "mail": ("sent mail (.mbox)", "the Sent mail card"),
+        "selfchat": ("notes to yourself", "the Notes to self card"),
+        "location": ("a location history", "the Location card"),
+        "photos": ("a photo folder", "the Photos card"),
+        "spotify": ("a Spotify export", "the Spotify card")}
+TIERED = ("notes", "calendar", "docs", "repos", "highlights", "mail", "selfchat",
+          "location", "photos", "spotify")  # imports that ask the tier
+OWN_CHECK = ("docs", "repos", "mail", "selfchat", "location", "photos",
+             "spotify")  # the source checks the path itself
 
 
 def _kind(source: str, path: Path) -> str:
     """The importer this card's file needs, detected as `cortex import` does. A file of
     another kind is refused with the card that takes it (R3-1)."""
     from cortex import importers
-    if source in ("docs", "repos"):  # any folder: the source says what it skips, or refuses
+    if source in OWN_CHECK:  # the source says what it skips, or refuses
         return source
     want, got = importers.SOURCES[source], _readable(importers.detect, path)
     if want in got:

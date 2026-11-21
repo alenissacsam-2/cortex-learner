@@ -195,6 +195,33 @@ def test_zip_bomb_entries_are_refused_before_they_are_read(root_plain, tmp_path,
     assert "too big" in str(e.value)
 
 
+def test_detect_keeps_takeout_kinds_beside_mail_and_location(tmp_path):
+    """Sources B decide only when nothing else matches: a full Takeout with Mail and Location
+    History is still activity and calendar; each of those files alone is its own kind."""
+    search = (EXPORTS / "takeout_MyActivity.json").read_text("utf-8")
+    ics = (EXPORTS / "calendar.ics").read_text("utf-8")
+    loc = '{"timelineObjects": []}'
+    mbox = "From x Mon Jan 01 00:00:00 2024\nFrom: me@example.test\n\nhi\n"
+    files = {"Takeout/My Activity/Search/MyActivity.json": search,
+             "Takeout/Calendar/me.ics": ics,
+             "Takeout/Location History/Semantic Location History/2024/2024_JANUARY.json": loc,
+             "Takeout/Mail/All mail.mbox": mbox}
+    assert importers.detect(_zip(tmp_path / "full.zip", files)) == ["takeout", "calendar"]
+    alone = {"Takeout/My Activity/Search/MyActivity.json": ["takeout"],
+             "Takeout/Calendar/me.ics": ["calendar"],
+             "Takeout/Location History/Semantic Location History/2024/2024_JANUARY.json":
+                 ["location"], "Takeout/Mail/All mail.mbox": ["mail"]}
+    for i, (name, kinds) in enumerate(alone.items()):
+        assert importers.detect(_zip(tmp_path / f"{i}.zip", {name: files[name]})) == kinds
+        one = tmp_path / str(i) / name.rsplit("/", 1)[-1]
+        one.parent.mkdir()
+        one.write_text(files[name], encoding="utf-8")
+        assert importers.detect(one) == kinds, name
+    timeline = tmp_path / "Timeline.json"
+    timeline.write_text('{"semanticSegments": []}', encoding="utf-8")
+    assert importers.detect(timeline) == ["location"]  # not a one-file chat export
+
+
 def test_detect_every_kind(tmp_path):
     gem = (EXPORTS / "gemini_MyActivity.json").read_text("utf-8")
     search = (EXPORTS / "takeout_MyActivity.json").read_text("utf-8")
@@ -277,11 +304,13 @@ def test_cli_private_is_refused_for_chats_and_google_activity(root_plain):
 
 
 def test_guides_for_notes_and_calendar():
-    assert set(importers.GUIDES) == {"notes", "calendar", "docs", "repos", "highlights"}
+    assert set(importers.GUIDES) == {"notes", "calendar", "docs", "repos", "highlights", "mail",
+                                    "selfchat", "location", "photos", "spotify"}
     for k, g in importers.GUIDES.items():
         assert g["steps"] and g["wait"] and g["pick"]
-        # docs and repos are folders on this computer: nothing to open
-        assert g["link"].startswith("https://") or (k in ("docs", "repos") and not g["link"])
+        # docs, repos and photos are folders on this computer: nothing to open
+        assert g["link"].startswith("https://") or (
+            k in ("docs", "repos", "photos") and not g["link"])
 
 
 def test_detect_takeout_in_another_language(tmp_path):

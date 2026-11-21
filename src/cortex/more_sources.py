@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
-from cortex import importers, sources
+from cortex import importers, life_sources, sources
 from cortex._proc import NO_WINDOW
 from cortex.vault import VaultError, is_private
 
@@ -544,4 +544,5 @@ def highlights_source(path: Path) -> sources.Source:
                           skips=skips)
 
 
-SOURCE_OF = {"docs": docs_source, "repos": repos_source, "highlights": highlights_source}
+SOURCE_OF = {"docs": docs_source, "repos": repos_source, "highlights": highlights_source,
+             **life_sources.SOURCE_OF}  # Sources B
