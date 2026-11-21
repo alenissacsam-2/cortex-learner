@@ -1676,6 +1676,7 @@
   const BLOCK = { core: 'Core lines', profile: 'Profile', preferences: 'Lines about you', contract: 'Teaching contract',
     related: 'Related pages', mistakes: 'Open mistakes', hub: 'Topic', topic: 'Topic concepts', claims: 'Lines about you' };
   const xrayOpen = new Set();  // the calls left open survive a redraw after a click
+  const xrayDry = new Map();  // per AI app: its dry run's {prompt, r}
   function renderXray(d) {
     const act = (path, body, said) => post(path, body, (r) => { renderXray(r); toast.ok(said); });
     const ref = (x) => (x.id ? { id: x.id } : { token: x.token });
@@ -1698,12 +1699,79 @@
     };
     const flags = (list, which) => list.map((x) => row(x.title, x.kind === 'claim' ? 'Line about you' : 'Page', x.where || null,
       [which === 'pin' ? pin(x) : mute(x)]));
+    // P2 Agent Aperture: per AI app, what its profile lets it read (saved through /api/profiles,
+    // as Connect → Agent profiles does), what it is served most, and a dry run of its first call
+    const scopeName = (s) => (s === 'all' ? 'Everything except private' : s);
+    const reads = (list) => (list.includes('all') ? 'everything except private'
+      : d.all_scopes.filter((s) => list.includes(s)).join(', ') || 'nothing');
+    const setScope = (g, s) => {
+      const data = { profiles: d.profiles.profiles.map((p) => ({ ...p, scopes: [...p.scopes] })), unknown: [...d.profiles.unknown] };
+      // the first rule with this match is the one the server matched; none: a new rule for this
+      // app at the end, starting from a copy of "Any other app" (never widened from here)
+      let p = g.rule == null ? null : data.profiles.find((x) => x.match === g.rule);
+      if (!p) {
+        if (data.profiles.length >= d.profiles_max) {
+          toast.error(`Cortex keeps at most ${d.profiles_max} rules. Remove one under Connect → Agent profiles, then try again.`);
+          return null;
+        }
+        p = { match: g.name.slice(0, 60), scopes: [...data.unknown] };
+        data.profiles.push(p);
+      }
+      const i = p.scopes.indexOf(s);
+      if (i >= 0) p.scopes.splice(i, 1); else p.scopes.push(s);
+      return post('/api/profiles', data).then((r) => r && load('xray').then(() => toast.ok(`Saved. ${g.client} reads: ${reads(p.scopes)}.`)));
+    };
+    const scopeBar = (g) => {
+      const all = g.scopes.includes('all'), named = !!g.name;
+      const chip = (s) => {
+        const locked = !named || (all && s !== 'all');
+        return h('button', { class: 'chip', type: 'button', 'aria-pressed': String(all || g.scopes.includes(s)),
+          'aria-disabled': locked ? 'true' : null,
+          title: !named ? 'Change “Any other app” under Connect → Agent profiles' : locked ? 'Turn off Everything first' : null,
+          onclick: () => (locked ? null : setScope(g, s)) }, scopeName(s));
+      };
+      const why = !named ? 'This app sends no name, so it gets what “Any other app” gets. Change that under Connect → Agent profiles.'
+        : g.rule != null ? `Set by the rule for apps named “${g.rule}”${g.shared.length ? `, shared with ${g.shared.join(', ')}` : ''}.`
+          : `No rule names this app, so it gets what “Any other app” gets. Changing a chip adds a rule for “${g.name}”.`;
+      return h('div', { class: 'field' },
+        h('div', { class: 'inline', role: 'group', 'aria-label': `What ${g.client} reads` },
+          h('span', { class: 'lbl', text: 'Reads:' }), d.all_scopes.map(chip)),
+        h('p', { class: 'help', text: why }));
+    };
+    const often = (g) => (g.often.length ? [h('div', { class: 'field' }, h('span', { class: 'lbl', text: 'Served most often' })),
+      ...g.often.map((x) => row(x.title, `served ${x.count} time${x.count === 1 ? '' : 's'}`, x.where || null,
+        x.id && x.kind !== 'me' ? [pin(x), mute(x)] : []))] : []);
+    // a dry run's prompt and answer survive a redraw; its Pin and Mute show the flags as now
+    const pins = new Set(d.pinned.map((x) => x.id || x.token)), mutes = new Set(d.muted.map((x) => x.id || x.token));
+    const now = (x) => ({ ...x, pinned: pins.has(x.id || x.token), muted: mutes.has(x.id || x.token) });
+    const dryRun = (g, k) => {
+      const key = `${g.name}|${g.client}`, st = xrayDry.get(key) || { prompt: '', r: null }, id = `xray-dry-${k}`;
+      xrayDry.set(key, st);
+      const input = h('input', { type: 'text', id, value: st.prompt, maxlength: '2000', spellcheck: 'false', autocomplete: 'off' });
+      const out = h('div', {});
+      const draw = () => {
+        const r = st.r;
+        out.replaceChildren(...(r ? [note(`Dry run · ${r.chars} characters · nothing was sent or logged`),
+          ...r.served.flatMap((b) => b.items.map((x) => item(now(x), b.block))),
+          ...r.trimmed.flatMap((b) => b.items.map((x) => item({ ...now(x), where: 'cut for space' }, b.block, 'cut'))),
+          r.served.length || r.trimmed.length ? null : note('Nothing would be served.')] : []));
+      };
+      const go = () => post('/api/xray/dryrun', { client: g.name, prompt: input.value }, (r) => { st.r = r; draw(); });
+      const show = btn('Show', go);
+      const sync = () => { st.prompt = input.value; show.disabled = !input.value.trim(); };
+      input.addEventListener('input', sync);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !show.disabled) { e.preventDefault(); go(); } });
+      sync();
+      draw();
+      return [h('div', { class: 'field' }, h('label', { for: id, text: `What would ${g.client} get for this prompt?` }),
+        h('div', { class: 'inline' }, input, show)), out];
+    };
     put('xray',
       board('Pinned and muted', { note: String(d.pinned.length + d.muted.length) },
         ...(d.pinned.length || d.muted.length ? [...flags(d.pinned, 'pin'), ...flags(d.muted, 'mute')]
           : [note('Nothing pinned or muted. Pin or mute a page or line from a call below.')])),
-      ...(d.clients.length ? d.clients.map((g) => board(g.client, { note: `${g.total} call${g.total === 1 ? '' : 's'}` },
-        ...g.calls.map((c) => call(c, g.client))))
+      ...(d.clients.length ? d.clients.map((g, k) => board(g.client, { note: `${g.total} call${g.total === 1 ? '' : 's'}` },
+        scopeBar(g), ...often(g), ...dryRun(g, k), ...g.calls.map((c) => call(c, g.client))))
         : [board('No calls yet', {}, note('When an AI app asks Cortex about you, each call shows here.'))]));
   }
 

@@ -484,7 +484,7 @@ async def _ask_click(ctx: Context, id: str, op: str, text: str,
 class Cortex:
     """The tool implementations; `build_server` registers each `cortex_*` method as a tool."""
 
-    def __init__(self, vault: Vault, role: str = "owner"):
+    def __init__(self, vault: Vault, role: str = "owner", build: bool = True):
         if role not in ROLES:
             raise invalid(f"role must be one of {', '.join(ROLES)}.")
         self.vault = vault
@@ -504,7 +504,8 @@ class Cortex:
         self._index: Index | None = None
         self._index_error: BaseException | None = None
         self._ready = threading.Event()
-        threading.Thread(target=self._build_index, name="cortex-index", daemon=True).start()
+        if build:  # dry_prime builds its own, read-only index
+            threading.Thread(target=self._build_index, name="cortex-index", daemon=True).start()
         # (tool, key) -> (first result, whether an event holds the key)
         self._done: dict[tuple[str, str], tuple[dict, bool]] = {}
         self._recalls: list[tuple[float, str, list[str]]] = []  # (monotonic, rid, ids) recent
@@ -1498,8 +1499,6 @@ class Cortex:
         Cortex has no transcript of, starts the chat's live log with the prompt (_chat_log,
         returned as `chat`). Nothing else is written but the X-ray's row of served ids (no
         text, cortex.xray), never a recall-log row. X-ray pins lead Related, mutes are left out."""
-        from cortex import semantic, topics  # numpy and the model load on first use
-
         if not isinstance(prompt, str) or not prompt.strip():
             raise invalid("prompt must be the user's message.")
         prompt = prompt[:PRIME_PROMPT]
@@ -1511,6 +1510,35 @@ class Cortex:
             self.session = None
             self._reset()
         tagged = self._tags(prompt)
+        parts, xr, hits = self._prime_select(prompt, related_only)
+        context = "\n\n".join(parts)
+        xray.record(self.vault, "cortex_prime", self.sessions.client, xr["served"],
+                    xr["trimmed"], len(context))
+        touch = xr["served"]["hub"]
+        # one ask per chat: a named problem's Attempt first line (prime.core, or the hook's
+        # copy of it) wins over a due concept's offer
+        attempt = (prime.named_problem(self.vault, prompt) is not None if related_only
+                   else any(b.startswith(f"## {prime.ATTEMPT_HEAD}\n") for b in parts))
+        offer = "" if attempt else self._offer(
+            [h["id"] for h in hits if h.get("kind") == "concept" and h.get("match") != "linked"])
+        return {"context": context, "touch": touch, **({"chat": chat} if chat else {}),
+                **({"tags": tagged} if tagged else {}),
+                "next": self._next(
+            "Answer with this in mind; cite at most 2 pages as [[id]], only if they fit. "
+            + (f"If the message is substantive, record cortex_log(kind='touch', "
+               f"payload={{'ids': {touch}}}) once. " if touch else "Nothing to touch. ")
+            + "Record everything durable at once, unasked; about them: their own words -> "
+              "cortex_patch with user_confirmed=true, your inference without it (waits for "
+              "Approve in the app)." + offer)
+            + (TAGS_NEXT if tagged else "") + (CHAT_NEXT.format(chat=chat) if chat else "")}
+
+    def _prime_select(self, prompt: str, related_only: bool = False, save: bool = True
+                      ) -> tuple[list[str], dict, list[dict]]:
+        """cortex_prime's selection: (its blocks, the X-ray's {served, trimmed} ids by block,
+        the recall hits). It writes nothing itself but the index's snapshot; `save` False
+        (dry_prime) also keeps recall and the topic hub from writing the vector cache."""
+        from cortex import semantic, topics  # numpy and the model load on first use
+
         xs, xr = xray.settings(self.vault), {"served": {}, "trimmed": {}}
         evs = list(self.log.iter_events())
         parts, left = ([], [PRIME_MAX]) if related_only else prime.core(
@@ -1521,8 +1549,9 @@ class Cortex:
         cov = self._coverage()
         room = len(f"## Coverage\n{_wrap('coverage', cov)}\n{COVERAGE_SAYS}") + 2 if cov else 0
         left[0] -= room
-        hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet())[0]
-        hub = topics.prompt_hub(self.index, semantic.load_embedder(), prompt, hits)
+        hits = semantic.search(self.index, prompt, PRIME_POOL, 1, quiet=self._quiet(),
+                               save=save)[0]
+        hub = topics.prompt_hub(self.index, semantic.load_embedder(), prompt, hits, save)
         hub = None if hub in xs["mute"] else hub
         # _notes holds no private or hidden page, so neither a pin nor a hit can serve one
         notes = self.index._notes
@@ -1563,27 +1592,8 @@ class Cortex:
         left[0] += room
         if cov:
             put("Coverage", cov, "coverage", room, COVERAGE_SAYS)
-        touch = [hub] if hub and hub not in self.touched else []
-        xr["served"]["hub"] = touch
-        context = "\n\n".join(parts)
-        xray.record(self.vault, "cortex_prime", self.sessions.client, xr["served"],
-                    xr["trimmed"], len(context))
-        # one ask per chat: a named problem's Attempt first line (prime.core, or the hook's
-        # copy of it) wins over a due concept's offer
-        attempt = (prime.named_problem(self.vault, prompt) is not None if related_only
-                   else any(b.startswith(f"## {prime.ATTEMPT_HEAD}\n") for b in parts))
-        offer = "" if attempt else self._offer(
-            [h["id"] for h in hits if h.get("kind") == "concept" and h.get("match") != "linked"])
-        return {"context": context, "touch": touch, **({"chat": chat} if chat else {}),
-                **({"tags": tagged} if tagged else {}),
-                "next": self._next(
-            "Answer with this in mind; cite at most 2 pages as [[id]], only if they fit. "
-            + (f"If the message is substantive, record cortex_log(kind='touch', "
-               f"payload={{'ids': {touch}}}) once. " if touch else "Nothing to touch. ")
-            + "Record everything durable at once, unasked; about them: their own words -> "
-              "cortex_patch with user_confirmed=true, your inference without it (waits for "
-              "Approve in the app)." + offer)
-            + (TAGS_NEXT if tagged else "") + (CHAT_NEXT.format(chat=chat) if chat else "")}
+        xr["served"]["hub"] = [hub] if hub and hub not in self.touched else []
+        return parts, xr, hits
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
                            asks: bool = False, lines: list | None = None) -> None:
@@ -3271,6 +3281,21 @@ BROWSE_SEARCH_DESC = ("Search the user's whole browsing archive, private pages i
 # boundary: any client can send any name.
 CLOUD_CLIENTS = ("claude", "gemini", "chatgpt", "openai", "cursor", "copilot", "codex",
                  "windsurf", "vscode", "code")
+
+
+def dry_prime(vault: Vault, client: str, prompt: str) -> dict:
+    """The app's X-ray dry run: what a new chat's cortex_prime would serve the owner's MCP
+    client named `client` ("" or "unknown": one that sends no name) for `prompt`, by the same
+    selection (Cortex._prime_select) under that client's profile, as {served, trimmed} ids by
+    block and the context's `chars`. Nothing is written: no X-ray row, event, chat log, tag,
+    session, index snapshot or vector cache, and the prompt is kept nowhere."""
+    c = Cortex(vault, build=False)
+    c.over_mcp = True  # the client's profile applies, as over MCP
+    c.sessions.client = None if client in ("", "unknown") else client
+    c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
+    c._ready.set()
+    parts, xr, _ = c._prime_select(prompt[:PRIME_PROMPT], save=False)
+    return {**xr, "chars": len("\n\n".join(parts))}
 
 
 def _browse_search(vault: Vault):

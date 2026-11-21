@@ -74,9 +74,20 @@ def save(vault: Vault, data) -> dict:
     return data
 
 
+def match(data: dict, client: str) -> int | None:
+    """The index of the first profile matching `client`, else None (it gets `unknown`)."""
+    name = norm(client)
+    return next((i for i, p in enumerate(data["profiles"]) if norm(p["match"]) in name),
+                None) if name else None
+
+
+def scopes_of(data: dict, client: str) -> list[str]:
+    """The scopes as stored for `client`: its first matching profile's, else `unknown`."""
+    i = match(data, client)
+    return data["unknown"] if i is None else data["profiles"][i]["scopes"]
+
+
 def scopes_for(data: dict, client: str) -> frozenset[str] | None:
     """The scopes of the first profile matching `client`, else `unknown`; None for all."""
-    name = norm(client)
-    scopes = next((p["scopes"] for p in data["profiles"] if norm(p["match"]) in name),
-                  data["unknown"]) if name else data["unknown"]
+    scopes = scopes_of(data, client)
     return None if "all" in scopes else frozenset(scopes)

@@ -342,6 +342,7 @@ class App:
             "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/review/import/dismiss": self.review_import_dismiss,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
+            "/api/xray/dryrun": self.xray_dryrun,
             "/api/tonight/undo": self.tonight_undo}
 
     def touch(self) -> None:
@@ -951,6 +952,20 @@ class App:
 
     def xray_mute(self, body: dict) -> dict:
         return self._xray_set("mute", body)
+
+    def xray_dryrun(self, body: dict) -> dict:
+        """What cortex_prime would serve one AI app for a prompt (mcp_server.dry_prime), shown
+        as an X-ray call: titles only. Nothing is written or logged, the prompt included."""
+        from cortex import xray
+        from cortex.mcp_server import dry_prime
+        client, prompt = body.get("client"), body.get("prompt")
+        if not isinstance(client, str) or len(client) > 100:
+            raise ValueError("client must be an AI app's name, at most 100 characters.")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 2000:
+            raise ValueError("Type a prompt of at most 2,000 characters.")
+        v = self._vault()
+        got = dry_prime(v, client, prompt)
+        return xray.present(v, got["served"], got["trimmed"], got["chars"])
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
