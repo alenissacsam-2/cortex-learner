@@ -331,6 +331,14 @@ def _retrievability(scheduler: Scheduler, card: Card, now: datetime) -> float:
 _CURVE = Scheduler()  # default FSRS-6 parameters: retention changes intervals, not the curve
 
 
+def half_life(stability: float) -> float:
+    """Days until `_retrievability`'s curve falls to 0.5 for this stability: the closed form
+    of (1 + factor·t/S)^decay = 0.5."""
+    decay = -_CURVE.parameters[20]
+    factor = 0.9 ** (1 / decay) - 1
+    return stability * (0.5 ** (1 / decay) - 1) / factor
+
+
 def recall_at(st: ConceptState | None, when: datetime) -> float:
     """Retrievability of the fold's card (unjittered) at `when`; 0 with no reviews (no memory
     to forecast; `predicted_p` keeps its 0.5 prior for single-item forecasts)."""

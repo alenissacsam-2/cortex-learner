@@ -1671,6 +1671,13 @@
     if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due. Run /cortex in Claude to start something new.'));
     else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
     else b.root.append(el('div', 'foot', 'That is everything due today.'));
+    // each subject's retention half-life, as one plain line (home._keep)
+    const keeps = (D.next_up || []).filter((g) => g.subject && g.keep);
+    if (keeps.length) {
+      const k = el('div', 'foot keep');
+      for (const g of keeps) k.append(el('div', null, `${g.subject.title}: ${g.keep.text}`));
+      b.root.append(k);
+    }
     host.replaceChildren(D.first_run && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;

@@ -574,3 +574,23 @@ def test_solved_after_a_graded_code_phase_is_plain_evidence(log):
         payload={"kind": "problem_status", "problem": "p1", "status": "solved"})
     st = fold(log.iter_events(), "2026-11-02", {"p1": "two-pointers"})[0]["two-pointers"]
     assert st.attempts == 2
+
+
+# ---- retention half-life (the Home's per-subject line) ----
+
+@pytest.mark.parametrize("stability", [0.2, 1.0, 2.3, 10.0, 75.5])
+def test_half_life_is_where_the_curve_reaches_one_half(stability):
+    from fsrs import Card
+
+    from cortex.levels import _CURVE, _retrievability, half_life
+    t0 = datetime(2026, 11, 1, tzinfo=UTC)
+    card = Card(card_id=1, stability=stability, last_review=t0)
+    h = half_life(stability)
+    assert abs(_retrievability(_CURVE, card, t0 + timedelta(days=h)) - 0.5) < 1e-6
+    assert _retrievability(_CURVE, card, t0 + timedelta(days=h * 0.9)) > 0.5
+
+
+def test_half_life_grows_with_stability():
+    from cortex.levels import half_life
+    lives = [half_life(s) for s in (0.1, 0.5, 1, 3, 10, 100)]
+    assert all(a < b for a, b in zip(lives, lives[1:], strict=False))
