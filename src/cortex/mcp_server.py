@@ -1088,6 +1088,26 @@ class Cortex:
             return bool(d) and lo <= d <= hi
         return keep
 
+    def _searched(self, kinds: tuple, keep, by: str, chats: bool | None = None) -> dict:
+        """RR-14: what an empty or weak search covered, so no answer reads as "no record":
+        the pages it could see (of `kinds`, past `keep`), how, and what never takes part."""
+        n = sum(1 for i, x in self.index._notes.items()
+                if (not kinds or x["kind"] in kinds) and (keep is None or keep(i)))
+        out = {"pages": n, "kinds": list(kinds) or "all", "by": by,
+               "excluded": ["private pages", "private browsing"]
+               + ["pages this app's profile withholds"] * bool(self._index_withheld())}
+        if chats is False:
+            out["ranked_lower"] = "imported chats (chats=true lifts them)"
+        return out
+
+    @staticmethod
+    def _absent(s: dict, weak: bool, more: str) -> str:
+        """RR-14's `next`: not found (or only weakly) in N pages, never "no record exists"."""
+        return (("Only weak matches" if weak else "Not found") + f" in the {s['pages']} pages "
+                f"searched ({s['by']})" + (", so check them before relying on them" if weak
+                                           else "") + ": not recorded in Cortex is not the "
+                f"same as never happened. {more}")
+
     def cortex_find(self, query: str = "", kind: Literal[
             "concept", "area", "domain", "mistake", "problem", "assessment", "application",
             "resource", "note", "project", "decision", "journal", "loop", "due",
@@ -1112,9 +1132,14 @@ class Cortex:
                     if keep is None or keep(h["id"])][:max(1, min(limit, 8))]
         else:
             hits = self.index.find(query, kind, limit, keep=keep)
-        return {**_find_out(hits), "next": self._next(
-            "Call cortex_read on an id for details." if hits
-            else "No hits; try other words, or cortex_add it if it is really new.")}
+        if hits:
+            return {**_find_out(hits), "next": self._next("Call cortex_read on an id for "
+                                                          "details.")}
+        s = self._searched(("concept",) if kind in ("due", "ready", "weak") else
+                           (kind,) if kind else (), keep, "keyword")
+        return {**_find_out(hits), "searched": s, "next": self._next(self._absent(
+            s, False, "Try other words or cortex_recall (by meaning); if the user says it is "
+            "new, cortex_add it."))}
 
     def cortex_recall(self, query: str, limit: int = 8, hops: int = 1, check: bool = False,
                       chats: bool = False, since: str | None = None, until: str | None = None,
@@ -1147,8 +1172,17 @@ class Cortex:
                "text": _wrap("recall", lines) if hits else ""}
         if notice:
             out["notice"] = notice
-        out["next"] = self._next("Call cortex_read on an id for details; cite pages as [[id]]."
-                                 if hits else "Nothing found; try other words.")
+        # RR-14: weak when, with the model, no hit cleared the meaning floor (keyword or
+        # linked hits only)
+        weak = bool(hits) and not notice and all(h["match"] != "similar" for h in hits)
+        if hits and not weak:
+            out["next"] = self._next("Call cortex_read on an id for details; cite pages as "
+                                     "[[id]].")
+        else:
+            out["searched"] = self._searched((), keep, "keyword" if notice else
+                                             "keyword + meaning", chats)
+            out["next"] = self._next(self._absent(out["searched"], weak, "Try other words"
+                                                  + ("." if chats else " or chats=true.")))
         if check:
             out["checks"] = self._checks(sentences)
             out["next"] = CHECK_NEXT
@@ -1341,9 +1375,16 @@ class Cortex:
                 "claims", []).append(cid)
         xray.record(self.vault, "cortex_context", self.sessions.client, served, trimmed,
                     len(context))
-        return {"context": context, "next": self._next(
-            "Use this to tailor your answer; save durable new facts with cortex_patch."
-            + (self._offer([h["id"] for h in concepts]) if topic else ""))}
+        out: dict[str, Any] = {"context": context}
+        lead = ""
+        if topic and (not hits or embed and all(h["match"] != "similar" for h in hits)):
+            out["searched"] = self._searched((), None, "keyword + meaning" if embed
+                                             else "keyword", False)  # RR-14
+            lead = self._absent(out["searched"], bool(hits), "")
+        out["next"] = self._next(
+            lead + "Use this to tailor your answer; save durable new facts with cortex_patch."
+            + (self._offer([h["id"] for h in concepts]) if topic else ""))
+        return out
 
     def _offer(self, ids: list[str]) -> str:
         """L3: OFFER for the first of `ids` that is due or has a confident miss, else ""."""

@@ -47,3 +47,26 @@ def test_find_and_recall_filter_by_day_and_source(vault, monkeypatch):
             with pytest.raises(VaultError) as e:
                 tool("car", **bad)
             assert e.value.code == "invalid_argument", bad
+
+
+def test_an_empty_or_weak_result_says_what_was_searched(vault, monkeypatch):
+    """RR-14: never "no record exists": how many pages, how, and what never takes part."""
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    c = Cortex(Vault(vault))
+    out = c.cortex_recall("zebra crossing")
+    s = out["searched"]
+    assert out["hits"] == [] and s["by"] == "keyword + meaning" and s["kinds"] == "all"
+    assert s["pages"] == len(c.index._notes) and "private pages" in s["excluded"]
+    assert s["ranked_lower"].startswith("imported chats")
+    assert out["next"].startswith(f"Not found in the {s['pages']} pages searched")
+    assert "never happened" in out["next"] and "chats=true" in out["next"]
+    assert "searched" not in c.cortex_recall("car motor")  # a meaning match is no absence
+    weak = c.cortex_recall("basics")  # a keyword hit no meaning match backs
+    assert weak["hits"] and weak["next"].startswith("Only weak matches") and weak["searched"]
+    out = c.cortex_find("zebra", kind="note", source="mine")
+    assert out["searched"]["pages"] == 1 and out["searched"]["kinds"] == ["note"]
+    assert out["searched"]["by"] == "keyword" and out["next"].startswith("Not found in the 1 ")
+    assert "searched" not in c.cortex_find("car")
+    out = c.cortex_context(topic="zebra crossing")
+    assert out["searched"]["pages"] == s["pages"] and out["next"].startswith("Not found")
+    assert "searched" not in c.cortex_context(topic="car motor")
