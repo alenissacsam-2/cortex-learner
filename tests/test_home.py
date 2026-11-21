@@ -267,13 +267,13 @@ HASHING = """          - id: "hashing"
 """
 
 
-def _add_hashing(root: Path, verdict: str, at: datetime) -> None:
+def _add_hashing(root: Path, verdict: str, at: datetime, **fields) -> None:
     """A third public dsa concept, graded once."""
     cat = (root / "catalog.yaml").read_bytes().decode()
     cut = cat.index('          - id: "secret-diary"')
     (root / "catalog.yaml").write_bytes((cat[:cut] + HASHING + cat[cut:]).encode())
     _note(root, "concepts", "hashing", {"id": "hashing", "title": "Hashing", "domain": "dsa",
-                                        "parent": "[[dsa.arrays]]"}, "# Hashing\n")
+                                        "parent": "[[dsa.arrays]]", **fields}, "# Hashing\n")
     _grade(root, "hashing", verdict, at)
 
 
@@ -294,6 +294,106 @@ def test_each_subject_gets_its_median_half_life_private_left_out(root):
     assert g["keep"]["n"] == 3 and g["keep"]["days"] == round(want, 1)
     assert g["keep"]["text"].startswith("You keep this ")
     assert "secret-diary" not in json.dumps(g)
+
+
+# ---- the 90-second check ----
+
+
+def _cold_vault(root: Path) -> None:
+    """hashing graded wrong long before the others (the most overdue), with a summary holding
+    a link, an image and HTML; the private concept graded wrong too."""
+    _add_hashing(root, "wrong", NOW - timedelta(days=10), summary=(
+        'Keys to slots via [[two-pointers|a hash]] ![x](http://e.test/x.png) <b>fast</b>'))
+    _grade(root, "secret-diary", "wrong", NOW - timedelta(days=12))
+
+
+def test_the_check_offers_three_due_concepts_most_overdue_first_never_private(root):
+    from cortex import planner
+    from cortex.catalog import Catalog
+    _cold_vault(root)
+    now = datetime.now(UTC)
+    items = home.cold_check(Vault(root), now)
+    ids = [i["id"] for i in items]
+    assert len(ids) == 3 and ids[0] == "hashing" and "secret-diary" not in ids
+    v, day = Vault(root), local_day(now)
+    cat = Catalog.load(v)
+    states = planner.current_states(v, day, cat)[0]
+    due = [c for c in states if c != "secret-diary" and planner.is_due(states[c], day)]
+    assert set(ids) <= set(due) and len(due) == 4  # paging, the latest, is left for next time
+    assert [states[c].next_due for c in ids] == sorted(states[c].next_due for c in ids)
+    by = {i["id"]: i for i in items}
+    assert by["hashing"]["summary"] == "Keys to slots via a hash fast"
+    assert by["hashing"]["title"] == "Hashing"
+    if "two-pointers" in by:
+        assert by["two-pointers"]["summary"] == "Move the pointer on the smaller side."
+    assert "Private concept" not in json.dumps(items)
+    assert _cache(root).get()["cold_check"] is True
+
+
+def test_no_due_concept_hides_the_check(tmp_path):
+    r = tmp_path / "vault"
+    shutil.copytree(FIXTURES / "vault_mini", r)
+    (r / ".cortex").mkdir()
+    _grade(r, "secret-diary", "wrong", NOW - timedelta(days=5))  # due, but private
+    assert _cache(r).get()["cold_check"] is False
+    assert home.cold_check(Vault(r), NOW) == []
+
+
+def test_an_answer_records_one_grade_through_cortex_grade(root):
+    from cortex import planner
+    _cold_vault(root)
+    v = Vault(root)
+    log = EventLog(v)
+    before = {e["id"] for e in log.iter_events()}
+    day = local_day(datetime.now(UTC))
+    was = planner.current_states(v, day)[0]["hashing"]
+    srv, app = _serve(root)
+    try:
+        assert call(app, "GET", "/api/home/check", token=False)[0] == 401
+        assert call(app, "POST", "/api/home/check/answer", {"id": "hashing", "answer": "knew"},
+                    token=False)[0] == 401
+        code, got, _, _ = call(app, "GET", "/api/home/check")
+        assert code == 200 and [i["id"] for i in got["items"]][0] == "hashing"
+        for bad in ("nope", "secret-diary", "dsa", None):  # unknown, private, not a concept
+            assert call(app, "POST", "/api/home/check/answer",
+                        {"id": bad, "answer": "knew"})[0] == 404, bad
+        assert call(app, "POST", "/api/home/check/answer",
+                    {"id": "hashing", "answer": "maybe"})[0] == 400
+        assert {e["id"] for e in log.iter_events()} == before  # refusals write nothing
+        code, out, _, _ = call(app, "POST", "/api/home/check/answer",
+                               {"id": "hashing", "answer": "shaky"})
+        assert code == 200 and out == {"recorded": True}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    new = [e for e in log.iter_events() if e["id"] not in before]
+    grades = [e for e in new if e["kind"] == "grade"]
+    assert len(grades) == 1 and {e["kind"] for e in new} <= {"grade", "open", "close"}
+    g = grades[0]
+    assert (g["object"], g["verdict"], g["confidence"], g["item_type"]) == (
+        "concept:hashing", "correct", 2, "recall")
+    assert g["learner_answer"] == "Shaky" and g["source"] == "tutor"
+    assert g["grader"] == {"client": "cortex-app", "model": "self"}
+    assert {"id", "ts", "day", "predicted_p"} <= set(g)
+    now = planner.current_states(v, day)[0]["hashing"]
+    assert now.attempts == was.attempts + 1 and now.last_seen == day
+
+
+@pytest.mark.parametrize(("answer", "verdict", "confidence"), [
+    ("forgot", "wrong", None), ("knew", "correct", 4)])
+def test_forgot_and_knew_it_map_to_their_verdicts(root, answer, verdict, confidence):
+    _cold_vault(root)
+    log = EventLog(Vault(root))
+    before = {e["id"] for e in log.iter_events()}
+    srv, app = _serve(root)
+    try:
+        assert call(app, "POST", "/api/home/check/answer",
+                    {"id": "hashing", "answer": answer})[0] == 200
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    g = next(e for e in log.iter_events() if e["id"] not in before and e["kind"] == "grade")
+    assert (g["verdict"], g.get("confidence")) == (verdict, confidence)
 
 
 # ---- the routes ----

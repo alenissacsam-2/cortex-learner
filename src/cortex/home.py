@@ -332,7 +332,9 @@ class HomeCache:
             data = dashboard.build_data(served, now=now, auto_relayout=False, memo=self._memo)
             parts = self._memo["parts"]
             self._data = {**data, "next_up": _next_up(data, parts, scan["day"]),
-                          "exams": [a for a in data["assessments"] if a["date"]]}
+                          "exams": [a for a in data["assessments"] if a["date"]],
+                          "cold_check": bool(cold_due(parts["states"], parts["catalog"],
+                                                      parts["hidden"], scan["day"]))}
         elif any(scan[k] != old.get(k) for k in ("vectors", "vectors_wal", "layout")):
             self._data = {**self._data, "brain": brainmap.build(
                 served, self._data["pages"], self._data["clusters"], auto_relayout=False,
@@ -635,6 +637,47 @@ def _keep(lives: list[float]) -> dict:
     else:
         text = f"You keep this about {round(d / 7)} weeks"
     return {"n": n, "days": round(d, 1), "text": text}
+
+
+# ---- the 90-second check -------------------------------------------------------------------
+
+COLD_N = 3  # concepts in one 90-second check
+
+
+def cold_due(states: dict, catalog, hidden: set[str], day: str) -> list[str]:
+    """Concepts the check may offer: cloud-visible, due today or tomorrow (planner.is_due),
+    most overdue (earliest next_due) first."""
+    tomorrow = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    due = [c for c, st in states.items() if c in catalog.entries
+           and audience_of_study([c], hidden) is Audience.CLOUD and planner.is_due(st, tomorrow)]
+    return sorted(due, key=lambda c: (states[c].next_due or "", c))
+
+
+def _summary(vault: Vault, cid: str) -> str | None:
+    """A concept page's one line: its `summary`, else its first body line that is not a
+    heading; plain text (links, images and markup stripped)."""
+    try:
+        n = vault.read("concept", cid)
+    except VaultError:
+        return None
+    s = str(n.fields.get("summary") or "")
+    if not s.strip():
+        s = next((ln for ln in n.body.splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")), "")
+        s = s.strip().lstrip("-*+> ").strip()
+    return plain(s, 200) or None
+
+
+def cold_check(vault: Vault, now: datetime) -> list[dict]:
+    """The 90-second check's items: up to COLD_N `cold_due` concepts with their titles and
+    one-line summaries. Never a private concept."""
+    from cortex.catalog import Catalog
+    day = local_day(now)
+    catalog = Catalog.load(vault)
+    states, _ = planner.current_states(vault, day, catalog)
+    ids = cold_due(states, catalog, planner.hidden(vault, catalog), day)[:COLD_N]
+    return [{"id": c, "title": plain(catalog.entries[c].title) or c,
+             "summary": _summary(vault, c)} for c in ids]
 
 
 def _brain_diff(old: dict, new: dict) -> dict:

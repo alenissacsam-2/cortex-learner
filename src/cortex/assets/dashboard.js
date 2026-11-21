@@ -7,6 +7,7 @@
   // it current from /api/home/delta.
   const BLOB = document.getElementById('data'), LIVE = !BLOB;
   let KEY = '';
+  let cold = null;  // the 90-second check's { root, timer } while its panel is open
   if (LIVE) {  // the app's key, as app.js: from the link once, then this tab's sessionStorage
     KEY = new URLSearchParams(location.search).get('t') || '';
     try { if (KEY) sessionStorage.setItem('cortex.key', KEY); else KEY = sessionStorage.getItem('cortex.key') || ''; } catch (e) { /* storage off */ }
@@ -813,6 +814,7 @@
       if (!$('palette').hidden) { closePalette(); return; }
       if (!look.hidden) { closeLook(true); return; }
       if (!reader.hidden) { closeReader(); return; }
+      if (cold) { closeCold(); return; }
       hideTip();
       return;
     }
@@ -1635,10 +1637,90 @@
     return b.root;
   }
 
+  /* the 90-second check: up to 3 due concepts, recall, reveal, self-grade; a text countdown */
+  const COLD_S = 90;
+  const COLD_ANSWERS = [['forgot', 'Forgot'], ['shaky', 'Shaky'], ['knew', 'Knew it']];
+  function closeCold() {
+    if (!cold) return;
+    clearInterval(cold.timer);
+    cold.root.remove();
+    cold = null;
+    const opener = $('cold-open');
+    (opener || $('view-home')).focus();
+  }
+  async function openCold() {
+    if (cold) return;
+    const close = button('band-btn', 'Close', closeCold, 'Close the 90-second check');
+    const b = board('90-second check', { cls: 'cold', action: close });
+    const clock = el('p', 'cold-timer');
+    clock.setAttribute('role', 'timer');
+    b.body.append(clock);
+    cold = { root: b.root, timer: null };
+    $('departures').prepend(b.root);
+    let items = [];
+    try { items = (await api('/api/home/check')).items || []; } catch (e) {
+      clock.textContent = 'The check could not load. ' + e.message;
+      close.focus();
+      return;
+    }
+    if (!cold || cold.root !== b.root) return;  // closed while loading
+    if (!items.length) {
+      clock.textContent = 'Nothing is due right now.';
+      close.focus();
+      return;
+    }
+    const open = new Set(), state = cold;  // answer buttons of items not answered yet; this panel
+    let left = COLD_S;
+    const tick = () => { clock.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left`; };
+    const finish = (text) => {
+      clearInterval(state.timer);  // the panel may be closed by now
+      for (const btn of open) btn.disabled = true;
+      open.clear();
+      clock.textContent = text;
+    };
+    for (const it of items) {
+      const box = el('div', 'cold-item'), acts = el('div', 'cold-acts'), said = el('p', 'muted');
+      said.setAttribute('aria-live', 'polite');
+      const sum = el('p', 'cold-sum', it.summary || 'Its page has no summary yet.');
+      sum.hidden = true;
+      acts.hidden = true;
+      const reveal = button('btn', 'Reveal', () => {
+        sum.hidden = false;
+        acts.hidden = false;
+        reveal.remove();
+        acts.firstChild.focus();
+      }, `Reveal what you wrote about ${it.title}`);
+      const btns = COLD_ANSWERS.map(([k, word]) => button('btn', word, async () => {
+        btns.forEach((x) => { x.disabled = true; open.delete(x); });
+        try {
+          await api('/api/home/check/answer', { id: it.id, answer: k });
+          said.textContent = `Saved: ${word}.`;
+        } catch (e) {
+          said.textContent = 'Not saved. ' + e.message;
+        }
+        if (!open.size && left > 0) finish('Done. Your answers are saved.');
+      }, `${word}: ${it.title}`));
+      btns.forEach((x) => open.add(x));
+      acts.append(...btns);
+      box.append(el('h3', null, it.title), el('p', null, 'Recall what you know, then reveal.'), reveal, sum, acts, said);
+      b.body.append(box);
+    }
+    tick();
+    state.timer = setInterval(() => {
+      left -= 1;
+      if (left > 0) tick();
+      else finish('Time is up. Unanswered ones are not recorded.');
+    }, 1000);
+    b.body.querySelector('.cold-item .btn').focus();
+  }
+
   let flicked = false;
   function renderHome() {
     const items = nextUp(), host = $('departures');
-    const b = board('Next up', { cls: 'departures' });
+    const coldBtn = LIVE && D.cold_check ? button('band-btn', '90-second check', openCold,
+      'Start a 90-second check of what is due') : null;
+    if (coldBtn) coldBtn.id = 'cold-open';
+    const b = board('Next up', { cls: 'departures', action: coldBtn });
     const head = el('div', 'dep-head');
     for (const h of ['TIME', 'ITEM', 'PLATFORM', 'STATUS', '']) head.append(el('span', null, h));
     b.body.append(head);
@@ -1678,7 +1760,9 @@
       for (const g of keeps) k.append(el('div', null, `${g.subject.title}: ${g.keep.text}`));
       b.root.append(k);
     }
-    host.replaceChildren(D.first_run && !items.length ? firstRunBoard() : b.root);
+    // an open 90-second check stays where it is (a live update never takes its focus or clock)
+    for (const c of [...host.children]) if (!cold || c !== cold.root) c.remove();
+    host.append(D.first_run && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;
       times.forEach((d, k) => {

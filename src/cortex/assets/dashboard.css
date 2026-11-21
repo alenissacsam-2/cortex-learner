@@ -191,6 +191,16 @@ section:focus { outline: none; }
 .home-row { display: grid; gap: 24px; margin-top: 24px; align-items: start; }
 .home-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .home-row.two { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+/* the 90-second check (the live home): above Next up while open */
+.board.cold { margin-bottom: 24px; }
+.cold-timer { margin: 0; padding: 8px 12px; color: var(--ink-2); font-size: 12.5px;
+  border-bottom: 1px solid var(--rule); }
+.cold-item { padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+.cold-item:last-child { border-bottom: 0; }
+.cold-item h3 { font-size: 14px; margin: 0 0 4px; }
+.cold-item p { margin: 4px 0; }
+.cold-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cold-acts[hidden], .cold-sum[hidden] { display: none; }
 /* the live home: the feed, quick chat, the Settings link */
 .band h2 + .band-tools { margin-left: auto; }
 a.band-btn { text-decoration: none; color: var(--band-ink); }

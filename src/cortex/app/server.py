@@ -286,6 +286,7 @@ class App:
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
                     "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
+                    "/api/home/check": self.cold_check,
                     "/api/vault/snapshot": None,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
@@ -310,6 +311,7 @@ class App:
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/export": self.export, "/api/vault/backup": self.backup,
             "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
+            "/api/home/check/answer": self.cold_answer,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
@@ -527,6 +529,66 @@ class App:
         if got is None:
             raise NotFound
         return got
+
+    # ---- the 90-second check on Home: self-graded, recorded through cortex_grade ----
+    COLD_ANSWERS = {"forgot": ("wrong", None, "Forgot"), "shaky": ("correct", 2, "Shaky"),
+                    "knew": ("correct", 4, "Knew it")}
+
+    def cold_check(self) -> dict:
+        """Up to 3 cloud-visible concepts due today or tomorrow, most overdue first, with each
+        page's one-line summary (home.cold_check). Never a private concept."""
+        from datetime import UTC, datetime
+
+        from cortex import home
+        return {"items": home.cold_check(self._vault(), datetime.now(UTC))}
+
+    def cold_answer(self, body: dict) -> dict:
+        """One answer: a closed-book recall item graded by the user (wrong; right at confidence
+        2; right at confidence 4), written by cortex_grade's own code path as the Review's clicks
+        are (`_click`: an `app_clicks` Cortex, a session closed at once so it is committed and
+        `cortex undo` takes it back), with the app as client and model "self". A concept the
+        check would not offer now (unknown, private, not due) is a 404."""
+        from datetime import UTC, datetime
+
+        from cortex import home, planner
+        from cortex.catalog import Catalog
+        from cortex.events import local_day
+        from cortex.mcp_server import Cortex
+        from cortex.vault import Vault
+        cid, answer = body.get("id"), body.get("answer")
+        if answer not in self.COLD_ANSWERS:
+            raise ValueError("answer must be forgot, shaky or knew.")
+        v = self._vault()
+        day = local_day(datetime.now(UTC))
+        catalog = Catalog.load(v)
+        if not isinstance(cid, str) or cid not in home.cold_due(
+                planner.current_states(v, day, catalog)[0], catalog,
+                planner.hidden(v, catalog), day):
+            raise NotFound
+        verdict, confidence, said = self.COLD_ANSWERS[answer]
+        kwargs = {"concept": cid, "question": "90-second check: recall what you know, then "
+                  "reveal.", "item_type": "recall", "learner_answer": said, "verdict": verdict,
+                  **({"confidence": confidence} if confidence else {})}
+        root = self.need_root()
+        with self.reviewing:
+            if self.core is None or self.core[0] != root:
+                core = Cortex(Vault(root))
+                core.app_clicks = True  # every write here is the user's own click
+                self.core = (root, core)
+            core = self.core[1]
+            client = core.sessions.client
+            core.sessions.client = "cortex-app"  # server-set, as grader.client always is
+            try:
+                core.session = core.sessions.start("ambient", None, "self")
+                core._reset()
+                out = core._call("cortex_grade", core.cortex_grade, kwargs)
+            finally:
+                core.sessions.client = client
+                if core.sessions.current is not None:
+                    core.sessions.close(summary="90-second check in the Cortex app")
+        if "error" in out:
+            raise ValueError(out.get("message") or out["error"])
+        return {"recorded": True}
 
     def unlock(self, body: dict) -> dict:
         """The Private switch: Windows asks the user to verify (Windows Hello); private items
