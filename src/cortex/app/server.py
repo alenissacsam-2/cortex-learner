@@ -329,6 +329,8 @@ class App:
             "/api/review/conflict": self.review_conflict,
             "/api/review/rule/approve": self.review_rule_approve,
             "/api/review/rule/dismiss": self.review_rule_dismiss,
+            "/api/review/decision/approve": self.review_decision_approve,
+            "/api/review/decision/dismiss": self.review_decision_dismiss,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute}
 
     def touch(self) -> None:
@@ -674,6 +676,36 @@ class App:
         x = self._rule(body)
         return self._click("cortex_patch", "_dismiss", {
             "page": "corrections", "section": "Core", "text": x["text"], "waiting": False})
+
+    def _decision(self, body: dict) -> dict:
+        from cortex import more_sources
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        item = next((x for x in more_sources.decision_proposals(v, EventLog(v).iter_events())
+                     if x["key"] == key), None)
+        if item is None:
+            raise NotFound
+        return item
+
+    def review_decision_approve(self, body: dict) -> dict:
+        """RR-9: a decision-like commit subject approved becomes a decision page (status
+        accepted, the commit's day, linked to the repo page; private when that page is)."""
+        x = self._decision(body)
+        fields = {"date": x["date"], "status": "accepted", "related": [x["page"]],
+                  "summary": f"From my commit {x['hash'][:7]} in {x['project']} "
+                             f"(\"{x['word']}\")."}
+        if x["private"]:
+            fields["private"] = True
+        return self._click("cortex_add", "_decide", {"title": x["subject"], "fields": fields,
+                                                     "hash": x["key"]})
+
+    def review_decision_dismiss(self, body: dict) -> dict:
+        """RR-9: a dismissed commit decision leaves a `dismiss` change on id `decisions` with its
+        key, so it is not offered again."""
+        x = self._decision(body)
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "decisions", "section": x["project"], "text": f"{x['page']} {x['hash']}",
+            "waiting": False})
 
     # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
     def xray(self) -> dict:

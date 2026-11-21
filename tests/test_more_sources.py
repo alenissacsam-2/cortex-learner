@@ -8,6 +8,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from cortex import importers, more_sources, sources
@@ -185,6 +186,108 @@ def test_an_updated_page_stays_private(root_plain, tmp_path):
                       ("repo-notebook", "Changed too.")):
         page = _page(v, nid)
         assert text in page and "private: true" in page
+
+
+@pytest.mark.parametrize("subject, word", [
+    ("Switch to uv for installs", "switch to"), ("Switched to SQLite FTS5", "switched to"),
+    ("Migrated to the mcp 2.x SDK", "migrated to"), ("Adopt ruff", "adopt"),
+    ("Deprecate the old dashboard", "deprecate"),
+    ("Replace pickle with JSON in the cache", "replace … with"),
+    ("Use a heap instead of a sorted list", "instead of"),
+    ("Drop Flask in favour of FastAPI", "in favour of"), ("ADR 3: one vault per user", "adr"),
+    ("Decided: no cloud sync", "decided"), ("Moved to pnpm", "moved to"),
+    ("Default to the normal tier", "default to"), ("Chose FSRS over SM-2", "chose"),
+    ("Merge branch 'switch to uv'", None), ("Bump deps; migrate to 3.12", None),
+    ("Revert \"Switch to uv\"", None), ("WIP: adopt ruff", None), ("fixup! decided", None),
+    ("Formatting: instead of tabs", None), ("Remove the old CLI", None),
+    ("Rename module", None), ("Add weekly view", None),
+    ("Wipe the cache; switch to v2", "switch to"),
+])
+def test_decision_word(subject, word):
+    assert more_sources.decision_word(subject) == word
+
+
+def _decisions_repo(parent: Path) -> Path:
+    repo = _repo(parent, "planner")
+    for day, msg in (("2026-01-05", "Switch to uv for installs"),
+                     ("2026-02-10", "Merge branch 'adopt-ruff'"),
+                     ("2026-03-15", "Replace pickle with JSON in the cache"),
+                     ("2026-04-20", "Tune the quiz timer")):
+        _git(repo, "commit", "-q", "--allow-empty", f"--date={day}T10:00:00", "-m", msg)
+    _git(repo, "commit", "-q", "--allow-empty", "--date=2026-05-01T10:00:00", "-m",
+         "Adopt ruff for lint", email="other@test.invalid")  # not mine
+    return repo
+
+
+def test_repo_decisions_are_listed_and_offered_once(root_plain, tmp_path):
+    v, projects = Vault(root_plain), tmp_path / "projects"
+    _decisions_repo(projects)
+    sources.run(v, more_sources.repos_source(projects), C)
+    page = _page(v, "repo-planner")
+    section = page.split(f"## {more_sources.DECISIONS}\n")[1]
+    assert section.count("\n- ") == 1 and "Merge branch" not in section and "Adopt" not in section
+    assert "2026-03-15" in section and "(replace … with): Replace pickle with JSON" in section
+    props = more_sources.decision_proposals(v, [])
+    assert [(x["date"], x["word"], x["subject"], x["project"], x["private"]) for x in props] == [
+        ("2026-03-15", "replace … with", "Replace pickle with JSON in the cache", "planner", False),
+        ("2026-01-05", "switch to", "Switch to uv for installs", "planner", False)]
+    assert all(len(x["hash"]) == 12 for x in props)
+    again = sources.run(v, more_sources.repos_source(projects), C)  # a re-import
+    assert again["duplicate"] == 1 and more_sources.decision_proposals(v, []) == props
+    done = [{"id": "e1", "kind": "change", "payload": {"change": {
+        "tool": "dismiss", "id": "decisions", "hash": props[0]["key"]}}}]
+    assert more_sources.decision_proposals(v, done) == props[1:]
+    voided = [*done, {"kind": "void", "ref": "e1"}]
+    assert more_sources.decision_proposals(v, voided) == props
+
+
+def test_a_private_repo_offers_private_decisions(root_plain, tmp_path):
+    v, projects = Vault(root_plain), tmp_path / "projects"
+    _decisions_repo(projects)
+    sources.run(v, more_sources.repos_source(projects), sources.Audience.LOCAL)
+    assert all(x["private"] for x in more_sources.decision_proposals(v, []))
+    sources.run(v, more_sources.repos_source(projects), sources.Audience.SKIP)
+    assert len(more_sources.decision_proposals(v, [])) == 2
+
+
+def test_git_with_no_output_is_a_clear_skip(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, "solo")
+    real = more_sources._git
+
+    def no_log(r, *args):
+        got = real(r, *args)
+        return subprocess.CompletedProcess(got.args, 0, None if args[0] == "log" else got.stdout)
+
+    monkeypatch.setattr(more_sources, "_git", no_log)
+    assert more_sources.repo_item(repo) == "git could not read it"
+
+
+@pytest.mark.usefixtures("home")
+def test_review_approves_and_dismisses_commit_decisions(root, tmp_path):
+    from test_review import changes
+
+    from cortex.app import server
+    projects = tmp_path / "projects"
+    _decisions_repo(projects)
+    sources.run(Vault(root), more_sources.repos_source(projects), sources.Audience.LOCAL)
+    (root / ".cortex").mkdir(exist_ok=True)
+    app = server.App(root)
+    view = app.review()
+    first, second = view["decisions"]
+    assert view["count"] >= 2 and first["subject"] == "Replace pickle with JSON in the cache"
+    view = app.review_decision_approve({"key": first["key"]})
+    assert [x["key"] for x in view["decisions"]] == [second["key"]]
+    (c,) = changes(root, "decisions")
+    assert (c["tool"], c["hash"], c["confirm"]) == ("decide", first["key"], "clicked")
+    page = (root / "decisions" / f"{c['target']}.md").read_text("utf-8")
+    assert 'title: "Replace pickle with JSON in the cache"' in page and "private: true" in page
+    assert 'date: "2026-03-15"' in page and 'status: "accepted"' in page
+    assert "[[repo-planner]]" in page and "planner" in page
+    assert app.review_decision_dismiss({"key": second["key"]})["decisions"] == []
+    with pytest.raises(server.NotFound):
+        app.review_decision_approve({"key": second["key"]})
+    sources.run(Vault(root), more_sources.repos_source(projects), sources.Audience.LOCAL)
+    assert app.review()["decisions"] == []  # a re-import does not offer them again
 
 
 def test_repo_without_user_email_is_skipped(root_plain, tmp_path, monkeypatch):

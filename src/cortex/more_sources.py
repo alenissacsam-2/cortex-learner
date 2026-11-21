@@ -12,6 +12,8 @@ so the local Chat (a small model reading a few ~700-character passages) can answ
   user.email>` the commit count, first and last dates and the last SUBJECTS subjects. Code,
   diffs and other files' contents are never read; `drops_code` turns a README's code blocks
   into "[code left out]". Keyed by the repo's path with `updates`, so a re-import rewrites it.
+  Of the last MINED subjects, the decision-like ones (`decision_word`) are listed on the page;
+  the app's Review offers each as an unconfirmed decision (`decision_proposals`).
 - highlights: Kindle `My Clippings.txt` and Readwise CSV make one page per book (one per book
   and month past MANY highlights), keyed by book with `updates`; a Pocket CSV (saved articles,
   no highlights) makes month pages. The format is read from the content, not the file name.
@@ -33,10 +35,20 @@ from xml.etree import ElementTree
 
 from cortex import importers, sources
 from cortex._proc import NO_WINDOW
-from cortex.vault import VaultError
+from cortex.vault import VaultError, is_private
 
 DOC_SUFFIXES = (".pdf", ".docx")
 DOC_CHARS, README_CHARS, SUBJECTS, MANY = 1500, 800, 20, 50
+MINED, SHOWN_DECISIONS = 200, 5  # subjects mined per repo; decision cards shown at a time
+DECISIONS = "Decisions in my commits"  # the repo page's section of decision-like subjects
+# RR-9's narrow set: bare remove, drop and rename are left out (too noisy)
+_DECIDES = re.compile(
+    r"\b(decided|decide|decision|chose|choose|switch(?:ed)? to|migrated? to|adopt(?:ed)?|"
+    r"deprecated?|replaced? .{1,60}? with|instead of|in favou?r of|default to|moved? to|ADR)\b",
+    re.I)
+_NOT_DECISION = re.compile(
+    r"^\W*(?:merge|bump|release|wip|fixup|typo|lint|format|revert)(?:s|ed|ing|ting)?\b", re.I)
+_HIT = re.compile(r"^- (\d{4}-\d\d-\d\d) ([0-9a-f]{12}) \(([^)]+)\): (.+)$")
 DOC_SKIPS = ("not a document", "encrypted", "scanned or no text", "over 200 MB", "unreadable",
              "over 5 MB", "not UTF-8 text")
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -204,30 +216,81 @@ def _readme(repo: Path, names: list[str]) -> str:
     return ""
 
 
+def decision_word(subject: str) -> str | None:
+    """The signal word that makes a commit subject look like a decision ("switched to",
+    "replace … with"), or None; subjects starting with merge, bump, release, wip, fixup, typo,
+    lint, format or revert never are."""
+    if _NOT_DECISION.match(subject) or not (m := _DECIDES.search(subject)):
+        return None
+    w = " ".join(m.group(1).lower().split())
+    return re.sub(r"^(replaced?) .* with$", r"\1 … with", w)
+
+
 def repo_item(repo: Path) -> sources.Item | str:
-    """One repo's Item, or why it is skipped. Reads git's log subjects and dates, the root's file
-    names and the README; nothing else."""
+    """One repo's Item, or why it is skipped. Reads git's log subjects, hashes and dates, the
+    root's file names and the README; nothing else. Of the last MINED subjects, those
+    `decision_word` picks are listed under `## DECISIONS` (date, hash, word, subject) for the
+    Review to offer (`decision_proposals`)."""
     try:
-        email = _git(repo, "config", "user.email").stdout.strip()
+        email = (_git(repo, "config", "user.email").stdout or "").strip()
         if not email:
             return "no git user.email"
         log = _git(repo, "log", "--fixed-strings", f"--author={email}", "--date=short",
-                   "--format=%ad %s")
+                   "--format=%ad%x09%H%x09%s")
     except (OSError, subprocess.SubprocessError):
         return "git could not read it"
-    lines = log.stdout.splitlines() if log.returncode == 0 else []
-    if not lines:
+    if log.stdout is None:  # captured output is a str; anything else is a broken git run
+        return "git could not read it"
+    rows = [r for ln in log.stdout.splitlines() if len(r := ln.split("\t", 2)) == 3] \
+        if log.returncode == 0 else []
+    if not rows:
         return "no commits by you"
     names = os.listdir(repo)
     stack, readme = _stack(names), _readme(repo, names)
-    first, last = lines[-1][:10], lines[0][:10]
-    n = len(lines)
+    first, last = rows[-1][0], rows[0][0]
+    n = len(rows)
     head = (f"Git repository {repo.name}" + (f" ({', '.join(stack)})" if stack else "")
             + f": {n:,} commit{'s' * (n != 1)} by me, from {first} to {last}.")
+    hits = [f"- {d} {h[:12]} ({w}): {s}" for d, h, s in rows[:MINED] if (w := decision_word(s))]
     text = head + (f"\n\n## README\n{readme}" if readme else "") + \
         f"\n\n## My last {min(n, SUBJECTS)} commits\n" + \
-        "\n".join(f"- {s}" for s in lines[:SUBJECTS])
+        "\n".join(f"- {d} {s}" for d, _, s in rows[:SUBJECTS]) + \
+        (f"\n\n## {DECISIONS}\n" + "\n".join(hits) if hits else "")
     return sources.Item(repo.name, last, text, str(repo), key=f"repo {repo.resolve()}")
+
+
+def decision_proposals(vault, events) -> list[dict]:
+    """RR-9: up to SHOWN_DECISIONS commit subjects from the repo pages' `## DECISIONS`, newest
+    first, as {key, page, project, date, hash, word, subject, private} for the app's Review.
+    The key hashes the repo page and the commit, so a re-import never offers one again; left
+    out are those the owner approved (a `decide` change) or dismissed (a `dismiss` change), both
+    on id `decisions` and holding the key. `private` follows the repo page (an unreadable page
+    counts as private), and Approve makes a private page's decision private too."""
+    from cortex import review
+    events = list(events)
+    voided = review._voided(events)
+    done = {c.get("hash") for e in events if e.get("kind") == "change"
+            and e.get("id") not in voided and isinstance(c := review._payload(e).get("change"),
+                                                          dict)
+            and c.get("tool") in ("dismiss", "decide") and c.get("id") == "decisions"}
+    out = []
+    for p in sorted((vault.root / "resources").glob("repo-*.md")):
+        try:
+            note = vault.read_path(p)
+        except VaultError:
+            continue
+        if not re.search(r"^Source: Git · ", note.body, re.M):
+            continue
+        private, project = is_private(note), str(note.fields.get("title") or p.stem)
+        section = note.body.partition(f"\n## {DECISIONS}\n")[2].split("\n## ", 1)[0]
+        for m in map(_HIT.match, section.splitlines()):
+            key = review.text_hash(f"{p.stem} {m.group(2)}") if m else None
+            if m and key not in done:
+                out.append({"key": key, "page": p.stem, "project": project, "date": m.group(1),
+                            "hash": m.group(2), "word": m.group(3), "subject": m.group(4),
+                            "private": private})
+    out.sort(key=lambda x: (x["date"], x["project"], x["hash"]), reverse=True)
+    return out[:SHOWN_DECISIONS]
 
 
 def repos_source(path: Path) -> sources.Source:
