@@ -930,7 +930,8 @@ class App:
             try:
                 return actions.capture(job, cli.undo, sid, vault=root)
             finally:
-                self.core = None  # the Review clicks' Cortex reloads the reverted catalog
+                with self.reviewing:  # never mid-click: the Review clicks' Cortex reloads
+                    self.core = None  # the reverted catalog
 
         return self.jobs.start("Undoing an AI app's changes", "tonight", run)
 

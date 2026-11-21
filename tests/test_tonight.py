@@ -140,6 +140,26 @@ def test_undo_of_a_session_still_open_says_so(root):
         "utf-8")
 
 
+def test_undo_resets_the_review_cortex_only_between_clicks(root, monkeypatch):
+    async def body(call):
+        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+                                  "parent": "dsa.arrays"})
+        await call("cortex_end", {"summary": "added a concept"})
+
+    run(root, body)
+    app = server.App(root)
+    (g,) = app.tonight()["learned"]
+    monkeypatch.setattr(server.actions, "capture", lambda *a, **k: {"ok": True})
+    app.core = (root, object())
+    with app.reviewing:  # a Review click in progress
+        app.tonight_undo({"session": g["session"]})
+        time.sleep(0.3)
+        assert app.core is not None  # never swapped out under the click
+    while app.jobs.running():
+        time.sleep(0.05)
+    assert app.core is None
+
+
 @pytest.mark.parametrize(("hh", "mm", "night"), [(19, 59, False), (20, 0, True),
                                                  (3, 59, True), (4, 0, False)])
 def test_the_app_opens_on_tonight_in_the_evening(root, hh, mm, night):
