@@ -490,8 +490,12 @@ def _visits(data):
 def location_file(name: str) -> bool:
     """A Takeout location history JSON, by its path (for `importers.detect`)."""
     low = name.lower().replace("\\", "/")
-    return low.endswith(".json") and ("semantic location history/" in low or low.rsplit(
-        "/", 1)[-1] in ("timeline.json", "location-history.json", "records.json"))
+    base = low.rsplit("/", 1)[-1]
+    return low.endswith(".json") and (
+        "semantic location history/" in low
+        or base in ("timeline.json", "location-history.json", "records.json")
+        or re.fullmatch(r"\d{4}_(?:january|february|march|april|may|june|july|august|"
+                        r"september|october|november|december)\.json", base) is not None)
 
 
 def location_source(path: Path) -> sources.Source:

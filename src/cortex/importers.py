@@ -324,13 +324,12 @@ def detect(path: Path) -> list[str]:
         return ["repos"]
     files = _files(path)
     names = [n.lower() for n, *_ in files]
-    if any(n.endswith(".mbox") for n in names):
-        return ["mail"]
     from cortex import life_sources
-    if any(life_sources.location_file(n) for n in names):
-        return ["location"]
-    if any(life_sources.spotify_file(n) for n in names):
-        return ["spotify"]
+    # Sources B decide only when nothing else does, so a full Takeout keeps its old kinds
+    life = next((k for k, hit in (("mail", lambda n: n.endswith(".mbox")),
+                                  ("location", life_sources.location_file),
+                                  ("spotify", life_sources.spotify_file))
+                 if any(map(hit, names))), None)
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
     heads = {n: read(takeout.HEAD) for n, (_, _, _, read) in zip(names, files, strict=True)
              if takeout.activity_file(n) == "html"}
@@ -341,7 +340,8 @@ def detect(path: Path) -> list[str]:
                   heads[n] if n in heads else read(4096))))]
     head = next((read(300).lstrip() for n, _, _, read in files if n.endswith(".md")), b"")
     pplx = head.startswith(b"<img") and b"perplexity" in head  # its export starts with a logo
-    json1 = len(names) == 1 and names[0].endswith(".json") and "myactivity" not in names[0]
+    json1 = len(names) == 1 and names[0].endswith(".json") and "myactivity" not in names[0] \
+        and not life
     kinds = ["chats"] if gemini or pplx or json1 or any(
         n.rsplit("/", 1)[-1].startswith("conversations") and n.endswith(".json")
         for n in names) else []
@@ -349,6 +349,8 @@ def detect(path: Path) -> list[str]:
         kinds.append("takeout")
     if any(n.endswith(".ics") for n in names):
         kinds.append("calendar")
+    if not kinds and life:
+        kinds.append(life)
     if not kinds and heads:
         raise VaultError("invalid_argument", f"{Path(path).name} holds HTML activity but no "
                          "Search, YouTube, Chrome or Gemini Apps rows Cortex can read. "
