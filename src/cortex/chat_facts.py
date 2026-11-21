@@ -136,12 +136,15 @@ def route(text: str, got, today: date) -> dict | None:
     `route` answers from Cortex's data, or None (the passages answer it). `got` is
     chat._when's (first day, last day, span) of `text`'s own date phrase. No date: all days, or
     the last 7 for a timeline. Ranges stop at today."""
-    if not got and (y := _YEAR.search(text)):  # chat._when has no years: they are ours only
-        year = int(y[2]) if y[2] else today.year - (y[1].lower() == "last")
-        got = (date(year, 1, 1), date(year, 12, 31), y.span())
-    if not got and (m := _OF_MONTH.search(text)):  # "timeline of October": chat's "in October"
-        from cortex import chat
-        got = (*chat._month(m[1], m[2], today), m.span())
+    try:  # a year date() refuses ("in 0000", "of December 9999"): no route, not a crash
+        if not got and (y := _YEAR.search(text)):  # chat._when has no years: ours only
+            year = int(y[2]) if y[2] else today.year - (y[1].lower() == "last")
+            got = (date(year, 1, 1), date(year, 12, 31), y.span())
+        if not got and (m := _OF_MONTH.search(text)):  # "timeline of October": chat's "in"
+            from cortex import chat
+            got = (*chat._month(m[1], m[2], today), m.span())
+    except ValueError:
+        return None
     rest = chat_study._norm(text[:got[2][0]] + " " + text[got[2][1]:] if got else text)
     lo, hi = (got[0].isoformat(), min(got[1], today).isoformat()) if got else (FIRST_DAY,
                                                                                today.isoformat())

@@ -69,6 +69,7 @@ def test_typed_questions_are_routed(q, kind, term):
     "how many times will I visit github tomorrow?",
     "should I use postgres vs mysql?", "compare it and that", "rust vs rust",
     "what am I missing?", "what is missing from this list?",
+    "how many notes in 0000?", "timeline of December 9999",  # audit 21 Nov C11: no crash
 ])
 def test_ordinary_questions_go_to_the_passages(q):
     assert _route(q) is None
