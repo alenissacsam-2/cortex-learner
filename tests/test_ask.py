@@ -134,3 +134,11 @@ def test_private_pages_need_the_private_flag(vault):
     assert {s["path"] for s in out["sources"]} <= {"notes/engines.md"}
     ask.ask(vault, "car motor", private=True, runner=r)
     assert "Motor car repair" in r.asked[1][1] and "secret" in r.asked[1][1]
+
+
+def test_relative_dates_in_a_passage_follow_its_date_line(vault):
+    r = Fake()
+    ask.ask(vault, "car motor", runner=r)
+    system = r.asked[0][0]
+    assert "relative to that passage's Date line, not to today" in system
+    assert '"tomorrow"' in system and '"next week"' in system
