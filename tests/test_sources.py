@@ -258,3 +258,24 @@ def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
     assert out["lines"] == ["Nothing was imported: you chose Don't save.",
                             '1 page from Notes is still in your vault; to forget them, delete '
                             'the pages in resources/ that say "Source: Notes" under their title.']
+
+
+def test_an_unchanged_reimport_keeps_the_owners_tags_and_lines(root_plain):
+    """Audit 21 Nov I5: an `updates` source (Kindle highlights, by key) re-imported unchanged
+    leaves the page alone; a changed one rewrites it and keeps the owner's fields."""
+    v = Vault(root_plain)
+
+    def src(text):
+        return _src(sources.Item("Book", "2026-11-02", text, "clips.txt", key="book"),
+                    updates=True)
+    sources.run(v, src("- first highlight"), C)
+    v._edit_fields("resource", "test-book", {"tags": ["mine"]})
+    p = root_plain / "resources" / "test-book.md"
+    p.write_text(p.read_text("utf-8") + "\nMy own line.\n", encoding="utf-8")
+    before = _page(v, "test-book")
+    r = sources.run(v, src("- first highlight"), C)
+    assert (r["updated"], r["duplicate"]) == (0, 1)
+    assert _page(v, "test-book") == before
+    r = sources.run(v, src("- first highlight\n- second highlight"), C)
+    page = _page(v, "test-book")
+    assert r["updated"] == 1 and "second highlight" in page and 'tags: ["mine"]' in page

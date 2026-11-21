@@ -12,7 +12,8 @@ month, `<prefix>-YYYY-MM` (`<prefix>-private-YYYY-MM` when private, so private i
 public page), a line per item, deduped by the line (calendars; location, photo dates and Spotify
 fit here). Both carry a `Source: <label> · Date: …` line (see importers' docstring). An item
 source that sets `updates` dedupes by `key` (a repo's path, a book) and rewrites that page when
-a re-import brings a changed text, instead of adding a second page.
+a re-import brings a changed text (the header's `body:` sha), keeping the owner's frontmatter,
+instead of adding a second page; an unchanged text leaves the page alone.
 
 Tiers reuse `access.Audience`: `--tier private|normal|skip` is LOCAL (pages `private: true`),
 CLOUD (normal pages) or SKIP (nothing imported). The last choice per source is kept in TIERS_FILE.
@@ -384,25 +385,31 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
         body = f"{facts(it, src)}\n\n{body}".strip()
-        mark = f" · body: {_sha(body)}" if src.by_origin else ""  # the facts are body too
+        # the facts are body too
+        mark = f" · body: {_sha(body)}" if src.by_origin or src.updates else ""
         page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin}{mark}"
                 f" · sha: {h}\n\n{body}\n")
         if old is None:
             if not dry_run:
                 vault.create_note("resource", nid, fields, page)
             continue
-        if src.by_origin:  # the owner's tags, links and status stay; the import's own keys move
-            fields = {**_fields(vault, old), **{k: fields[k] for k in ("title", "date",
-                                                                       "summary")},
-                      **({"private": True} if hidden else {})}
+        cur = old.read_text("utf-8", errors="replace")
+        if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
+            r["duplicate"] += 1  # `updates`: the same text as last time; the owner's edits stay
+            continue
+        # the owner's tags, links and status stay; the import's own keys move
+        fields = {**(_fields(vault, old) or fields),
+                  **{k: fields[k] for k in ("title", "date", "summary")},
+                  **({"private": True} if hidden else {})}
         text = _note_text(nid, fields, page)
-        if old.read_text("utf-8", errors="replace") == text:
+        if cur == text:
             r["duplicate"] += 1
             continue
         r["updated"] += 1
         r["private"] += hidden
-        if not dry_run:  # a page edited since the check keeps its edit
-            vault.update_text(old, lambda cur, t=text: cur if untouched(cur) is False else t)
+        if not dry_run:  # by_origin: a page edited since the check keeps its edit
+            vault.update_text(old, lambda cur, t=text: cur if src.by_origin
+                              and untouched(cur) is False else t)
 
 
 SUMMARY_CHARS = 200
@@ -458,12 +465,13 @@ def edited_pages(vault: Vault, events) -> list[dict]:
     instead. {key, page, new, title, private}, at most SHOWN_EDITED; Dismiss (a `dismiss`
     change on id `imports` holding the key) closes one. Nothing is stored: a fold over the
     header lines."""
-    from cortex import review  # it imports modules that import this one
+    from cortex import importers, review  # they import modules that import this one
     events = list(events)
     groups = defaultdict(list)
+    notes = set(importers.LABELS.values())  # by_origin's labels: an `updates` page has no -2
     for p in sorted((vault.root / "resources").glob("*.md")):
         text = p.read_text("utf-8", errors="replace")
-        if (m := HEADER.search(text)) and m.group(3):
+        if (m := HEADER.search(text)) and m.group(3) and m.group(1) in notes:
             groups[m.group(1), m.group(3)].append(((m.group(2), len(p.stem), p.stem), p, text))
     out = []
     for pages in groups.values():
