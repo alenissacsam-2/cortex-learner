@@ -260,6 +260,22 @@ def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
                             'the pages in resources/ that say "Source: Notes" under their title.']
 
 
+def test_a_changed_day_line_replaces_the_old_one(root_plain):
+    """Audit 21 Nov I8: a per-day summary line (photos, location) whose count changed replaces
+    that day's line instead of adding a second one; other lines stay."""
+    v = Vault(root_plain)
+
+    def run(*texts):
+        return sources.run(v, _src(*(sources.Item(t[:10], t[:10], t) for t in texts),
+                                   page="month"), C)
+    run("2026-11-02: 3 photos (Trip)", "2026-11-03: 1 photo (Home)")
+    r = run("2026-11-02: 5 photos (Trip)", "2026-11-04: 2 photos (Home)")
+    page = _page(v, "test-2026-11")
+    assert page.count("2026-11-02:") == 1 and "- 2026-11-02: 5 photos (Trip)" in page
+    assert "- 2026-11-03: 1 photo (Home)" in page and "- 2026-11-04: 2 photos" in page
+    assert (r["imported"], r["updated"], r["duplicate"]) == (1, 1, 0)
+
+
 def test_an_unchanged_reimport_keeps_the_owners_tags_and_lines(root_plain):
     """Audit 21 Nov I5: an `updates` source (Kindle highlights, by key) re-imported unchanged
     leaves the page alone; a changed one rewrites it and keeps the owner's fields."""

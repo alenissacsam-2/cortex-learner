@@ -60,6 +60,7 @@ WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.S
 CODE_LEFT_OUT = "[code left out]"
 
 _HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
+_DAY_LINE = re.compile(r"- (\d{4}-\d\d-\d\d): ")  # a month page's per-day summary line
 # an item page's header line: label, date, origin, and (RR-18, by_origin sources) a body sha
 HEADER = re.compile(r"^Source: (.+?) · Date: (\S+)(?: · From: (.*?))?"
                     r"(?: · body: ([0-9a-f]{16}))? · sha: [0-9a-f]{16}$", re.M)
@@ -521,14 +522,25 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         p = vault.path_for("resource", nid)
         have = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
         add = sorted(lines - have)
+        # a per-day summary line ("- YYYY-MM-DD: …", photos and location) replaces that day's
+        old = {m.group(1): ln for ln in have if (m := _DAY_LINE.match(ln))}
+        swap = {old[m.group(1)]: ln for ln in add
+                if (m := _DAY_LINE.match(ln)) and m.group(1) in old}
+        add = [ln for ln in add if ln not in swap.values()]
         r["imported"] += len(add)
+        r["updated"] += len(swap)
         r["private"] += len(add) if hidden else 0
-        if dry_run or not add:
+        if dry_run or not (add or swap):
             continue
         heading = src.noun.capitalize()
+        if swap:
+            vault.update_text(p, lambda t, s=swap: "".join(
+                s.get(x.rstrip("\r\n"), x.rstrip("\r\n")) + x[len(x.rstrip("\r\n")):]
+                for x in t.splitlines(keepends=True)))
         if have:
             # shortcut: later imports append, so a month is sorted within each import only
-            vault.append_to_section("resource", nid, heading, "\n".join(add))
+            if add:
+                vault.append_to_section("resource", nid, heading, "\n".join(add))
             continue
         fields = {"title": f"{src.label} {month}", "kind": "resource", "resource_type": "other",
                   "status": "reference", "covers": [], "related": [], "date": f"{month}-01",
@@ -538,4 +550,4 @@ def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) ->
         vault.create_note("resource", nid, fields, f"# {src.label} {month}\n\nSource: "
                           f"{src.label} · Date: {month}-01\n\n## {heading}\n" + "\n".join(add)
                           + "\n")
-    r["duplicate"] = r["items"] - r["imported"]
+    r["duplicate"] = r["items"] - r["imported"] - r["updated"]
