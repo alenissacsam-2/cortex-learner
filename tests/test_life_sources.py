@@ -309,3 +309,61 @@ def test_cli_imports_photos(tmp_path, root_plain):
     assert r.exit_code == 0, r.output
     assert "Photos: tier normal (the default" in r.output
     assert (root_plain / "resources" / "photos-2024-03.md").is_file()
+
+
+# ---- Spotify ----
+
+H = 3_600_000  # an hour in ms
+ACCOUNT = [{"endTime": "2023-12-31 23:00", "artistName": "Old Band", "trackName": "Old Song",
+            "msPlayed": 2 * H},
+           {"endTime": "2024-01-02 10:00", "artistName": "Band A", "trackName": "Song 1",
+            "msPlayed": H}]
+PODCASTS = [{"endTime": "2024-02-01 08:00", "podcastName": "Lex Talks", "episodeName": "Ep 1",
+             "msPlayed": H // 2}]
+EXTENDED = [
+    {"ts": "2024-01-02T10:00:00Z", "ms_played": 3 * H, "conn_country": "IN",
+     "ip_addr": "203.0.113.7", "platform": "android", "master_metadata_track_name": "Song 1",
+     "master_metadata_album_artist_name": "Band A", "episode_show_name": None},
+    {"ts": "2024-03-05T10:00:00Z", "ms_played": H, "ip_addr": "203.0.113.7",
+     "master_metadata_track_name": "Song 2", "master_metadata_album_artist_name": "Band B"},
+    {"ts": "2024-03-06T10:00:00Z", "ms_played": H // 2, "master_metadata_track_name": None,
+     "episode_show_name": "Lex Talks", "episode_name": "Ep 2"},
+    {"ts": "2024-03-07T10:00:00Z", "ms_played": 0, "master_metadata_track_name": "Skipped",
+     "master_metadata_album_artist_name": "Band C"}]
+
+
+def test_spotify_year_pages_from_either_shape(tmp_path, root_plain):
+    import json
+    import zipfile
+    acct = tmp_path / "account.zip"
+    with zipfile.ZipFile(acct, "w") as z:
+        z.writestr("Spotify Account Data/StreamingHistory_music_0.json", json.dumps(ACCOUNT))
+        z.writestr("Spotify Account Data/StreamingHistory_podcast_0.json",
+                   json.dumps(PODCASTS))
+        z.writestr("Spotify Account Data/StreamingHistory_music_1.json", "[broken")
+        z.writestr("Spotify Account Data/Userdata.json", '{"email": "me@example.test"}')
+    assert importers.detect(acct) == ["spotify"]
+    v = Vault(root_plain)
+    r = sources.run(v, life_sources.spotify_source(acct), C)
+    assert r["imported"] == 2 and r["reasons"]["malformed file"] == 1
+    pages = _pages(v, "listening")
+    y24 = pages["listening-spotify-2024"]
+    assert "My Spotify listening in 2024: 1.5 hours (music 1.0, podcasts 0.5)." in y24
+    assert "1. Band A: 1.0 hours" in y24 and '1. "Song 1" by Band A: 1.0 hours' in y24
+    assert "1. Lex Talks: 0.5 hours" in y24 and "Old Band" not in y24
+    assert "Old Band" in pages["listening-spotify-2023"]
+    assert "@" not in "".join(pages.values())
+    r = sources.run(v, life_sources.spotify_source(acct), C)
+    assert r["imported"] == 0 and r["updated"] == 0 and _pages(v, "listening") == pages
+
+    ext = tmp_path / "extended"
+    ext.mkdir()
+    (ext / "Streaming_History_Audio_2024.json").write_text(json.dumps(EXTENDED), "utf-8")
+    (ext / "StreamingHistory_music_0.json").write_text(json.dumps(ACCOUNT), "utf-8")
+    r = sources.run(v, life_sources.spotify_source(ext), C)
+    assert r["reasons"]["covered by the extended history"] == 1 and r["updated"] == 1
+    y24 = _pages(v, "listening")["listening-spotify-2024"]
+    assert "4.5 hours (music 4.0, podcasts 0.5)" in y24 and "Skipped" not in y24
+    assert '1. "Song 1" by Band A: 3.0 hours\n2. "Song 2" by Band B: 1.0 hours' in y24
+    assert "203.0.113.7" not in y24 and "android" not in y24 and "IN" not in y24.split()
+    assert "2024-01-02" not in y24.split("\n\n", 2)[2]  # nothing per play

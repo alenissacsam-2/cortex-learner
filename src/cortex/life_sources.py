@@ -6,6 +6,14 @@ coarse daily summary, never other people's text, addresses, coordinates or files
   sent messages: date, subject, recipients' names (never addresses) and the owner's own text,
   with quoted replies, forwarded parts, signatures and HTML stripped. Keyed by month with
   `updates`, so a re-import of a newer (cumulative) export rewrites a month page in place.
+- selfchat: a WhatsApp chat-with-yourself .txt and Telegram Saved Messages (result.json) into
+  month pages, a line per own message; media named, never copied. Private by default.
+- location: Google Timeline JSON (both shapes) into month pages of one city per day, from the
+  visits' postal addresses; no coordinates, streets or network. Private by default.
+- photos: a photo folder into month pages of photos per day and album (folder) names; EXIF
+  capture date only, never images or GPS.
+- spotify: streaming history into a page per year of hours and top artists, tracks and
+  podcasts; nothing per play.
 """
 
 from __future__ import annotations
@@ -591,5 +599,111 @@ def photos_source(path: Path) -> sources.Source:
                           coarse_place=True, skips=("not a photo", "unreadable"))
 
 
+# ---- Spotify, a page per year ----
+
+TOP, TOP_PODCASTS = 20, 10
+SPOTIFY_SKIPS = ("not a listening history file", "covered by the extended history",
+                 "malformed file", "over 200 MB")
+
+
+def spotify_file(name: str) -> str | None:
+    """"extended" (Streaming_History_Audio_*.json, endsong_*.json), "account"
+    (StreamingHistory*.json, music and podcasts) or None."""
+    base = name.lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if not base.endswith(".json"):
+        return None
+    if base.startswith(("streaming_history_audio_", "endsong_")):
+        return "extended"
+    return "account" if base.startswith("streaminghistory") else None
+
+
+def _hours(ms: float) -> str:
+    return f"{ms / 3.6e6:,.1f}"
+
+
+def _plays(rows: list, kind: str, years: dict) -> None:
+    """Add one file's rows to `years` (year -> {total, music, podcasts, artists, tracks,
+    shows, last}); nothing per play is kept."""
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        extended = kind == "extended"
+        when = str(r.get("ts" if extended else "endTime") or "")
+        ms = r.get("ms_played" if extended else "msPlayed")
+        if not re.match(r"\d{4}-\d\d-\d\d", when) or not isinstance(ms, int | float) or ms <= 0:
+            continue
+        y = years.setdefault(when[:4], {"total": 0, "music": 0, "podcasts": 0,
+                                        "artists": Counter(), "tracks": Counter(),
+                                        "shows": Counter(), "last": ""})
+        y["total"] += ms
+        y["last"] = max(y["last"], when[:10])
+        track = r.get("master_metadata_track_name" if extended else "trackName")
+        artist = r.get("master_metadata_album_artist_name" if extended else "artistName")
+        show = r.get("episode_show_name" if extended else "podcastName")
+        if track and artist:
+            y["music"] += ms
+            y["artists"][artist] += ms
+            y["tracks"][track, artist] += ms
+        elif show:
+            y["podcasts"] += ms
+            y["shows"][show] += ms
+
+
+def _year_text(year: str, y: dict) -> str:
+    head = (f"My Spotify listening in {year}: {_hours(y['total'])} hours (music "
+            f"{_hours(y['music'])}, podcasts {_hours(y['podcasts'])}).")
+    out = [head]
+    for title, rows in (
+            (f"Top {TOP} artists", [f"{a}: {_hours(ms)} hours"
+                                    for a, ms in y["artists"].most_common(TOP)]),
+            (f"Top {TOP} tracks", [f"\"{t}\" by {a}: {_hours(ms)} hours"
+                                   for (t, a), ms in y["tracks"].most_common(TOP)]),
+            ("Top podcasts", [f"{s}: {_hours(ms)} hours"
+                              for s, ms in y["shows"].most_common(TOP_PODCASTS)])):
+        if rows:
+            out.append(f"## {title}\n" + "\n".join(f"{i}. {x}" for i, x in enumerate(rows, 1)))
+    return "\n\n".join(out)
+
+
+def spotify_source(path: Path) -> sources.Source:
+    """A Spotify data export (the account data's StreamingHistory*.json or the extended
+    Streaming_History_Audio_*.json; the extended one wins when both are there) into one page
+    per year: total hours, the top artists and tracks by time, the top podcasts. Keyed by
+    year with `updates`, so a newer export rewrites the year in place."""
+    import json
+    path = Path(path)
+    found = [(f, k) for f in importers._files(path) if (k := spotify_file(f[0]))]
+    if not found:
+        raise VaultError("invalid_argument", f"Found no Spotify streaming history "
+                         f"(StreamingHistory*.json or Streaming_History_Audio_*.json) in "
+                         f"{path.name}.")
+    extended = any(k == "extended" for _, k in found)
+
+    def items():
+        years = {}
+        for (_name, _size, _mtime, read), kind in found:
+            if extended and kind == "account":
+                yield "covered by the extended history"
+                continue
+            try:
+                rows = json.loads(read().decode("utf-8-sig"))
+            except VaultError:
+                yield "over 200 MB"
+                continue
+            except ValueError:
+                yield "malformed file"
+                continue
+            if not isinstance(rows, list):
+                yield "not a listening history file"
+                continue
+            _plays(rows, kind, years)
+        for year, y in sorted(years.items()):
+            yield sources.Item(f"Spotify {year}", y["last"], _year_text(year, y),
+                               key=f"spotify {year}")
+
+    return sources.Source("spotify", "Spotify", "file", items, prefix="listening",
+                          updates=True, skips=SPOTIFY_SKIPS)
+
+
 SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source,
-             "photos": photos_source}
+             "photos": photos_source, "spotify": spotify_source}

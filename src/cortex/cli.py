@@ -1061,13 +1061,13 @@ def import_cmd(path: Annotated[Path, typer.Argument(
              "Takeout of My Activity, a notes folder or .zip (Obsidian, Notion, .md/.txt), "
              "a calendar .ics (or Google's .zip of them), a folder of documents (.pdf, "
              ".docx), a folder of your git projects, reading highlights (Kindle "
-             "My Clippings.txt, a Readwise or Pocket .csv), sent mail (.mbox) or a Google "
-             "Timeline (location history).")],
+             "My Clippings.txt, a Readwise or Pocket .csv), sent mail (.mbox), a Google "
+             "Timeline (location history), a photo folder or a Spotify data export.")],
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
                  "obsidian, notion, notes, calendar, docs, repos, highlights, mail, "
                  "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages), "
-                 "location (Google Timeline) or photos (a photo folder).")] = None,
+                 "location (Google Timeline), photos (a photo folder) or spotify.")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(

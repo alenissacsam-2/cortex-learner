@@ -37,7 +37,8 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
-           "selfchat": "selfchat", "location": "location", "photos": "photos"}
+           "selfchat": "selfchat", "location": "location", "photos": "photos",
+           "spotify": "spotify"}
 
 GUIDES = {
     "notes": {
@@ -147,6 +148,17 @@ GUIDES = {
                   "kept."],
         "wait": "seconds to minutes",
         "pick": "paste the full path of the photo folder"},
+    "spotify": {
+        "name": "Spotify listening",
+        "link": "https://www.spotify.com/account/privacy/",
+        "steps": ["Open spotify.com/account/privacy (signed in) and request your Account data "
+                  "(about 5 days, the last year) or your Extended streaming history (up to 30 "
+                  "days, every year).",
+                  "Download the .zip from Spotify's email.",
+                  "Each year becomes one page: total hours, your top 20 artists and top 20 "
+                  "tracks by time, and your top podcasts. Nothing per play is kept."],
+        "wait": "about 5 days for account data; up to 30 days for the extended history",
+        "pick": "Spotify's .zip as it is, or its folder"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -317,6 +329,8 @@ def detect(path: Path) -> list[str]:
     from cortex import life_sources
     if any(life_sources.location_file(n) for n in names):
         return ["location"]
+    if any(life_sources.spotify_file(n) for n in names):
+        return ["spotify"]
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
     heads = {n: read(takeout.HEAD) for n, (_, _, _, read) in zip(names, files, strict=True)
              if takeout.activity_file(n) == "html"}

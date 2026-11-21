@@ -45,7 +45,7 @@ UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox")
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
 IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar",
            "docs", "repos", "highlights", "mail", "selfchat", "location",
-           "photos")
+           "photos", "spotify")
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
 _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 # path -> (its file, type); "/" is the live home, filled by dashboard.render_live

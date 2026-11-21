@@ -322,7 +322,7 @@ def imports(root: Path | None = None) -> dict:
             ("docs", ("docs-*.md",)), ("repos", ("repo-*.md",)),
             ("highlights", ("highlights-*.md", "pocket-*.md")), ("mail", ("mail-*.md",)),
             ("selfchat", ("selfchat-*.md",)), ("location", ("location-*.md",)),
-            ("photos", ("photos-*.md",)))}
+            ("photos", ("photos-*.md",)), ("spotify", ("listening-*.md",)))}
         for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events),
                                  *((k, ps, len(ps)) for k, ps in more.items())):
             out[source] = {"count": n,
