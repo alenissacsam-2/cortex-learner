@@ -91,6 +91,33 @@ def test_mail_reimport_is_a_no_op_and_bad_file_is_counted(tmp_path, root_plain):
     assert r["reasons"]["not an mbox file"] == 1 and r["imported"] == 0
 
 
+def test_an_inbox_top_sender_is_never_taken_as_you(tmp_path, root_plain):
+    """Audit 21 Nov I4: who you are comes from Sent mail across all boxes, never from a box's
+    most common sender (a newsletter in an Inbox)."""
+    news = "".join(_mail("News <news@example.test>", "me@example.test",
+                         f"Mon, 0{d} Mar 2026 09:00:00 +0000", f"Issue {d}", f"newsletter {d}",
+                         labels="Inbox") for d in range(1, 4))
+    (tmp_path / "Inbox.mbox").write_text(news, encoding="utf-8")
+    (tmp_path / "Sent.mbox").write_text(MBOX, encoding="utf-8")
+    v = Vault(root_plain)
+    r = sources.run(v, life_sources.mail_source(tmp_path), C)
+    assert r["imported"] == 2 and r["reasons"]["not sent by you"] == 4
+    assert "newsletter" not in "".join(_pages(v, "mail").values())
+    # an Inbox alone, labelled or not: no owner, nothing imported
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "Inbox.mbox").write_text(news.replace("X-Gmail-Labels: Inbox\n", ""),
+                                      encoding="utf-8")
+    for box in (tmp_path / "Inbox.mbox", plain / "Inbox.mbox"):
+        r = sources.run(v, life_sources.mail_source(box), C)
+        assert r["imported"] == 0 and r["reasons"]["not sent by you"] == 3, box
+    # a Sent folder from a mail app (no Gmail labels) is still yours
+    (plain / "Sent.mbox").write_text(news.replace("X-Gmail-Labels: Inbox\n", "")
+                                     .replace("news@", "me2@"), encoding="utf-8")
+    r = sources.run(v, life_sources.mail_source(plain / "Sent.mbox"), C)
+    assert r["imported"] + r["updated"] == 1 and not any(r["reasons"].values()), r
+
+
 def test_own_text_cuts():
     assert life_sources.own_text("Mine.\n> theirs\nmore mine") == "Mine.\nmore mine"
     assert life_sources.own_text("Mine.\nFrom: Asha\nSent: Monday\ntheirs") == "Mine."
