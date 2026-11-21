@@ -235,26 +235,27 @@ def chat(root):
     return Index(v, Catalog.load(v))
 
 
-def test_chunks_are_title_prefixed_overlapping_windows_cut_at_turns():
-    n = {"title": "Trip", "fields": {}, "body": chat_body()}
+def test_chunks_are_headed_overlapping_windows_cut_at_turns():
+    n = {"title": "Trip", "kind": "resource", "fields": {}, "body": chat_body()}
     body = semantic._filled(n["body"].strip())
     ch = semantic._chunks(n)
     assert ch[0] == (0, semantic._text(n)) and len(ch) > 3
     assert ch[1][0] == semantic.BODY_CHARS - semantic.CHUNK_OVERLAP
     for (s, t), (s2, _) in zip(ch[1:], ch[2:], strict=False):
-        piece = t.removeprefix("Trip\n")
-        assert t.startswith("Trip\n") and body[s:s + len(piece)] == piece
+        head, piece = t.split("\n", 1)
+        assert head.startswith("Trip › ### ") and body[s:s + len(piece)] == piece
         assert len(piece) <= semantic.CHUNK_CHARS
         assert body[s + len(piece):].startswith("\n### ")  # cut before a whole turn
         assert s2 == s + len(piece) - semantic.CHUNK_OVERLAP  # overlap
     s, t = ch[-1]
-    assert body[s:] == t.removeprefix("Trip\n")  # the last one runs to the end
-    short = {"title": "S", "fields": {}, "body": "x" * semantic.BODY_CHARS}
+    assert body[s:] == t.split("\n", 1)[1]  # the last one runs to the end
+    short = {"title": "S", "kind": "note", "fields": {}, "body": "x" * semantic.BODY_CHARS}
     assert semantic._chunks(short) == [(0, semantic._text(short))]
-    flat = {"title": "F", "fields": {}, "body": "y" * 5000}  # no boundary: a hard cut
+    flat = {"title": "F", "kind": "note", "fields": {}, "body": "y" * 5000}  # a hard cut
     tail = semantic._chunks(flat)[1:]
     assert [s for s, _ in tail] == [1300, 2100, 2900, 3700, 4500]  # stride 800
-    assert [len(t) - 2 for _, t in tail] == [1000] * 4 + [500]
+    assert [t.split("\n", 1) for _, t in tail][0][0] == "F · note"  # no heading, no day
+    assert [len(t.split("\n", 1)[1]) for _, t in tail] == [1000] * 4 + [500]
 
 
 def test_a_page_scores_by_its_best_chunk_and_reranks_on_it(chat):
@@ -315,7 +316,7 @@ def test_cache_versioning_rebuilds_on_new_chunking(root, chat, monkeypatch):
     semantic.vectors(chat, FakeEmbed(), 4)
     with closing(vecstore.connect(root / semantic.CACHE, create=False)) as con:
         meta = vecstore.get_meta(con, "settings")
-        assert meta["text"] == 3 and meta["chunk"] == semantic.CHUNKING
+        assert meta["text"] == semantic.TEXT_VERSION and meta["chunk"] == semantic.CHUNKING
         rows = list(vecstore.rows(con, meta["dim"]))
         assert rows and all(full and v.dtype == np.float16 for _, _, full, _, v in rows)
     semantic._MEM.clear()
@@ -486,6 +487,56 @@ def test_a_recent_journal_or_chat_page_edges_out_an_old_one(root, monkeypatch):
     note(root, "notes/dated.md", "title: Dated\ndate: 2026-11-19\n", "# Dated\n\ncar")
     idx = Index(v, Catalog.load(v))
     assert semantic._factors(idx, "dated", False, None) == {}
+
+
+def test_a_current_query_ranks_the_newer_of_two_like_pages_first(root, monkeypatch):
+    monkeypatch.setattr(semantic, "_today", lambda: "2026-11-20")
+    for name, day in (("a-old", "2025-01-10"), ("b-new", "2026-11-10")):
+        note(root, f"decisions/{name}.md", f"title: Car plan\nstatus: accepted\ndate: {day}\n",
+             CARS.format(t="Car plan", tl="", z=""))
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+
+    def order(q):
+        got = ids(semantic.recall(idx, q, FakeEmbed(), hops=0, limit=20))
+        return got.index("a-old") < got.index("b-new")
+
+    assert order("vehicle")  # neutral: equal scores, by id
+    assert not order("which vehicle do I use these days")
+    assert semantic.is_current("Am I STILL on it?") and not semantic.is_current("knowledge")
+
+
+def _long_page():
+    filler = "Some words about the plan and the week. " * 30
+    body = (f"# Week\n\n{filler}\n\n## 10 Nov\n\n### Notes\n\n{filler}\n\n"
+            f"### Decisions\n\n{filler}\n\n{filler}\n\n## 11 Nov\n\n{filler}\n")
+    return {"title": "Week", "kind": "journal", "fields": {"date": "2026-11-10"}, "body": body}
+
+
+def test_a_deep_chunk_is_headed_by_title_heading_path_day_and_kind():
+    n = _long_page()
+    body = semantic._filled(n["body"].strip())
+    ch = semantic._chunks(n)
+    assert len(ch) > 2 and ch[0] == (0, semantic._text(n))
+    for s, t in ch[1:]:
+        head, piece = t.split("\n", 1)
+        assert body[s:s + len(piece)] == piece  # the offset still points into the real body
+        above = [ln for ln in body[:s].splitlines() if ln.startswith("#")]
+        assert head.endswith(" · 2026-11-10 · journal") and above[-1] in head
+    assert ch[1][1].split("\n", 1)[0] == "Week › ## 10 Nov › ### Notes · 2026-11-10 · journal"
+    assert ch[-1][1].startswith("Week › ## 11 Nov · ")  # a new ## closes ### Decisions
+    long = semantic._header("T" * 300, ["## x"], "2026-11-10", "note")
+    assert len(long) == semantic.HEADER_CHARS and long.endswith(" · 2026-11-10 · note")
+
+
+def test_a_deep_passage_cites_its_span_in_the_body_not_the_header():
+    from cortex import ask
+
+    n = _long_page()
+    s, t = semantic._chunks(n)[2]
+    at, size = ask._span(n["body"], t, n["title"])
+    assert n["body"][at:].startswith(t.split("\n", 1)[1].strip().splitlines()[0])
+    assert size <= len(t)
 
 
 def test_explain_shows_the_weight_factors(root, monkeypatch):

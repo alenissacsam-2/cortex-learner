@@ -185,7 +185,8 @@ def _span(body: str, text: str, title: str) -> tuple[int, int]:
     after the title line, then the last line of 12+ characters (any last line when none is that
     long) from there; (0, len(text)) when the start is not found."""
     lines = [ln.strip() for ln in text.splitlines()]
-    lines = lines[1:] if lines and lines[0] == title.strip() else lines
+    # the title line, or a deep chunk's header (`semantic._header`), is not body text
+    lines = lines[1:] if lines and lines[0].startswith(" ".join(title.split())) else lines
     at = next((a for s in lines if len(s) >= 12 and (a := body.find(s)) >= 0), -1)
     if at < 0:
         return 0, len(text)
