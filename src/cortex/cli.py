@@ -764,6 +764,25 @@ def lint_cmd(findability: Annotated[bool, typer.Option(
     v.append_log(local_day(datetime.now(UTC)), "lint", f"{len(findings)} findings")
 
 
+@app.command("agent-text")
+@_errors
+def agent_text_cmd(vault: VaultOpt = None) -> None:
+    """Print every fixed string an agent can see (server instructions, tool descriptions, next
+    hints, SKILL.md, hook templates, the rule-file block), then its size per app profile."""
+    from cortex import agent_text, profiles
+
+    srcs = agent_text.sources()
+    for label, channel, text in srcs:
+        typer.echo(f"== {label} [{channel}] ({len(text)} chars) ==\n{text}\n")
+    try:  # the owner's profiles when a vault is set; DEFAULT otherwise (no vault text is read)
+        data = profiles.load(_vault(vault))
+    except VaultError:
+        data = profiles.DEFAULT
+    typer.echo("== chars per app profile ==")
+    for name, n in agent_text.sizes(data, srcs):
+        typer.echo(f"{name}: {n} ({', '.join(sorted(agent_text.channels(name)))})")
+
+
 @app.command("relink")
 @_errors
 def relink_cmd(dry_run: Annotated[bool, typer.Option(

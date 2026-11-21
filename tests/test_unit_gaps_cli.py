@@ -50,6 +50,7 @@ CASES = [
     (["setup", "--dry-run", "--yes", "--vault", "{V}"], {0}),
     (["setup", "--print-mcp-config", "--vault", "{V}"], {0}),
     (["lint", "--vault", "{V}"], {0}),
+    (["agent-text", "--vault", "{V}"], {0}),
     (["relink", "--dry-run", "--vault", "{V}"], {0}),
     (["reflect", "--vault", "{V}"], {0}),
     (["chats", "--vault", "{V}"], {0}),

@@ -112,6 +112,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex undo <session>` | Reverts one chat's changes |
 | `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
+| `cortex agent-text` | Every fixed text Cortex shows an AI app, with its size per app |
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |
 | `cortex chat eval` | The Chat test: 40 questions on a made-up vault, scored in code ([below](#the-chat-test)) |

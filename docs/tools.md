@@ -377,6 +377,9 @@ The 16th tool, registered only by `cortex mcp --private`, which the CLI refuses 
 ### `cortex claims --summary` (CLI only)
 `cortex claims --summary [--vault V]` (`cortex know` is a hidden alias) prints, per claim page (`me/preferences`, `personality`, `goals`, `profile`, `voice`), the live claim count, `tiers:` counts (`tiers:` ends with `(confirmed: N clicked, R reflected, M relayed)` when any line is confirmed; idea 11); then the same for all pages. A private page prints `me/<page>: private` only. Read-only: writes no event or file.
 
+### `cortex agent-text` (CLI only)
+`cortex agent-text [--vault V]` (RR-36) prints every fixed string an agent can see, each as `== <source> [<channel>] (N chars) ==` and its text: the server `INSTRUCTIONS`, each tool description, the `next` hint constants of `mcp_server` (`*_NEXT`, `OFFER`, `MOCK_BRIEF`, `ASK_FOCUS`; a dict one as `key: text` lines), `skills/cortex/SKILL.md` (a checkout only), the prime hook's templates (`HEAD`, `NEXT`, `TAGGED`, `NUDGE`) and the rule-file block without a vault. Then `== chars per app profile ==`: per profile match (the vault's `.cortex/profiles.json`, else the defaults) and `unknown`, the summed size of the channels that reach that app: `mcp` for every app, `plugin` (skill and hooks) for Claude, `rules` for Cursor, VS Code, Copilot and Codex. Vault text (claims, pages, the rule block's core lines) is never printed. Read-only.
+
 ## Event (JSONL, one object per line, `events/YYYY/MM/<session>.jsonl`)
 | Field | Filled by | Notes |
 |---|---|---|
