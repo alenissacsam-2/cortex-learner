@@ -38,7 +38,7 @@ SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "take
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
            "selfchat": "selfchat", "location": "location", "photos": "photos",
-           "spotify": "spotify"}
+           "spotify": "spotify", "voice-memos": "voice-memos"}
 
 GUIDES = {
     "notes": {
@@ -159,6 +159,20 @@ GUIDES = {
                   "tracks by time, and your top podcasts. Nothing per play is kept."],
         "wait": "about 5 days for account data; up to 30 days for the extended history",
         "pick": "Spotify's .zip as it is, or its folder"},
+    "voice-memos": {
+        "name": "Voice memos",
+        "link": "",
+        "steps": ["Copy your recordings into one folder on this computer: your phone's voice "
+                  "recorder files, or WhatsApp voice notes (Android: WhatsApp/Media/WhatsApp "
+                  "Voice Notes). .m4a, .mp3, .wav, .ogg, .opus and .aac files are read, "
+                  "subfolders too; a recording over 2 hours is skipped.",
+                  "Each recording becomes one private page of what you said, transcribed on "
+                  "this computer by a local speech model (about 150 MB, installed once when "
+                  "you click Install). The audio is never copied into Cortex and never leaves "
+                  "this computer; silence and noise are left out."],
+        "wait": "the transcribing runs on this computer: seconds to a minute per minute of "
+                "audio",
+        "pick": "paste the full path of the folder of recordings"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -361,6 +375,9 @@ def detect(path: Path) -> list[str]:
         kinds.append("notes")
     elif not kinds and any(n.endswith(more_sources.DOC_SUFFIXES) for n in names):
         kinds.append("docs")  # PDFs among notes (attachments) still mean notes
+    from cortex import voice_memos
+    if not kinds and any(n.endswith(voice_memos.AUDIO) for n in names):
+        kinds.append("voice-memos")  # last: a notes folder with a recording is still notes
     return kinds
 
 

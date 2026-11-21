@@ -113,6 +113,7 @@ class Source:
     # could not read) keeps the report from counting pages as gone from the folder
     by_origin: bool = False
     walk_errors: list = field(default_factory=list)
+    vault: Vault | None = None  # set by `run`, for items that need it (voice memos' prompt)
 
 
 def tier(value: str | Audience) -> Audience:
@@ -311,6 +312,7 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
          "unreadable": {}}
     if tier is Audience.SKIP:
         return r
+    src.vault = vault
     (_items if src.page == "item" else _months)(vault, src, tier is Audience.LOCAL, dry_run, r)
     return r
 

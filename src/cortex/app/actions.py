@@ -374,11 +374,12 @@ KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity ca
         "selfchat": ("notes to yourself", "the Notes to self card"),
         "location": ("a location history", "the Location card"),
         "photos": ("a photo folder", "the Photos card"),
-        "spotify": ("a Spotify export", "the Spotify card")}
+        "spotify": ("a Spotify export", "the Spotify card"),
+        "voice-memos": ("a folder of recordings", "the Voice memos card")}
 TIERED = ("notes", "calendar", "docs", "repos", "highlights", "mail", "selfchat",
-          "location", "photos", "spotify")  # imports that ask the tier
+          "location", "photos", "spotify", "voice-memos")  # imports that ask the tier
 OWN_CHECK = ("docs", "repos", "mail", "selfchat", "location", "photos",
-             "spotify")  # the source checks the path itself
+             "spotify", "voice-memos")  # the source checks the path itself
 
 
 def _kind(source: str, path: Path) -> str:
@@ -456,11 +457,26 @@ def import_preview(job, source: str, path: Path, root: Path | None = None) -> di
                 f"Download the search model first ({wizard.EMBED['size']}): it sorts each page "
                 "into a topic, and without it every page lands under Other.")])
         return out
+    if kind == "voice-memos":
+        from cortex import voice_memos
+        if not path.is_dir():
+            raise ValueError(f"{path.name} is not a folder; paste the folder of recordings.")
+        if voice_memos.load_transcriber() is None:  # asked at Check; nothing downloads unasked
+            return {"ok": False, "kind": "import-preview", "need": "voice", "found": 0,
+                    "lines": ["Needs the local speech model (~150 MB). Install?"],
+                    "note": "It transcribes on this computer: your recordings never leave it, "
+                            "and nothing is downloaded until you click Install."}
     if kind in TIERED:
         # C2: the page asks the tier before Import, starting from the last choice or default
         v = _vault(root)
         t = _tier(v, kind, path)[0]
         counted = sources.Audience.CLOUD if t is sources.Audience.SKIP else t
+    if kind == "voice-memos":  # counted only: transcribing waits for Import
+        n, new = voice_memos.count(v, path)
+        return {"ok": True, "kind": "import-preview", "found": new, "tier": t.value,
+                "lines": [f"Found {n:,} recording{_s(n)}, {new:,} of them new. Each new one is "
+                          "transcribed on this computer when you click Import, which can take "
+                          "a while; the progress shows at the top."]}
     if kind in more_sources.SOURCE_OF:
         src = _source(kind, path)
         r = _readable(sources.run, v, src, counted, True)
@@ -499,8 +515,10 @@ def _cortex_hint() -> str:
             "from them.")
 
 
-def _source(kind: str, path: Path):
-    from cortex import importers, more_sources
+def _source(kind: str, path: Path, job=None):
+    from cortex import importers, more_sources, voice_memos
+    if kind == "voice-memos":  # the job: a line per recording, and Cancel
+        return _readable(voice_memos.voice_source, path, job)
     return _readable({"notes": importers.notes_source, "calendar": importers.calendar_source,
                       **more_sources.SOURCE_OF}[kind], path)
 
@@ -535,7 +553,7 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
                 "lines": ["Nothing was imported: you chose Don't save.", *told]}
     if kind in more_sources.SOURCE_OF:
         job.say("importing")
-        src = _source(kind, path)
+        src = _source(kind, path, job)
         r = _readable(sources.run, v, src, t, False)
         _commit(v, kind)
         return {"ok": True, "kind": "import", "counts": {kind: r["imported"] + r["updated"]},
