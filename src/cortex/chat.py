@@ -700,6 +700,28 @@ def history(msgs: list, sources: dict | None = None) -> list:
 _HEADING = re.compile(r"^#{1,6}\s+(.+)$", re.M)
 
 
+RELATIVES = 3  # names one "my <relation>" may add to the search
+_MY = re.compile(r"\bmy\s+\w", re.I)
+
+
+def relatives(vault: Vault, text: str) -> list[str]:
+    """Names of the people pages whose `relation` field `text` names as "my <relation>" ("my
+    sister", "my study-partner"), for the search: the question rarely holds the name itself.
+    Public people pages only: the index never holds a private one, and none is read here."""
+    if not _MY.search(text):
+        return []
+    with _INDEX_LOCK:
+        people = sorted((n["title"], str(n["fields"].get("relation") or ""))
+                        for n in _index(vault)._notes.values() if n["kind"] == "person")
+    out = []
+    for title, rel in people:
+        tag = re.escape(rel).replace(r"\-", r"[\s-]")
+        if rel and re.search(rf"\bmy\s+{tag}s?\b", text, re.I) and (name := chat_study._title(
+                title)) and name not in out:
+            out.append(name)
+    return out[:RELATIVES]
+
+
 def _clean(text: str) -> str:
     """Untrusted page text, line by line, without links, images, URLs or HTML."""
     return "\n".join(render.plain(ln, 10_000) for ln in text.splitlines()).strip()
@@ -760,9 +782,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
-    matched} when passages were searched (how many the model read of how many the search found;
-    saved on the answer too)}, {"t": "done", id, model, seconds, stopped}; or {"t": "err",
-    code (not_set_up, no_local_model, no_answer), message}. A set `cancel` stops the stream;
+    matched, also (names `relatives` added, when any)} when passages were searched (how many
+    the model read of how many the search found; saved on the answer too)}, {"t": "done", id,
+    model, seconds, stopped}; or {"t": "err", code (not_set_up, no_local_model, no_answer),
+    message}. A set `cancel` stops the stream;
     the partial answer is saved with `stopped: true`. Returns the chat id. `runner` is a local
     `localllm.Runner` or None; never a cloud one."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
@@ -826,6 +849,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})
     found: list = []
+    also: list = []  # people's names `relatives` added to the search
     stats: dict = {}  # ask._passages' match count, for the coverage line
     parts: list = []
     messages = facts = None
@@ -861,7 +885,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         past = got and got[0] <= today
         emit({"t": "step", "s": "Searching your notes and browsing" + (
             f" from {_span(got[0], min(got[1], today), today)}" if past else "")})
-        found = ask._passages(vault, query, s["passages"],
+        also = relatives(vault, query)  # "my sister": her name is searched too
+        found = ask._passages(vault, "\n".join([query, *also]), s["passages"],
                               between=(got[0].isoformat(), min(got[1], today).isoformat())
                               if past else None,
                               sources=s["sources"], topic=topic(said, got[2]) if got else "",
@@ -914,7 +939,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     sources = [{"n": n, **pill(p)} for n, p in enumerate(found, 1) if n in cited]
     # a small model often cites nothing: then show what it read, marked as not cited
     searched = [] if sources else [pill(p) for p in found[:SEARCHED]]
-    coverage = {"read": len(found), "matched": stats["matched"]} if "matched" in stats else None
+    coverage = {"read": len(found), "matched": stats["matched"],
+                **({"also": also} if also else {})} if "matched" in stats else None
     msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
                  **({"facts": facts} if facts is not None else {}),

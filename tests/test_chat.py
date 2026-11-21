@@ -655,6 +655,29 @@ def test_a_follow_up_carries_history_and_the_previous_question(vault, stream, mo
     assert len(chat.load(vault, cid)) == 4
 
 
+def test_my_relation_adds_a_public_persons_name_to_the_search(vault, stream, monkeypatch):
+    note(vault.root, "people/asha-rao.md", "title: Asha Rao\nkind: person\nrelation: sister\n"
+         "private: false\n", "# Asha Rao\n\nPlays the violin.")
+    note(vault.root, "people/hidden-sis.md", "title: Hidden Sis\nkind: person\nrelation: sister\n",
+         "# Hidden Sis\n\nPrivate by default.")  # a people page is private unless it says not
+    note(vault.root, "people/ravi.md", "title: Ravi\nkind: person\nrelation: study-partner\n"
+         "private: false\n", "# Ravi\n\nDSA.")
+    assert chat.relatives(vault, "What does my sister play?") == ["Asha Rao"]
+    assert chat.relatives(vault, "my study partner and my sisters") == ["Asha Rao", "Ravi"]
+    assert chat.relatives(vault, "my brother") == [] and chat.relatives(vault, "a sister") == []
+    asked = []
+    real = ask._passages
+    monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
+                                                                                      **kw))
+    s = stream("ollama", ["The violin [1]."])
+    cid, ev = _turn(vault, None, "What does my sister play?", s.runner())
+    assert asked == ["What does my sister play?\nAsha Rao"]
+    assert ev[-2]["coverage"]["also"] == ["Asha Rao"]
+    assert chat.load(vault, cid)[-1]["coverage"]["also"] == ["Asha Rao"]
+    _, ev = _turn(vault, None, "car motor", s.runner())
+    assert "also" not in ev[-2]["coverage"]
+
+
 def test_history_leaves_out_answers_made_with_a_switch_now_off(vault, stream):
     s = stream("ollama", ["Answer [1]."])
     cid, _ = _turn(vault, None, "car motor", s.runner())  # every switch on

@@ -653,7 +653,8 @@
       const cov = m.coverage;  // what the model read of what the search found
       el.replaceChildren(who, m.facts ? factsBox(m.facts) : '', body, copy, sourceRow(m.sources, m.searched, open, shown) || '',
         shown ? passageView(shown, p, () => open(shown)) : '',
-        cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}` }) : '',
+        cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched} match${cov.matched === 1 ? '' : 'es'}`
+          + (cov.also && cov.also.length ? ` · also searched: ${cov.also.join(', ')}` : '') }) : '',
         m.stopped ? h('p', { class: 'ink-3 small', text: 'Stopped before the end.' }) : '');
     };
     draw(false);
