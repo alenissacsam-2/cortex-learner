@@ -125,6 +125,8 @@ def test_no_private_leaves_out_private_pages_and_stores(tmp_path, home):
     b = root / ".cortex" / "browse"
     b.mkdir(parents=True)
     (b / "sites.json").write_text("{}", encoding="utf-8")
+    for s in ("", "-wal", "-shm"):  # Audit 21 Nov I3: raw chat turns, private ones too
+        (root / f".cortex/chat-import.sqlite{s}").write_text("health chat", encoding="utf-8")
     for rel in (store.PATH, semantic.CACHE):
         with closing(sqlite3.connect(root / rel)) as con:
             con.execute("CREATE TABLE t(x)")
@@ -145,6 +147,7 @@ def test_no_private_leaves_out_private_pages_and_stores(tmp_path, home):
             "raw/public.txt", ".cortex/vectors.db"} <= names, names
     assert any(n.startswith("events/") for n in names)
     for gone in ("notes/diary.md", "concepts/secret-diary.md", "mistakes/dsa.diary-slip.md",
-                 "resources/letter.md", "raw/letter.txt"):
+                 "resources/letter.md", "raw/letter.txt", ".cortex/chat-import.sqlite",
+                 ".cortex/chat-import.sqlite-wal", ".cortex/chat-import.sqlite-shm"):
         assert gone not in names, gone
     assert not [n for n in names if n.startswith((".git/", ".cortex/browse/", "browse/private/"))]
