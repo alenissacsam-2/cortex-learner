@@ -410,4 +410,125 @@ def selfchat_source(path: Path) -> sources.Source:
                           page="month", noun="messages", skips=SELF_SKIPS)
 
 
-SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source}
+# ---- location: a city per day ----
+
+LOC_SKIPS = ("no place name", "not a location file", "raw points (not read)",
+             "malformed file", "over 200 MB")
+_STREET = re.compile(r"\b(?:road|rd|street|st|avenue|ave|lane|ln|marg|drive|dr|blvd|boulevard|"
+                     r"way|highway|hwy|cross|floor|block|sector|plot|house|flat|apt|suite|"
+                     r"building|tower|nagar|layout|colony)\b", re.I)
+
+
+def city(address: str) -> str | None:
+    """The city in a one-line postal address ("MG Road, Bengaluru, Karnataka 560001, India"
+    -> "Bengaluru"; "Street 1, 10117 Berlin, Germany" -> "Berlin"), or None when the part it
+    lands on could be finer than a city (digits or a street word in it)."""
+    parts = [p.strip() for p in str(address).replace("\n", ",").split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    cand = parts[-2]
+    if re.match(r"\d", cand):  # "10117 Berlin": the postcode first
+        cand = re.sub(r"^[\d\s-]+", "", cand)
+    elif re.search(r"\d", cand) and len(parts) >= 3:  # "Karnataka 560001": the region
+        cand = parts[-3]
+    elif len(parts) >= 4:  # "street, city, region, country"
+        cand = parts[-3]
+    cand = re.sub(r"\s+\d[\d\s-]*$", "", cand).strip()  # a postcode after the city
+    if not cand or re.search(r"\d", cand) or _STREET.search(cand) or len(cand) > 40:
+        return None
+    return cand
+
+
+def _when_day(value) -> str:
+    """YYYY-MM-DD from an ISO time (its own local date) or epoch milliseconds (UTC)."""
+    s = str(value or "")
+    if re.match(r"\d{4}-\d\d-\d\d", s):
+        return s[:10]
+    if s.isdigit():
+        from datetime import UTC, datetime
+        try:
+            return datetime.fromtimestamp(int(s) / 1000, UTC).date().isoformat()
+        except (ValueError, OverflowError, OSError):
+            return ""
+    return ""
+
+
+def _visits(data):
+    """(day, address or None) per place visit, from either Takeout shape: the monthly
+    Semantic Location History (`timelineObjects` placeVisit) or the on-device Timeline
+    (`semanticSegments`, or a bare list of segments). Movements are not places: skipped.
+    Raises ValueError on any other shape."""
+    if isinstance(data, dict) and isinstance(data.get("timelineObjects"), list):
+        for o in data["timelineObjects"]:
+            v = o.get("placeVisit") if isinstance(o, dict) else None
+            if isinstance(v, dict):
+                dur, loc = v.get("duration") or {}, v.get("location") or {}
+                yield (_when_day(dur.get("startTimestamp") or dur.get("startTimestampMs")),
+                       loc.get("address"))
+        return
+    segs = data.get("semanticSegments") if isinstance(data, dict) else data
+    if not isinstance(segs, list):
+        raise ValueError("not a location file")
+    for s in segs:
+        visit = s.get("visit") if isinstance(s, dict) else None
+        if isinstance(visit, dict):
+            top = visit.get("topCandidate") or {}
+            place = top.get("placeLocation")
+            yield (_when_day(s.get("startTime")),
+                   top.get("address") or (place.get("address") if isinstance(place, dict)
+                                          else None))
+
+
+def location_file(name: str) -> bool:
+    """A Takeout location history JSON, by its path (for `importers.detect`)."""
+    low = name.lower().replace("\\", "/")
+    return low.endswith(".json") and ("semantic location history/" in low or low.rsplit(
+        "/", 1)[-1] in ("timeline.json", "location-history.json", "records.json"))
+
+
+def location_source(path: Path) -> sources.Source:
+    """Google Timeline exports into month pages of `- YYYY-MM-DD: City`, one city per day
+    (the most visited that day). Coordinates, street addresses, raw points (Records.json) and
+    movements are never read into a page; a day with no address is skipped (no network, no
+    reverse geocoding)."""
+    import json
+    path = Path(path)
+    found = [f for f in importers._files(path) if f[0].lower().endswith(".json")]
+    if not found:
+        raise VaultError("invalid_argument", f"Found no location history .json in "
+                         f"{path.name}.")
+
+    def items():
+        days = defaultdict(Counter)
+        for name, _size, _mtime, read in found:
+            if name.lower().rsplit("/", 1)[-1] == "records.json":
+                yield "raw points (not read)"
+                continue
+            try:
+                data = json.loads(read().decode("utf-8-sig"))
+                visits = list(_visits(data))
+            except VaultError:
+                yield "over 200 MB"
+                continue
+            except ValueError as e:
+                yield "not a location file" if str(e) == "not a location file" \
+                    else "malformed file"
+                continue
+            except (AttributeError, TypeError):  # a list of something else
+                yield "not a location file"
+                continue
+            for day, address in visits:
+                if day:
+                    days[day][city(address) if address else None] += 1
+        for day, cities in sorted(days.items()):
+            cities.pop(None, None)
+            if not cities:
+                yield "no place name"
+                continue
+            yield sources.Item(day, day, f"{day}: {cities.most_common(1)[0][0]}")
+
+    return sources.Source("location", "Location", "file", items, default_tier=LOCAL,
+                          page="month", noun="places", coarse_place=True, skips=LOC_SKIPS)
+
+
+SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source}

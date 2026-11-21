@@ -37,7 +37,7 @@ LABELS = {"obsidian": "Obsidian", "notion": "Notion", "notes": "Notes"}
 SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "takeout",
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
-           "selfchat": "selfchat"}
+           "selfchat": "selfchat", "location": "location"}
 
 GUIDES = {
     "notes": {
@@ -122,6 +122,20 @@ GUIDES = {
                   "left out."],
         "wait": "instant on WhatsApp; minutes for a Telegram export",
         "pick": "the WhatsApp .txt or .zip, or Telegram's result.json"},
+    "location": {
+        "name": "Location (Google Timeline)",
+        "link": "https://takeout.google.com",
+        "steps": ["Older exports: open takeout.google.com, click Deselect all, tick Location "
+                  "History (Timeline), then Next step and Create export; download the .zip.",
+                  "Timeline kept on your phone: on Android open Settings > Location > Location "
+                  "services > Timeline > Export Timeline data (on an iPhone, Google Maps' "
+                  "Timeline settings offer the same export), and save Timeline.json or "
+                  "location-history.json.",
+                  "Each day keeps one city, from the addresses in the export. Coordinates, "
+                  "street addresses and raw location points never reach a page; a day with no "
+                  "address is left out (phone exports often have none)."],
+        "wait": "hours to a day for Takeout; instant on the phone",
+        "pick": "the Takeout .zip as it is, or Timeline.json"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -289,6 +303,9 @@ def detect(path: Path) -> list[str]:
     names = [n.lower() for n, *_ in files]
     if any(n.endswith(".mbox") for n in names):
         return ["mail"]
+    from cortex import life_sources
+    if any(life_sources.location_file(n) for n in names):
+        return ["location"]
     # an HTML activity file counts only when its head holds a row (`html_rows` can read it)
     heads = {n: read(takeout.HEAD) for n, (_, _, _, read) in zip(names, files, strict=True)
              if takeout.activity_file(n) == "html"}

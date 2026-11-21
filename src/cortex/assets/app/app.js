@@ -1153,7 +1153,7 @@
   }
 
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'browser'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'location', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
@@ -1165,6 +1165,7 @@
     highlights: 'Kindle clippings, a Readwise export or a Pocket list.',
     mail: 'The mail you sent, from an .mbox file: your own words, never addresses.',
     selfchat: 'Notes you sent yourself: a WhatsApp chat with yourself or Telegram Saved Messages.',
+    location: 'Where you were: one city per day from your Google Timeline, never an address.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;

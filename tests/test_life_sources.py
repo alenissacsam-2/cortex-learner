@@ -185,3 +185,75 @@ def test_cli_imports_selfchat(tmp_path, root_plain):
     assert "Notes to self: read" in r.output
     assert "private: true" in (root_plain / "resources" / "selfchat-private-2024-03.md") \
         .read_text("utf-8")
+
+
+# ---- location ----
+
+def _visit(start: str, address: str | None, lat: int = 129716000) -> dict:
+    loc = {"latitudeE7": lat, "longitudeE7": 775946000, "name": "Cafe Secret Spot",
+           "placeId": "ChIJabc"}
+    if address:
+        loc["address"] = address
+    return {"placeVisit": {"location": loc, "duration": {"startTimestamp": start}}}
+
+
+OLD = {"timelineObjects": [
+    _visit("2024-03-01T08:00:00Z", "12, 5th Cross, Indiranagar, Bengaluru, Karnataka 560038, "
+           "India"),
+    _visit("2024-03-01T12:00:00Z", "MG Road, Bengaluru, Karnataka 560001, India"),
+    _visit("2024-03-01T18:00:00Z", "Unter den Linden 1, 10117 Berlin, Germany"),
+    _visit("2024-03-02T09:00:00Z", None),
+    {"activitySegment": {"startLocation": {"latitudeE7": 129716000}, "duration": {
+        "startTimestamp": "2024-03-03T09:00:00Z"}}},
+    _visit("1711958400000", "1 Infinite Loop, Cupertino, CA 95014, United States")]}
+NEW = {"semanticSegments": [
+    {"startTime": "2024-04-05T09:00:00.000+05:30", "endTime": "2024-04-05T10:00:00.000+05:30",
+     "visit": {"topCandidate": {"placeId": "x", "semanticType": "HOME",
+                                "placeLocation": {"latLng": "12.9716123°, 77.5946123°"}}}},
+    {"startTime": "2024-04-06T09:00:00.000+05:30",
+     "visit": {"topCandidate": {"placeLocation": {"latLng": "48.8566°, 2.3522°",
+                                                  "address": "Rue X 5, 75001 Paris, France"}}}},
+    {"startTime": "2024-04-06T11:00:00.000+05:30", "timelinePath": [
+        {"point": "48.8566°, 2.3522°", "time": "2024-04-06T11:00:00.000+05:30"}]}],
+       "rawSignals": [{"position": {"LatLng": "48.8566°, 2.3522°"}}]}
+
+
+def test_city_from_an_address():
+    assert life_sources.city("MG Road, Bengaluru, Karnataka 560001, India") == "Bengaluru"
+    assert life_sources.city("Unter den Linden 1, 10117 Berlin, Germany") == "Berlin"
+    assert life_sources.city("1 Infinite Loop, Cupertino, CA 95014, USA") == "Cupertino"
+    assert life_sources.city("Paris, France") == "Paris"
+    assert life_sources.city("10 Downing St, London SW1A 2AA, UK") is None  # never a street
+    assert life_sources.city("Main Street 4") is None
+
+
+def test_location_city_per_day_and_no_coordinates(tmp_path, root_plain):
+    import json
+    import zipfile
+    z = tmp_path / "takeout.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("Takeout/Location History (Timeline)/Semantic Location History/2024/"
+                   "2024_MARCH.json", json.dumps(OLD))
+        f.writestr("Takeout/Location History (Timeline)/Records.json", '{"locations": []}')
+        f.writestr("Takeout/Location History (Timeline)/Semantic Location History/2024/"
+                   "2024_BAD.json", "{broken")
+    assert importers.detect(z) == ["location"]
+    phone = tmp_path / "Timeline.json"
+    phone.write_text(json.dumps(NEW), encoding="utf-8")
+    v = Vault(root_plain)
+    src = life_sources.location_source(z)
+    assert src.default_tier is sources.Audience.LOCAL
+    r = sources.run(v, src, C)
+    assert r["reasons"]["raw points (not read)"] == 1 and r["reasons"]["malformed file"] == 1
+    assert r["reasons"]["no place name"] == 1  # 2 March: a visit with no address
+    r = sources.run(v, life_sources.location_source(phone), C)
+    assert r["reasons"]["no place name"] == 1 and r["imported"] == 1
+    pages = _pages(v, "location")
+    lines = sorted(x for p in pages.values() for x in p.splitlines() if x.startswith("- "))
+    assert lines == ["- 2024-03-01: Bengaluru", "- 2024-04-01: Cupertino",
+                     "- 2024-04-06: Paris"]
+    for text in pages.values():
+        assert not re.search(r"\d+\.\d{2,}", text) and "°" not in text
+        assert "Road" not in text and "Cafe" not in text and "Linden" not in text
+    r = sources.run(v, life_sources.location_source(z), C)
+    assert r["imported"] == 0 and _pages(v, "location") == pages
