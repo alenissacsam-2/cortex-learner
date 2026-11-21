@@ -394,3 +394,26 @@ def test_spotify_year_pages_from_either_shape(tmp_path, root_plain):
     assert '1. "Song 1" by Band A: 3.0 hours\n2. "Song 2" by Band B: 1.0 hours' in y24
     assert "203.0.113.7" not in y24 and "android" not in y24 and "IN" not in y24.split()
     assert "2024-01-02" not in y24.split("\n\n", 2)[2]  # nothing per play
+
+
+def test_a_partial_export_never_shrinks_a_year_or_month(tmp_path, root_plain):
+    """Audit 21 Nov I6: a slice of a Spotify history or of a Sent folder, imported after the
+    whole one, leaves the bigger year or month page as it is."""
+    import json
+    v = Vault(root_plain)
+    full, part = tmp_path / "full", tmp_path / "part"
+    for d, rows in ((full, EXTENDED), (part, EXTENDED[1:2])):
+        d.mkdir()
+        (d / "Streaming_History_Audio_2024.json").write_text(json.dumps(rows), "utf-8")
+    sources.run(v, life_sources.spotify_source(full), C)
+    before = _pages(v, "listening")
+    r = sources.run(v, life_sources.spotify_source(part), C)
+    assert r["updated"] == 0 and _pages(v, "listening") == before
+    (full / "Sent.mbox").write_text(MBOX, encoding="utf-8")
+    april = "From 1234@xxx" + MBOX.split("From 1234@xxx")[2]  # one of April's two messages
+    (part / "Sent.mbox").write_text(april, encoding="utf-8")
+    sources.run(v, life_sources.mail_source(full / "Sent.mbox"), C)
+    before = _pages(v, "mail")
+    assert "2 messages" in before["mail-sent-mail-2026-04"]
+    sources.run(v, life_sources.mail_source(part / "Sent.mbox"), C)
+    assert _pages(v, "mail") == before

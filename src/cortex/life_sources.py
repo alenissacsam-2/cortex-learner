@@ -257,7 +257,16 @@ def mail_source(path: Path) -> sources.Source:
                                str(boxes[0] if len(boxes) == 1 else path), key=f"mail {month}")
 
     return sources.Source("mail", "Sent mail", "file", items, default_tier=LOCAL,
-                          prefix="mail", strips_quotes=True, updates=True, skips=MAIL_SKIPS)
+                          prefix="mail", strips_quotes=True, updates=True, skips=MAIL_SKIPS,
+                          size=_figure(r"My sent mail in [\d-]+: (\d+) message"))
+
+
+def _figure(pattern: str):
+    """A page's figure for `Source.size`: the first group of `pattern`, else 0."""
+    def size(text: str) -> float:
+        m = re.search(pattern, text)
+        return float(m.group(1).replace(",", "")) if m else 0.0
+    return size
 
 
 # ---- notes to self (WhatsApp, Telegram) ----
@@ -727,7 +736,8 @@ def spotify_source(path: Path) -> sources.Source:
                                key=f"spotify {year}")
 
     return sources.Source("spotify", "Spotify", "file", items, prefix="listening",
-                          updates=True, skips=SPOTIFY_SKIPS)
+                          updates=True, skips=SPOTIFY_SKIPS,
+                          size=_figure(r"My Spotify listening in \d{4}: ([\d,.]+) hours"))
 
 
 SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source,

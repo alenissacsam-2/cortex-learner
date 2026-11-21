@@ -109,6 +109,9 @@ class Source:
     strips_quotes: bool = False  # mail: other people's quoted text is dropped
     coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
     updates: bool = False  # a known `key` rewrites its page when the text changed (repos)
+    # `updates`: a page's figure (Spotify hours, mail messages); a re-import with a smaller one
+    # (a partial export) leaves the page as it is
+    size: Callable[[str], float] | None = None
     # RR-18 (notes): a changed file at a known `From:` origin rewrites that page when its body
     # is as the import wrote it (the header's `body:` sha); `walk_errors` (folders the walk
     # could not read) keeps the report from counting pages as gone from the folder
@@ -396,6 +399,10 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         cur = old.read_text("utf-8", errors="replace")
         if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
             r["duplicate"] += 1  # `updates`: the same text as last time; the owner's edits stay
+            continue
+        if src.size and src.size(body) < src.size(cur):
+            r["reasons"]["less than the page already has"] = \
+                r["reasons"].get("less than the page already has", 0) + 1
             continue
         # the owner's tags, links and status stay; the import's own keys move
         fields = {**(_fields(vault, old) or fields),
