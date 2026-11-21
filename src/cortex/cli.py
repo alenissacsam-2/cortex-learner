@@ -288,7 +288,7 @@ ME_PAGES = {
     "me/preferences.md": _page("My preferences", "Coding", "Communication", "Learning",
                                "Workflow", "Environment", "Career", "Personal", *CLAIM_TAIL),
     "me/goals.md": _page("My goals", "Now", "Later", *CLAIM_TAIL),
-    "me/setup.md": _page("My setup", "Hardware", "Software"),
+    "me/setup.md": _page("My setup", "Hardware", "Software", *CLAIM_TAIL),
     "me/personality.md": _page(
         "How I tick", "Values", "How I think", "How I decide", "Strengths", "Growth edges",
         "Communication", "Energy and routines", *CLAIM_TAIL,

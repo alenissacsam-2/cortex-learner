@@ -1485,7 +1485,8 @@
     if (o) o.textContent = k ? `Review (${k})` : 'Review';
   }
   const PAGE = { 'teaching-contract': 'Teaching rule', preferences: 'Preferences', personality: 'Personality',
-    goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait', core: 'Core' };
+    goals: 'Goals', profile: 'Profile', voice: 'Voice', portrait: 'Portrait', core: 'Core',
+    setup: 'Setup' };
   /* R3-4: every Review row is a card. J/K move focus between cards (a roving tabindex), and on
      the focused card Y approves, N dismisses, R retires and S skips; never while typing. */
   let lastReview = null, reviewAt = -1, reviewBusy = false;

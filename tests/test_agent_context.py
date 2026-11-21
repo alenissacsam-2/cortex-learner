@@ -5,6 +5,7 @@ people text; profiles are set from the app only), and the context packs (at most
 characters, never a private page or a hidden subject) with `cortex pack`."""
 
 import json
+import re
 
 import anyio
 import pytest
@@ -333,6 +334,83 @@ def test_profiles_scope_what_a_client_gets(vroot, client, seen):
     assert ("does not share personal pages" in out) == (client != "claude-ai")
 
 
+# G2: an old-format setup page (no claim ids, no Past / Not me tail) and a Workflow section
+SETUP = ("# My setup\n\n## Hardware\n- CANARY-HARD-4Q laptop with an RTX 4060.\n\n"
+         "## Software\n- Windows 11 with VS Code.\n")
+WORKFLOW = "\n## Workflow\n- CANARY-WKFL-4Q small commits, tests first.\n"
+
+
+def _g2_vault(vroot, setup_front="id: setup\n"):
+    note(vroot, "me/preferences.md", "id: preferences\n", PREFS + WORKFLOW)
+    note(vroot, "me/setup.md", setup_front, SETUP)
+
+
+async def _g2(call):
+    return [json.dumps(await call(name, args)) for name, args in (
+        ("cortex_prime", {"prompt": "help me start a python project"}),
+        ("cortex_context", {"scope": "all"}), ("cortex_context", {"scope": "coding"}),
+        ("cortex_context", {"scope": "environment"}), ("cortex_start", {"mode": "home"}))]
+
+
+@pytest.mark.parametrize("client, scopes, seen", [
+    ("cursor-vscode", None, {"WKFL", "HARD"}), ("codex-mcp-client", None, {"WKFL", "HARD"}),
+    ("Visual Studio Code", None, {"WKFL", "HARD"}), ("claude-ai", None, {"WKFL", "HARD"}),
+    ("mcp", None, set()),  # an unknown app: the core only
+    ("cursor-vscode", ["core", "coding"], {"WKFL"})])  # no environment: no setup line
+def test_workflow_and_setup_reach_the_apps_whose_scopes_hold_them(vroot, client, scopes, seen):
+    _g2_vault(vroot)
+    if scopes:
+        v = Vault(vroot)
+        data = profiles.load(v)
+        data["profiles"].insert(0, {"match": "cursor", "scopes": scopes})
+        profiles.save(v, data)
+    prime, ctx_all, ctx_coding, ctx_env, home = serve(vroot, client, _g2)
+    for canary in ("WKFL", "HARD"):
+        for got in (prime, ctx_all, home):  # home: cortex_context(scope='all')'s claims
+            assert (f"CANARY-{canary}-4Q" in got) == (canary in seen), (client, canary, got)
+    if seen:
+        assert "[Workflow] CANARY-WKFL-4Q" in prime and "CANARY-WKFL-4Q" in ctx_coding
+        assert "CANARY-WKFL-4Q" not in ctx_env and "CANARY-HARD-4Q" not in ctx_coding
+    if "HARD" in seen:  # every old line is served, without a claim id
+        assert "[Hardware] CANARY-HARD-4Q" in prime and "[Software] Windows 11" in prime
+        assert "Windows 11 with VS Code" in ctx_env and "^c-" not in prime + ctx_env
+
+
+def test_setup_and_workflow_in_packs_and_never_a_private_setup(home, vroot):
+    _g2_vault(vroot)
+    v = Vault(vroot)
+    general, coding, writing = (packs.pack(v, n) for n in ("general", "coding", "writing"))
+    assert "CANARY-WKFL-4Q" in coding and "CANARY-HARD-4Q" in coding
+    assert "CANARY-HARD-4Q" in general and "CANARY-HARD-4Q" not in writing
+    assert "CANARY-WKFL-4Q" not in writing
+    assert "CANARY-HARD-4Q" not in packs.rule_block(v)  # the rules block is the core only
+    note(vroot, "me/setup.md", "id: setup\nprivate: true\n", SETUP)
+    out = "".join(packs.pack(v, n) for n in packs.PACKS) + "".join(serve(vroot, "claude-ai", _g2))
+    assert "CANARY-HARD-4Q" not in out and "CANARY-WKFL-4Q" in out
+
+
+def test_an_agents_setup_line_waits_for_approve(home, vroot, monkeypatch):
+    from cortex.app import server
+    _g2_vault(vroot)
+    before = (vroot / "me/setup.md").read_bytes()
+
+    async def body(call):
+        return await call("cortex_patch", {"id": "me/setup", "op": "append_to_section",
+                                           "target": "Software", "text": "Uses Neovim."})
+
+    out = serve(vroot, "cursor-vscode", body)
+    assert out["queued"] is True and out["changed"] is False
+    assert (vroot / "me/setup.md").read_bytes() == before  # nothing written yet
+    a = server.App(vroot)
+    monkeypatch.setattr(a, "entry", lambda: entry(vroot))
+    p = next(x for x in a.review()["pending"] if x["page"] == "setup")
+    assert p["section"] == "Software" and "Neovim" in p["text"]
+    a.review_approve({"key": p["key"]})
+    text = (vroot / "me/setup.md").read_text(encoding="utf-8")
+    assert re.search(r"^- Uses Neovim\. \(confirmed [\d-]+\) \^c-[a-z2-7]{5}$", text, re.M)
+    assert "- CANARY-HARD-4Q laptop with an RTX 4060.\n" in text  # the old lines stay
+
+
 def test_owner_profiles_change_it_and_bad_files_fall_back(vroot):
     v = Vault(vroot)
     data = profiles.load(v)
@@ -380,6 +458,12 @@ def test_scope_rules():
     assert not access.scope_section(s, "personality", "How I think")
     assert not access.scope_kind(s, "journal") and access.scope_kind(s, "concept")
     assert access.scope_section(None, "personality", "x") and access.scope_kind({"all"}, "person")
+    # G2: Workflow sits under coding; me/setup under environment
+    assert access.scope_section(s, "preferences", "Workflow")
+    assert not access.scope_section({"communication"}, "preferences", "Workflow")
+    assert not access.scope_page(s, "setup") and not access.scope_section(s, "setup", "Hardware")
+    assert access.scope_page({"environment"}, "setup")
+    assert access.scope_section({"environment"}, "setup", "Software")
 
 
 # ---- the app -----------------------------------------------------------------------------

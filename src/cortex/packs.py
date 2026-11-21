@@ -43,7 +43,7 @@ def lines(vault: Vault, scopes, now: datetime | None = None) -> tuple[list[str],
     today = local_day(now)
     events = list(EventLog(vault).iter_events())
     served = prime.served_claims(vault, events)
-    private = {p for p in ("core", *access.SECTIONED)
+    private = {p for p in ("core", "setup", *access.SECTIONED)
                if (n := prime.me(vault, p)) is not None and is_private(n)}
     # as prime.core: X-ray muted lines, and R3-3 held ones while their pair waits, stay out
     xs, ids = xray.settings(vault), prime.claim_ids(vault)

@@ -338,7 +338,8 @@ SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learnin
                   "projects": "Projects", "environment": "Environment", "career": "Career",
                   "personal": "Personal"}
 # SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
-CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core")
+CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core",
+                 "setup")
 SAID = 0.6  # R3-2: the share of a line's content words one logged user turn must hold
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
@@ -1617,7 +1618,8 @@ class Cortex:
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
                            asks: bool = False, lines: list | None = None) -> None:
-        """The Personality, Goals (scope all) and Preferences blocks of cortex_context; `nag`
+        """The Personality, Goals (scope all), Preferences and Setup (scope all, environment)
+        blocks of cortex_context (a Workflow section counts as coding); `nag`
         (only /cortex home) says when the preferences are not recorded. `served`: a
         `_served_claims()` result to reuse; `asks`: an (ask) line was served already (B3);
         `lines` gets each offered claim's (`^c-…`, line) for the X-ray. Muted claims are out."""
@@ -1626,7 +1628,9 @@ class Cortex:
         want = None if scope == "all" else SCOPE_HEADINGS[scope]
         keeps = {"personality": (lambda h: h in heads) if heads else None,
                  "goals": (lambda h: h == "now") if scope == "all" else None,
-                 "preferences": lambda h: want is None or h == want.lower()}
+                 "preferences": lambda h: want is None
+                 or access.PREFERENCE_SCOPE.get(h, h) == scope,
+                 "setup": (lambda h: True) if scope in ("all", "environment") else None}
         if (allow := self._allow()) is not None:  # plan v9 item 8: the client's profile
             keeps = {p: k and (lambda h, k=k, p=p: k(h) and allow(p, h)) for p, k in keeps.items()}
         withheld = self._withheld()
@@ -1650,6 +1654,8 @@ class Cortex:
             where =(f"the ## {want} section of "
                      if want and prime.me(self.vault, "preferences") else "")
             put("Preferences", f"{where}me/preferences.md: {NOT_RECORDED}")
+        if got["setup"][0]:  # G2: the hardware and software, for the environment scope
+            put("Setup", got["setup"][0], "me/setup")
 
     def _held(self) -> set[str]:
         """R3-3: the older lines of recorded pairs still waiting in Review (prime.held)."""
@@ -3409,9 +3415,9 @@ DESCRIPTIONS = {
                   "spot_check, voice_sample, resurfaced, chat_learned): payloads in the "
                   "/cortex mode files.",
     "cortex_patch": "Edit a note (any, including me/*): append under a heading, set a "
-                    "whitelisted field, or tick a checklist item in a section. me/personality and "
-                    "me/preferences, me/portrait, me/voice (one ## <audience> section each, "
-                    "plus ## Everyone): user_confirmed=true only after the user agrees; "
+                    "whitelisted field, or tick a checklist item in a section. me/personality, "
+                    "me/preferences, me/setup, me/portrait, me/voice (one ## <audience> section "
+                    "each, plus ## Everyone): user_confirmed=true only after the user agrees; "
                     "otherwise the line waits in inbox.md. me/teaching-contract: a rule always "
                     "waits for the user's Approve in the Cortex app, even with "
                     "user_confirmed=true. supersedes: up to 3 ^c-… ids of me/* lines the new "

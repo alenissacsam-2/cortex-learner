@@ -107,9 +107,11 @@ SCOPES = ("all", "core", "coding", "communication", "learning", "projects", "env
           "career", "personal")
 SECTIONED = ("preferences", "personality")
 # me/ pages outside SECTIONED: their scope (the teaching contract is for tutors, not coding
-# agents); a page not listed is "personal"
-PAGE_SCOPE = {"core": "core", "teaching-contract": "learning"}
+# agents; setup, the hardware and software, is for them); a page not listed is "personal"
+PAGE_SCOPE = {"core": "core", "teaching-contract": "learning", "setup": "environment"}
 PERSONALITY_SCOPE = {"communication": "communication", "how i think": "learning"}
+# preferences sections not named after a scope: the scope they sit under
+PREFERENCE_SCOPE = {"workflow": "coding"}
 KIND_SCOPE = {"journal": "personal", "person": "personal", "project": "projects"}
 
 
@@ -133,6 +135,7 @@ def scope_section(scopes, page: str, heading: str) -> bool:
     if page == "personality":
         return PERSONALITY_SCOPE.get(h) in scopes
     if page == "preferences":
+        h = PREFERENCE_SCOPE.get(h, h)
         return h in SCOPES[2:] and h in scopes
     return scope_page(scopes, page)
 

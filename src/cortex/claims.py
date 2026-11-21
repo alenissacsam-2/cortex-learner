@@ -14,8 +14,9 @@ import re
 from cortex.reflect import UNCONFIRMED
 from cortex.vault import VaultError, invalid
 
-# voice: PHASE4 V2; core: the pinned lines prime serves first (prime.core_lines)
-PAGES = ("personality", "preferences", "goals", "profile", "voice", "core")
+# voice: PHASE4 V2; core: the pinned lines prime serves first (prime.core_lines); setup: the
+# hardware and software, served with the preferences (G2)
+PAGES = ("personality", "preferences", "goals", "profile", "voice", "core", "setup")
 RESERVED = {"past": "past", "not me": "not_me"}  # lowercased heading -> claim status
 TIERS = ("confirmed", "agent", "exposed", "typed", "legacy")
 ACT_TIERS = ("typed", "confirmed")  # act-grade: may be said as the user (PHASE1.md)

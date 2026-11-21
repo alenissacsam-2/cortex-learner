@@ -42,7 +42,7 @@ def build(vault: Vault, events: list[dict], now: datetime) -> tuple[str, int]:
     """(the Markdown snapshot within MAX_CHARS, how many live claim lines were left out as not
     act-grade)."""
     served = prime.served_claims(vault, events)
-    keeps = {"preferences": lambda h: True,
+    keeps = {"preferences": lambda h: True, "setup": lambda h: True,
              "personality": lambda h: h in prime.PERSONALITY_HEADINGS["all"],
              "goals": lambda h: h == "now", "profile": lambda h: True}
     rows: dict[str, list] = {"preferences": [], "goals": [], "profile": []}
