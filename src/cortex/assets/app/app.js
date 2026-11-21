@@ -1393,6 +1393,15 @@
       try {
         const r = await api('/api/browse/private-chats?offset=' + at);
         if (!r.total) { box.replaceChildren(note('No imported chat was made private.')); return; }
+        if (r.locked) {  // titles only while the Private switch is open (the Home page's Windows Hello unlock)
+          const cats = Object.entries(r.by_category || {}).map(([c, n]) => `${CATEGORY_NAMES[c] || c} ${n}`).join(', ');
+          box.replaceChildren(row(`${r.total} chat${r.total === 1 ? '' : 's'} kept private${cats ? ` (${cats})` : ''}.`, null,
+            'Unlock Private to see their titles.',
+            [btn('Unlock Private', () => post('/api/home/unlock', {}, (u) => {
+              if (u.unlocked) page(0); else toast(u.message || 'Private items stay hidden.', true);
+            }))]));
+          return;
+        }
         body.append(...r.rows.map((c) => h('tr', {}, h('td', { text: c.title }), h('td', { text: c.app }),
           h('td', { text: c.date }), h('td', { text: CATEGORY_NAMES[c.category] || c.category }))));
         more.hidden = body.children.length >= r.total;

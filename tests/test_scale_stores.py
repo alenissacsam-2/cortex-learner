@@ -154,6 +154,22 @@ def test_the_private_npz_is_migrated_once_and_renamed(root, monkeypatch):
     assert gone not in vectors._npz(v, rel=vectors.NPZ + legacy.DONE)[0]
 
 
+def test_the_app_start_migrates_the_old_browse_files(root):
+    """F3: the app's start reads a legacy file in and renames it, before any import."""
+    from cortex.app import server
+    (root / ".cortex").mkdir(exist_ok=True)
+    p = root / sites.DAYS
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(DAYS), encoding="utf-8")
+    srv, app, _ = server.start(root, idle=False, echo=lambda s: None)
+    try:
+        assert not p.exists() and (root / (sites.DAYS + legacy.DONE)).is_file()
+        assert sites.load_days(Vault(root))[0] == DAYS
+    finally:
+        app.stop.set()
+        server.finish(srv, app)
+
+
 def test_a_store_migrated_by_an_earlier_version_only_renames_the_old_files(root):
     """The site counts read in already (`days_migrated`): the file is renamed, not read
     again; verdicts.json goes into the store under the store's own labels."""

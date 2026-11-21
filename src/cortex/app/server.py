@@ -422,7 +422,8 @@ class App:
     def private_chats(self, query: dict) -> dict:
         """Imported chats made private for a sensitive category (chat_import.made_private),
         newest first, PAGE_ROWS from `offset`: titles, apps, dates and categories only, never
-        chat text or browsing. The app's own page only: no MCP tool reads it."""
+        chat text or browsing. The app's own page only: no MCP tool reads it. While the Private
+        switch is locked: counts by category only (`locked`), no row."""
         from cortex import chat_import
         from cortex.events import EventLog
         try:
@@ -431,7 +432,14 @@ class App:
             at = 0
         v = self._vault()
         rows = chat_import.made_private(v, EventLog(v).iter_events())
-        return {"rows": rows[at:at + PAGE_ROWS], "total": len(rows), "offset": at}
+        cats: dict[str, int] = {}
+        for r in rows:
+            cats[r["category"]] = cats.get(r["category"], 0) + 1
+        if not self.private_unlocked:  # titles only while the Private switch is open
+            return {"rows": [], "total": len(rows), "offset": 0, "locked": True,
+                    "by_category": cats}
+        return {"rows": rows[at:at + PAGE_ROWS], "total": len(rows), "offset": at,
+                "locked": False, "by_category": cats}
 
     def vault(self) -> dict:
         from cortex.session import git_choice

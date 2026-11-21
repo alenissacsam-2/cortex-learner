@@ -628,7 +628,7 @@ def test_a_start_time_too_far_apart_keeps_both_pages(root_committed, dirs, tmp_p
 
 
 def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_committed, dirs,
-                                                                    app):
+                                                                    app, monkeypatch):
     """G2: Browsing › Chats kept private: title, app, date and category, 20 a page, newest
     first; a shared chat, one the owner made shared again and private browsing never show,
     nor any chat text past the title; a page written before the category was recorded is
@@ -636,6 +636,7 @@ def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_commit
     import inspect
 
     from cortex import mcp_server
+    from cortex.app import hello
     from cortex.events import EventLog
     code, _ = dirs
     for d in range(1, 26):
@@ -653,8 +654,15 @@ def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_commit
     # the owner made one shared again: it leaves the list
     p = root_committed / CHATS / f"{mine['p/h25']['pages'][0]}.md"
     p.write_text(p.read_text(encoding="utf-8").replace("private: true\n", ""), encoding="utf-8")
+    # locked: counts by category only, no title anywhere
+    status, js, _, _ = call(app, "GET", "/api/browse/private-chats?offset=20")
+    assert status == 200 and js == {"rows": [], "total": 24, "offset": 0, "locked": True,
+                                    "by_category": {"health": 24}}
+    assert "symptoms" not in json.dumps(js)
+    monkeypatch.setattr(hello, "verify", lambda: (True, None))
+    assert call(app, "POST", "/api/home/unlock", {})[1]["unlocked"]
     status, js, _, _ = call(app, "GET", "/api/browse/private-chats")
-    assert status == 200 and js["total"] == 24 and len(js["rows"]) == 20
+    assert status == 200 and js["total"] == 24 and len(js["rows"]) == 20 and not js["locked"]
     dates = [r["date"] for r in js["rows"]]
     assert dates == sorted(dates, reverse=True)
     top = js["rows"][0]
@@ -668,6 +676,9 @@ def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_commit
         assert gone not in text, gone
     assert call(app, "GET", "/api/browse/private-chats?offset=x")[1]["offset"] == 0
     assert call(app, "GET", "/api/browse/private-chats", token=False)[0] == 401
+    call(app, "POST", "/api/home/lock", {})  # locked again: no row
+    js = call(app, "GET", "/api/browse/private-chats")[1]
+    assert js["locked"] and js["rows"] == [] and "symptoms" not in json.dumps(js)
     # a page saved before the category was recorded: judged again from its body
     evs = [dict(e, payload={k: v for k, v in e["payload"].items() if k != "category"})
            if isinstance(e.get("payload"), dict) else e
