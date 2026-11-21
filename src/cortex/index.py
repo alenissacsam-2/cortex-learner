@@ -589,7 +589,7 @@ class Index:
                                      "characters.") from None
                 if lo + size < end:  # end at a line end when one is in the window's second half
                     nl = body.rfind("\n", lo + size // 2, lo + size)
-                    hi = nl if nl > 0 else lo + size
+                    hi = nl + 1 if nl > 0 else lo + size  # the newline too: next_at starts a line
             text = body[lo:hi]
         # shown first, so the cap never cuts it; a later window of the page goes without
         head = f"Summary: {n['fields']['summary']}\n\n" if n["fields"].get("summary") \
@@ -634,6 +634,6 @@ class Index:
             text = text[: len(text) // 2 if over > len(text) // 2
                         else max(0, len(text) - over - len(TRUNCATED))]
             nl = text.rfind("\n")
-            text = text[:nl] if nl > len(text) // 2 else text
+            text = text[:nl + 1] if nl > len(text) // 2 else text
             over = show(text, True)
         return result

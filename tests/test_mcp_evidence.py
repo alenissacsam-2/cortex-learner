@@ -129,6 +129,18 @@ def test_windowed_read_and_reading_on(vault, monkeypatch):
     wk3 = c.cortex_read("garage", at="week 3")
     assert wk3["text"].split("\n")[1].rstrip() == "## Week 3" and "next_at" not in wk3
     assert "The page goes on" not in wk3["next"]
+    lines = "".join(f"Line {i:03d} of the log.\n" for i in range(200))
+    note(vault, "notes/numbered.md", "title: Numbered\n", lines)
+    c = Cortex(Vault(vault))
+    shown, at = [], None
+    while True:  # reading on from next_at never repeats or skips a line
+        part = c.cortex_read("numbered", at=at, window=300)
+        body = part["text"].split("\n", 1)[1].split("\n[truncated")[0].split("\n</untrusted")[0]
+        shown += [ln.rstrip() for ln in body.split("\n") if ln.startswith("Line ")]
+        if "next_at" not in part:
+            break
+        at = part["next_at"]
+    assert shown == [f"Line {i:03d} of the log." for i in range(200)]
     for bad in ({"at": "Week 9"}, {"window": "big"}, {"at": 0, "sections": ["Week 1"]}):
         with pytest.raises(VaultError) as e:
             c.cortex_read("garage", **bad)
