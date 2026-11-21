@@ -258,6 +258,22 @@ def test_chunks_are_headed_overlapping_windows_cut_at_turns():
     assert [len(t.split("\n", 1)[1]) for _, t in tail] == [1000] * 4 + [500]
 
 
+def test_a_window_without_turns_or_paragraphs_cuts_at_a_line_sentence_or_space():
+    """RR-32: the cut ladder never splits a word when the window has any whitespace."""
+    assert semantic._cut("a\n\nb\nc. d e") == 1  # paragraph first
+    assert semantic._cut("ab\ncd. ef gh") == 2  # then a line end
+    assert semantic._cut("one two. three four") == 8  # then after a sentence's end
+    assert semantic._cut("one two three") == 7  # then the last space
+    assert semantic._cut("x" * 50) == -1  # no whitespace: a hard cut
+    words = " ".join(f"w{k:04d}" for k in range(1500))  # one long line of 6-char words
+    n = {"title": "W", "kind": "note", "fields": {}, "body": words}
+    body = semantic._filled(words)
+    for s, t in semantic._chunks(n)[1:]:
+        piece = t.split("\n", 1)[1]
+        assert body[s:s + len(piece)] == piece
+        assert s + len(piece) == len(body) or body[s + len(piece)] == " "  # ends on a space
+
+
 def test_a_page_scores_by_its_best_chunk_and_reranks_on_it(chat):
     hits = semantic.recall(chat, "vehicle", FakeEmbed(), hops=0)
     trip = next(h for h in hits if h["id"] == "trip")

@@ -54,7 +54,7 @@ CACHE = ".cortex/vectors.db"  # the vector store (cortex.vecstore)
 NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once, then a backup
 BODY_CHARS = 1500
 CHUNK_CHARS, CHUNK_OVERLAP = 1000, 200  # ~250-300 tokens: well under bge-small's 512
-TEXT_VERSION = 4  # bump when _text or _chunks change, so cached vectors are rebuilt
+TEXT_VERSION = 5  # bump when _text or _chunks change, so cached vectors are rebuilt
 CHUNKING = [BODY_CHARS, CHUNK_CHARS, CHUNK_OVERLAP]  # in the cache meta: a change rebuilds
 RECALL_BUDGET = 1.0  # seconds of extra-chunk embedding per recall; `cortex model build` the rest
 HEAD_BUDGET = 1.0  # seconds of missing chunk-0 embedding per recall (a lost cache, an import)
@@ -390,8 +390,8 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     """(start in the filled body, text) per chunk. Chunk 0 is `_text` (start 0). The rest are
     windows of about CHUNK_CHARS over the body from BODY_CHARS - CHUNK_OVERLAP on, each under
     a `_header` line (the last 2 levels of headings above the window start), overlapping the
-    one before by CHUNK_OVERLAP and cut at the last turn (`### `, `**Me:**`), else paragraph,
-    boundary in the window's final CHUNK_OVERLAP characters."""
+    one before by CHUNK_OVERLAP and cut at the best boundary in the window's final
+    CHUNK_OVERLAP characters (`_cut`: turn, paragraph, line, sentence, then space)."""
     body = _filled(n["body"].strip())
     out = [(0, _text(n))]
     if len(body) <= BODY_CHARS:
@@ -414,9 +414,7 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
         if end >= len(body) - CHUNK_OVERLAP:  # the rest, rather than a short last window
             out.append((s, f"{header(s)}\n{body[s:]}"))
             break
-        seg = body[end - CHUNK_OVERLAP:end]
-        turns = [m.start() for m in _TURN.finditer(seg)]
-        cut = turns[-1] if turns else seg.rfind("\n\n")
+        cut = _cut(body[end - CHUNK_OVERLAP:end])
         if cut > 0:
             end += cut - CHUNK_OVERLAP
         out.append((s, f"{header(s)}\n{body[s:end]}"))
@@ -424,6 +422,21 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     return out
 
 
+def _cut(seg: str) -> int:
+    """Where in `seg` (a window's last CHUNK_OVERLAP characters) the window ends, by a ladder:
+    before the last turn, else at a paragraph break, a line end, after a sentence's end, a
+    space, so a word is never split; -1 (a hard cut) only when `seg` has none of them."""
+    turns = [m.start() for m in _TURN.finditer(seg)]
+    if turns:
+        return turns[-1]
+    for at in (seg.rfind("\n\n"), seg.rfind("\n"),
+               max((m.end() for m in _SENTENCE.finditer(seg)), default=-1), seg.rfind(" ")):
+        if at > 0:
+            return at
+    return -1
+
+
+_SENTENCE = re.compile(r"[.!?][\"')\]]*(?=\s)")
 _HEAD_LINE = re.compile(r"^(#{1,6})[ \t][^\n]*", re.M)
 # a turn starts at its `### <time>` line when it has one, else at `**Me:**`
 _TURN = re.compile(r"\n(?:### [^\n]*\n)?\*\*Me:\*\*|\n### ")
