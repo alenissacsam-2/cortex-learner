@@ -490,7 +490,8 @@ def _book_items(app: str, origin: str, mtime: float, rows) -> list:
                              for d, q, note in g)
             out.append(sources.Item(name, days[-1] if days else _day(mtime),
                                     f"{head}\n\n{body}", origin,
-                                    key=f"highlights {app} {title} {author} {month}"))
+                                    key=f"highlights {app} {title} {author} {month}",
+                                    who=author))
     return out
 
 

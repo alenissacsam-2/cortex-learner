@@ -377,6 +377,7 @@ def test_kindle_and_readwise_pages(root_plain, tmp_path):
     assert r["imported"] == 2 and r["reasons"]["bookmark or empty"] == 1
     page = _page(v, "highlights-deep-work")
     assert 'date: "2025-03-04"' in page
+    assert "\n\nWhen: 2025-03-04\nWho: Cal Newport\n\nMy Kindle" in page  # R3-6's fact header
     assert ('My Kindle highlights from "Deep Work" by Cal Newport (2 highlights, 2025-03-03 '
             "to 2025-03-04).") in page
     assert '- 2025-03-03: "Clarity about what matters' in page

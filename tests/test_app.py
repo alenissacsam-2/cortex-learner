@@ -1537,8 +1537,10 @@ def test_chat_test_runs_as_a_job_on_a_click(app, monkeypatch):
     asked = []
     q = {"id": "Q01", "question": "How many?", "status": "fail", "why": ["missing '23'"],
          "answer": "<b>22</b>"}
-    rep = {"passed": 13, "ran": 14, "skipped": 26, "total": 40, "pass_bar": 35, "model": None,
-           "model_note": "no local model", "stopped": False,
+    rep = {"passed": 13, "ran": 14, "blocked": 26, "total": 40, "pass_bar": 35, "model": None,
+           "model_note": "no local model", "stopped": False, "result": "BLOCKED",
+           "manifest": "ab" * 32, "queries": {"lexical": {"rate": "9/9 (100%)"}},
+           "misses": {"pool": ["Q16"], "ordering": []},
            "blockers": [{"name": "Private leak", "ids": ["Q35"], "state": "ok", "failed": []}],
            "questions": [q, {**q, "id": "Q02", "status": "pass", "why": []}],
            "retrieval": {"recall": {"@1": "no data"}}, "latency": {"median": 0.1}}
@@ -1559,6 +1561,8 @@ def test_chat_test_runs_as_a_job_on_a_click(app, monkeypatch):
     assert r["failures"] == [{"id": "Q01", "question": "How many?", "why": "missing '23'",
                               "answer": "<b>22</b>"}]  # app.js shows it as text
     assert r["blockers"] == [{"name": "Private leak", "state": "ok"}]
+    assert (r["result"], r["manifest"], r["queries"], r["misses"]) == (
+        "BLOCKED", "ab" * 6, {"lexical": "9/9 (100%)"}, {"pool": 1, "ordering": 0})
 
 
 def test_chat_needs_the_key_and_the_origin(app):

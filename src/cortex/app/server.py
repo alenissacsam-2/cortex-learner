@@ -1132,7 +1132,10 @@ class App:
             r = chat_eval.run(cancel=job.cancelled, progress=lambda d, n, qid: job.progress(
                 1, 1, d, n, f"Question {qid}"))
             return {"kind": "chat_eval", "passed": r["passed"], "ran": r["ran"],
-                    "skipped": r["skipped"], "total": r["total"], "bar": r["pass_bar"],
+                    "result": r["result"], "manifest": r["manifest"][:12],
+                    "queries": {k: v["rate"] for k, v in r["queries"].items()},
+                    "misses": {k: len(v) for k, v in r["misses"].items()},
+                    "blocked": r["blocked"], "total": r["total"], "bar": r["pass_bar"],
                     "model": r["model"], "model_note": r["model_note"], "stopped": r["stopped"],
                     "blockers": [{k: b[k] for k in ("name", "state")} for b in r["blockers"]],
                     "failures": [{"id": q["id"], "question": q["question"],

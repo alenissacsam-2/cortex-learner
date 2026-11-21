@@ -494,6 +494,8 @@ def rows(root: Path | None) -> list[dict]:
                     "detail": (f"{v['notes']} notes; last indexed {v['last_index'] or 'not yet'}"
                                if v["ok"] else "This folder is not a Cortex vault yet."),
                     "action": None if v["ok"] else _go("setup", "Set up")})
+    if v["ok"] and (row := archive_row(root)):
+        out.append(row)
     out.append(git_row())
     e = embedding(root if v["ok"] else None)
     out.append({"id": "embed", "label": "Search model", "state": "ok" if e["downloaded"] else "off",
@@ -521,6 +523,20 @@ def rows(root: Path | None) -> list[dict]:
     b = browse(root if v["ok"] else None)
     out.append(history_row(root if v["ok"] else None, b))
     return out
+
+
+def archive_row(root: Path) -> dict | None:
+    """R3-10: after the automatic chat archive move, one line: what moved and how to undo it
+    (chat_archive.last_move, from the marker the move writes); None before or after an undo."""
+    from cortex import chat_archive
+    from cortex.vault import Vault
+    m = chat_archive.last_move(Vault(root))
+    if m is None:
+        return None
+    n = m["count"]
+    return {"id": "archive", "label": "Chat archive", "state": "ok", "action": None,
+            "value": f"{n} chat page{'s' * (n != 1)} moved to {m['folder']} on {m['day']}",
+            "detail": f"Out of git, still searchable. To undo: run `{m['undo']}` in a terminal."}
 
 
 def git_row() -> dict:

@@ -152,3 +152,20 @@ def test_the_app_pass_moves_once(chats):
     said.clear()
     actions.chat_import(job, chats)
     assert not any("moved" in s for s in said)
+
+
+def test_status_says_what_moved_and_how_to_undo(chats):
+    """R3-10: one Status line after the automatic move, gone after `--undo`."""
+    from cortex.app import status
+
+    v = Vault(chats)
+    assert status.archive_row(chats) is None  # never moved
+    chat_archive.auto(v)
+    row = status.archive_row(chats)
+    assert row["value"].startswith("3 chat pages moved to archive/chats/ on 20")
+    assert "cortex chats archive --undo" in row["detail"]
+    assert row in status.rows(chats)
+    (chats / chat_archive.MARKER).write_text("2026-11-01T00:00:00+00:00\n", "utf-8")  # older
+    assert status.archive_row(chats)["value"].endswith("archive/chats/ on 2026-11-01")
+    chat_archive.move(v, undo=True)
+    assert status.archive_row(chats) is None

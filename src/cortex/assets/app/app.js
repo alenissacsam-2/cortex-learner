@@ -368,9 +368,11 @@
   }
   // the Chat test's summary (server.chat_eval): score, blockers, failures; all text, no markup
   function chatEvalNodes(r) {
-    const skipped = r.skipped ? `${r.skipped} skipped${r.model ? '' : ` (${r.model_note})`}` : 'none skipped';
+    const blocked = r.blocked ? `${r.blocked} blocked${r.model ? '' : ` (${r.model_note})`}` : 'none blocked';
     return [
-      row('Score', `${r.passed} of ${r.ran} passed`, `${skipped} · the bar is ${r.bar} of ${r.total}${r.model ? ` · model ${r.model}` : ''}${r.stopped ? ' · stopped early' : ''}`, null),
+      row('Score', `${r.result}: ${r.passed} of ${r.ran} passed`, `${blocked} · the bar is ${r.bar} of ${r.total}${r.model ? ` · model ${r.model}` : ''}${r.stopped ? ' · stopped early' : ''} · vault ${r.manifest}`, null),
+      row('By query kind', null, Object.entries(r.queries).map(([k, v]) => `${k} ${v}`).join(' · '), null),
+      row('Misses', null, Object.entries(r.misses).map(([k, n]) => `${k.replace('_', ' ')} ${n}`).join(' · '), null),
       row('Blockers', null, r.blockers.map((b) => `${b.state}: ${b.name}`).join(' · '), null),
       r.failures.length
         ? h('ul', { class: 'pad' }, r.failures.map((f) => h('li', { text: `${f.id} ${f.question} · ${f.why} · Answer: ${f.answer}` })))

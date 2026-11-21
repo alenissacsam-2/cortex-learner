@@ -410,9 +410,12 @@ def build(source: str, path: Path, c: Chat, ctx: Ctx) -> Page:
     month = day[:8] + "01"
     up = f"[[{month}]] · " if ctx.vault.path_for("journal", month).is_file() else "· "
     first, kept = c.head, c.kept
+    last = local_day(_when(c.last) or t0)
+    when = f"When: {day}" + (f" to {last}" if last > day else "")  # R3-6: the fact header
     if not c.coding:
         title = _line(first, TITLE_CHARS) or f"{label} chat {day}"
-        out = [f"# {title}", "", f"Timeline: {up}Source: {label} · Date: {day} · {MINE}", ""]
+        out = [f"# {title}", "", f"Timeline: {up}Source: {label} · Date: {day} · {MINE}", "",
+               when, f"Who: me and {label}", ""]
         if len(kept) < c.n:
             out += [f"The first {len(kept)} of my {c.n} turns.", ""]
         for ts, t in kept:
@@ -428,9 +431,9 @@ def build(source: str, path: Path, c: Chat, ctx: Ctx) -> Page:
     done = list(c.commits)
     pid = ctx.project(name)
     named = f"[[{pid}|{topics.alias(name)}]]" if pid else _line(name)
-    last = local_day(_when(c.last) or t0)
     span = f"on {day}" if last <= day else f"from {day} to {last}"
     out = [f"# {title}", "", f"Timeline: {up}Source: {label} · Date: {day}", "",
+           when, f"Who: me and {label}", f"Where: {named}", "",
            f"Coding session in {named} {span}: {c.n_asked} request{'s' * (c.n_asked != 1)}, "
            f"{_n(files, 'file')} changed, {_n(done, 'commit')}.", "", "## What I asked",
            *_list(asked, REQUESTS, c.n_asked)]

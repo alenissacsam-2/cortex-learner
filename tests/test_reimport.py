@@ -78,6 +78,41 @@ def test_a_page_imported_before_body_shas_is_not_overwritten(root_plain, tmp_pat
     assert sources.edited_pages(v, []) == []  # but no card: it may not be edited
 
 
+def test_a_page_starts_with_its_fact_header(root_plain, tmp_path):  # R3-6
+    v = Vault(root_plain)
+    d = _notes(tmp_path / "n", Plan="---\nsummary: The Q3 launch plan\n---\nFirst plan.\n",
+               Bare="No frontmatter.\n")
+    importers.import_notes(v, d)
+    page = _page(root_plain, "notes-plan")
+    head = page.split("· sha: ", 1)[1].split("\n", 1)[1]  # the body under the header line
+    assert head.startswith("\nWhen: 20") and "\nSummary: The Q3 launch plan\n\nFirst plan." \
+        in head
+    assert sources.HEADER.search(page) and sources.untouched(page) is True
+    assert "Who:" not in page and "Summary:" not in _page(root_plain, "notes-bare")  # unknown
+
+
+def test_a_page_from_before_fact_headers_is_rewritten_in_place(root_plain, tmp_path):  # R3-6
+    v, d = Vault(root_plain), _notes(tmp_path / "n", Plan="First plan.\n")
+    importers.import_notes(v, d)
+    p = root_plain / "resources/notes-plan.md"
+
+    def old(t):  # the page as an import before R3-6 wrote it: no facts, body sha of the body
+        t = "".join(ln for ln in t.splitlines(keepends=True) if not ln.startswith("When: "))
+        t = t.replace("sha: " + t.split("· sha: ")[1][:16] + "\n\n\n", "sha: "
+                      + t.split("· sha: ")[1][:16] + "\n\n")
+        return sources.HEADER.sub(lambda m: m.group(0).replace(
+            m.group(4), sources._sha("First plan.")), t)
+    v.update_text(p, old)
+    assert "When:" not in p.read_text("utf-8") and sources.untouched(p.read_text("utf-8"))
+    assert importers.import_notes(v, d)["updated"] == 0  # an unchanged file: a no-op
+    assert "When:" not in p.read_text("utf-8")
+    (d / "Plan.md").write_text("Second plan.\n", encoding="utf-8")
+    r = importers.import_notes(v, d)
+    assert (r["new"], r["updated"]) == (0, 1)  # in place, not a -2 page
+    assert "When: " in p.read_text("utf-8") and sources.untouched(p.read_text("utf-8"))
+    assert not (root_plain / "resources/notes-plan-2.md").exists()
+
+
 def test_files_gone_from_the_folder_are_counted_not_deleted(root_plain, tmp_path):
     v, d = Vault(root_plain), _notes(tmp_path / "n", A="Alpha note.\n", B="Beta note.\n")
     importers.import_notes(v, d)
