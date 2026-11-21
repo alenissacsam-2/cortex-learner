@@ -76,7 +76,8 @@ class Api:
 def _wait_for_url(log, proc: subprocess.Popen, timeout: float = 60) -> tuple[int, str]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if m := re.search(r"http://127\.0\.0\.1:(\d+)/\?t=([\w-]+)",
+        # T1: from 20:00 to 04:00 the start link is /manage?t=…#tonight
+        if m := re.search(r"http://127\.0\.0\.1:(\d+)/(?:manage)?\?t=([\w-]+)",
                           log.read_text(encoding="utf-8", errors="replace")):
             return int(m.group(1)), m.group(2)
         assert proc.poll() is None, log.read_text(encoding="utf-8", errors="replace")
