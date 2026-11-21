@@ -207,8 +207,9 @@ def route(text: str, got, today: date) -> dict | None:
 # ---- reading the stores ----------------------------------------------------------------------
 
 def _matcher(ws: list[str]):
-    # whole words and their plurals ("clas" from "class": classes), so "java" is not JavaScript
-    rxs = [re.compile(r"\b" + re.escape(w) + r"(?:s|es|ses)?\b", re.I) for w in ws]
+    # whole words, their plurals ("clas" from "class": classes) and a version (python3), so
+    # "java" is not JavaScript
+    rxs = [re.compile(r"\b" + re.escape(w) + r"(?:s|es|ses)?\d*\b", re.I) for w in ws]
     return (lambda hay: all(rx.search(hay) for rx in rxs)), rxs
 
 

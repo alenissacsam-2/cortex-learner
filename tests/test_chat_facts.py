@@ -321,7 +321,8 @@ def test_a_private_subject_is_counted_only_under_the_private_switch(vault):
     ("c++", "C++ templates", True), ("c++", "cooking curry", False),
     ("pointers", "two-pointers drill", True), ("pointer", "Pointers again", True),
     ("process", "child processes", True), ("class", "classes in Python", True),
-    ("node.js", "Node.js streams", True), ("kubernetes", "kubernetes/kubernetes", True)])
+    ("node.js", "Node.js streams", True), ("kubernetes", "kubernetes/kubernetes", True),
+    ("python", "python3 venv", True), ("java", "java8 lambdas", True)])
 def test_terms_match_whole_words_with_a_plural(term, hay, hit):
     """Audit 21 Nov C3: "java" is not JavaScript, "git" not GitHub, "c" not every c-word."""
     assert chat_facts._matcher(chat_facts.words(term))[0](hay) is hit
