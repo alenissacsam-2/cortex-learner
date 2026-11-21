@@ -1097,9 +1097,11 @@ def import_cmd(path: Annotated[Path, typer.Argument(
         raise VaultError("invalid_argument", f"Cannot tell what {path.name} is; add --source "
                          f"{'|'.join(importers.SOURCES)}.")
     if given and {"chats", "takeout"} & set(kinds):  # G5: these have no private mode
+        from cortex.app.actions import TIERED  # the imports that take a tier
         flag = "--private" if private else "--tier"
-        raise VaultError("invalid_argument", f"{flag} applies to notes, calendars, docs, "
-                         "repos and highlights only. "
+        *some, last = ["calendars" if k == "calendar" else k for k in TIERED]
+        raise VaultError("invalid_argument", f"{flag} applies to {', '.join(some)} and {last} "
+                         "only. "
                          "Chats are always readable by /cortex; Google activity follows your "
                          f"Browsing settings. Run again without {flag}.")
     dry = " (dry run: nothing written)" if dry_run else ""
