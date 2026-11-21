@@ -1,0 +1,173 @@
+"""R3-5: `//pref: <text>`, `//fact: <text>` and `//forget: <text>`, typed by the owner in any
+chat and caught by code, never by the model. Callers pass user turns only, never assistant
+text, tool output or note text: the prime prompt (cortex_prime and the plugin's prime hook,
+cortex.prime_hook), a chat_turn's `user` and an imported chat's user turns (chat_import).
+
+- pref: a me/preferences line under `## Personal`, written as cortex_patch writes a
+  user_confirmed one (its change stamped `confirm: tagged`, an act-grade yes);
+- fact: the same on me/profile under `## Background`;
+- forget: the one live claim line the text covers at least STRONG of (review's word bag) is
+  retired to `## Past` (history kept, `cortex undo` takes it back); none or several, and
+  nothing changes: a `tag_forget` event holds the candidates for the app's Review.
+
+A chat that read outside text (an exposed session) only proposes: a pref or fact waits in
+inbox.md for Approve, a forget becomes the Review card. A tag seen twice on one day (the hook,
+then cortex_prime or chat_turn of the same turn, or a re-import) writes once: each carries a
+`key` (tag, text, day) that cortex_patch's own key dedupe (`Cortex._keyed`) honours."""
+
+from __future__ import annotations
+
+import hashlib
+import re
+
+from cortex import claims, review
+from cortex.events import EventLog, local_day
+from cortex.render import plain
+from cortex.vault import scan_secrets
+
+TAG = re.compile(r"(?<![\w:/])//(pref|fact|forget):[ \t]*([^\r\n]*)", re.I)
+MAX_CHARS = 300  # a tag's text
+PAGES = {"pref": ("preferences", "Personal"), "fact": ("profile", "Background")}
+STRONG = 0.6  # of a claim line's content words the forget text must hold
+SHOWN = 5  # candidates on a forget card
+
+
+def find(text: str) -> list[tuple[str, str]]:
+    """(tag, text) of each `//pref:`, `//fact:` or `//forget:` in a user turn, in order; the
+    text runs to the end of its line, whitespace collapsed; an empty one is skipped."""
+    out: list[tuple[str, str]] = []
+    for m in TAG.finditer(text or ""):
+        item = (m.group(1).lower(), " ".join(m.group(2).split())[:MAX_CHARS])
+        if item[1] and item not in out:
+            out.append(item)
+    return out
+
+
+def key(tag: str, text: str, day: str) -> str:
+    return "tag:" + hashlib.sha1(f"{tag}\n{claims.norm(text)}\n{day}".encode()).hexdigest()[:16]
+
+
+def apply(core, items, said: bool = True, forget_said: bool = True) -> list[str]:
+    """Act on (tag, text, day) items through `core` (an mcp_server.Cortex): each one through
+    its `_call`, so roles, the excluded folder, an ambient session and the key dedupe all
+    apply. `said`: the caller knows these are the owner's typed words (the hook, an import);
+    a session that read outside text still only proposes. `forget_said=False` (an import: an
+    old chat's forget may predate the line it matches) sends every forget to the Review.
+    Returns a line per tag acted on."""
+    lines = []
+    for tag, text, day in items:
+        k = key(tag, text, day)
+        if core.log.has_key(k):  # before _call, which would open a session for nothing
+            continue
+        ok = said and (forget_said or tag != "forget")
+        out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": ok,
+                                                     "key": k})
+        if "error" not in out and not out.get("duplicate"):
+            lines.append(out["summary"])
+    return lines
+
+
+def apply_in(vault, items, log: EventLog | None = None, forget_said: bool = True
+             ) -> list[str]:
+    """`apply` outside the MCP server (the prime hook, chat_import): a Cortex of its own, built
+    only when an item is new (`log`: an EventLog to check keys with), whose session is closed
+    (and committed) at once."""
+    log = log or EventLog(vault)
+    items = [i for i in items if not log.has_key(key(*i))]
+    if not items:
+        return []
+    from cortex.mcp_server import Cortex  # the SDK: only when there is something to write
+
+    core = Cortex(vault)
+    try:
+        return apply(core, items, forget_said=forget_said)
+    finally:
+        if core.sessions.current is not None:
+            core.sessions.close(summary="Saved //tags the user typed")
+
+
+def act(core, tag: str, text: str, said: bool) -> dict:
+    """One tag, inside `core`'s open session (Cortex._tag)."""
+    scan_secrets(text)
+    day = local_day(core._now())
+    if tag == "forget":
+        return _forget(core, text, day, said)
+    page, section = PAGES[tag]
+    if not said:
+        core._propose(f"- {section}: {text} (proposed {day}, me/{page})")
+        core.proposed.append(plain(f"{section}: {text}", 200))
+        core.sessions.note("patched", change={"tool": "propose", "id": page, "kind": "me",
+                                              "op": "append_to_section", "target": section})
+        return {"changed": False, "queued": True,
+                "summary": f"//{tag} waits for Approve in the Cortex app (this chat read "
+                           "outside text)"}
+    core._ensure_section(page, section)
+    core.tagged = True
+    try:
+        out = core.cortex_patch(id=f"me/{page}", op="append_to_section", target=section,
+                                text=text, user_confirmed=True)
+    finally:
+        core.tagged = False
+    return {**out, "summary": f"//{tag} saved to me/{page}"}
+
+
+def _score(text: str, line: str) -> float:
+    """The share of `line`'s content words (review._bag) that `text` holds."""
+    mine = review._bag(line)
+    return len(review._bag(text) & mine) / len(mine) if mine else 0.0
+
+
+def candidates(vault, text: str, today: str) -> list[dict]:
+    """Live, non-private claim rows sharing a content word with `text`, best first, each with
+    its `score`."""
+    hidden = review._private(vault)
+    rows = [{**r, "score": s} for r in claims.rows(vault)
+            if claims.is_live(r, today) and r["page"] not in hidden
+            and (s := _score(text, r["text"])) > 0]
+    return sorted(rows, key=lambda r: -r["score"])
+
+
+def _forget(core, text: str, day: str, said: bool) -> dict:
+    rows = candidates(core.vault, text, day)
+    strong = [r for r in rows if r["score"] >= STRONG]
+    if said and len(strong) == 1:
+        r = strong[0]
+        core.tagged = True
+        try:
+            out = core.cortex_patch(id=f"me/{r['page']}", op="retire", target=r["id"],
+                                    user_confirmed=True)
+        finally:
+            core.tagged = False
+        return {**out, "summary": f"//forget retired a line on me/{r['page']}"}
+    shown = (strong or rows)[:SHOWN]
+    core._append("log", {"payload": {"kind": "tag_forget", "text": text, "candidates": [
+        {"page": r["page"], "id": r["id"]} for r in shown]}})
+    return {"changed": False, "queued": True,
+            "summary": f"//forget matched {len(strong) or 'no'} line{'s' * (len(strong) != 1)}"
+                       " strongly: nothing changed; the Cortex app's Review lists "
+                       f"{len(shown)} to pick from"}
+
+
+def forget_cards(vault, events, today: str) -> list[dict]:
+    """The Review's open forget cards, newest first: {key (the event id), text, day,
+    candidates [{page, id, text}]} with raw note text. A card closes on Dismiss (a `dismiss`
+    change on page `forget`) or once one of its candidates is no longer live."""
+    events = list(events)
+    voided = review._voided(events)
+    live = {(r["page"], r["id"]): r for r in claims.rows(vault) if claims.is_live(r, today)}
+    hidden = review._private(vault)
+    out = []
+    for e in events:
+        p = review._payload(e)
+        if (e.get("kind") != "log" or p.get("kind") != "tag_forget" or e.get("id") in voided
+                or review.dismissed(events, "forget", e["id"])):
+            continue
+        pairs = [(c.get("page"), c.get("id")) for c in p.get("candidates") or []
+                 if isinstance(c, dict)]
+        if any(k not in live for k in pairs):
+            continue
+        out.append({"key": e["id"], "text": str(p.get("text") or ""), "day": e.get("day"),
+                    "candidates": [{"page": pg, "id": i, "text": live[(pg, i)]["text"]}
+                                   for pg, i in pairs if pg not in hidden]})
+    return out[::-1]
+

@@ -146,7 +146,7 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
               projects: list[str] = (), loops: list[str] = (), ideas: list[str] = (),
               coming_up: Mapping | None = None, solid: list[str] = (), back: list[str] = (),
               resolved: int = 0, unconfirmed: int = 0, revisit: list[str] = (),
-              edits: list[Mapping] = (), need: bool = False, unlearned: int = 0,
+              edits: list[Mapping] = (), unlearned: int = 0,
               undated: list[str] = ()) -> str:
     """The lean /cortex card, at most 10 lines (UX-7). `domains` are (title, in_progress, solid,
     not_started); `due` the due concept titles, most urgent first; `coming_up` an assessment
@@ -154,7 +154,7 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
     `date`, 0..1) or `calibrating` ({n, need} history pairs); `solid`/`back` concept titles
     that reached
     Solid / came back from Needs refresh this week; `revisit` decision ids; `edits` ambient
-    contract/profile edits {session, day, pages}, latest first; `need` an open tell-me tap;
+    contract/profile edits {session, day, pages}, latest first;
     `undated` ids of pending assessments with no date or a past one.
     Optional lines show only when non-empty; every item is raw text, escaped here."""
     parts = [f"{t} {GLYPH['learning']} {a} {GLYPH['solid']} {b} {GLYPH['not_started']} {c}"
@@ -191,7 +191,6 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
               if unconfirmed else []),
             *([f"decisions to revisit: {_few(revisit, ', ', n=FOLLOW_UPS_SHOWN)}"]
               if revisit else []),
-            *(["1 question for you"] if need else []),
             *([f"{len(undated)} test{'s' * (len(undated) != 1)} "
                f"need{'s' * (len(undated) == 1)} a date (or a result): "
                + ", ".join(f"[[{esc(i)}]]" for i in undated[:HOME_SHOWN])] if undated else []),

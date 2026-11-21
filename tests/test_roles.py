@@ -12,7 +12,6 @@ from cortex.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
-NEED = {"question": "Which city do you live in?", "area": "habits"}
 
 
 def test_reader_reads_but_never_writes(root):
@@ -32,7 +31,7 @@ def test_reader_reads_but_never_writes(root):
                 ("cortex_patch", {"id": "me/profile", "op": "append_to_section",
                                   "target": "Background", "text": "- x"}),
                 ("cortex_add", {"kind": "note", "title": "x"}),
-                ("cortex_log", {"kind": "need", "payload": NEED}),
+                ("cortex_log", {"kind": "journal", "payload": {"text": "x"}}),
                 ("cortex_grade", {"learner_answer": "x", "concept": "two-pointers",
                                   "question": "q", "verdict": "correct"}),
                 ("cortex_start", {}), ("cortex_end", {}),
@@ -60,11 +59,12 @@ def test_kill_switch(root):
     assert share.killed(v) and doctor.check_kill(root)[2].startswith("on")
     owner = Cortex(v)
     assert owner._gate("cortex_as_me", {})["error"] == "killed"
-    assert owner._gate("cortex_log", {"kind": "need"}) is None
+    assert owner._gate("cortex_log", {"kind": "journal"}) is None
 
     async def study(call):
         assert "hits" in await call("cortex_find", {"query": "pointers"})
-        assert (await call("cortex_log", {"kind": "need", "payload": NEED}))["recorded"] == 1
+        assert "error" not in await call("cortex_log", {"kind": "resurfaced",
+                                                        "payload": {"ids": ["two-pointers"]}})
 
     async def off(call):
         out = await call("cortex_find", {"query": "pointers"})

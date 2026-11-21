@@ -1694,15 +1694,10 @@
     const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
       'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
       ['Ideas', 'ideas']);
-    const ask = boardList(board('Cortex wants to ask'), D.needs.slice(0, 3).map((n) => brow({
-      title: n.area ? `Something about your ${n.area}` : 'Something about you',
-      sub: n.count > 1 ? `came up in ${n.count} chats` : 'came up in a chat',
-      prompt: 'Ask me what Cortex wants to know' })), 3,
-    'Nothing to ask right now. Cortex adds a question here when a chat lacks something about you.');
     const rowA = $('home-row-a'), rowB = $('home-row-b');
     if (!LIVE) {  // the snapshot has no feed and no chat
       rowA.replaceChildren(examsBoard, loops, back);
-      rowB.replaceChildren(ask);
+      rowB.replaceChildren();
       return;
     }
     // the quick chat is built once: a live update never takes its text or focus
@@ -1710,8 +1705,8 @@
     for (const c of [...rowA.children]) if (c !== chatBoard) c.remove();
     rowA.prepend(feedBoard(), examsBoard);
     if (!chatBoard.isConnected) rowA.append(chatBoard);
-    rowB.className = 'home-row three';
-    rowB.replaceChildren(loops, back, ask);
+    rowB.className = 'home-row two';
+    rowB.replaceChildren(loops, back);
   }
 
   /* ---- Brain section ---- */

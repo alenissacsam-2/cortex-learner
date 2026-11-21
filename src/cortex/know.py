@@ -1,5 +1,5 @@
 """`cortex claims --summary` (v6 agenda 9): how well the user model knows the user, per page.
-Live claims by authorship tier, and open needs. A pure read: every number is folded from the
+Live claims by authorship tier. A pure read: every number is folded from the
 claim pages and the event log on the spot, nothing is stored or written. Private me/ pages
 show only as `private`."""
 
@@ -8,13 +8,13 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 
-from cortex import claims, needs
+from cortex import claims
 from cortex.vault import is_private
 
 
 def report(vault, events: Iterable[dict], today: str) -> dict:
     """{pages: [{page, private} | {page, live, tiers, clicked, reflected}], total: {live,
-    tiers, clicked, reflected}, needs}. `clicked`: confirmed lines the user ticked in Cortex's
+    tiers, clicked, reflected}}. `clicked`: confirmed lines the user ticked in Cortex's
     own dialog (idea 11); `reflected`: a yes in a clean reflect. Texts are raw note text:
     callers escape."""
     events = list(events)
@@ -37,5 +37,4 @@ def report(vault, events: Iterable[dict], today: str) -> dict:
     return {"pages": pages,
             "total": {"live": sum(total_t.values()),
                       "tiers": {t: total_t[t] for t in claims.TIERS}, "clicked": how["clicked"],
-                      "reflected": how["reflected"]},
-            "needs": needs.open(events, today)}
+                      "reflected": how["reflected"]}}

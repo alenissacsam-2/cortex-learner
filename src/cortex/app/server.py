@@ -331,6 +331,7 @@ class App:
             "/api/review/rule/dismiss": self.review_rule_dismiss,
             "/api/review/decision/approve": self.review_decision_approve,
             "/api/review/decision/dismiss": self.review_decision_dismiss,
+            "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute}
 
     def touch(self) -> None:
@@ -711,6 +712,18 @@ class App:
         return self._click("cortex_patch", "_dismiss", {
             "page": "decisions", "section": x["project"], "text": f"{x['page']} {x['hash']}",
             "waiting": False})
+
+    def review_forget_dismiss(self, body: dict) -> dict:
+        """A //forget card (cortex.tags) dismissed: a `dismiss` change on page `forget` holds
+        the hash of its event id, so the card closes; no line changes."""
+        from cortex import tags
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        if not any(x["key"] == key for x in tags.forget_cards(
+                v, EventLog(v).iter_events(), self._today())):
+            raise NotFound
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "forget", "section": "Forget", "text": key, "waiting": False})
 
     # ---- Agent X-ray (v9 item 6): what prime and context served each AI app ----
     def xray(self) -> dict:

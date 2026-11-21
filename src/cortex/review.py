@@ -11,7 +11,9 @@
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
 - decisions (RR-9): decision-like commit subjects of imported git repos
-  (more_sources.decision_proposals); Approve makes a decision page, Dismiss drops it.
+  (more_sources.decision_proposals); Approve makes a decision page, Dismiss drops it;
+- forget (R3-5): a `//forget:` the user typed that matched no line or several, with its
+  candidate lines (cortex.tags.forget_cards; Retire a line, or Dismiss).
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -291,7 +293,11 @@ def view(vault, events, today: str) -> dict:
              for x in corrections.proposals(vault, events, current)]
     decisions = [{**x, "project": plain(x["project"], 80), "subject": plain(x["subject"], SHOWN)}
                  for x in more_sources.decision_proposals(vault, events)]
+    from cortex import tags  # it imports this module
+    forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
+               "candidates": [side(c) for c in x["candidates"]]}
+              for x in tags.forget_cards(vault, events, today)]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
-            "rules": rules, "decisions": decisions,
+            "rules": rules, "decisions": decisions, "forget": forget,
             "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions)}
+            + len(decisions) + len(forget)}

@@ -43,8 +43,6 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         for ch, text in (("email", "Dear Prof, may I ask..."), ("ai", "fix my code")):
             await call("cortex_log", {"kind": "voice_sample", "payload": {
                 "text": text, "audience": "professor", "act": "request", "channel": ch}})
-        await call("cortex_log", {"kind": "need", "payload": {
-            "question": "How do you sign emails to staff?", "area": "habits"}})
 
         monkeypatch.setattr(EventLog, "iter_events", counted)
         out = await call("cortex_as_me", {"task": "Ask Dr Lee for an extension",
@@ -67,7 +65,7 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         assert out["person"]["text"].startswith('<untrusted_note id="people/dr-lee">')
         assert not {"boundaries", "fidelity"} & set(out)
         u = out["unknowns"]
-        assert any("How do you sign" in x for x in u) and any("Finish the thesis" in x for x in u)
+        assert any("Finish the thesis" in x for x in u)
         assert not any(x.startswith("no voice") for x in u)
         assert out["next"] == AS_ME_NEXT
 

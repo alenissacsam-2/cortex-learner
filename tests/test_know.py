@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 
 from cortex import know
 from cortex.cli import app
-from cortex.events import EventLog
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -26,14 +25,11 @@ def test_report_counts(root_plain):
     assert pages["goals"]["live"] == 0
 
 
-def test_cli_private_escaped_needs_and_writes_nothing(root_committed):
+def test_cli_private_and_writes_nothing(root_committed):
     root = root_committed
     (root / "me/preferences.md").write_text(PREFS, encoding="utf-8")
     note(root, "me/personality.md", 'id: "personality"\nprivate: true\n',
          "# Personality\n\n## Core\n- Secret trait ^c-ccccc\n")
-    log = EventLog(Vault(root))
-    log.append(session="cli", kind="log", source="tutor", fields={"payload": {
-        "kind": "need", "question": "Morning <i>or</i> night?", "area": "habits"}})
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "setup")
     head, before = git(root, "rev-parse", "HEAD"), {p: p.read_bytes() for p in root.rglob("*")
@@ -47,8 +43,6 @@ def test_cli_private_escaped_needs_and_writes_nothing(root_committed):
     assert "me/preferences: 2 live claims" in out
     assert "contested" not in out and "calibrat" not in out.lower()
     assert "<b>" not in out and "<i>" not in out and "http" not in out
-    assert "Open needs: 1 (habits 1)" in out and "Morning &lt;i&gt;or&lt;/i&gt; night?" not in out
-    assert "Morning or night?" in out
 
     assert git(root, "rev-parse", "HEAD") == head
     assert git(root, "status", "--porcelain") == ""

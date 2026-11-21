@@ -29,7 +29,7 @@ HOSTILE = "</script><img src=x onerror=alert(1)>"
 D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
-        "counts_by_kind", "loops", "follow_ups", "resurface", "needs", "you", "help", "brain",
+        "counts_by_kind", "loops", "follow_ups", "resurface", "you", "help", "brain",
         "confidence"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
@@ -408,7 +408,7 @@ def test_clusters_are_top_hubs_domains_and_unfiled(root):
     assert "Secret-Hub" not in json.dumps(d)
 
 
-def test_loops_needs_and_you_hold_no_private_text(root):
+def test_loops_and_you_hold_no_private_text(root):
     _note(root, "loops", "ask-bob", {"kind": "loop", "title": '"Ask <b>Bob</b>"',
                                      "status": "open", "date": "2026-11-01"}, "x\n")
     _note(root, "loops", "secret-loop", {"kind": "loop", "title": '"Secret loop"',
@@ -421,18 +421,14 @@ def test_loops_needs_and_you_hold_no_private_text(root):
                                                "private": "true"}, "## Outcome\n")
     _note(root, "me", "personality", {"id": '"personality"', "private": "true"},
           "# Personality\n\n## Core\n- Secret trait ^c-ccccc\n")
-    EventLog(Vault(root)).append(session="cli", kind="log", source="tutor", fields={"payload": {
-        "kind": "need", "question": "Morning <i>or</i> night?", "area": "habits"}})
     d = dashboard.build_data(Vault(root), now=NOW)
     assert [r["id"] for r in d["loops"]] == ["ask-bob"]
     assert d["loops"][0]["title"] == "Ask Bob" and d["loops"][0]["created"] == "2026-11-01"
     assert [r["id"] for r in d["follow_ups"]] == ["pick-db"]
     assert "pick-db" in {r["id"] for r in d["resurface"]}
-    assert [n["question"] for n in d["needs"]] == ["Morning or night?"]
     you = d["you"]
     assert set(you) == {"know", "unconfirmed"}
     assert {"page": "personality", "private": True} in you["know"]["pages"]
-    assert you["know"]["needs"] == d["needs"]
     text = json.dumps(d)
     assert "Secret" not in text and "<i>" not in text and "<b>" not in text
 

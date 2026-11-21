@@ -55,7 +55,6 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `log assessment\|result\|solved\|taught` | Records results by hand |
 | `reflect` | The weekly review pack |
 | `claims` (`--summary`, `--unasked`) | Lines about you: all, how well Cortex knows you per page, or saved without asking |
-| `needs` | Facts a chat wished it had |
 | `chats` / `import-chats` | Past chats / import a claude.ai export |
 | `digest` | Review chats imported since the last digest; each topic you confirm is a touch, never a grade |
 | `harvest status` | Harvest progress and undo commands |

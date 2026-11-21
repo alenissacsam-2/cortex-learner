@@ -330,9 +330,7 @@ async def _mcp(root) -> tuple[dict[str, str], set[str], set[str]]:
         for kind, payload in (("journal", {"text": "Cooked pasta and studied pointers."}),
                               ("touch", {"ids": ["pasta"]}),
                               ("self_report", {"concept": "two-pointers",
-                                               "verdict": "correct"}),
-                              ("need", {"question": "Which pasta shape do I like?",
-                                        "area": "personal"})):
+                                               "verdict": "correct"})):
             await call("cortex_log", {"kind": kind, "payload": payload})
         await call("cortex_patch", {"id": "pasta", "op": "append_to_section",
                                     "target": "Notes", "text": "- Salt the water."})
@@ -377,7 +375,7 @@ def cli_outputs(root, monkeypatch) -> dict[str, str]:
     out = {}
     for args in (("today",), ("brief",), ("reflect",), ("lint",), ("recall", "pasta recipe"),
                  ("recall", "pointers"), ("concept", "duplicates"), ("claims", "--summary"),
-                 ("chats",), ("needs",), ("browse", "status"), ("dashboard", "--no-open")):
+                 ("chats",), ("browse", "status"), ("dashboard", "--no-open")):
         out["cli " + " ".join(args)] = cli(*args, "--vault", root)
     out["cli export context"] = cli("export", "context", "--vault", root)
     runner = FakeRunner()

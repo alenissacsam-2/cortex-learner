@@ -3,7 +3,10 @@ Code chat it prints the light part of cortex_prime (cortex.prime.core: profile, 
 contract core) as `additionalContext`, and tells the model to fetch the Related block from the
 running server with cortex_prime(related_only=true). It never imports the `mcp` SDK or the
 embedder and never builds the index, so it stays fast on a large vault. Later prompts of the
-same chat print nothing. It never fails the prompt: any error prints nothing and exits 0.
+same chat print nothing, unless the prompt holds a //pref, //fact or //forget line (R3-5,
+cortex.tags): every prompt's tags are the owner's own typed words, saved at once (then, and
+only then, the `mcp` SDK is imported) and named in the context. It never fails the prompt: any
+error prints nothing and exits 0.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ NEXT = ("Answer with this in mind. If the message is substantive, call cortex_pr
         "(topics, concepts taught, answers, facts, sources, decisions, insights); about them: "
         "their own words -> cortex_patch with user_confirmed=true, your inference without it "
         "(waits for Approve in the app).")
+TAGGED = ("Cortex saved the user's //pref, //fact and //forget lines itself ({lines}); do "
+          "not save them again.")
 NUDGE = ("Cortex (the user's second brain) could not prime this chat: call "
          "cortex_prime(prompt=<the user's message>) before you answer.")
 pending: threading.Thread | None = None  # the prime thread, left running past BUDGET
@@ -47,12 +52,14 @@ def run(raw: str) -> str:
         root = _vault_root()
         if root is None or not root.is_dir():
             return ""
+        saved = _tags(root, prompt)
+        note = [TAGGED.format(lines="; ".join(saved))] if saved else []
         try:
             seen = (root / STATE).read_text(encoding="utf-8").split()
         except OSError:
             seen = []
         if sid in seen:
-            return ""
+            return _out(note[0]) if note else ""
         from datetime import UTC, datetime
 
         from cortex import prime, xray
@@ -81,9 +88,27 @@ def run(raw: str) -> str:
         pending.start()
         pending.join(BUDGET)
         out = box.get("out")
-        return _out("\n\n".join([HEAD, out, NEXT]) if out is not None else NUDGE)
+        return _out("\n\n".join([HEAD, out, NEXT, *note]) if out is not None
+                    else "\n\n".join([NUDGE, *note]))
     except Exception:  # noqa: BLE001  (garbage stdin, a busy vault lock, a broken vault)
         return ""
+
+
+def _tags(root, prompt: str) -> list[str]:
+    """R3-5: save the prompt's //tags (cortex.tags); the display lines, [] on any error."""
+    if "//" not in prompt:
+        return []
+    try:
+        from datetime import UTC, datetime
+
+        from cortex import tags
+        from cortex.events import local_day
+        from cortex.vault import Vault
+
+        day = local_day(datetime.now(UTC))
+        return tags.apply_in(Vault(root), [(t, x, day) for t, x in tags.find(prompt)])
+    except Exception:  # noqa: BLE001  (a tag must never cost the prompt)
+        return []
 
 
 def _out(text: str) -> str:
