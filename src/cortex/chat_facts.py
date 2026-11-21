@@ -103,6 +103,8 @@ _OF_MONTH = re.compile(rf"\b(?:of|for|during|over)\s+({_MONTH})\b\.?(?:\s+(\d{{4
 _FOCUS = {"chat": "chats", "conversation": "chats", "note": "notes", "journal": "journal",
           "visit": "browsing", "searche": "browsing"}
 _BROWSING_VERB = re.compile(r"^(?:visit\w*|brows\w*|search\w*|watch\w*|go|went|open\w*)\b")
+# concept events that are the log's bookkeeping, not studying (also rollups' study rows)
+BOOKKEEPING = ("void", "remap", "open", "resume", "close", "change")
 
 
 # ---- routing ----------------------------------------------------------------------------------
@@ -314,9 +316,12 @@ def _study(vault, lo: str, hi: str, sources: dict, match) -> tuple[int, list]:
     hide = set() if sources.get("private") else planner.hidden(vault, catalog)
     names: dict = {}
     read, out = 0, []
-    for ev in EventLog(vault).iter_events():
+    events = list(EventLog(vault).iter_events())
+    voided = {e.get("ref") for e in events if e.get("kind") == "void"}
+    for ev in events:
         obj, d = str(ev.get("object") or ""), str(ev.get("day") or "")
-        if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("kind") == "void":
+        if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("id") in voided \
+                or ev.get("kind") in BOOKKEEPING:
             continue
         c = obj[8:]
         if c in hide:

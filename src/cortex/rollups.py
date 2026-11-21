@@ -98,7 +98,7 @@ def _items(vault: Vault, lo: str, hi: str) -> list[tuple]:
     for ev in events:
         obj, d = str(ev.get("object") or ""), str(ev.get("day") or "")
         if not obj.startswith("concept:") or not lo <= d <= hi or ev.get("id") in voided \
-                or ev.get("kind") in ("void", "remap", "open", "resume", "close", "change"):
+                or ev.get("kind") in chat_facts.BOOKKEEPING:
             continue
         c = obj[8:]
         e = catalog.entries.get(c)

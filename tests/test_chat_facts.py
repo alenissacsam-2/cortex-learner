@@ -305,6 +305,22 @@ def test_a_private_subject_is_counted_only_under_the_private_switch(vault):
     assert about["page"] is None
 
 
+def test_study_counts_skip_voided_and_bookkeeping_events(vault):
+    """Audit 21 Nov C2: a voided grade and a remap are not study."""
+    from cortex.events import EventLog
+
+    log = EventLog(vault)
+    noon = datetime(2026, 11, 18, 12).astimezone()
+    g = log.append(session="cli", kind="grade", source="tutor", now=noon,
+                   fields={"object": "concept:two-pointers", "verdict": "correct"})
+    log.append(session="cli", kind="void", source="tutor", now=noon,
+               fields={"ref": g["id"], "payload": {"reason": "x"}})
+    log.append(session="cli", kind="remap", source="external", now=noon,
+               fields={"object": "concept:two-pointers", "ref": "concept:old-pointers"})
+    q = _route("how many times did I study two pointers?")
+    assert chat_facts.facts(vault, q, ALL_ON)["sources"] == {"study": 2}
+
+
 # ---- the stream ------------------------------------------------------------------------------
 
 def _turn(vault, text, runner, settings=None):
