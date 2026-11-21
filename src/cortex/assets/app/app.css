@@ -444,6 +444,14 @@ dialog.confirm h2 { margin: 0 0 10px; }
   .chat-bar { justify-content: space-between; align-items: center; }
 }
 @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+/* Tonight's pulse: 24 hours of the Cortex day from 04:00, filled by activity (0 to 3), the
+   current hour outlined. No motion. */
+.pulse { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
+.pcell { height: 22px; border-radius: 2px; border: 1px solid var(--rule); }
+.pcell.l1 { background: color-mix(in srgb, var(--lit) 30%, var(--panel)); }
+.pcell.l2 { background: color-mix(in srgb, var(--lit) 62%, var(--panel)); }
+.pcell.l3 { background: var(--lit); }
+.pcell.now { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 @media (max-width: 760px) {
   .top { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 16px; }
