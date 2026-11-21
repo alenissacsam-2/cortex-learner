@@ -1489,7 +1489,7 @@
     setup: 'Setup' };
   /* R3-4: every Review row is a card. J/K move focus between cards (a roving tabindex), and on
      the focused card Y approves, N dismisses, R retires and S skips; never while typing. */
-  let lastReview = null, reviewAt = -1, reviewBusy = false;
+  let lastReview = null, reviewAt = -1, reviewBusy = false, reviewMoreOpen = false;
   const reviewSkipped = new Set();  // cards skipped with S: out of Today's 5 until the page reloads
   function card(title, value, sub, acts, keys, id) {
     // keys: {y|n|r: [button, function]}; each key's button says its shortcut
@@ -1573,19 +1573,27 @@
       return card(`You told ${x.chats} chats: ${x.text}`, x.page === 'core' ? 'Core' : 'Preferences', null, [y[0], n[0]], two(y, n), id);
     };
     const retire = (x) => kb('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, `Retire: ${x.text}`);
-    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire };
+    // G6: a line AI apps are not given until Keep it; Keep it out retires it to ## Past
+    const unsafeCard = (x, id) => {
+      const r = kb('Keep it out', () => act('/api/review/retire', { id: x.id }, 'Kept out: the line moved to Past.'), null, `Keep it out: ${x.text}`);
+      const y = kb('Keep it', () => act('/api/review/unsafe/keep', { key: x.key }, 'Kept. AI apps get the line again.'), null, `Keep it: ${x.text}`);
+      return card(x.text, `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`, null, [r[0], y[0]], { r, y }, id);
+    };
+    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard };
   }
-  // R3-4's Today's 5 board (Review and Tonight): the view's `today` keys as cards, skips left out
+  // R3-4's Today's 5 board (Review and Tonight): the view's `today` keys as cards, skips left out;
+  // D4: once none is left, the board says Done for today
   function todayBoard(d, m) {
-    const find = { pending: d.pending || [], conflict: d.conflicts || [], rule: d.rules || [] };
-    const make = { pending: m.pendingCard, conflict: m.conflictCard, rule: m.ruleCard };
+    const find = { pending: d.pending || [], conflict: d.conflicts || [], rule: d.rules || [], unsafe: d.unsafe || [] };
+    const make = { pending: m.pendingCard, conflict: m.conflictCard, rule: m.ruleCard, unsafe: m.unsafeCard };
     const today = (d.today || []).filter((t) => !reviewSkipped.has(`${t.type}:${t.key}`)).map((t) => {
       const x = (find[t.type] || []).find((y) => y.key === t.key);
       return x ? make[t.type](x, `${t.type}:${t.key}`) : null;
     }).filter(Boolean);
+    if (!today.length) return board('Done for today', { note: '0' }, note('Nothing else needs you. Cortex saves and tidies the rest itself.'));
     return board('Today’s 5', { note: String(today.length) },
       h('p', { class: 'help pad', text: 'Keys: J and K move between cards, Y approve, N dismiss, R retire, S skip.' }),
-      ...list(today, d.today_left === 0 ? 'Done for today. The lists below still wait.' : 'Nothing for today.'));
+      ...today);
   }
   // after a key's action or a skip, focus stays at the same place among section `s`'s cards
   function cardsDrawn(s) {
@@ -1601,12 +1609,15 @@
     badge(d.count);
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
     const m = reviewCards(act);
-    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire } = m;
+    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard } = m;
     const rules = d.rules || [];
     const allRules = rules.length > 1 ? ['Approve all', () => act('/api/review/rule/approve-all', { keys: rules.map((x) => x.key) }, 'Added to your lines.'),
       { 'aria-label': `Approve all ${rules.length} repeated corrections` }] : null;
-    put('review',
-      todayBoard(d, m),
+    // D4: every board but Today's 5 sits folded under one section, closed until opened
+    const more = h('details', { class: 'review-more', open: reviewMoreOpen },
+      h('summary', { text: `More, only if you want (${d.more || 0})` }));
+    more.addEventListener('toggle', () => { reviewMoreOpen = more.open; });
+    more.append(
       board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) => pendingCard(p)),
       'Nothing is waiting.')),
       board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) => {
@@ -1631,8 +1642,6 @@
       }), 'Every playbook reached an AI app lately.')),
       board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
-      board('These lines say nearly the same: keep one?', { note: String((d.duplicates || []).length) }, ...list((d.duplicates || []).map((c) => conflictCard(c)),
-      'No lines say nearly the same.')),
       board('Corrections you repeat', { note: String(rules.length), btn: allRules }, ...list(rules.map((x) => ruleCard(x)),
       'No repeated corrections found.')),
       board('Decisions in your commits', { note: String((d.decisions || []).length) }, ...list((d.decisions || []).map((x) => {
@@ -1649,12 +1658,9 @@
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
         return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
       }), 'No edited imports.')),
-      // G6: a line AI apps are not given until Keep it; Keep it out retires it to ## Past
-      board('Lines that may steer an AI', { note: String((d.unsafe || []).length) }, ...list((d.unsafe || []).map((x) => {
-        const r = kb('Keep it out', () => act('/api/review/retire', { id: x.id }, 'Kept out: the line moved to Past.'), null, `Keep it out: ${x.text}`);
-        const y = kb('Keep it', () => act('/api/review/unsafe/keep', { key: x.key }, 'Kept. AI apps get the line again.'), null, `Keep it: ${x.text}`);
-        return card(x.text, `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`, null, [r[0], y[0]], { r, y });
-      }), 'No line looks like an instruction to an AI.')));
+      board('Lines that may steer an AI', { note: String((d.unsafe || []).length) }, ...list((d.unsafe || []).map((x) => unsafeCard(x)),
+      'No line looks like an instruction to an AI.')));
+    put('review', todayBoard(d, m), more);
     cardsDrawn('review');
   }
 

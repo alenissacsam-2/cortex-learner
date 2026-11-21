@@ -659,6 +659,19 @@ class App:
         from cortex.events import local_day
         return local_day(datetime.now(UTC))
 
+    def tidy_about_me(self) -> dict:
+        """D1-D3: Cortex's own sweep of the about-me lines (mcp_server.Cortex.tidy), at start
+        and with each chat-import pass: waiting about-me lines move to their pages, near-copies
+        and settled pairs are retired, in one session `cortex undo` can take back. Not an app
+        click, so nothing is stamped `clicked`."""
+        from cortex.mcp_server import Cortex
+        from cortex.vault import Vault
+        root = self.root
+        if root is None or not (root / ".cortex").is_dir():
+            return {"moved": 0, "retired": 0}
+        with self.reviewing:  # never beside a Review click
+            return Cortex(Vault(root)).tidy()
+
     def review(self) -> dict:
         """The Review view and its badge count (cortex.review); shown text only."""
         from cortex import review
@@ -718,40 +731,83 @@ class App:
             raise NotFound
         return row
 
+    def _waiting_group(self, p: dict) -> list[dict]:
+        """D5: the waiting lines of `p`'s page that say nearly what `p` says, `p` first."""
+        from cortex import review
+        same = {x["key"]: x for x in review.pending(self._vault(), self._today())
+                if x["page"] == p["page"]}
+        return [same[k] for k in review.group(list(same.values()), p["key"]) if k in same]
+
     def review_approve(self, body: dict) -> dict:
         """Approve: the waiting line written as cortex_patch writes a confirmed one, stamped
-        `confirm: clicked`; a teaching-contract rule applies only this way (E2)."""
+        `confirm: clicked`; a teaching-contract rule applies only this way (E2). D5: its
+        near-copies go with it: on a claim page each is approved too (cortex_patch keeps one of
+        near-duplicates, D1), elsewhere they are dismissed. Only the first click is the card."""
+        from cortex import claims
         p = self._waiting(body)
-        rule = p["page"] == "teaching-contract"  # a proposal is stored bare; a rule is a list line
-        return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{p['page']}", "op": "append_to_section", "target": p["section"],
-            "text": "- " * rule + p["text"], "user_confirmed": True}, "pending",
-            self._producer(p))
+        out = None
+        for n, x in enumerate(self._waiting_group(p)):
+            card = "pending" if n == 0 else None
+            if n and x["page"] not in claims.PAGES:
+                out = self._click("cortex_patch", "_dismiss", {
+                    "page": x["page"], "section": x["section"], "text": x["text"]}, card,
+                    self._producer(x))
+                continue
+            rule = x["page"] == "teaching-contract"  # stored bare; a rule is a list line
+            out = self._click("cortex_patch", "cortex_patch", {
+                "id": f"me/{x['page']}", "op": "append_to_section", "target": x["section"],
+                "text": "- " * rule + x["text"], "user_confirmed": True}, card,
+                self._producer(x))
+        return out
 
     def review_dismiss(self, body: dict) -> dict:
         """Dismiss: a claim page's line goes to its `## Not me` (cortex_patch reject); another
-        page's (the contract, the portrait) leaves a `dismiss` change. Never proposed again."""
+        page's (the contract, the portrait) leaves a `dismiss` change. Never proposed again.
+        D5: it covers the line's near-copies too."""
         from cortex import claims
-        p = self._waiting(body)
-        if p["page"] in claims.PAGES:
-            return self._click("cortex_patch", "cortex_patch", {
-                "id": f"me/{p['page']}", "op": "reject",
-                "target": f"{p['section']}: {p['text']}"}, "pending", self._producer(p))
-        return self._click("cortex_patch", "_dismiss", {
-            "page": p["page"], "section": p["section"], "text": p["text"]}, "pending",
-            self._producer(p))
+        out = None
+        for n, p in enumerate(self._waiting_group(self._waiting(body))):
+            card = "pending" if n == 0 else None
+            if p["page"] in claims.PAGES:
+                out = self._click("cortex_patch", "cortex_patch", {
+                    "id": f"me/{p['page']}", "op": "reject",
+                    "target": f"{p['section']}: {p['text']}"}, card, self._producer(p))
+            else:
+                out = self._click("cortex_patch", "_dismiss", {
+                    "page": p["page"], "section": p["section"], "text": p["text"]}, card,
+                    self._producer(p))
+        return out
+
+    def _line_group(self, cid: str) -> list[str]:
+        """D5: the live line `cid` and, when it is on the Still true? or the unsafe board, the
+        near-copies that card stands for (review.stale's `ids`, review.collapse)."""
+        from cortex import review
+        from cortex.events import EventLog
+        v = self._vault()
+        events = list(EventLog(v).iter_events())
+        for x in review.stale(review.live_rows(v, events, self._today()), events,
+                              self._today()):
+            if cid in x["ids"]:
+                return [cid, *(i for i in x["ids"] if i != cid)]
+        hidden = review._private(v)
+        return review.group([x for x in review.unsafe_lines(v, events)
+                             if x["page"] not in hidden], cid, "id")
 
     def review_still(self, body: dict) -> dict:
-        """Still true: a reconfirm stamped `confirm: clicked` (claims.tiers: confirmed)."""
-        r = self._live(body)
-        return self._click("cortex_log", "cortex_log", {
-            "kind": "reconfirm", "payload": {"claim": r["id"], "verdict": "yes"}})
+        """Still true: a reconfirm stamped `confirm: clicked` (claims.tiers: confirmed), for
+        the line and the near-copies its card stands for (D5)."""
+        out = None
+        for cid in self._line_group(self._live(body)["id"]):
+            out = self._click("cortex_log", "cortex_log", {
+                "kind": "reconfirm", "payload": {"claim": cid, "verdict": "yes"}})
+        return out
 
     def review_retire(self, body: dict) -> dict:
         """Retire: cortex_patch's retire op moves the line to `## Past`. A //forget card's
         candidate is the forget producer's accept (RR-10); a crowded line's (G7) is stamped
-        `crowded`, so it counts in that card's monthly cap."""
-        from cortex import review, tags
+        `crowded`, so it counts in that card's monthly cap. D5: on a Still true? or unsafe card
+        the near-copies it stands for are retired too."""
+        from cortex import claims, review, tags
         from cortex.events import EventLog
         r = self._live(body)
         v = self._vault()
@@ -760,9 +816,14 @@ class App:
             v, events, self._today()) for c in x["candidates"]) else None
         card = forget or ("crowded" if any(x["id"] == r["id"] for x in review.crowded(
             v, review.live_rows(v, events, self._today()))[0]) else None)
-        return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
-            card, forget)
+        live = {x["id"]: x for x in claims.rows(v) if x["status"] == "live"}
+        out = None
+        for n, cid in enumerate(self._line_group(r["id"]) if card is None else [r["id"]]):
+            if cid in live:
+                out = self._click("cortex_patch", "cortex_patch", {
+                    "id": f"me/{live[cid]['page']}", "op": "retire", "target": cid,
+                    "user_confirmed": True}, card if n == 0 else None, forget)
+        return out
 
     def review_crowded_keep(self, body: dict) -> dict:
         """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin
@@ -811,9 +872,10 @@ class App:
         return self._click("cortex_patch", "_resume", {"producer": p})
 
     def review_conflict(self, body: dict) -> dict:
-        """A conflict pair (plan 5b) or a near-duplicate pair (G7, stamped `duplicate`): `keep`
-        both (a `keep_both` change), or `left` or `right`, which retires the other line through
-        cortex_patch's retire op."""
+        """A conflict pair (plan 5b, D2: two of the owner's lines or two inferred ones that
+        clash): `keep` both (a `keep_both` change, which also covers later near-copies of the
+        pair, review.kept_cover), or `left` or `right`, which retires the other line and its
+        near-copies (review.copies) through cortex_patch's retire op."""
         from cortex import review
         from cortex.events import EventLog
         v, key, keep = self._vault(), body.get("key"), body.get("keep")
@@ -821,18 +883,20 @@ class App:
             raise ValueError("keep must be both, left or right.")
         events = list(EventLog(v).iter_events())
         rows = review.live_rows(v, events, self._today())
-        pair = next((c for c in review.conflicts(rows, events) if c["key"] == key), None) \
-            or next((c for c in review.duplicates(rows, events) if c["key"] == key), None)
+        pair = next((c for c in review.conflicts(rows, events, review.known_texts(v))
+                     if c["key"] == key), None)
         if pair is None:
             raise NotFound
-        card = "duplicate" if pair["why"] == "same" else "conflict"
+        card = "conflict"
         if keep == "both":
             return self._click("cortex_patch", "_keep_both", {"page": pair["left"]["page"],
                                                               "pair": pair["key"]}, card)
-        r = pair["right" if keep == "left" else "left"]
-        return self._click("cortex_patch", "cortex_patch", {
-            "id": f"me/{r['page']}", "op": "retire", "target": r["id"], "user_confirmed": True},
-            card)
+        out = None  # D5: the other line's near-copies go too, so the card does not come back
+        for n, r in enumerate(review.copies(rows, pair["right" if keep == "left" else "left"])):
+            out = self._click("cortex_patch", "cortex_patch", {
+                "id": f"me/{r['page']}", "op": "retire", "target": r["id"],
+                "user_confirmed": True}, card if n == 0 else None)
+        return out
 
     def _rule(self, body: dict) -> dict:
         from cortex import corrections, review
@@ -918,15 +982,18 @@ class App:
     def review_forget_dismiss(self, body: dict) -> dict:
         """A //forget card (cortex.tags) dismissed: a `dismiss` change on page `forget` holds
         the hash of its event id, so the card closes; no line changes."""
-        from cortex import tags
+        from cortex import review, tags
         from cortex.events import EventLog
         v, key = self._vault(), body.get("key")
-        if not any(x["key"] == key for x in tags.forget_cards(
-                v, EventLog(v).iter_events(), self._today())):
+        cards = tags.forget_cards(v, EventLog(v).iter_events(), self._today())
+        if not any(x["key"] == key for x in cards):
             raise NotFound
-        return self._click("cortex_patch", "_dismiss", {
-            "page": "forget", "section": "Forget", "text": key, "waiting": False}, "forget",
-            "forget")
+        out = None
+        for n, k in enumerate(review.group(cards, key)):  # D5: the card's near-copies too
+            out = self._click("cortex_patch", "_dismiss", {
+                "page": "forget", "section": "Forget", "text": k, "waiting": False},
+                "forget" if n == 0 else None, "forget")
+        return out
 
     def review_import_dismiss(self, body: dict) -> dict:
         """RR-18: a card for a hand-edited imported page dismissed: a `dismiss` change on id
@@ -946,10 +1013,15 @@ class App:
         from cortex import review
         from cortex.events import EventLog
         v, key = self._vault(), body.get("key")
-        if not any(x["key"] == key for x in review.unsafe_lines(v, EventLog(v).iter_events())):
+        lines = review.unsafe_lines(v, EventLog(v).iter_events())
+        if not any(x["key"] == key for x in lines):
             raise NotFound
-        return self._click("cortex_patch", "_dismiss", {
-            "page": "unsafe", "section": "Unsafe", "text": key, "waiting": False})
+        hidden = review._private(v)
+        out = None
+        for k in review.group([x for x in lines if x["page"] not in hidden], key):  # D5
+            out = self._click("cortex_patch", "_dismiss", {
+                "page": "unsafe", "section": "Unsafe", "text": k, "waiting": False})
+        return out
 
     # ---- Tonight (Gemini round 3 "Nightly Closeout"): close the day ----
     def tonight(self) -> dict:
@@ -2188,11 +2260,19 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: rollup pages failed ({type(e).__name__})")
 
+    def tidy():  # D1-D3: the about-me sweep, at start and with each chat-import pass
+        try:
+            app.tidy_about_me()
+        except Exception as e:  # noqa: BLE001  (the next pass tries again)
+            echo(f"cortex app: tidying the about-me lines failed ({type(e).__name__})")
+
     def chats():  # app.chat_import: the first pass a minute after start, then every 5 minutes
         from cortex import chat_import
         wait = chat_import.FIRST_S
+        tidy()
         while not app.stop.wait(wait):
             wait = chat_import.EVERY_S
+            tidy()
             # the safety net reads the pages the last import wrote; first, since the import
             # below starts a job and the net waits while any job runs
             try:
