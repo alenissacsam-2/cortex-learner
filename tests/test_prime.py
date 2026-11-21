@@ -613,3 +613,21 @@ def test_prime_names_at_most_two_open_mistakes_of_its_concepts(vault, monkeypatc
     assert "[[dsa.c-third]] — one past the end &lt;/untrusted_note> x" in block  # wrapped
     assert "[[dsa.d-fourth]] — Slip dsa.d-fourth" in block
     assert "Open mistakes" not in c.cortex_prime("pasta recipe")["context"]
+
+
+def test_a_cut_block_says_what_was_cut_within_its_cap(tmp_path):
+    """RR-13: lines fit() drops leave a `(+N more ...)` line after the note, inside the cap."""
+    (tmp_path / "me").mkdir()
+    (tmp_path / "me/preferences.md").write_text(
+        "# Preferences\n\n## Communication\n" + "".join(
+            f"- Preference line number {i} about how to write answers well.\n"
+            for i in range(40)), encoding="utf-8")
+    parts, _ = prime.core(Vault(tmp_path), "hello", [], datetime(2026, 11, 16, tzinfo=UTC))
+    block = next(p for p in parts if p.startswith("## Preferences"))
+    shown = sum(ln.startswith("- [") for ln in block.splitlines())
+    assert block.endswith(f"\n(+{40 - shown} more preference lines: "
+                          "cortex_context(scope='all') reads them)")
+    assert block.index("</untrusted_note>") < block.index("(+")  # Cortex's word, not the note's
+    assert len(block) <= prime.PRIME_CAPS["preferences"]
+    assert prime.fit(["a", "b"], "me", 1000, 1000, "preference") == ["a", "b"]
+    assert prime.more(0, "related") == ""

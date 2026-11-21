@@ -1324,9 +1324,10 @@ class Cortex:
                and h["id"] not in xs["mute"]][:PRIME_RECALLS]))
         rel = prime.fit([f"- [[{i}]] — " + (said.get(i) or notes[i]["fields"].get("summary")
                                             or notes[i]["title"]) for i in ids],
-                        "related", PRIME_CAPS["related"], left[0])
+                        "related", PRIME_CAPS["related"], left[0], "related")
         if rel:
-            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"])
+            put("Related", "\n".join(rel), "related", PRIME_CAPS["related"],
+                prime.more(len(ids) - len(rel), "related"))
         xr["served"]["related"], xr["trimmed"]["related"] = ids[:len(rel)], ids[len(rel):]
         # open mistakes on the hit concepts, as cortex_context lists them
         ids = list(dict.fromkeys(
@@ -1335,9 +1336,10 @@ class Cortex:
             if notes.get(m, {}).get("kind") == "mistake" and m not in xs["mute"]
         ))[:PRIME_MISTAKES]
         mis = prime.fit([f"- [[{m}]] — {notes[m]['fields'].get('summary') or notes[m]['title']}"
-                         for m in ids], "mistakes", PRIME_CAPS["mistakes"], left[0])
+                         for m in ids], "mistakes", PRIME_CAPS["mistakes"], left[0], "mistake")
         if mis:
-            put("Open mistakes", "\n".join(mis), "mistakes", PRIME_CAPS["mistakes"])
+            put("Open mistakes", "\n".join(mis), "mistakes", PRIME_CAPS["mistakes"],
+                prime.more(len(ids) - len(mis), "mistake"))
         xr["served"]["mistakes"], xr["trimmed"]["mistakes"] = ids[:len(mis)], ids[len(mis):]
         touch = [hub] if hub and hub not in self.touched else []
         xr["served"]["hub"] = touch

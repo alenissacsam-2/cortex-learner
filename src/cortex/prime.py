@@ -204,11 +204,14 @@ def claim_items(vault: Vault, page: str, keep, served: dict, today: str, ids: di
 
 
 def putter(parts: list[str], left: list[int]):
-    """A `put(head, text, id, cap)` that appends a wrapped block to `parts`, within `cap`
-    and the remaining budget `left[0]`."""
-    def put(head: str, text: str, id: str | None = None, cap: int = CONTEXT_MAX) -> None:
+    """A `put(head, text, id, cap, tail)` that appends a wrapped block to `parts`, within `cap`
+    and the remaining budget `left[0]`; `tail` (a `more` line) follows the wrapped text,
+    outside the note, since it is Cortex's own word."""
+    def put(head: str, text: str, id: str | None = None, cap: int = CONTEXT_MAX,
+            tail: str = "") -> None:
         while True:  # trim until the wrapped block fits (escaping can lengthen the text)
-            block = f"## {head}\n" + (_wrap(id, text) if id else text)
+            block = f"## {head}\n" + (_wrap(id, text) if id else text) + (
+                f"\n{tail}" if tail else "")
             over = len(block) - min(cap, left[0])
             if over <= 0:
                 break
@@ -220,12 +223,27 @@ def putter(parts: list[str], left: list[int]):
     return put
 
 
-def fit(lines: list[str], id: str, cap: int, left: int) -> list[str]:
-    """`lines` minus the last ones until their wrapped block fits `cap` and `left`."""
-    lines = list(lines)
-    while lines and len(_wrap(id, "\n".join(lines))) + 40 > min(cap, left):
-        lines.pop()  # 40: room for the "## <head>\n" line
-    return lines
+def fit(lines: list[str], id: str, cap: int, left: int, what: str = "") -> list[str]:
+    """`lines` minus the last ones until their wrapped block fits `cap` and `left`. With
+    `what` (a MORE key) and lines cut, room is kept for the `more` line saying so (RR-13)."""
+    keep, room = list(lines), 0
+    while keep and len(_wrap(id, "\n".join(keep))) + 40 + room > min(cap, left):
+        keep.pop()  # 40: room for the "## <head>\n" line
+        if what and not room:
+            room = len(more(len(lines), what)) + 1  # n has at most this many digits
+    return keep
+
+
+# RR-13: the line after a block fit() cut, naming the call that reads the rest
+MORE = {"preference": "cortex_context(scope='all')",
+        "contract": "cortex_read(id='me/teaching-contract')",
+        "related": "cortex_recall(query=<the message>)",
+        "mistake": "cortex_context(topic=<the topic>)"}
+
+
+def more(n: int, what: str) -> str:
+    """`(+N more <what> lines: <call> reads them)`, or "" when nothing was cut."""
+    return f"(+{n} more {what} lines: {MORE[what]} reads them)" if n > 0 else ""
 
 
 def named_problem(vault: Vault, prompt: str):
@@ -387,15 +405,17 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     if problem := named_problem(vault, prompt):
         put(ATTEMPT_HEAD, attempt_line(problem))
         cap -= before - left[0]  # budget-neutral: the line comes out of the preferences cap
-    if prefs := fit([r[3] for r in rows], "me", cap, left[0]):
-        put("Preferences", "\n".join(prefs), "me", cap)
+    if prefs := fit([r[3] for r in rows], "me", cap, left[0], "preference"):
+        put("Preferences", "\n".join(prefs), "me", cap,
+            more(len(rows) - len(prefs), "preference"))
     elif n := len(withheld & {"preferences", "personality"}):
         put("Preferences", WITHHELD.format(n=n))  # no "not recorded" nag: /cortex home asks
     if "teaching-contract" not in withheld and (rules := contract_core(contract(vault, set()))):
         # whole rules that fit, else the first one cut by put
-        lines = fit(rules, "me/teaching-contract", PRIME_CAPS["contract"], left[0]) or rules[:1]
+        lines = fit(rules, "me/teaching-contract", PRIME_CAPS["contract"], left[0],
+                    "contract") or rules[:1]
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
-            PRIME_CAPS["contract"])
+            PRIME_CAPS["contract"], more(len(rules) - len(lines), "contract"))
     if xr is not None:
         heads = {b.split("\n", 1)[0][3:] for b in parts}
         xr["served"] = {"core": [c for (p, _, t), c in ids.items()
