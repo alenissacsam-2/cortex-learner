@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 
 from cortex import chats, render, sources
+from cortex.events import local_day
 from cortex.vault import Vault, VaultError, truthy
 
 MAX_BYTES = 5 * 1024 * 1024  # bigger files are attachments or dumps, not notes
@@ -450,6 +451,12 @@ def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
                           walk_errors=errors)
 
 
+def _day(ts: float) -> str:
+    """A file time's Cortex day (events.local_day: local, 04:00 rollover), never its UTC
+    date."""
+    return local_day(datetime.fromtimestamp(ts, UTC))
+
+
 def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
     """One `_files` entry as a note Item, or the reason it is skipped. Its key is the whole
     text, so the docs source's .md/.txt dedupe against an earlier notes import."""
@@ -463,8 +470,7 @@ def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
                 else "not UTF-8 text")
     rel = _clean(name)
     fm = _FRONT.match(text)
-    return sources.Item(PurePosixPath(rel).stem,
-                        datetime.fromtimestamp(mtime, UTC).date().isoformat(),
+    return sources.Item(PurePosixPath(rel).stem, _day(mtime),
                         text[fm.end():] if fm else text, rel,
                         private=bool(fm and _is_private(fm.group(1))), key=text,
                         summary=_summary(fm.group(1)) if fm else "")

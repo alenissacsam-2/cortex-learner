@@ -33,7 +33,7 @@ import sys
 import threading
 import zipfile
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
@@ -79,7 +79,8 @@ _KDATE = re.compile(r"(?:(\d{1,2}) ([A-Za-z]+)|([A-Za-z]+) (\d{1,2}),) (\d{4})")
 
 
 def _day(ts: float) -> str:
-    return datetime.fromtimestamp(ts, UTC).date().isoformat()
+    """A timestamp's Cortex day (local, 04:00 rollover), as importers.note_item dates notes."""
+    return importers._day(ts)
 
 
 def _clip(text: str, n: int) -> str:
