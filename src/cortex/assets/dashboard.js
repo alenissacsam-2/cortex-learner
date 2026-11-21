@@ -1144,7 +1144,7 @@
   const todayUis = [];
   function todayBtn(cls) {
     const b = button(cls + ' tbtn', null, playToday);
-    b.title = 'Show everything from today in the brain: pages taught, tested, asked about, added or saved; press again to leave Today';
+    b.title = 'Show everything from today in the brain: pages taught, tested, asked about, added or saved; the Left and Right arrow keys step through them; press again to leave Today';
     b.append(icon('target'), ' Today');
     b.setAttribute('aria-pressed', 'false');
     const at = el('span', 'today-at');
@@ -1183,11 +1183,16 @@
     if (!brain) return;
     if (brain.todayIds) { brain.overview(); live('Left Today.'); return; }
     // all of today's work: the feed's today (taught, tested, asked, added, chats; events, which leave a
-    // concept's file alone) and every page saved today, newest first; the feed is already privacy-filtered
+    // concept's file alone) and every page the owner saved today (`today_ids`: never a page a Cortex
+    // job rewrote), newest first; the feed and the pages are already privacy-filtered
     const d = (p) => dateOf(p) || '';
-    const saved = D.pages.filter((p) => p.updated === TODAY)
+    const mine = new Set(D.today_ids || []);
+    const saved = D.pages.filter((p) => mine.has(p.id))
       .sort((a, b) => (d(b) > d(a) ? 1 : d(b) < d(a) ? -1 : 0)).map((p) => p.id);
-    const ids = [...new Set([...((D.feed && D.feed.today) || []).map((i) => i.id), ...saved])]
+    // a chat the automatic import brought in today counts only when the chat itself is from today (or
+    // undated), so a first import of older chats does not flood Today
+    const fresh = (i) => i.kind !== 'chat' || !PAGES.has(i.id) || !PAGES.get(i.id).date || PAGES.get(i.id).date === TODAY;
+    const ids = [...new Set([...((D.feed && D.feed.today) || []).filter(fresh).map((i) => i.id), ...saved])]
       .filter((id) => BRAIN_IDS.has(id));
     brain.today(ids);
     live(ids.length ? `Showing ${plural(ids.length, 'page')} from today.` : 'Nothing from today yet.');
@@ -1857,7 +1862,7 @@
       if (key.childElementCount) lg.append(key);
     }
     lg.append(el('p', null, 'drag to turn · scroll to zoom · click a lobe name for its pages · click a point to inspect it · double-click empty space for the overview'));
-    lg.append(el('p', null, 'keys: Esc back · [ ] step · Backspace previous · F frame · 0 reset · arrows turn · + − zoom · A M G modes · S spin'
+    lg.append(el('p', null, 'keys: Esc back · [ ] step (Today: ← → too) · Backspace previous · F frame · 0 reset · arrows turn · + − zoom · A M G modes · S spin'
       + (HAS_STYLE ? ' · L look' : '')));
   }
 
@@ -2731,7 +2736,7 @@
     const keys = el('ul', 'prose');
     for (const t of ['Ctrl+K: search pages, sections and commands', '1 to 8: switch sections',
       'Arrow keys in the section tabs: move between sections', 'Esc: close the reader or the search',
-      'In the brain: drag to turn, scroll to zoom, arrows turn, + and − zoom, 0 resets the view',
+      'In the brain: drag to turn, scroll to zoom, arrows turn (in Today, Left and Right step through today\'s pages), + and − zoom, 0 resets the view',
       'In the brain: Esc goes back one level (page, region, overview); double-click empty space for the overview; double-click a page or region name to fly to it',
       'With a page selected: [ and ] step to the previous or next connection, Backspace returns to the previous page, F frames the selection',
       'With the brain focused: A, M and G switch Activity, Mastery and Growth; S turns spin on or off; L opens Look',

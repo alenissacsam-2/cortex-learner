@@ -30,7 +30,7 @@ D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
         "counts_by_kind", "loops", "follow_ups", "resurface", "you", "help", "brain",
-        "confidence"}
+        "confidence", "today_ids"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
 # its header comment names the sinks it avoids; comments are not code
@@ -598,6 +598,34 @@ def test_day_is_the_cortex_day_not_the_calendar_date(root):
     d = dashboard.build_data(Vault(root), now=late)
     assert d["as_of"].startswith("2026-11-14") and d["day"] == "2026-11-13"
     assert "let TODAY = D.day ||" in JS and "TODAY = D.day ||" in JS[JS.index("function reindex"):]
+
+
+def test_today_ids_are_pages_the_owner_saved_today(root):
+    # the brain's Today: never a page a Cortex job rewrote today; an import by its item's date
+    old = time.time() - 30 * 86400
+    for p in root.rglob("*"):
+        os.utime(p, (old, old))
+    v = Vault(root)
+    now = datetime.now().astimezone()
+    day = dashboard.build_data(v, now=now)["day"]
+    v.create_note("rollup", "2025-review", {"title": "2025 review"}, "# 2025 review\n")
+    v.create_note("note", "algo-hub", {"title": "Algorithms", "tags": ["topic"]}, "# Algo\n")
+    v.create_note("resource", "old-obsidian", {"title": "Old", "date": "2024-03-01"},
+                  "# Old\n\nSource: Obsidian · Date: 2024-03-01\n\nText.\n")
+    v.create_note("resource", "old-chat", {"title": "Chat"},
+                  "# Chat\n\nTimeline: [[algo-hub]] · Source: Claude · Date: 2024-03-02\n\nHi.\n")
+    v.create_note("resource", "mail-today", {"title": "Mail", "date": day},
+                  f"# Mail\n\nSource: Gmail · Date: {day}\n\nText.\n")
+    v.create_note("note", "my-idea", {"title": "My idea"}, "# My idea\n\nMine.\n")
+    v.create_note("note", "older-idea", {"title": "Older"}, "# Older\n")
+    os.utime(v.path_for("note", "older-idea"), (old, old))
+    d = dashboard.build_data(v, now=now)
+    shown = {p["id"] for p in d["pages"]}
+    assert {"2025-review", "algo-hub", "old-obsidian", "old-chat"} <= shown
+    assert sorted(d["today_ids"]) == ["mail-today", "my-idea"]
+    assert "D.today_ids" in JS[JS.index("function playToday"):]
+    # in Today, Left and Right step through today's pages; elsewhere they turn
+    assert "if (!todayStep(-1)) turn(" in BRAIN_JS and "if (!todayStep(1)) turn(" in BRAIN_JS
 
 
 def test_me_pages_get_friendly_titles(root):

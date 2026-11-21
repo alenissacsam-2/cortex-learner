@@ -172,6 +172,8 @@ section:focus { outline: none; }
   letter-spacing: .06em; min-height: 30px; border-bottom: 1px solid var(--rule);
 }
 .dep-row { min-height: 52px; border-bottom: 1px solid var(--rule); }
+/* a time label wider than the TIME column (TODAY, IN 2D, 21 NOV) draws with a smaller dot pitch */
+.dep-row .tcell .dm { max-width: 100%; height: auto; }
 .dep-row:last-of-type { border-bottom: 0; }
 /* the item column is narrow on the half-width board: its line wraps instead of cutting off */
 .dep-row .sub { white-space: normal; text-wrap: balance; }
