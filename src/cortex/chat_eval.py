@@ -464,8 +464,8 @@ def report(sp: dict, rows: list, model: str | None, why: str, build_s: float,
     gold_cited = [r for r in ran if r.get("cites_gold") is not None]
     blockers = []
     for name, ids in BLOCKERS:
-        st = [by[i]["status"] for i in ids if i in by]
-        state = "BLOCKED" if "fail" in st else "ok" if "pass" in st else "not run"
+        st = [by[i]["status"] if i in by else "blocked" for i in ids]  # absent: never asked
+        state = "BLOCKED" if "fail" in st else "ok" if set(st) == {"pass"} else "not run"
         blockers.append({"name": name, "ids": ids, "state": state,
                          "failed": [i for i in ids if i in by and by[i]["status"] == "fail"]})
     secs = sorted(r["seconds"] for r in ran)

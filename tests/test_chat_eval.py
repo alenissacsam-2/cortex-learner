@@ -151,6 +151,21 @@ def test_no_model_means_blocked_not_failed():
     assert out.startswith("Chat test as of 2026-11-20: BLOCKED") and "f" * 64 in out
 
 
+def test_a_blocker_with_a_blocked_question_is_not_ok():
+    """Audit 21 Nov C8: one pass and one blocked (not run) is not "ok"."""
+    def row(i, status):
+        return {"id": i, "kind": "k", "query": "lexical", "status": status, "seconds": 0.1,
+                "why": [], "retrieval": "n/a", "gold_rank": None, "answer": ""}
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass"), row("Q36", "blocked")],
+                         None, "no local model", 0.0)
+    assert r["blockers"][0]["state"] == "not run"
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass")], None, "stopped", 0.0)
+    assert r["blockers"][0]["state"] == "not run"  # Q36 never asked
+    r = chat_eval.report(chat_eval.spec(), [row("Q35", "pass"), row("Q36", "pass")],
+                         "qwen3.5-2b", "", 0.0)
+    assert r["blockers"][0]["state"] == "ok"
+
+
 def test_an_empty_report_says_no_data_not_zero():
     out = chat_eval.summary(chat_eval.report(chat_eval.spec(), [], None, "no local model", 0.0))
     assert "recall @1 no data, @3 no data, @5 no data" in out
@@ -271,7 +286,9 @@ def test_the_made_up_vault_end_to_end(tmp_path, monkeypatch):
     assert r["manifest"] == chat_eval.manifest(tmp_path / "vault")
     assert re.fullmatch(r"[0-9a-f]{64}", r["manifest"])
     assert {b["name"]: b["state"] for b in r["blockers"]} == {
-        "Private leak with Private off": "ok", "Stale preference served as current": "not run",
+        # Q35 passes, Q36 needs the model: not run, not ok (audit 21 Nov C8)
+        "Private leak with Private off": "not run",
+        "Stale preference served as current": "not run",
         "Made-up history for an empty month": "ok",
         "Computed count or study state wrong": "ok",
         "Deep passage missed (1.42 ms past character 700)": "not run"}
