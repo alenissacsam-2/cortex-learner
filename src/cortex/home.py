@@ -598,11 +598,15 @@ def _next_up(data: dict, parts: dict, day: str) -> list[dict]:
                 and look.audience(c) is Audience.CLOUD and planner.is_due(states[c], day):
             steps.append({"kind": "review", "id": c, "title": look.title(c),
                           "state": states[c].state, "why": "Due for review"})
-    last: dict = {}
+    last: dict = {}  # subject id -> its latest study event (taught, asked, graded, self-report)
     for e in parts["events"]:
         p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
-        c = p.get("change") if e.get("kind") == "change" else None
-        i = _obj(e) or (str(c.get("id")) if isinstance(c, dict) and c.get("id") else None)
+        k = e.get("kind")
+        # a page edit or an AI app saving a note is not study: it must not reorder Next up
+        study = k in ("taught", "ask", "grade") or (k == "log" and p.get("kind") == "self_report")
+        if not study:
+            continue
+        i = _obj(e) or (str(p["concept"]) if p.get("concept") else None)
         if i and (s := look.subject(i)):
             last[s["id"]] = max(last.get(s["id"], ""), e.get("ts", ""))
     sharp: dict = {}  # subject id -> FSRS stabilities (days) of its shown concepts

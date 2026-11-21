@@ -201,6 +201,15 @@ def test_a_grade_shows_in_today_and_puts_its_subject_first(root):
     assert exam["days_left"] == (date(2026, 11, 20) - date.fromisoformat(before["day"])).days
 
 
+def test_a_page_edit_does_not_put_its_subject_first(root):
+    # an AI app saving or editing a page is not study: sys (graded last) stays first
+    EventLog(Vault(root)).append(session="cli", kind="change", source="external", now=NOW,
+                                 fields={"payload": {"note": "edited",
+                                                     "change": {"id": "two-pointers"}}})
+    assert [(g["subject"] or {}).get("id") for g in _cache(root).get()["next_up"]] == [
+        "domain:sys", "domain:dsa", None]
+
+
 def test_a_claim_page_edit_reaches_the_kept_you_section(root):
     hc = _cache(root)
     live = {p["page"]: p.get("live") for p in hc.get()["you"]["know"]["pages"]}
