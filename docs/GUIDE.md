@@ -110,7 +110,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex chats` | Your past chats, newest first |
 | `cortex harvest status` | Harvest progress |
 | `cortex undo <session>` | Reverts one chat's changes |
-| `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex |
+| `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex, and per import source the page-length quartiles and the share of pages that are mostly links or numbers only (numbers only, never page text) |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |

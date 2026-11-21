@@ -246,6 +246,12 @@ def scrub(text: str, src: Source | None = None) -> str:
     return chats.redact(text)
 
 
+def link_lines(lines: list[str]) -> int:
+    """How many of `lines` are mostly a web address (over half their non-space characters)."""
+    return sum(2 * sum(len(u) for u in _URL.findall(ln)) > len(ln.replace(" ", ""))
+               for ln in lines)
+
+
 def unreadable(text: str) -> str | None:
     """Why an item's text is garbage (an UNREADABLE reason), or None when it reads as text:
     U+FFFD over 5% of its non-space characters (a bad decode), letters, digits and marks under
@@ -260,9 +266,7 @@ def unreadable(text: str) -> str | None:
     if sum(c.isalnum() or unicodedata.category(c)[0] == "M" for c in chars) < 0.25 * len(chars):
         return "mostly symbols"
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    links = sum(2 * sum(len(u) for u in _URL.findall(ln)) > len(ln.replace(" ", ""))
-                for ln in lines)
-    if links > 0.6 * len(lines):
+    if link_lines(lines) > 0.6 * len(lines):
         return "link list"
     if len(lines) >= 10 and len(set(lines)) < 0.3 * len(lines):
         return "repetitive"

@@ -283,6 +283,53 @@ def check_id_clashes(root: Path) -> tuple[str, str, str, str]:
     return "PASS", name, f"{len(seen)} ids", ""
 
 
+# RR-38: the import header (`Source: <label> · Date:`) or a chat page's Timeline line
+_IMPORT_HEAD = re.compile(r"^(?:Timeline: [^\n]*?)?Source: ([^·\n]+?) · Date: [^\n]*$", re.M)
+OTHER_SOURCE = "other"  # a label no Cortex importer writes: never printed, it may be page text
+
+
+def _quartiles(xs: list[int]) -> list[int]:
+    s = sorted(xs)
+    return [s[round(q * (len(s) - 1))] for q in (0.25, 0.5, 0.75)]
+
+
+def check_import_shapes(root: Path) -> list[tuple[str, str, str, str]]:
+    """RR-38: per import source, its pages' length quartiles (characters below the header
+    line) and the share of pages that are mostly links (sources.link_lines over 60% of the
+    lines, the quality gate's rule) or numbers only (under 10% letters and at least 30% digits
+    of their non-space characters). Numbers only: no page text, and a label Cortex's importers
+    do not write shows as OTHER_SOURCE."""
+    from cortex import chat_import, importers, sources
+    known = {*chat_import.LABELS.values(), *importers.LABELS.values(), "Calendar", "Documents",
+             "Git", "Highlights", "Pocket"}
+    shapes: dict[str, list[tuple[int, bool, bool]]] = {}
+    for p in Vault(root).note_paths("resource"):
+        try:
+            text = p.read_text("utf-8", errors="replace")
+        except OSError:
+            continue
+        if not (m := _IMPORT_HEAD.search(text, text.find("\n---", 3) + 1)):
+            continue
+        body = text[m.end():]
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        chars = [c for c in body if not c.isspace()]
+        links = bool(lines) and sources.link_lines(lines) > 0.6 * len(lines)
+        numbers = bool(chars) and sum(c.isalpha() for c in chars) < 0.1 * len(chars) \
+            and sum(c.isdigit() for c in chars) >= 0.3 * len(chars)
+        label = m.group(1).strip() if m.group(1).strip() in known else OTHER_SOURCE
+        shapes.setdefault(label, []).append((len(body.strip()), links, numbers))
+    if not shapes:
+        return [("PASS", "Import shapes", "no imported pages", "")]
+    out = []
+    for label, rows in sorted(shapes.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        q, n = _quartiles([r[0] for r in rows]), len(rows)
+        out.append(("PASS", f"Import shapes: {label}", (
+            f"{n:,} page{'s' * (n != 1)}, length quartiles {q[0]:,} / {q[1]:,} / {q[2]:,} "
+            f"characters, mostly links {sum(r[1] for r in rows) / n:.0%}, numbers only "
+            f"{sum(r[2] for r in rows) / n:.0%}"), ""))
+    return out
+
+
 def check_claims(root: Path) -> tuple[str, str, str, str]:
     """Live claims per authorship tier (v5 F3); a preview, so doctor records no baseline."""
     v = Vault(root)
