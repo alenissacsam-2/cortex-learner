@@ -43,7 +43,8 @@ MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
 UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics")
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
-IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar")
+IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar",
+           "docs", "repos", "highlights")
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
 _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 # path -> (its file, type); "/" is the live home, filled by dashboard.render_live
@@ -1251,7 +1252,7 @@ class App:
             if not p.exists():  # a folder is fine: Perplexity .md files, an unzipped Takeout
                 raise ValueError(f"Nothing is at {p}.")
         # notes, calendars and Google activity go into the vault; chats go beside it
-        root = self.need_root() if source in ("notes", "calendar") or (
+        root = self.need_root() if source in actions.TIERED or (
             source == "google-activity" and not keep) else self.root
 
         def run(job):

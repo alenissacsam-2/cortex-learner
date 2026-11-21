@@ -301,7 +301,8 @@ def history(root: Path | None, scanned: dict) -> dict:
 def imports(root: Path | None = None) -> dict:
     """Per guided-import source: what is imported so far, and when. Chats: conversations in
     their folder (its time); notes: the resource pages the notes import names; calendar: the
-    event lines on its month pages (the newest page's time)."""
+    event lines on its month pages (the newest page's time); docs, repos and highlights:
+    their pages."""
     from cortex import chats
     out = {}
     for source, (folder, _) in chats.EXPORT_DIRS.items():
@@ -317,7 +318,11 @@ def imports(root: Path | None = None) -> dict:
         for p in cal:
             with contextlib.suppress(OSError):
                 events += sum(x.startswith("- ") for x in p.read_text("utf-8").splitlines())
-        for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events)):
+        more = {k: [p for g in globs for p in res.glob(g)] for k, globs in (
+            ("docs", ("docs-*.md",)), ("repos", ("repo-*.md",)),
+            ("highlights", ("highlights-*.md", "pocket-*.md")))}
+        for source, pages, n in (("notes", notes, len(notes)), ("calendar", cal, events),
+                                 *((k, ps, len(ps)) for k, ps in more.items())):
             out[source] = {"count": n,
                            "when": max(when(p) or "" for p in pages) if n else None}
     return out

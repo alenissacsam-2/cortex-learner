@@ -9,7 +9,9 @@ Two page shapes. `page="item"`: one `resource` page per item, `<prefix>-<title s
 a sha of the item's text (notes; PDFs, highlights and mail fit here). `page="month"`: one page per
 month, `<prefix>-YYYY-MM` (`<prefix>-private-YYYY-MM` when private, so private items never join a
 public page), a line per item, deduped by the line (calendars; location, photo dates and Spotify
-fit here). Both carry a `Source: <label> · Date: …` line (see importers' docstring).
+fit here). Both carry a `Source: <label> · Date: …` line (see importers' docstring). An item
+source that sets `updates` dedupes by `key` (a repo's path, a book) and rewrites that page when
+a re-import brings a changed text, instead of adding a second page.
 
 Tiers reuse `access.Audience`: `--tier private|normal|skip` is LOCAL (pages `private: true`),
 CLOUD (normal pages) or SKIP (nothing imported). The last choice per source is kept in TIERS_FILE.
@@ -41,12 +43,14 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+from ruamel.yaml.comments import CommentedMap
 
 from cortex import chats
 from cortex.access import Audience
 from cortex.catalog import slugify
-from cortex.vault import Vault
+from cortex.vault import Vault, VaultError, _dump_fm, _to_yaml, is_private
 
 TIERS_FILE = ".cortex/import-tiers.json"  # {source id: "local" | "cloud" | "skip"}
 WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.SKIP}
@@ -91,6 +95,7 @@ class Source:
     drops_code: bool = False  # AI or tool text: fenced code becomes CODE_LEFT_OUT
     strips_quotes: bool = False  # mail: other people's quoted text is dropped
     coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
+    updates: bool = False  # a known `key` rewrites its page when the text changed (repos)
 
 
 def tier(value: str | Audience) -> Audience:
@@ -185,8 +190,9 @@ def _free_id(vault: Vault, base: str, taken: set[str]) -> str:
     return nid
 
 
-def _known_hashes(vault: Vault) -> set[str]:
-    return {h for p in (vault.root / "resources").glob("*.md")
+def _known_hashes(vault: Vault) -> dict[str, Path | None]:
+    """sha -> the page that carries it."""
+    return {h: p for p in (vault.root / "resources").glob("*.md")
             for h in _HASH.findall(p.read_text("utf-8", errors="replace"))}
 
 
@@ -194,8 +200,9 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
         dry_run: bool = False) -> dict:
     """Import `src` at `tier`. The report: `read` (entries, skipped ones too), `imported` (new
     pages for item sources, new lines for month sources), `private`, `duplicate`, `reasons`
-    (skip reason -> count), `items` (items read) and `pages` (pages they belong on)."""
-    r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0,
+    (skip reason -> count), `items` (items read), `pages` (pages they belong on) and `updated`
+    (pages rewritten by a source that `updates`)."""
+    r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
          "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value}
     if tier is Audience.SKIP:
         return r
@@ -214,23 +221,29 @@ def _read(src: Source, r: dict):
 
 
 def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
-    known, taken, todo = _known_hashes(vault), set(), []
+    known, seen, taken, todo = _known_hashes(vault), set(), set(), []
     for it in _read(src, r):
         h = _sha(it.key or it.text)
-        if h in known:
+        old = known.get(h)
+        if h in seen or (h in known and not (src.updates and old)):
             r["duplicate"] += 1
             continue
-        known.add(h)
+        seen.add(h)
+        if old:  # `updates`: compared with its page below; a private page stays private
+            todo.append((old.stem, it, h, private or it.private or _was_private(vault, old),
+                          old))
+            continue
         # the id comes from the filtered title, so a key in a title never reaches a file name
         slug = slugify(scrub(it.title, src)) or "untitled"
         nid = _free_id(vault, f"{src.prefix or src.id}-{slug}"[:81].rstrip("-."), taken)
-        todo.append((nid, it, h, private or it.private))
-    r["imported"] = r["pages"] = len(todo)
-    r["private"] = sum(t[3] for t in todo)
-    if dry_run:
+        todo.append((nid, it, h, private or it.private, None))
+    new = [t for t in todo if t[4] is None]
+    r["imported"], r["pages"] = len(new), len(todo)
+    r["private"] = sum(t[3] for t in new)
+    if dry_run and len(new) == len(todo):
         return
     # [[Title]] links between this import's public pages keep working; others become plain text
-    ids = {slugify(it.title): nid for nid, it, _, hidden in todo if not hidden}
+    ids = {slugify(it.title): nid for nid, it, _, hidden, _ in todo if not hidden}
 
     def link(m):
         if m.group(1):  # an embedded image or file
@@ -239,7 +252,7 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         text = m.group(3) or m.group(2)
         return f"[[{to}|{text}]]" if to else text
 
-    for nid, it, h, hidden in todo:
+    for nid, it, h, hidden, old in todo:
         body = scrub(_WIKI.sub(link, it.text), src).strip() \
             .removeprefix(f"# {it.title}\n")
         first = next((s.strip("# ").strip() for s in body.splitlines()
@@ -252,8 +265,35 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         if hidden:
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
-        vault.create_note("resource", nid, fields, f"# {fields['title']}\n\nSource: {src.label} · "
-                          f"Date: {it.date}{origin} · sha: {h}\n\n{body}\n")
+        page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin} · "
+                f"sha: {h}\n\n{body}\n")
+        if old is None:
+            if not dry_run:
+                vault.create_note("resource", nid, fields, page)
+            continue
+        text = _note_text(nid, fields, page)
+        if old.read_text("utf-8", errors="replace") == text:
+            r["duplicate"] += 1
+            continue
+        r["updated"] += 1
+        r["private"] += hidden
+        if not dry_run:
+            vault.update_text(old, lambda _, t=text: t)
+
+
+def _was_private(vault: Vault, page: Path) -> bool:
+    """Whether a page an `updates` import rewrites is private now (set by an earlier private
+    import or by hand); a page that does not parse counts as private (fail closed)."""
+    try:
+        return is_private(vault.read_path(page))
+    except VaultError:
+        return True
+
+
+def _note_text(nid: str, fields: dict, body: str) -> str:
+    """The text `Vault.create_note` writes, to compare with and rewrite an updated page."""
+    data = CommentedMap((k, _to_yaml(v)) for k, v in {"id": nid, **fields}.items())
+    return "---\n" + _dump_fm(data, "\n") + "---\n" + body
 
 
 def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:

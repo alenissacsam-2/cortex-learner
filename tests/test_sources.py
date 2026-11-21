@@ -135,7 +135,7 @@ def test_cli_tier_flag_default_and_memory(root_plain):
     assert "calendar: read 3, imported 3, private 3" in out
     assert (root_plain / "resources" / "calendar-private-2026-11.md").is_file()
     r = _cli(root_plain, EXPORTS / "perplexity_thread.md", "--tier", "normal")
-    assert r.exit_code == 1 and "--tier applies to notes and calendars only" in r.output
+    assert r.exit_code == 1 and "--tier applies to notes, calendars, docs" in r.output
     r = _cli(root_plain, ics, "--tier", "public")
     assert r.exit_code == 1 and "--tier must be one of private, normal, skip" in r.output
 

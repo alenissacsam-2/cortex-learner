@@ -366,13 +366,19 @@ def sweep_updates(keep: Path | None = None) -> None:
 KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity card"),
         "takeout": ("Google activity (My Activity)", "the Google activity card"),
         "notes": ("a notes folder or export", "the Notes card"),
-        "calendar": ("a calendar", "the Calendar card")}
+        "calendar": ("a calendar", "the Calendar card"),
+        "docs": ("a folder of documents", "the Documents card"),
+        "repos": ("a folder of git projects", "the code projects card"),
+        "highlights": ("reading highlights", "the Reading highlights card")}
+TIERED = ("notes", "calendar", "docs", "repos", "highlights")  # imports that ask the tier
 
 
 def _kind(source: str, path: Path) -> str:
     """The importer this card's file needs, detected as `cortex import` does. A file of
     another kind is refused with the card that takes it (R3-1)."""
     from cortex import importers
+    if source in ("docs", "repos"):  # any folder: the source says what it skips, or refuses
+        return source
     want, got = importers.SOURCES[source], _readable(importers.detect, path)
     if want in got:
         return want
@@ -419,7 +425,7 @@ def _readable(fn, *args):
 
 def import_preview(job, source: str, path: Path, root: Path | None = None) -> dict:
     """A dry run: what an import of `path` would bring, counts and dates only."""
-    from cortex import chats, importers, sources
+    from cortex import chats, importers, more_sources, sources
     job.say("reading the file (nothing is imported yet)")
     kind = _kind(source, path)
     if kind == "takeout":
@@ -442,11 +448,16 @@ def import_preview(job, source: str, path: Path, root: Path | None = None) -> di
                 f"Download the search model first ({wizard.EMBED['size']}): it sorts each page "
                 "into a topic, and without it every page lands under Other.")])
         return out
-    if kind in ("notes", "calendar"):
+    if kind in TIERED:
         # C2: the page asks the tier before Import, starting from the last choice or default
         v = _vault(root)
         t = _tier(v, kind, path)[0]
         counted = sources.Audience.CLOUD if t is sources.Audience.SKIP else t
+    if kind in more_sources.SOURCE_OF:
+        src = _source(kind, path)
+        r = _readable(sources.run, v, src, counted, True)
+        return {"ok": True, "kind": "import-preview", "found": r["imported"] + r["updated"],
+                "tier": t.value, "lines": [_found(r), importers.report_line(src.label, r)]}
     if kind == "notes":
         r = _readable(importers.import_notes, v, path, None, True, False, counted)
         new, same, skipped = r["new"], r["same"], r["skipped"]
@@ -480,29 +491,48 @@ def _cortex_hint() -> str:
             "from them.")
 
 
+def _source(kind: str, path: Path):
+    from cortex import importers, more_sources
+    return _readable({"notes": importers.notes_source, "calendar": importers.calendar_source,
+                      **more_sources.SOURCE_OF}[kind], path)
+
+
+def _found(r: dict) -> str:
+    """A docs, repos or highlights preview's count, as a sentence."""
+    return (f"Found {r['imported']:,} new item{_s(r['imported'])}"
+            + (f", {r['updated']:,} changed" if r["updated"] else "")
+            + (f", {r['duplicate']:,} already in" if r["duplicate"] else "") + ".")
+
+
 def _tier(v, kind: str, path: Path, given: str | None = None):
-    """(tier, how) for a notes or calendar import: the page's choice (remembered), else the
-    last choice, else the source's default (sources.pick_tier)."""
-    from cortex import importers, sources
-    src = _readable(importers.notes_source if kind == "notes" else importers.calendar_source,
-                    path)
-    return sources.pick_tier(v, src, given)
+    """(tier, how) for a tiered import: the page's choice (remembered), else the last choice,
+    else the source's default (sources.pick_tier)."""
+    from cortex import sources
+    return sources.pick_tier(v, _source(kind, path), given)
 
 
 def import_run(job, source: str, path: Path, root: Path | None = None,
                tier: str | None = None) -> dict:
     """Import `path`; `tier` (skip, local or cloud) is the page's choice for notes and
     calendars, the user's click."""
-    from cortex import chats, importers, sources
+    from cortex import chats, importers, more_sources, sources
     job.say("reading the file")
     kind = _kind(source, path)
-    if kind in ("notes", "calendar"):
+    if kind in TIERED:
         v = _vault(root)
         t = _tier(v, kind, path, tier)[0]
         if t is sources.Audience.SKIP:
             return {"ok": True, "kind": "import", "counts": {
-                "notes" if kind == "notes" else "events": 0},
+                "notes" if kind == "notes" else "events" if kind == "calendar" else kind: 0},
                 "lines": ["Nothing was imported: you chose Don't save."]}
+    if kind in more_sources.SOURCE_OF:
+        job.say("importing")
+        src = _source(kind, path)
+        r = _readable(sources.run, v, src, t, False)
+        _commit(v, kind)
+        return {"ok": True, "kind": "import", "counts": {kind: r["imported"] + r["updated"]},
+                "lines": [f"{_found(r).replace('Found', 'Imported', 1)} Pages are in "
+                          f"{root / 'resources'}.", importers.report_line(src.label, r)]}
     if kind == "notes":
         job.say("importing the notes")
         r = _readable(importers.import_notes, v, path, None, False, False, t)
