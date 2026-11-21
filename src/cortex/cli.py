@@ -1063,12 +1063,14 @@ def import_cmd(path: Annotated[Path, typer.Argument(
              "a calendar .ics (or Google's .zip of them), a folder of documents (.pdf, "
              ".docx), a folder of your git projects, reading highlights (Kindle "
              "My Clippings.txt, a Readwise or Pocket .csv), sent mail (.mbox), a Google "
-             "Timeline (location history), a photo folder or a Spotify data export.")],
+             "Timeline (location history), a photo folder, a Spotify data export or a "
+             "folder of voice memos (transcribed locally).")],
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
                  "obsidian, notion, notes, calendar, docs, repos, highlights, mail, "
                  "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages), "
-                 "location (Google Timeline), photos (a photo folder) or spotify.")] = None,
+                 "location (Google Timeline), photos (a photo folder), spotify or "
+                 "voice-memos (a folder of recordings).")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
@@ -1958,9 +1960,23 @@ def _download_setup() -> None:
 
 @model_app.command("download")
 @_errors
-def model_download(vault: VaultOpt = None) -> None:
+def model_download(vault: VaultOpt = None, voice: Annotated[bool, typer.Option(
+        "--voice", help="Instead: install faster-whisper and download the local speech model "
+                        "for voice memos (about 150 MB).")] = False) -> None:
     """Download the embedding and rerank models once, then build the vault's vector cache."""
     from cortex import semantic
+
+    if voice:
+        from cortex import voice_memos
+        try:
+            _download_setup()
+            voice_memos.install(typer.echo)
+        except Exception as e:  # noqa: BLE001  (a plain sentence, never a traceback)
+            typer.echo(f"The speech model install stopped ({e}). Try again later or on "
+                       "another network.", err=True)
+            raise typer.Exit(1) from None
+        typer.echo(f"speech model ready in {semantic.models_dir()}")
+        return
 
     d = semantic.models_dir()
     seen: list[str] = []

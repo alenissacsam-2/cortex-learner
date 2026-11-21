@@ -24,7 +24,7 @@ from datetime import date
 from html.parser import HTMLParser
 from pathlib import Path
 
-from cortex import importers, sources
+from cortex import importers, sources, voice_memos
 from cortex.vault import VaultError
 
 LOCAL = sources.Audience.LOCAL
@@ -710,4 +710,5 @@ def spotify_source(path: Path) -> sources.Source:
 
 
 SOURCE_OF = {"mail": mail_source, "selfchat": selfchat_source, "location": location_source,
-             "photos": photos_source, "spotify": spotify_source}
+             "photos": photos_source, "spotify": spotify_source,
+             "voice-memos": voice_memos.voice_source}

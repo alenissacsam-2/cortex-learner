@@ -19,6 +19,10 @@ dependencies = [
     "pypdf>=6.9.2,<7",
 ]
 
+[project.optional-dependencies]
+# voice memos: local transcription, installed only by `cortex model download --voice`
+voice = ["faster-whisper==1.2.1"]
+
 [project.scripts]
 cortex = "cortex.taint:main"
 

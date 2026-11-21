@@ -290,6 +290,12 @@ def embed(job, root: Path | None) -> dict:
                                   *(["--vault", str(root)] if root else [])], env=proxy_env())
 
 
+def voice(job) -> dict:
+    """`cortex model download --voice` (the only path that installs faster-whisper and fetches
+    the speech model), on the owner's click."""
+    return actions.run_proc(job, [_cortex(), "model", "download", "--voice"], env=proxy_env())
+
+
 def index(job, root: Path) -> dict:
     return actions.run_proc(job, [_cortex(), "model", "build", "--vault", str(root)])
 

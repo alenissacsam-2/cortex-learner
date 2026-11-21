@@ -136,6 +136,8 @@ Useful options:
 - `cortex setup --yes` takes every suggested answer without asking.
 - `--vault PATH`, `--no-model`, `--no-code`, `--no-desktop` and `--sample` / `--no-sample` skip or answer single questions.
 
+**Optional: voice memos.** Transcribing recordings needs faster-whisper and its speech model, which the core install leaves out. Click Install on the app's Voice memos card, or run `cortex model download --voice`: it installs faster-whisper (pinned, with `uv pip` into Cortex's own Python) and downloads the model (about 150 MB) into `~/.cortex/models`. Nothing else ever downloads them. From a source checkout, `uv sync --extra voice` installs the package. Audio is decoded by PyAV, which bundles FFmpeg, so no ffmpeg install is needed.
+
 To remove the sample later (your own pages stay):
 
 ```

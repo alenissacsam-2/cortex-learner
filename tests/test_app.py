@@ -2040,6 +2040,38 @@ def test_google_activity_preview_says_the_search_model_is_needed(app, monkeypatc
     assert "stopped: needs the search model" in js  # the job bar never says done for it
 
 
+def test_voice_memos_ask_to_install_then_count_without_transcribing(app, vault, tmp_path,
+                                                                     monkeypatch):
+    """Voice memos: without the speech model, Check asks to install it (nothing downloads);
+    with it, Check counts the recordings and only Import transcribes them."""
+    from types import SimpleNamespace
+
+    from cortex import voice_memos
+    d = tmp_path / "Recordings"
+    d.mkdir()
+    (d / "20241103 memo.m4a").write_bytes(b"audio")
+    monkeypatch.setattr(voice_memos, "load_transcriber", lambda: None)
+    call(app, "POST", "/api/import/preview", {"source": "voice-memos", "path": str(d)})
+    r = wait_job(app)["result"]
+    assert r["need"] == "voice" and r["ok"] is False and "~150 MB" in r["lines"][0]
+    calls = []
+
+    def fake(path, prompt):
+        calls.append(path.name)
+        return 9, [SimpleNamespace(start=0, text="A note about the lab report.",
+                                   no_speech_prob=0.0, avg_logprob=-0.2)]
+    monkeypatch.setattr(voice_memos, "load_transcriber", lambda: fake)
+    call(app, "POST", "/api/import/preview", {"source": "voice-memos", "path": str(d)})
+    r = wait_job(app)["result"]
+    assert r["found"] == 1 and r["tier"] == "local" and not calls
+    call(app, "POST", "/api/import/run", {"source": "voice-memos", "path": str(d)})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["counts"] == {"voice-memos": 1}
+    assert calls == ["20241103 memo.m4a"]
+    (page,) = (vault / "resources").glob("voice-2024-11-03-*.md")
+    assert "private: true" in page.read_text("utf-8")
+
+
 def test_cloud_on_needs_provider_model_and_variable(app, home):
     """R3-4: "on" is refused until each is filled, naming what is missing; off saves."""
     from cortex import taint

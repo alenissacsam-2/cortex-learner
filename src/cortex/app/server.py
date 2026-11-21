@@ -45,7 +45,7 @@ UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox")
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
 IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar",
            "docs", "repos", "highlights", "mail", "selfchat", "location",
-           "photos", "spotify")
+           "photos", "spotify", "voice-memos")
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
 _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 # path -> (its file, type); "/" is the live home, filled by dashboard.render_live
@@ -319,6 +319,7 @@ class App:
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
+            "/api/setup/voice": self.setup_voice,
             "/api/setup/index": self.setup_index, "/api/setup/install": self.setup_install,
             "/api/setup/git": self.setup_git,
             "/api/setup/pull": self.setup_pull, "/api/setup/test": self.setup_test,
@@ -1434,6 +1435,10 @@ class App:
             return {**idx, "lines": [*out["lines"][-5:], *idx["lines"]]}
         return self.jobs.start("Downloading the search model", "setup", run, cancellable=True)
 
+    def setup_voice(self, body: dict) -> dict:
+        return self.jobs.start("Installing the speech model", "setup", wizard.voice,
+                               cancellable=True)
+
     def setup_index(self, body: dict) -> dict:
         root = self.need_root()
         return self.jobs.start("Indexing your notes", "setup",
@@ -1538,7 +1543,8 @@ class App:
             finally:  # kept after a preview, or to retry once the search model is in
                 if out is None or not (keep or out.get("need")):
                     self._drop(uid)
-        return self.jobs.start(title, "setup", run, cancellable=source == "google-activity",
+        return self.jobs.start(title, "setup", run,
+                               cancellable=source in ("google-activity", "voice-memos"),
                                quiet_errors=source == "google-activity")
 
     def import_preview(self, body: dict) -> dict:

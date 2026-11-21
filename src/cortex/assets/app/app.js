@@ -251,7 +251,7 @@
   function showJob(j) {
     clearTimeout(hideTimer);
     const r = j.result || {};
-    const word = j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done';
+    const word = j.error ? 'failed' : r.cancelled ? 'cancelled' : r.need === 'embed' ? 'stopped: needs the search model' : r.need === 'voice' ? 'stopped: needs the speech model' : r.error === 'no_answer' ? 'no answer' : r.error ? 'stopped: needs setup' : r.ok === false ? 'failed' : 'done';
     // running: the moving bar under the line; done: a brief success tint; failed: the error tint
     $('jobline').classList.remove('idle', 'running', 'ok', 'bad', 'ended', 'determinate');
     $('jobline').classList.add(j.running ? 'running' : word === 'done' ? 'ok' : word === 'failed' ? 'bad' : 'ended');
@@ -1156,7 +1156,7 @@
   }
 
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'location', 'photos', 'spotify', 'browser'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'location', 'photos', 'spotify', 'voice-memos', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
@@ -1171,6 +1171,7 @@
     location: 'Where you were: one city per day from your Google Timeline, never an address.',
     photos: 'When you took photos, and in which albums: dates and folder names only, never the images.',
     spotify: 'Your Spotify years: hours, top artists, tracks and podcasts; nothing per play.',
+    'voice-memos': 'Your recordings, transcribed on this computer; the audio never leaves it.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
@@ -1267,6 +1268,9 @@
       out.push(h('div', {}, p.lines.map((t) => h('p', { class: 'gfound', text: t })), p.note ? h('p', { class: 'help', text: p.note }) : null));
       if (p.need === 'embed') {  // said at Check, before any Import (R3-3)
         out.push(h('div', { class: 'inline' }, btn('Download the search model', () => job('/api/setup/embed', {}), 'btn lit'),
+          btn('Check again', check), back(2)));
+      } else if (p.need === 'voice') {  // installed only on this click (cortex model download --voice)
+        out.push(h('div', { class: 'inline' }, btn('Install', () => job('/api/setup/voice', {}), 'btn lit'),
           btn('Check again', check), back(2)));
       } else if (!done || again) {
         // C2: notes and calendars ask who may read the pages before Import (last choice preselected)
