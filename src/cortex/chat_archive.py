@@ -98,9 +98,9 @@ def move(vault: Vault, *, undo: bool = False, dry_run: bool = False) -> dict:
         git = _git(vault, moved, undo)
         if undo:
             vault.remove(vault.root / MARKER)
-        else:
+        else:  # when, and how many moved (R3-10: the app's Status line reads it)
             vault.write_text(vault.root / MARKER,
-                             datetime.now(UTC).isoformat(timespec="seconds") + "\n")
+                             f"{datetime.now(UTC).isoformat(timespec='seconds')} {len(moved)}\n")
     _set(not undo)
     return {"ids": moved, "kept": kept, "git": git}
 
@@ -110,6 +110,27 @@ def auto(vault: Vault) -> dict | None:
     if (vault.root / MARKER).exists() or not enabled():
         return None
     return move(vault)
+
+
+UNDO_HOW = "cortex chats archive --undo"
+
+
+def last_move(vault: Vault) -> dict | None:
+    """R3-10: the archive move's record from MARKER: {day, count, folder, undo}, or None when it
+    never ran, was undone, or moved nothing. A marker from before R3-10 holds only its time: the
+    count is then the pages in the archive now."""
+    try:
+        parts = (vault.root / MARKER).read_text(encoding="utf-8").split()
+    except OSError:
+        return None
+    if not parts:
+        return None
+    try:
+        n = int(parts[1])
+    except (IndexError, ValueError):
+        d = vault.root / CHAT_ARCHIVE
+        n = sum(1 for _ in d.glob("*.md")) if d.is_dir() else 0
+    return {"day": parts[0][:10], "count": n, "folder": IGNORE, "undo": UNDO_HOW} if n else None
 
 
 def _git(vault: Vault, ids: list[str], undo: bool) -> str:
