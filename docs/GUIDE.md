@@ -374,7 +374,6 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 | **Clicked / relayed** | You ticked the dialog or clicked Approve / Still true in the app yourself / the chat said you said yes |
 | **Exposed** | A chat that recently read outside text (a web page, an imported chat). What it writes about you is marked, and it can't change your teaching contract. |
 | **Honest Double** | Checks text written as you (CV, answers) against what you've actually shown you know |
-| **Need** | A fact about you a chat wished it had; Cortex asks you later, one at a time |
 | **Loop** | An open item: a commitment, question or idea |
 | **Resurfacing** | Old ideas and decisions brought back at growing intervals |
 

@@ -32,7 +32,7 @@ from cortex.session import _git
 from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
 from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError
 
-EPILOG = ("About you: claims [--unasked|--summary], needs, voice, export context · "
+EPILOG = ("About you: claims [--unasked|--summary], voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
           "Import: import [--dry-run|--private], import-chats, digest · "
           "Chats: chats, harvest status, safety-net · "
@@ -828,20 +828,6 @@ def pack_cmd(name: Annotated[str, typer.Argument(help="general, coding or writin
     typer.echo(render.term(text))
 
 
-@app.command("needs")
-@_errors
-def needs_cmd(vault: VaultOpt = None) -> None:
-    """List open needs (personal facts real work lacked), most pressing first, with counts."""
-    from cortex import needs
-
-    rows = needs.open(EventLog(_vault(vault)).iter_events(), local_day(datetime.now(UTC)))
-    for r in rows:
-        typer.echo(f"{r['count']}x  {r['area']:<11}  {render.esc(r['question'], 100)}  "
-                   f"({r['id']})")
-    if not rows:
-        typer.echo("No open needs.")
-
-
 chats_app = typer.Typer(invoke_without_command=True)
 app.add_typer(chats_app, name="chats")
 
@@ -1135,7 +1121,7 @@ def claims_cmd(tier: Annotated[str | None, typer.Option(
             "--unasked", help="What was saved about you without your say, with undo steps.")]
         = False,
         summary: Annotated[bool, typer.Option(
-            "--summary", help="How well Cortex knows you, per me/ page, plus open needs.")]
+            "--summary", help="How well Cortex knows you, per me/ page.")]
         = False,
         days: Annotated[int, typer.Option(help="With --unasked: days of me/ changes.")] = 14,
         vault: VaultOpt = None) -> None:
@@ -1195,8 +1181,7 @@ def saved_cmd(days: int = 14, vault: VaultOpt = None) -> None:
 @app.command("know", hidden=True)  # now `claims --summary`
 @_errors
 def know_cmd(vault: VaultOpt = None) -> None:
-    """How well Cortex knows you: per me/ page, live claims by tier, and open needs.
-    Read-only."""
+    """How well Cortex knows you: per me/ page, live claims by tier. Read-only."""
     from cortex import know
 
     def counts(d: dict) -> str:
@@ -1220,11 +1205,6 @@ def know_cmd(vault: VaultOpt = None) -> None:
     t = out["total"]
     typer.echo(f"All claim pages: {t['live']} live claims")
     typer.echo(f"  tiers: {counts(t['tiers'])}{split(t)}")
-    by_area = Counter(r["area"] for r in out["needs"])
-    typer.echo(f"Open needs: {len(out['needs'])}"
-               + (f" ({counts(dict(by_area.most_common()))})" if by_area else ""))
-    for r in out["needs"][:5]:
-        typer.echo(f"  {r['count']}x  {r['area']:<11}  {render.esc(r['question'], 100)}")
 
 
 voice_app = typer.Typer(help="Your own sent messages (voice samples).")

@@ -9,7 +9,7 @@ import anyio
 import pytest
 from conftest import events, run
 
-from cortex import claims, know, needs, prime
+from cortex import claims, know, prime
 from cortex.events import EventLog, local_day
 from cortex.reflect import reflect
 from cortex.vault import Vault
@@ -59,7 +59,6 @@ def test_an_old_vault_with_removed_kinds_still_loads(root):
     v, now = Vault(root), datetime.now(UTC)
     evs = list(EventLog(v).iter_events())
     day = local_day(now)
-    assert needs.open(evs, day) == []
     claims.tiers(v, evs)
     know.report(v, evs, day)
     prime.served_claims(v, evs)
@@ -97,7 +96,7 @@ def test_removed_log_kinds_get_a_clear_refusal(root):
                          "letter_feedback", "circling", "draft", "sent"):
                 r = await c.call_tool("cortex_log", {"kind": kind, "payload": {"text": "x"}})
                 text = r.content[0].text
-                assert r.is_error and "Input should be" in text and "'need'" in text, text
+                assert r.is_error and "Input should be" in text and "'touch'" in text, text
 
     before = len(events(root))
     anyio.run(main)

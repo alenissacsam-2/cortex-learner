@@ -183,7 +183,7 @@ def test_warmup_gap_ignores_ledger_logs_but_not_evidence(v):
     log = EventLog(v)
     log.append(session="cli", kind="grade", source="tutor", now=at(12),
                fields={"object": "concept:arrays-basics", "verdict": "correct"})
-    for kind in ("touch", "need"):  # always-on ledger lines after the 3-day break
+    for kind in ("touch", "resurfaced"):  # always-on ledger lines after the 3-day break
         log.append(session="cli", kind="log", source="tutor", now=at(15),
                    fields={"object": "concept:arrays-basics", "payload": {"kind": kind}})
 

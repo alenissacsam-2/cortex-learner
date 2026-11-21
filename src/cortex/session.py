@@ -59,12 +59,11 @@ LIVE_CLOSE = timedelta(hours=24)  # B2: a sweep closes a live server's session o
 RESUME_AFTER = timedelta(minutes=15)
 EVENT_BUDGET, PATCH_BUDGET = 40, 10
 COUNT_KINDS = ("asked", "graded", "logged", "patched", "added")
-# Ledger `log` kinds: they record that a chat happened (a topic touch, a missing fact, a resurface,
+# Ledger `log` kinds: they record that a chat happened (a topic touch, a resurface,
 # an act-as-me read), never learning evidence, a change, a note or a grade. A session whose only
 # writes are these closes quietly: its close event and commit, no journal, session note,
 # Today.md or log.md line (v6 CONSENSUS item 5, r1-user P1). Every other log kind is loud.
-LEDGER_LOG_KINDS = frozenset({"touch", "need", "need_skip", "resurfaced", "access",
-                              "chat_learned"})
+LEDGER_LOG_KINDS = frozenset({"touch", "resurfaced", "access", "chat_learned"})
 SUMMARY_MAX = 600
 
 

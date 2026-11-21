@@ -28,7 +28,6 @@ from cortex import (
     learning_eval,
     levels,
     loops,
-    needs,
     planner,
     reflect,
     topics,
@@ -255,16 +254,11 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
     parsed = _Parsed(vault.root, notes)  # loops and know read notes through this: parsed once
     created = _created(memo)
     loop_notes = {n.id: n for n in notes["loop"]}
-    open_needs = [_plained(r, "question", "area", "task")
-                  | {"options": [plain(o) for o in r["options"]]
-                     if isinstance(r["options"], list) else []}
-                  for r in needs.open(events, day)]
     # it reads only the events, the me notes and the claim pages' text (even one that won't parse)
     claimed = [p.read_bytes() if p.is_file() else None
                for p in (vault.root / "me" / f"{c}.md" for c in claims.PAGES)]
     known = _once(memo, "know", (gen, day, notes["me"], claimed),
                   lambda: know.report(parsed, events, day))
-    known = known | {"needs": open_needs}
     profile = next((n for n in notes["me"] if n.id == "profile" and not is_private(n)), None)
     m = _NAME_RE.search(profile.body) if profile else None
     name = plain(m.group(1).strip(string.punctuation)) if m else ""
@@ -302,7 +296,6 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         "resurface": [_plained(r, "title", "summary")
                       for r in loops.resurface(parsed, day, limit=5, events=events,
                                                created_of=created)],
-        "needs": open_needs,
         "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0]},
         "help": _help(),
     }

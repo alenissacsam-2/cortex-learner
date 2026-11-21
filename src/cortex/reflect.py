@@ -141,7 +141,7 @@ def emerging(vault: Vault, now: dt.datetime) -> list[dict]:
 
 def reflect(vault: Vault, catalog, now: dt.datetime) -> dict:
     """`now` is aware (the server clock); file times and inbox dates are local."""
-    from cortex import claims, needs  # these import this module
+    from cortex import claims  # it imports this module
 
     local = now.astimezone().replace(tzinfo=None)
     rows, dropped = unconfirmed(vault, local_day(now))
@@ -158,7 +158,6 @@ def reflect(vault: Vault, catalog, now: dt.datetime) -> dict:
                              for t, d in old_fleeting(vault, local)],
             "week": planner.week_summary(vault, catalog, now=now),
             "portrait": portrait(vault, catalog, now),
-            "needs": needs.counts(events, local_day(now)),
             "spot_check": [{**r, "question": plain(r["question"], 300),
                             "answer": plain(r["answer"], 300)}
                            for r in learning_eval.spot_checks(

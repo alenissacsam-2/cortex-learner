@@ -52,7 +52,6 @@ CASES = [
     (["lint", "--vault", "{V}"], {0}),
     (["relink", "--dry-run", "--vault", "{V}"], {0}),
     (["reflect", "--vault", "{V}"], {0}),
-    (["needs", "--vault", "{V}"], {0}),
     (["chats", "--vault", "{V}"], {0}),
     (["claims", "--vault", "{V}"], {0}),
     (["claims", "--unasked", "--vault", "{V}"], {0}),
