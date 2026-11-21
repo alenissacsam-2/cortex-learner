@@ -1658,7 +1658,9 @@
       paused.length ? note(`Review stopped offering ${paused.map((p) => p.label).join(', ')}; Status has Resume.`) : '');
     const learned = d.learned.map((g) => h('div', { role: 'group', 'aria-label': `${g.client}: ${plural(g.rows.length, 'change')}` },
       row(g.client, plural(g.rows.length, 'change'), `Session ${g.session}`, [
-        btn('Undo', () => job('/api/tonight/undo', { session: g.session }), null, { 'aria-label': `Undo everything ${g.client} saved in session ${g.session}` })]),
+        btn('Undo', () => confirmDialog(`Undo ${g.client}’s session?`, 'Undo',
+          [h('p', { class: 'ink-2', text: `Everything ${g.client} saved in session ${g.session} is reverted, including the ${plural(g.rows.length, 'change')} listed here. This cannot be redone from the app.` })],
+          () => job('/api/tonight/undo', { session: g.session })), null, { 'aria-label': `Undo everything ${g.client} saved in session ${g.session}` })]),
       g.rows.map((x) => row(x.text, x.id, x.time, null))));
     put('tonight',
       board('Today', { note: d.day }, ...pulse),

@@ -188,6 +188,10 @@ OPEN_TONIGHT = """    nav.querySelectorAll('button').find((b) => b.dataset.s ===
     out.undo = t.querySelectorAll('button').filter((b) => b.textContent === 'Undo').map((b) => b.getAttribute('aria-label'));
     t.querySelectorAll('button').find((b) => b.textContent === 'Undo').fire('click');
     await tick();
+    out.undoAsk = [$('confirm-title').textContent, $('confirm-ok').textContent, $('confirm-body').textContent,
+      fetched.some((f) => f.path === '/api/tonight/undo')];
+    $('confirm-ok').onclick();
+    await tick();
     out.undone = fetched.filter((f) => f.path === '/api/tonight/undo').map((f) => f.body);
     out.today = todayCards().map"""  # noqa: E501  (JavaScript)
 PAGE_JS = KEYS_JS.replace(OPEN_REVIEW, OPEN_TONIGHT).replace(
@@ -236,6 +240,9 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path):
     assert "Claude Code: 6" in out["text"] and "<b>Likes tea</b>" in out["text"]  # as text
     assert "A 2-minute cold check tomorrow: ask any AI app /cortex review." in out["text"]
     assert out["undo"] == ["Undo everything Claude Code saved in session s_1"]
+    title, ok, ask, posted = out["undoAsk"]  # asked first: nothing posted before the OK
+    assert (title, ok, posted) == ("Undo Claude Code’s session?", "Undo", False)
+    assert "Claude Code" in ask and "1 change" in ask and "cannot be redone" in ask
     assert out["undone"] == [{"session": "s_1"}]
     assert out["today"] == [["Quiz me", "group", "0"], ["Uses Vim", "group", "-1"]]
     # Y on the focused card answers it through Review's endpoint, as on the Review page
