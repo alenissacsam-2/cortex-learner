@@ -33,6 +33,7 @@ from cortex import (
     learning_eval,
     levels,
     loops,
+    packs,
     people,
     planner,
     prime,
@@ -3883,9 +3884,65 @@ def build_server(vault: Vault, role: str = "owner", excluded: str | None = None,
             core.warming.start()
         return out
 
+    # B2-c: the owner's pinned core in cortex_prime's description, for apps with no rules file
+    # (Claude Desktop, Gemini) whose model skips cortex_prime; every client reads tools/list.
+    # shortcut: clients see a changed core at their next tools/list, upgrade with list_changed
+    # if owners notice
+    async def core_rules(ctx, call_next):
+        out = await call_next(ctx)
+        if ctx.method == "tools/list" and isinstance(out, dict):  # the wire dict, built per call
+            params = getattr(ctx.session, "client_params", None)
+            client = str(getattr(getattr(params, "client_info", None), "name", "") or "")
+            try:
+                add = _core_rules(core, client or core.sessions.client or "")
+            except Exception:  # a broken vault leaves the list as it was; never fail tools/list
+                logging.getLogger(__name__).exception("core rules for tools/list failed")
+                add = ""
+            for t in out.get("tools", []) if add else ():
+                if t.get("name") == "cortex_prime":
+                    t["description"] = f"{t.get('description', '')}\n\n{add}"
+        return out
+
     if not excluded:
         server.middleware.append(warm)
+        if role == "owner":
+            server.middleware.append(core_rules)
     return server
+
+
+CORE_RULES_HEAD = "The user's standing rules (from Cortex; follow them in every reply):"
+CORE_RULES_MAX = 700  # the added text; prime's description stays well under 2,048 chars
+
+
+def _core_rules(core: Cortex, client: str) -> str:
+    """The text tools/list appends to cortex_prime's description for MCP `client`: the pinned
+    core lines exactly as packs.rule_block writes them into that client's rules file (its
+    profile's scopes; private and unconfirmed lines never), whole lines within CORE_RULES_MAX;
+    "" for Claude Code (its hook primes every chat) or with no pinned line. Cached on `core`
+    by me/core.md's and the profiles file's mtimes, the client and the day."""
+    if "claudecode" in profiles.norm(client):
+        return ""
+    v = core.vault
+
+    def mtime(p):
+        try:
+            return p.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    key = (mtime(v.root / "me" / "core.md"), mtime(v.root / profiles.PATH), client,
+           local_day(core._now()))
+    cache = getattr(core, "_core_rules", None)
+    if cache and cache[0] == key:
+        return cache[1]
+    block = packs.rule_block(v, scopes=profiles.scopes_for(profiles.load(v), client))
+    out = [CORE_RULES_HEAD]
+    for ln in (x for x in block.splitlines() if x.startswith("- ")):
+        if len("\n".join([*out, ln])) <= CORE_RULES_MAX:  # whole lines, as prime's core
+            out.append(ln)
+    text = "\n".join(out) if len(out) > 1 else ""
+    core._core_rules = (key, text)
+    return text
 
 
 def _warm_embedder() -> None:
