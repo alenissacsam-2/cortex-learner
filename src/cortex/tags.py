@@ -78,7 +78,9 @@ def apply_in(vault, items, log: EventLog | None = None, forget_said: bool = True
         return []
     from cortex.mcp_server import Cortex  # the SDK: only when there is something to write
 
-    core = Cortex(vault)
+    # no index build: a tag writes me/ pages only, and the build thread slowed the hook ~1 s
+    core = Cortex(vault, build=False)
+    core._ready.set()  # so a use of the index raises at once instead of waiting forever
     try:
         return apply(core, items, forget_said=forget_said)
     finally:

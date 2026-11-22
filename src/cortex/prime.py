@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import re
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
-from cortex import claims, xray
+from cortex import claims, render, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import local_day
@@ -272,6 +272,76 @@ MORE = {"preference": "cortex_context(scope='all')",
 def more(n: int, what: str) -> str:
     """`(+N more <what> lines: <call> reads them)`, or "" when nothing was cut."""
     return f"(+{n} more {what} lines: {MORE[what]} reads them)" if n > 0 else ""
+
+
+# G4: playbooks (notes tagged `playbook`) the prompt matches, out of the Related budget
+PRIME_PLAYBOOKS, PLAYBOOK_TAG, PLAYBOOK_SUMMARY = 2, "playbook", 60
+PLAYBOOK_SAYS = ("Follow it for this task (cortex_read it first); if the user corrects how, "
+                 "cortex_patch that playbook.")
+# a playbook file changed this long after the last write Cortex logged on it: the owner edited it
+OWNER_EDIT_SLACK = 2
+
+
+def playbooks(vault: Vault, prompt: str, hits: list[dict], notes: dict, mute: set[str],
+              scopes, evs: list[dict]) -> list[tuple[str, str]]:
+    """G4: [(id, "- [[id]] title: summary")] of the playbooks (`note` pages tagged
+    `playbook`) the prompt matches, best first: recall `hits`, then by the content words
+    (pref_rows' terms) their title and summary share. `notes` ({id: {kind, title, fields}},
+    as the index holds them) holds no private page; a muted one, or one whose `scope` the
+    client's `scopes` (None: all) lack, is out. An agent-written one the owner has not
+    confirmed (`unconfirmed_notes`) ends in ` (ask)`. cortex_prime and the prime hook's
+    later-turn delta (cortex.delta.playbooks) both select with this."""
+    words = re.findall(r"\w+", prompt.lower())
+    terms = {t for t in words if len(t) > 2 and t not in STOPWORDS
+             and t not in TASK_WORDS}
+    terms |= {x for w in words for x in ABBREVIATIONS.get(w, ())}
+    rank = {h["id"]: n for n, h in enumerate(hits) if h.get("match") != "linked"}
+    found = []
+    for i, n in notes.items():
+        f, tags = n["fields"], n["fields"].get("tags")
+        if (n["kind"] != "note" or i in mute or PLAYBOOK_TAG not in (
+                tags if isinstance(tags, list) else [tags])):
+            continue
+        if scopes is not None and str(f.get("scope") or "all") not in ("all", *scopes):
+            continue
+        summary = render.plain(str(f.get("summary") or ""), PLAYBOOK_SUMMARY)
+        shared = sum(t in f"{n['title']} {summary}".lower() for t in terms)
+        if i in rank or shared:
+            found.append((rank.get(i, len(rank)), -shared, i, n["title"], summary))
+    found.sort()
+    ask = unconfirmed_notes(vault, {x[2] for x in found[:PRIME_PLAYBOOKS]}, evs)
+    return [(i, f"- [[{i}]] {title}" + (f": {summary}" if summary else "")
+             + (" (ask)" if i in ask else "")) for _, _, i, title, summary in found]
+
+
+def unconfirmed_notes(vault: Vault, ids: set[str], evs: list[dict]) -> set[str]:
+    """G4: which of the note `ids` an agent wrote and the owner has not confirmed: the last
+    write Cortex logged on the page (its `cortex_add`, or a `cortex_patch` with its `tier`
+    as for claims) is not the owner's (`confirmed`, or `clicked` in the app), and the file
+    has not changed since. A page with no logged write is the owner's own; filing it under
+    a topic (`set_topics`) is no write about its content."""
+    last, at = {}, {}
+    for e in evs:
+        pl = e.get("payload") if e.get("kind") == "change" else None
+        c = pl.get("change") if isinstance(pl, dict) else None
+        if isinstance(c, dict) and c.get("kind") == "note" and c.get("id") in ids:
+            at[c["id"]] = e.get("ts")
+            if c.get("op") != "set_topics":
+                last[c["id"]] = c
+    out = set()
+    for i, c in last.items():
+        if c.get("tier") == "confirmed" or c.get("confirm") == "clicked":
+            continue
+        ts = at[i]
+        try:  # shortcut: any later write Cortex did not log (a relink) reads as the owner's
+            # edit; record a hash with each write if that ever matters
+            edited = vault.path_for("note", i).stat().st_mtime > datetime.strptime(
+                ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp() + OWNER_EDIT_SLACK
+        except (OSError, TypeError, ValueError):
+            edited = False
+        if not edited:
+            out.add(i)
+    return out
 
 
 def named_problem(vault: Vault, prompt: str):
