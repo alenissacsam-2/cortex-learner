@@ -175,9 +175,9 @@ def test_conflict_pairs_and_the_three_buttons(root, app):  # noqa: F811
 
 
 def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
-    """22 Nov (D2): the newer line of a recorded pair stays and the older is retired at once,
-    recorded as an automatic change the user can undo; Review never asks. (A guessed pair of
-    two facts, "Neovim" / "Vim", is left alone: test_possible_update_of_by_word_overlap.)"""
+    """22 Nov (D2): a recorded pair never makes a Review card. W1: a guessed pair whose newer
+    line says more ("… at work") is left alone, both live: retiring the older would narrow its
+    scope (a guessed pair of the same facts is settled: test_losslessness)."""
     prefs(root, "Uses Vim for editing code")
     old = cid(root, "preferences", "Uses Vim")
 
@@ -188,9 +188,9 @@ def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
 
     run(root, body)
     assert app.review()["conflicts"] == []
-    assert "Uses Vim" in (root / "me" / "preferences.md").read_text("utf-8").split("## Past")[1]
-    (c,) = [c for c in changes(root, "preferences") if c.get("auto")]
-    assert (c["op"], c["target"], c["why"], c["card"]) == ("retire", old, "update", "conflict")
+    assert "## Past" not in (root / "me" / "preferences.md").read_text("utf-8")
+    assert old in {r["id"] for r in live(root, "preferences")}
+    assert [c for c in changes(root, "preferences") if c.get("auto")] == []
 
 
 # ---- repeated corrections ----

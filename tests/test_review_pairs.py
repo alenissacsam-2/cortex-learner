@@ -10,7 +10,7 @@ from conftest import run
 from test_review import app, changes, live, today  # noqa: F401  (app is a fixture)
 from test_review_conflicts import cid, prefs
 
-from cortex import prime
+from cortex import claims, prime
 from cortex.events import EventLog
 from cortex.vault import Vault
 
@@ -116,17 +116,18 @@ def test_a_guessed_update_pair_and_a_profile_line_are_settled_too(root):
     vim = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
-        # a lossless update (it names everything the old line does): the guessed pair is
-        # settled; "Uses Neovim …" would name a tool the old line lacks, so both would stay
+        # W1: the newer line says more ("at work"), so the guessed pair is not the same
+        # facts: both stay on the page (retiring the older would narrow its scope)
         out = await call("cortex_patch", {**NEW, "text": "- Uses Vim for editing code at work"})
-        assert [r["id"] for r in out["replaced"]] == [vim]  # the guessed pair, settled
+        assert vim and not out.get("replaced")
         await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
                                     "target": "Background", "text": "- Lives in Mumbai",
                                     "user_confirmed": True, "supersedes": [home]})
 
     run(root, body)
+    assert vim in {r["id"] for r in claims.rows(Vault(root))
+                   if r["page"] == "preferences" and r["status"] == "live"}
     for text in (light(root), context(root)):
-        assert "Uses Vim for editing code at work" in text
-        assert text.count("Uses Vim for editing code") == 1
+        assert "Uses Vim for editing code at work" in text  # (prime.held mutes the older line)
         assert "Lives in Mumbai" in text and "Pune" not in text
         assert "Studies computer science" in text
