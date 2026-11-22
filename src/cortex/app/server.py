@@ -2285,6 +2285,11 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: the chat safety net failed ({type(e).__name__}); retried in "
                      f"{chat_import.EVERY_S // 60} minutes")
+            try:  # facts the owner stated in those chats, saved as about-me guesses
+                from cortex import fact_harvest
+                fact_harvest.auto(app)
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: saving facts from chats failed ({type(e).__name__})")
             try:
                 app.chat_import_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)

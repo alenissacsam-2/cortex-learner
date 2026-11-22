@@ -24,6 +24,8 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 
 **Local model calls.** When you turn on a local model, Cortex talks to Ollama (127.0.0.1:11434) or LM Studio on this computer only. It refuses any address that is not loopback, sends `localhost` to 127.0.0.1, ignores proxy settings, and refuses cloud models that a local runner can forward to (Ollama `-cloud` models, for example).
 
+**Facts from your chats.** Cortex saves facts you stated about yourself in your recent chats using your local model only. The model reads only your own messages of non-private chats, and nothing leaves this computer.
+
 Searches, topic filing (`cortex topics`), the dashboard, the Claude Code hooks and every tool run offline.
 
 ## What the AI model sees

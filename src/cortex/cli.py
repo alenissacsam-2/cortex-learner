@@ -35,7 +35,7 @@ from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError
 EPILOG = ("About you: claims [--unasked|--summary], voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
           "Import: import [--dry-run|--private], import-chats, digest · "
-          "Chats: chats, harvest status, safety-net · "
+          "Chats: chats, harvest status, safety-net, fact-harvest · "
           "Vault: lint, relink, concept duplicates, topics, replay, undo, backup · "
           "Setup: app, setup [--print-mcp-config], init, doctor, model download, exclude")
 app = typer.Typer(no_args_is_help=True, epilog=EPILOG)
@@ -994,6 +994,27 @@ def safety_net_cmd(
     dry = " [dry run: nothing written]" if dry_run else ""
     typer.echo((out.get("line") or "Safety net: nothing new to record")
                + (f" ({said})" if said else "") + dry)
+
+
+@app.command("fact-harvest")
+@_errors
+def fact_harvest_cmd(vault: VaultOpt = None) -> None:
+    """Save facts you stated about yourself in your recent chat pages (where you live, work or
+    study, what you work on, tools, goals, preferences) as about-me guesses, with a local model
+    already loaded. Your own words only; private chats and hidden subjects are skipped. The app
+    runs it after each chat import; `cortex undo <session>` takes a pass back."""
+    from cortex import fact_harvest
+
+    v = _vault(vault)
+    runner = fact_harvest.cli_runner()
+    if runner is None:
+        typer.echo("No local model is loaded: load the small model, then run this again.")
+        return
+    out = fact_harvest.run(v, runner)
+    said = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(out.items())
+                     if isinstance(n, int))
+    typer.echo(f"Fact harvest: {said or 'nothing new'}"
+               + (f" (undo: cortex undo {out['session']})" if out.get("session") else ""))
 
 
 @app.command("digest")

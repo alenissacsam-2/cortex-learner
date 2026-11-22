@@ -165,6 +165,24 @@ def _learning(events) -> list[dict]:
     return out
 
 
+def hidden_pattern(catalog: Catalog, hide: set[str]) -> re.Pattern | None:
+    """Whole-word titles and aliases of the hidden concepts (planner.hidden), or None."""
+    return _pattern(n for e in catalog.entries.values() if e.kind == "concept"
+                    and e.id in hide for n in (e.title, *e.aliases))
+
+
+def skip_reason(note, chat: Chat, ctx, hidden: re.Pattern | None, now: datetime) -> str | None:
+    """Why a pass leaves `chat` alone (the module docstring's rules: "private", "old",
+    "hidden"), or None. `ctx`: a chat_import.Ctx; `hidden`: `hidden_pattern`'s."""
+    if is_private(note) or ctx.audience(chat.text) != "cloud":
+        return "private"
+    if chat.last_day() < (now - timedelta(days=RECENT_DAYS)).date().isoformat():
+        return "old"
+    if hidden is not None and hidden.search(chat.text):
+        return "hidden"
+    return None
+
+
 def _usable(name: str, least: int = MIN_NAME) -> bool:
     words = name.casefold().split()
     return len(name) >= least and not all(w in STOPWORDS or w in GENERIC for w in words)
@@ -211,9 +229,9 @@ def ask_model(runner, chat: Chat) -> list[str]:
 
 # ---- the pass ---------------------------------------------------------------------------------
 
-def _load(vault: Vault) -> dict:
+def _load(vault: Vault, state: str = STATE) -> dict:
     try:
-        d = json.loads((vault.root / STATE).read_text(encoding="utf-8"))
+        d = json.loads((vault.root / state).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return d if isinstance(d, dict) else {}
@@ -245,8 +263,7 @@ class Linker:
         self.vault, self.catalog, self.index, self.hide, self.embed = \
             vault, catalog, index, hide, embed
         self.tree = topics.tree(index)
-        self.hidden = _pattern(n for e in catalog.entries.values() if e.kind == "concept"
-                               and e.id in hide for n in (e.title, *e.aliases))
+        self.hidden = hidden_pattern(catalog, hide)
         self._vecs = None
 
     def vectors(self):
@@ -378,13 +395,7 @@ class _Pass:
     # ---- one chat ----
 
     def skip(self, note, chat: Chat) -> str | None:
-        if is_private(note) or self.ctx.audience(chat.text) != "cloud":
-            return "private"
-        if chat.last_day() < (self.now - timedelta(days=RECENT_DAYS)).date().isoformat():
-            return "old"
-        if self.link.hidden is not None and self.link.hidden.search(chat.text):
-            return "hidden"
-        return None
+        return skip_reason(note, chat, self.ctx, self.link.hidden, self.now)
 
     def layer1(self, chat: Chat) -> list[str]:
         ids = list(dict.fromkeys(self.by_name[" ".join(m[0].casefold().split())]
