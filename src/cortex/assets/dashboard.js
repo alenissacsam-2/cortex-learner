@@ -1742,7 +1742,7 @@
       if (said) toast(said);
     };
     r.querySelector('.acts').append(...(f
-      ? [button('btn', 'Add chats', post('/api/import/pickup/add', { path: f.path }, 'Adding the chats. Settings shows when it is done.')),
+      ? [button('btn', 'Add chats', post('/api/import/pickup/add', { path: f.path }, 'Adding the chats. Setup shows when it is done.')),
         button('btn', 'Not this one', post('/api/import/pickup/dismiss', { path: f.path }))]
       : [button('btn', 'Show me how', () => location.assign('/manage#import-claude')),
         button('btn', 'Later', post('/api/import/pickup/later', {}))]));
