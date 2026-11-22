@@ -107,6 +107,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex ask "question"` | Answers from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex claims --summary` | How well Cortex knows you, per page (and which lines you clicked vs a chat relayed) |
 | `cortex claims --unasked` | What chats saved about you without asking, each with its undo |
+| `cortex voice measure` | Counts how you write in the sent messages you added with `cortex voice import` (sentence length, questions, greetings and sign-offs, exclamation marks, lowercase, emoji; per audience with at least 8 messages, never what you typed to an AI) and turns the clear ones into short lines; `--propose` puts them in Review, and the ones you approve go to `me/voice.md`, where AI apps writing as you read them |
 | `cortex export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
 | `cortex pack general\|coding\|writing` | A short context pack (at most 2,500 characters: your pinned core, then that pack's preferences) to paste at the start of a ChatGPT or Gemini chat; the app's **Connect AI apps** has the same packs with a Copy button |
 | `cortex import <file>` | Imports a chat export, notes, a calendar, Google activity, documents, your git projects or reading highlights (below) |
