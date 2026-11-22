@@ -938,3 +938,22 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     assert o["sites"] == 20 and o["id"].startswith("site:") and "secret" not in o["id"], o
     assert o["panel"] and o["selected"] == "true", o
     assert all(Path(p).stat().st_size > 10_000 for p in shots)
+
+
+def test_a_table_cell_keeps_its_escaped_pipe(tmp_path):
+    """The Help tab's table parser (dashboard.js `cells`, run alone under node) reads `a\\|b`
+    inside a cell as one cell holding `a|b`, not as two cells."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    js = (ROOT / "src/cortex/assets/dashboard.js").read_text(encoding="utf-8")
+    start = js.index("  const cells = ")
+    fn = js[start:js.index(";\n", start) + 2]
+    script = tmp_path / "cells.cjs"
+    script.write_text(fn + r"console.log(JSON.stringify([cells("
+                      r"'| `log assessment\\|result\\|solved` | Records results |'), "
+                      r"cells('|a|b|'), cells('x \\|')]));" "\n", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [["`log assessment|result|solved`", "Records results"],
+                                    ["a", "b"], ["x |"]]

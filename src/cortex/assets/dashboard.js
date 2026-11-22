@@ -331,7 +331,9 @@
     if (i < text.length) into.append(text.slice(i));
     return into;
   }
-  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  // an escaped pipe (\|) is text inside a cell, not a border
+  const cells = (l) => l.trim().replace(/^\||(?<!\\)\|$/g, '').split(/(?<!\\)\|/)
+    .map((c) => c.trim().replace(/\\\|/g, '|'));
   // Block Markdown: headings, paragraphs, lists, fenced code, blockquotes, tables, rules.
   const QUOTE_DEPTH = 20;  // deeper quotes render as text: untrusted nesting must not blow the stack
   function md(src, depth = 0) {
