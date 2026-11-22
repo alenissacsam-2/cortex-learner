@@ -234,3 +234,85 @@ def test_german_suffix_verbs_are_stripped_only_from_german_rows(tmp_path):
 ])
 def test_a_numeric_date_is_day_first_and_never_guessed(text, want):
     assert takeout.when(text) == want
+
+
+# ---- YouTube's own history ("YouTube and YouTube Music" Takeout), invented rows -------------
+
+YT = "Takeout/YouTube and YouTube Music/history/"
+WATCH = [{"header": "YouTube", "title": "Watched Heaps in 7 minutes",
+          "titleUrl": "https://www.youtube.com/watch?v=zzzzzzzzzz1",
+          "subtitles": [{"name": "Tree Channel", "url": "https://www.youtube.com/channel/UC9"}],
+          "time": "2026-10-03T08:00:00.123Z", "products": ["YouTube"],
+          "activityControls": ["YouTube watch history"]}]
+SEARCH = [{"header": "YouTube", "title": "Searched for binary heap",
+           "titleUrl": "https://www.youtube.com/results?search_query=binary+heap",
+           "time": "2026-10-03T07:55:00.000Z", "products": ["YouTube"],
+           "activityControls": ["YouTube search history"]},
+          {"header": "YouTube", "title": "Searched for hot girls bikini",
+           "titleUrl": "https://www.youtube.com/results?search_query=hot+girls+bikini",
+           "time": "2026-10-03T07:50:00.000Z", "products": ["YouTube"]}]
+WATCH_HTML = (
+    '<html><body><div class="mdl-grid"><div class="outer-cell mdl-cell"><div class="mdl-grid">'
+    '<div class="header-cell mdl-cell"><p class="mdl-typography--title">YouTube<br></p></div>'
+    '<div class="content-cell mdl-cell mdl-typography--body-1">Watched&nbsp;<a href="'
+    'https://www.youtube.com/watch?v=zzzzzzzzzz1">Heaps in 7 minutes</a><br><a href="'
+    'https://www.youtube.com/channel/UC9">Tree Channel</a><br>Oct 3, 2026, 8:00:00 AM UTC<br>'
+    '</div><div class="content-cell mdl-cell mdl-typography--text-right"></div>'
+    '<div class="content-cell mdl-cell mdl-typography--caption"><b>Products:</b><br>&emsp;'
+    'YouTube<br></div></div></div></div></body></html>')
+HEAP = ("takeout/youtube", "https://www.youtube.com/watch?v=zzzzzzzzzz1", "Heaps in 7 minutes",
+        "Tree Channel")
+
+
+def _yt(r):
+    return (r.source, r.url, r.title, r.channel)
+
+
+@pytest.mark.parametrize("name, body", [("watch-history.json", json.dumps(WATCH)),
+                                        ("watch-history.html", WATCH_HTML)])
+def test_youtube_watch_history_alone(tmp_path, name, body):
+    f = tmp_path / name
+    f.write_text(body, "utf-8")
+    rs = takeout.records(f)
+    assert [_yt(r) for r in rs] == [HEAP]
+    assert rs[0].start.replace(microsecond=0) == datetime(2026, 10, 3, 8, tzinfo=UTC)
+
+
+def test_youtube_only_takeout_zip_and_folder(tmp_path):
+    members = {YT + "watch-history.json": json.dumps(WATCH),
+               YT + "search-history.json": json.dumps(SEARCH)}
+    z = tmp_path / "yt.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        for n, b in members.items():
+            f.writestr(n, b)
+    for n, b in members.items():
+        (tmp_path / "dir" / n).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "dir" / n).write_text(b, "utf-8")
+    for src in (z, tmp_path / "dir"):
+        assert [r.title for r in takeout.records(src)] == [
+            "hot girls bikini", "binary heap", "Heaps in 7 minutes"]
+    assert takeout.wanted(YT + "watch-history.html")  # its folder is named per language
+    assert takeout.wanted("Takeout/YouTube und YouTube Music/Verlauf/search-history.html")
+
+
+def test_a_watch_in_my_activity_and_watch_history_counts_once(tmp_path):
+    # My Activity as HTML (Takeout's default, times to the second) beside watch-history.json
+    z = tmp_path / "full.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("Takeout/My Activity/YouTube/MyActivity.html", WATCH_HTML)
+        f.writestr(YT + "watch-history.json", json.dumps(WATCH))
+        f.writestr("Takeout/My Activity/YouTube/MyActivity.json", json.dumps(WATCH))
+    rs = takeout.records(z)
+    assert [_yt(r) for r in rs] == [HEAP] and rs[0].secs == sources.GAP_CAP
+
+
+def test_youtube_history_goes_through_the_privacy_filter(tmp_path):
+    f = tmp_path / "search-history.json"
+    f.write_text(json.dumps(SEARCH), "utf-8")
+    adult, plain = takeout.records(f)
+    assert privacy.filter_record(adult.url, adult.title,
+                                 settings=privacy.Settings(adult="skip")) is None  # the default
+    k = privacy.filter_record(adult.url, adult.title, settings=privacy.Settings(adult="private"))
+    assert (k.category, k.private) == ("adult", True)
+    assert privacy.filter_record(plain.url, plain.title, settings=privacy.Settings()).private \
+        is False

@@ -356,7 +356,7 @@ def detect(path: Path) -> list[str]:
                   heads[n] if n in heads else read(4096))))]
     head = next((read(300).lstrip() for n, _, _, read in files if n.endswith(".md")), b"")
     pplx = head.startswith(b"<img") and b"perplexity" in head  # its export starts with a logo
-    json1 = len(names) == 1 and names[0].endswith(".json") and "myactivity" not in names[0] \
+    json1 = len(names) == 1 and names[0].endswith(".json") and not takeout.activity_file(names[0]) \
         and not life
     kinds = ["chats"] if gemini or pplx or json1 or any(
         n.rsplit("/", 1)[-1].startswith("conversations") and n.endswith(".json")

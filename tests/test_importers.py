@@ -257,6 +257,19 @@ def test_detect_every_kind(tmp_path):
         importers.detect(html)
 
 
+def test_detect_youtube_history_as_takeout(tmp_path):
+    rows = (EXPORTS / "takeout_MyActivity.json").read_text("utf-8")
+    one = tmp_path / "watch-history.json"
+    one.write_text(rows, "utf-8")
+    assert importers.detect(one) == ["takeout"]  # not a lone chat .json
+    yt = "Takeout/YouTube and YouTube Music/history/"
+    z = _zip(tmp_path / "yt.zip", {yt + "watch-history.json": rows,
+                                   yt + "search-history.json": rows})
+    assert importers.detect(z) == ["takeout"]
+    from cortex.app import exports
+    assert exports.kind_of([yt + "watch-history.html"]) == "google-activity"
+
+
 def test_detect_routes_html_takeout(tmp_path):
     act = EXPORTS / "takeout_html" / "Takeout" / "My Activity"
     search, gem = (act / p / "MyActivity.html" for p in ("Search", "Gemini Apps"))

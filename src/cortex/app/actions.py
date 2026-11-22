@@ -479,7 +479,8 @@ def import_preview(job, source: str, path: Path, root: Path | None = None) -> di
         rows = _readable(takeout.records, path)
         if not rows:
             raise ValueError("Found no Search, YouTube or Chrome activity in this "
-                             "export (only English Takeouts are read)."
+                             "export (My Activity, or YouTube's watch and search history; "
+                             "only English Takeouts are read)."
                              + _skipped_rows(rows))
         kinds = Counter(v.source.rsplit("/", 1)[-1] for v in rows)
         out = {"ok": True, "kind": "import-preview", "found": len(rows), "note": GOOGLE_NOTE,

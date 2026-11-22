@@ -1230,7 +1230,7 @@
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
-    'google-activity': 'Searches, YouTube and Chrome activity, from Google Takeout.',
+    'google-activity': 'Searches, YouTube and Chrome activity, from Google Takeout: My Activity, or YouTube\'s own watch and search history.',
     notes: 'An Obsidian vault, a Notion export or a folder of .md and .txt notes.',
     calendar: 'Your events, from an .ics calendar file.',
     docs: 'A folder of PDFs, Word documents and text files.',
