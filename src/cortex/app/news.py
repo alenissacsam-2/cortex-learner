@@ -43,7 +43,8 @@ BEFORE_NEWS = "0.2.1"
 
 def start() -> None:
     """On app start, with no readable record: a fresh install (no vault set yet) records this
-    version silently; an existing user came from BEFORE_NEWS or earlier, so sees what is new."""
+    version silently; an existing user came from BEFORE_NEWS or earlier, so sees what is new.
+    `cortex init` calls this before it first sets a vault, so a CLI setup counts as fresh."""
     if _seen() is None and _v(update.current()):
         record(BEFORE_NEWS if status.config().get("vault") else None)
 

@@ -3004,6 +3004,18 @@ def test_whats_new_fresh_install_records_silently(newsfile, monkeypatch):
         "item 0.2.3"], "do": []}}
 
 
+def test_whats_new_init_before_the_first_app_open_is_a_fresh_install(
+        newsfile, tmp_path, monkeypatch):
+    from cortex import taint, update
+    from cortex.cli import _init
+
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    _init(tmp_path / "v")
+    newsfile.start()  # the first app open, after `cortex init` set the vault
+    assert taint.config()["app"]["whats_new_seen"] == "0.2.3"
+    assert newsfile.card()["show"] == []
+
+
 def test_whats_new_an_existing_user_without_a_record_sees_everything_since_0_2_1(
         newsfile, tmp_path, monkeypatch):
     from cortex import taint, update
