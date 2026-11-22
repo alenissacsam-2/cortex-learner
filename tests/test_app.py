@@ -2803,8 +2803,38 @@ def test_status_git_row_installs_and_llm_row_judges_the_chosen_runner(vault, mon
     assert llm("ollama", ["llama3:8b"], lms="C:/lms.exe") == ("warn", "Ollama, qwen3.5:2b")
     assert llm("ollama", ["qwen3.5:2b"], lms="C:/lms.exe") == ("ok", "Ollama, qwen3.5:2b")
     assert llm("ollama", None) == ("warn", "Ollama, qwen3.5:2b")
-    assert llm("auto", None) == ("warn", "no runner, qwen3.5:2b")
+    assert llm("auto", None) == ("warn", "none running, qwen3.5:2b")
     assert llm("auto", ["QWEN3.5:2B"]) == ("ok", "Ollama, qwen3.5:2b")
+
+
+@pytest.mark.parametrize(("enabled", "runner", "ollama", "lms", "model", "value", "detail"), [
+    (False, "auto", ["llama3:8b"], None, None, "Ollama, no model chosen", "Off. Optional"),
+    (False, "auto", None, None, None, "none running, no model chosen", "Off. Optional"),
+    (True, "auto", ["llama3:8b"], None, None, "Ollama, no model chosen",
+     "On, but no model is chosen. Open Local model to choose one."),
+    (True, "ollama", None, None, None, "Ollama, no model chosen", "On, but no model is chosen."),
+    (True, "auto", None, None, "q:2b", "none running, q:2b",
+     "On, but neither Ollama nor LM Studio is running."),
+    (True, "ollama", None, None, "q:2b", "Ollama, q:2b", "On, but Ollama is not running."),
+    (True, "lmstudio", None, None, "q:2b", "LM Studio, q:2b",
+     "On, but LM Studio is not on this computer."),
+    (True, "ollama", ["llama3:8b"], None, "q:2b", "Ollama, q:2b",
+     "On, but Ollama does not have q:2b. Open Local model to get it"),
+    (True, "lmstudio", None, "C:/lms.exe", "q:2b", "LM Studio, q:2b",
+     "On, but LM Studio does not have q:2b."),
+    (True, "ollama", ["q:2b"], None, "q:2b", "Ollama, q:2b", "On: sorts your browsing"),
+])
+def test_status_llm_row_says_what_is_true(monkeypatch, enabled, runner, ollama, lms, model,
+                                          value, detail):
+    """The Local model row names the runner that is set or running and says in plain words
+    what is missing: a model, a running runner, LM Studio itself, or the model in it."""
+    monkeypatch.setattr(status, "lms_models", lambda: [])
+    monkeypatch.setattr(status, "llm", lambda quick=False: {
+        "enabled": enabled, "runner": runner, "model": model, "loaded": [],
+        "ollama": ollama, "lms": lms, "server_port": None})
+    r = status.llm_row()
+    assert r["value"] == value and r["detail"].startswith(detail), r
+    assert "no runner" not in r["detail"]
 
 
 def test_installer_wording(app, monkeypatch):
@@ -3004,6 +3034,18 @@ def test_whats_new_fresh_install_records_silently(newsfile, monkeypatch):
         "item 0.2.3"], "do": []}}
 
 
+def test_whats_new_init_before_the_first_app_open_is_a_fresh_install(
+        newsfile, tmp_path, monkeypatch):
+    from cortex import taint, update
+    from cortex.cli import _init
+
+    monkeypatch.setattr(update, "current", lambda: "0.2.3")
+    _init(tmp_path / "v")
+    newsfile.start()  # the first app open, after `cortex init` set the vault
+    assert taint.config()["app"]["whats_new_seen"] == "0.2.3"
+    assert newsfile.card()["show"] == []
+
+
 def test_whats_new_an_existing_user_without_a_record_sees_everything_since_0_2_1(
         newsfile, tmp_path, monkeypatch):
     from cortex import taint, update
@@ -3052,3 +3094,22 @@ def test_whats_new_ships_plain_entries():
         least = 1 if running and update.newer(news._v(v), running) else 3
         assert news._v(v) and least <= len(e["items"]) <= 6 and isinstance(e["do"], list), v
         assert all(isinstance(x, str) and x for x in e["items"] + e["do"]), v
+
+
+@pytest.mark.parametrize("gone", [ConnectionAbortedError, ConnectionResetError, BrokenPipeError])
+def test_a_browser_that_leaves_mid_answer_is_dropped_quietly(vault, gone):
+    """Leaving a page mid-response (WinError 10053 on Windows) is no error: `_send` drops it and
+    closes the connection instead of raising a traceback into app.log."""
+    srv, _ = server.make_server(vault)
+    try:
+        h = object.__new__(srv.RequestHandlerClass)
+
+        class Gone:
+            def write(self, b):
+                raise gone(10053, "aborted")
+        h.wfile, h.command, h.request_version, h.close_connection = Gone(), "GET", "HTTP/1.1", False
+        h.requestline, h.client_address = "GET / HTTP/1.1", ("127.0.0.1", 1)
+        h._send(200, {"ok": True})
+        assert h.close_connection is True
+    finally:
+        srv.server_close()
