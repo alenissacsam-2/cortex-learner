@@ -218,7 +218,8 @@ def test_everything_about(vault):
                                "how does python vs java handle memory?", "does rust vs go",
                                "is react better than vue or vs code?"])
 def test_a_question_with_vs_inside_is_no_compare(q):
-    assert chat_facts.route(q, None, date(2026, 11, 21)) is None  # the passages answer it
+    got = chat_facts.route(q, None, date(2026, 11, 21))  # the passages answer it, or (R4) a
+    assert got is None or got["kind"] == "decisions"  # decision question reads decision pages
 
 
 def test_compare_counts_each_side_with_its_top_page(vault):

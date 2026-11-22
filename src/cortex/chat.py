@@ -51,6 +51,7 @@ DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PAS
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
+PAGES_READ = 4  # pages of an inventory, schedule or decisions answer the model reads
 SAID_NOTHING = ("{model} gave no answer, twice. These are the pages it searched; open one to "
                 "read it, or ask again in other words.")
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
@@ -1058,6 +1059,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             elif fq["kind"] == "compare":  # each side's top page, read from its start
                 found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
                                                if r["page"] and r["page"]["id"]])
+            elif fq["kind"] in chat_facts.PAGE_KINDS:  # the pages counted, read to be cited
+                found = _page_passages(vault, [*dict.fromkeys(
+                    r["id"] for r in facts["rows"])][:PAGES_READ])
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})

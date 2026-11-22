@@ -26,7 +26,7 @@ from collections import Counter, defaultdict
 from contextlib import closing
 from datetime import date, timedelta
 
-from cortex import chat_study, planner
+from cortex import chat_pages, chat_study, planner
 from cortex.catalog import Catalog
 from cortex.events import EventLog
 from cortex.index import STOPWORDS, _wrap
@@ -35,6 +35,7 @@ SOURCES = ("notes", "chats", "journal", "browsing", "study")  # the order facts 
 NOUN = {"notes": "note", "chats": "saved AI chat", "journal": "journal line",
         "browsing": "visit", "study": "study event"}
 SHOWN = 3  # titles per row
+PAGE_KINDS = ("inventory", "schedule", "decisions")  # chat_pages answers them
 ROWS = 31  # timeline buckets
 FIRST_DAY = "0001-01-01"  # every dated item; undated ones ("") stay out
 SYSTEM = (
@@ -148,6 +149,8 @@ def route(text: str, got, today: date) -> dict | None:
     rest = chat_study._norm(text[:got[2][0]] + " " + text[got[2][1]:] if got else text)
     lo, hi = (got[0].isoformat(), min(got[1], today).isoformat()) if got else (FIRST_DAY,
                                                                                today.isoformat())
+    if (q := chat_pages.route(text, rest, got, today)) is not None:
+        return q  # inventory, schedule, decisions: read from the pages
     if got and got[0] > today:
         return None  # nothing is dated in the future
     base = {"lo": lo, "hi": hi, "focus": None, "unit": None}
@@ -383,6 +386,8 @@ def facts(vault, q: dict, sources: dict) -> dict:
     and sites (about), page and unopened (gaps). An empty answer has total 0 and no rows."""
     if q["kind"] == "gaps":
         return _gaps(vault, q, sources)
+    if q["kind"] in PAGE_KINDS:
+        return chat_pages.facts(vault, q, sources)
     if q["kind"] == "compare":
         return _compare(vault, q, sources)
     read, found, off, titles = _gather(vault, q, sources)
@@ -582,6 +587,8 @@ def empty(f: dict) -> bool:
 def say(f: dict, today: date) -> str:
     """The facts in plain words, with no model: the whole answer when they are empty or no
     local model is there, and the model's fallback."""
+    if f["kind"] in PAGE_KINDS:
+        return chat_pages.say(f, today)
     when, q = _when(f, today), f["query"]
     subject = f'"{q}"' if q else "anything"
     if f["kind"] == "count" and f["focus"] and not q and not f["total"]:
@@ -669,6 +676,8 @@ def _lines(f: dict, today: date) -> list[str]:
                 for r in f["rows"]]
     elif f["kind"] == "compare":
         pass  # say holds both sides
+    elif f["kind"] in PAGE_KINDS:
+        out += chat_pages.lines(f)
     else:
         if f["sites"]:
             out.append("Sites: " + ", ".join(f"{s['site']} ({s['visits']} visits)"
@@ -692,14 +701,16 @@ def prompt(f: dict, found: list, question: str, today: date) -> str:
 STEP = {"count": "Counting {q}", "first": "Finding the first time {q} shows up",
         "last": "Finding the last time {q} shows up", "timeline": "Putting together your timeline",
         "about": "Gathering everything about {q}", "compare": "Comparing {q}",
-        "gaps": "Looking for gaps in {q}"}
+        "gaps": "Looking for gaps in {q}", "inventory": "Counting your {t}",
+        "schedule": "Reading your upcoming tests, interviews and calendar",
+        "decisions": "Finding your decisions about {q}"}
 
 
 def step(q: dict, today: date) -> str:
     from cortex import chat
 
     s = STEP[q["kind"]].format(q=f'"{q["term"]}"' if q["term"] else
-                               f"your {q['focus'] or 'items'}")
+                               f"your {q['focus'] or 'items'}", t=q["term"])
     if q["lo"] != FIRST_DAY:
         lo, hi = date.fromisoformat(q["lo"]), date.fromisoformat(q["hi"])
         s += (" on " if lo == hi else " from ") + chat._span(lo, hi, today)
