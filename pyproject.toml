@@ -31,7 +31,7 @@ cortex-app = "cortex.app.launch:main"
 cortex-receiver = "cortex.app.launch:receiver"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-xdist>=3.8.0", "ruff"]
 
 [build-system]
 requires = ["hatchling"]
