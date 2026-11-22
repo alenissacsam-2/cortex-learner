@@ -116,7 +116,9 @@ def test_a_guessed_update_pair_and_a_profile_line_are_settled_too(root):
     vim = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
-        out = await call("cortex_patch", {**NEW, "text": "- Uses Neovim for editing code"})
+        # a lossless update (it names everything the old line does): the guessed pair is
+        # settled; "Uses Neovim …" would name a tool the old line lacks, so both would stay
+        out = await call("cortex_patch", {**NEW, "text": "- Uses Vim for editing code at work"})
         assert [r["id"] for r in out["replaced"]] == [vim]  # the guessed pair, settled
         await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
                                     "target": "Background", "text": "- Lives in Mumbai",
@@ -124,6 +126,7 @@ def test_a_guessed_update_pair_and_a_profile_line_are_settled_too(root):
 
     run(root, body)
     for text in (light(root), context(root)):
-        assert "Uses Neovim" in text and "Uses Vim" not in text
+        assert "Uses Vim for editing code at work" in text
+        assert text.count("Uses Vim for editing code") == 1
         assert "Lives in Mumbai" in text and "Pune" not in text
         assert "Studies computer science" in text
