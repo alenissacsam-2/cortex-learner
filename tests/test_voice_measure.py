@@ -122,3 +122,14 @@ def test_cli_measure(root):
 def test_no_network():
     src = inspect.getsource(voice)
     assert not any(w in src for w in ("urllib", "socket", "http", "requests"))
+
+
+def test_a_row_without_a_valid_audience_counts_only_for_all(tmp_path):
+    v = Vault(tmp_path)
+    _samples(v)
+    p = tmp_path / voice.SAMPLES
+    extra = "".join('{"channel": "chat", "text": "hello there"}\n' for _ in range(8))
+    extra += "".join('{"audience": "all", "channel": "chat", "text": "hi"}\n' for _ in range(8))
+    p.write_text(p.read_text("utf-8") + extra, encoding="utf-8")
+    m = voice.measure(v)
+    assert set(m) == {"all", "friend", "professor"} and m["all"]["n"] == 27 + 16

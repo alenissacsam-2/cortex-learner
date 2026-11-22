@@ -165,7 +165,9 @@ def measure(vault) -> dict:
         if s.get("channel") != "ai" and isinstance(s.get("text"), str):
             t = s["text"].replace("\r\n", "\n")
             groups.setdefault("all", []).append(t)
-            groups.setdefault(str(s.get("audience")), []).append(t)
+            a = s.get("audience")  # a hand-edited row may lack one; "all" is the whole set
+            if isinstance(a, str) and AUDIENCE_RE.fullmatch(a) and a != "all":
+                groups.setdefault(a, []).append(t)
     return {g: _numbers(ts) for g, ts in sorted(groups.items()) if len(ts) >= MIN_GROUP}
 
 
