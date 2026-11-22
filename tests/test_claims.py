@@ -86,7 +86,7 @@ def test_ids_written_and_tiers(root):
         await call("cortex_patch", {**goal, "text": "Ship v5"})
         await call("cortex_read", {"id": "raw/src.md"})
         await call("cortex_patch", {**goal, "text": "- Tabs"})
-        assert (await call("cortex_patch", {**pref, "text": "- Spaces"}))["queued"] is True
+        assert (await call("cortex_patch", {**pref, "text": "- Spaces"}))["changed"] is True
         await call("cortex_end")
         await call("cortex_read", {"id": "raw/src.md"})  # no session: marks the next ambient
         await call("cortex_patch", {**goal, "text": "- Fish shell"})
@@ -105,13 +105,13 @@ def test_ids_written_and_tiers(root):
     write(root, "me/preferences.md", prefs + "- Hand typed\n")
     assert tiers(root) == {"Old habit": "legacy", "Vim": "confirmed", "Ship v5": "agent",
                            "Tabs": "exposed", "Fish shell": "exposed", "Dark mode": "exposed",
-                           "Light mode": "exposed", "Hand typed": "typed",
+                           "Light mode": "exposed", "Hand typed": "typed", "Spaces": "exposed",
                            "Test learner, synthetic.": "legacy"}  # the fixture profile
     evs = list(EventLog(Vault(root)).iter_events())
     assert sum(e.get("payload", {}).get("note") == "claims_baseline" for e in evs) == 1
     ch = [e["payload"]["change"] for e in evs if e["kind"] == "change"
           and "change" in e["payload"] and e["payload"]["change"].get("claim")]
-    assert len(ch) == 6 and all(c["tier"] in claims.TIERS for c in ch)
+    assert len(ch) == 7 and all(c["tier"] in claims.TIERS for c in ch)
 
 
 def test_revise_retire_reject_and_not_me(root):
@@ -142,7 +142,8 @@ def test_revise_retire_reject_and_not_me(root):
         assert no["error"] == "invalid_argument"
         q = {"id": "me/preferences", "op": "append_to_section", "target": "Personal",
              "text": "Night owl"}
-        assert (await call("cortex_patch", q))["queued"] is True
+        write(root, "inbox.md", "# Inbox\n\n## About me (unconfirmed)\n- Personal: Night owl "
+              f"(proposed {d}, me/preferences)\n")  # as an older Cortex queued it (D3)
         rej = await call("cortex_patch", {"id": "me/preferences", "op": "reject",
                                           "target": "Personal: Night owl"})
         assert rej["changed"] is True and "claim" not in rej
@@ -257,16 +258,17 @@ def test_identical_lines_get_distinct_ids():
     assert len(set(ids)) == 40
 
 
-def test_confirming_a_proposed_line_clears_it_from_the_inbox(root):
+def test_confirming_an_inferred_line_replaces_it(root):
     write(root, "me/preferences.md", "# Preferences\n\n## Coding\n")
     p = {"id": "me/preferences", "op": "append_to_section", "target": "Working with AI",
          "text": "Short answers (from a chat on 2026-11-07)"}
 
     async def body(call):
-        assert (await call("cortex_patch", p))["queued"] is True
-        assert len((await call("cortex_reflect"))["unconfirmed"]) == 1
-        assert (await call("cortex_patch", {**p, "user_confirmed": True}))["changed"] is True
+        guess = await call("cortex_patch", p)  # D3: saved at once, as a guess
+        assert guess["changed"] is True and "queued" not in guess
         assert (await call("cortex_reflect"))["unconfirmed"] == []
+        out = await call("cortex_patch", {**p, "user_confirmed": True})
+        assert out["changed"] is True and [r["id"] for r in out["replaced"]] == [guess["claim"]]
 
     run(root, body)
     assert "## Working with AI\n- Short answers (from a chat on 2026-11-07) (confirmed" in read(
