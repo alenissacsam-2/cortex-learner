@@ -23,9 +23,10 @@ with its Resume (app/server.py `_paused_rows`), and Resume starts the count agai
 The model reads only the user's own turns of one chat (wrapped as untrusted data) and names at
 most PER_CHAT facts the user stated about themself, each with its page (PAGES) and the user's
 exact words. Code then checks each one (`check`): the quote occurs verbatim (whitespace and
-case aside) in one user turn of that page, is first person, not a question, and shares a
-content word with the fact; the fact passes claims.unsafe (the about-me injection guard) and
-vault.secret_pattern, and fits LINE_CHARS. A failed check drops it silently.
+case aside) in one user turn of that page, is first person, not a question, and backs the
+fact (`_backed`: half its content words, the same polarity and tense); the fact passes
+claims.unsafe (the about-me injection guard) and vault.secret_pattern, and fits LINE_CHARS.
+A failed check drops it silently.
 
 Each survivor is written as cortex_patch writes an about-me line without user_confirmed (an
 inferred guess, tier `agent`, served (ask)), so near-copies are dropped, a clash with the
@@ -114,9 +115,21 @@ def check(item, turns: list[str]) -> tuple[str, str] | None:
     fact = " ".join(fact.split()).removeprefix("- ").strip()
     if (page not in PAGES or not 3 <= len(fact) <= LINE_CHARS or "\n" in fact
             or claims.unsafe(f"{PAGES[page]}\n{fact}") or secret_pattern(fact)
-            or not said(quote, turns) or not review._bag(fact) & review._bag(quote)):
+            or not said(quote, turns) or not _backed(fact, quote)):
         return None
     return page, fact
+
+
+def _backed(fact: str, quote: str) -> bool:
+    """W1: the quote says the fact: at least half of the fact's content words (review._bag),
+    the same polarity ("I don't like Python" never backs "Likes Python"), and the same tense
+    (review.ended; the shared words' past forms, review._past)."""
+    mine, theirs = review._bag(fact), review._bag(quote)
+    shared = mine & theirs
+    return (bool(shared) and 2 * len(shared) >= len(mine)
+            and review.negated(fact) == review.negated(quote)
+            and review.ended(fact) == review.ended(quote)
+            and review._past(fact) & shared == review._past(quote) & shared)
 
 
 def ask_model(runner, turns: list[str]) -> list[tuple[str, str]] | None:

@@ -6,9 +6,9 @@
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
 - conflicts (plan 5b, D2): pairs of live lines that clash (Keep both, Keep first, Keep second):
-  two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`), both
-  the owner's or both inferred. Everything else `settle` resolves itself: near-duplicates
-  (D1), recorded `possible_update_of` / `supersedes` pairs and an owner's line against an
+  two lines that say opposite things (`opposed`), both the owner's or both inferred.
+  Everything else `settle` resolves itself: lines that say the same facts (D1, W1
+  `same_facts`), recorded `possible_update_of` / `supersedes` pairs and an owner's line against an
   inferred one (D2); mcp_server.Cortex._tidy retires the loser through the retire path;
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
@@ -35,6 +35,7 @@ so every write is cortex_patch's or cortex_log's own code path."""
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import hashlib
 import re
 import sys
@@ -75,9 +76,20 @@ PLAYBOOK_TAG = "playbook"  # mcp_server.PLAYBOOK_TAG (it imports this module)
 _WORD = re.compile(r"[a-z0-9']+")
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
-# a line "says no" with one of these or any word ending n't: never/always, don't/do, avoid/prefer
+# a line "says no" with one of these, a `_NEG_PHRASE` or any word ending n't: never/always,
+# don't/do, avoid/prefer, stopped using/uses
 _NEG = frozenset("no not never none nothing nor neither without avoid avoids avoiding stop "
+                 "stops stopped stopping quit quits quitting refuse refuses refused "
                  "hate hates dislike dislikes dont cannot".split())
+_NEG_PHRASE = re.compile(r"\b(?:no longer|g(?:ive|ives|ave|iving|iven) up)\b")
+# W1: a line that says something ended ("used to", "ex-") is never the same fact as one that
+# does not; past verb forms the stemmer merges ("lived") are `_past`'s
+_ENDED = re.compile(r"\b(?:used to|formerly|previously|no longer|back in \d{4})\b|\bex-")
+_NUM = re.compile(r"(\d+(?:[.,]\d+)*)\s*([a-z%]*)")  # a number and the word after it (its unit)
+_CMP = re.compile(r"\b(rather than|instead of|over|than|before|after)\b")  # comparative order
+_COMPARE = re.compile(r"([a-z0-9']+)\s+(rather than|instead of|over|than|before|after)\s+"
+                      r"([a-z0-9']+)")  # a comparative with the word on each side
+_SUFFIX = re.compile(r"(?:(?<=..)ing|(?<!e)ed|es|s)$")
 _VECS: dict = {}  # normalised line -> unit vector, from the embedder in _VECS_OF[0]
 _VECS_OF: list = [None]
 
@@ -87,21 +99,78 @@ def _words(text: str) -> list[str]:
 
 
 def negated(text: str) -> bool:
-    """Does the line say no (a `_NEG` word, or a word ending n't)?"""
-    return any(w in _NEG or w.endswith("n't") for w in _words(text))
+    """Does the line say no (a `_NEG` word or phrase, or a word ending n't)?"""
+    return (any(w in _NEG or w.endswith("n't") for w in _words(text))
+            or bool(_NEG_PHRASE.search(" ".join(_words(text)))))
 
 
 def _stem(w: str) -> str:
-    """shortcut: a crude suffix strip (using, uses, used, use -> us); a real stemmer if pairs
-    are missed."""
-    if len(w) > 4:
-        w = re.sub(r"(?:ing|ed|es|s)$", "", w)
+    """shortcut: a crude suffix strip (use, uses, using, used -> us; study, studies, studying,
+    studied -> study); it misses doubled consonants (running) and irregular forms. Tense is
+    `same_facts`' job, not the stemmer's. A real stemmer if pairs are missed."""
+    if len(w) > 4 and w.endswith(("ies", "ied")):
+        return w[:-3] + "y"
+    if len(w) > 3:
+        w = _SUFFIX.sub("", w)
     return w.rstrip("e") if len(w) > 2 else w
 
 
 def _bag(text: str) -> frozenset:
-    return frozenset(_stem(w) for w in _words(text)
+    return frozenset(_stem(w) for w in _WORD.findall(_NEG_PHRASE.sub(" ", " ".join(_words(text))))
                      if w not in _STOP and w not in _NEG and not w.endswith("n't"))
+
+
+def ended(text: str) -> bool:
+    """W1: does the line say something ended (`_ENDED`: used to, formerly, no longer, ex-)?"""
+    return bool(_ENDED.search(" ".join(_words(text))))
+
+
+def _past(text: str) -> frozenset:
+    """W1: the stems of the line's past verb forms, any word ending -ed (lived, used, studied).
+    shortcut: an adjective (based, interested) counts too, so such lines stay two (the safe
+    side); a part-of-speech tagger if that keeps real copies apart."""
+    return frozenset(_stem(w) for w in _words(text) if len(w) > 3 and w.endswith("ed"))
+
+
+@functools.lru_cache(maxsize=8192)  # settle compares every pair: each line is parsed once
+def _facts(text: str) -> tuple:
+    """W1: what `same_facts` compares: the bag, polarity, tense (`ended`, `_past`), the
+    numbers with their units (a multiset), the raw `(until …)` stamp (claims.norm drops it),
+    and the content words on each side of every comparative (`_CMP`)."""
+    norm = " ".join(_words(text))
+    m = claims._UNTIL.search(text)
+    order = tuple(s if k % 2 else _bag(s) for k, s in enumerate(_CMP.split(norm)))
+    return (_bag(text), negated(text), ended(text), _past(text), tuple(sorted(_NUM.findall(norm))),
+            m and m.group(1), order)
+
+
+def same_facts(a: str, b: str) -> bool:
+    """W1: the two lines say the same thing, so Cortex may retire one by itself: equal bags and
+    the same polarity, tense, numbers, `(until …)` stamp and comparative order (`_facts`). A
+    strict subset ("…peanuts" / "…peanuts and shellfish") never is."""
+    return _facts(a) == _facts(b)
+
+
+@functools.lru_cache(maxsize=8192)
+def _swapped(text: str) -> tuple:
+    """The (word before, comparative, word after) of each comparative in the line."""
+    return tuple(_COMPARE.findall(" ".join(_words(text))))
+
+
+# the words a `_NEG` word answers (never/always, avoid/prefer, dislike/like, hate/love): left
+# out of the bags `opposed` compares, so "Always uses tabs" / "Never uses tabs" are opposites
+_POLE = frozenset(map(_stem, ("always", "prefer", "like", "love")))
+
+
+def opposed(a: str, b: str) -> bool:
+    """W1: the two lines say opposite things: equal bags (negation words and `_POLE` left
+    out) and exactly one negated, or equal bags and a comparative reversed ("Rust over Go" /
+    "Go over Rust")."""
+    fa, fb = _facts(a), _facts(b)
+    if fa[0] - _POLE != fb[0] - _POLE:
+        return False
+    x, y = _swapped(a), _swapped(b)
+    return fa[1] != fb[1] or (bool(x) and x != y and y == tuple((r, c, w) for w, c, r in x))
 
 
 def apart(a: str, b: str) -> bool:
@@ -198,8 +267,8 @@ def kept_cover(rows: list[dict], events, known: dict | None = None):
     no = [negated(t) for t in texts]
     n = len(rows)
 
-    def near(i: int, k: int) -> bool:
-        return no[i] == no[k] and score(i, k) >= cut
+    def near(i: int, k: int) -> bool:  # W1: only a line saying the same facts
+        return score(i, k) >= cut and same_facts(texts[i], texts[k])
 
     def covered(i: int, j: int) -> bool:
         if pair_key(rows[i], rows[j]) in kept:
@@ -215,11 +284,11 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
     why}] with raw rows, cards: [{key, why: "opposite", left, right}]}.
     - a recorded pair (claims.recorded_pairs) whose lines agree: the newer stays, unless the
       older is the owner's and the newer inferred (why `update` or `supersedes`); a guessed
-      `update` pair that is `apart` is left alone;
-    - lines on one page that say nearly the same (`scorer` cut, same `negated`): the one
-      `rank` puts first stays (why `duplicate`), so n near-copies are one line;
-    - two of the lines left, as similar but exactly one negated (or a recorded pair that
-      is): the owner's stays over an inferred one (why `opposite`); two of the owner's or two
+      `update` pair is applied only when `same_facts` or `opposed` (W1), else left alone;
+    - lines on one page that say the same facts (`scorer` cut and `same_facts`): the one
+      `rank` puts first stays (why `duplicate`), so n copies are one line;
+    - two of the lines left that are `opposed` (or a recorded pair exactly one of which is
+      negated): the owner's stays over an inferred one (why `opposite`); two of the owner's or two
       inferred are a card, one per pair of near-copy groups.
     A pair the user kept both of (`kept_cover`) or whose key is in `skip` is left alone, and
     so is a line whose `page/id` is in `skip` (an automatic retire the user undid)."""
@@ -243,8 +312,9 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
         o, n = at.get(old), at.get(new)
         if o is None or n is None or o in gone or n in gone or not free(o, n):
             continue
-        if why == "update" and apart(rows[o]["text"], rows[n]["text"]):
-            continue  # a guessed pair of two facts: both stay (the agent may retire one)
+        a, b = rows[o]["text"], rows[n]["text"]
+        if why == "update" and not (same_facts(a, b) or opposed(a, b)):
+            continue  # W1: a guessed pair that would lose a fact: both stay (the agent decides)
         if no[o] != no[n]:
             forced.append((o, n))
         elif owned(rows[o]) and not owned(rows[n]):
@@ -256,8 +326,8 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
     keep: list[int] = []
     for i in sorted((i for i in range(len(rows)) if i not in gone),
                     key=lambda i: rank(rows[i]), reverse=True):
-        k = next((k for k in keep if rows[k]["page"] == rows[i]["page"] and no[k] == no[i]
-                  and score(i, k) >= cut and free(i, k)), None)
+        k = next((k for k in keep if rows[k]["page"] == rows[i]["page"] and score(i, k) >= cut
+                  and same_facts(rows[i]["text"], rows[k]["text"]) and free(i, k)), None)
         if k is None or kept(i):
             keep.append(i)
         else:
@@ -265,8 +335,11 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
             drop(i, k, "duplicate")
     keep.sort()
     pairs = [(rep.get(a, a), rep.get(b, b)) for a, b in forced]
-    pairs += [(a, b) for x, a in enumerate(keep) for b in keep[x + 1:]
-              if no[a] != no[b] and score(a, b) >= cut]
+    by: dict[frozenset, list[int]] = {}  # opposed lines share their bag less `_POLE`
+    for a in keep:
+        by.setdefault(_facts(rows[a]["text"])[0] - _POLE, []).append(a)
+    pairs += sorted((a, b) for g in by.values() for x, a in enumerate(g) for b in g[x + 1:]
+                    if opposed(rows[a]["text"], rows[b]["text"]))
     cards, seen = [], set()
     for a, b in pairs:
         if a == b or a in gone or b in gone or frozenset((a, b)) in seen or not free(a, b):
@@ -292,25 +365,25 @@ def conflicts(rows: list[dict], events: list[dict], known: dict | None = None) -
 
 
 def copies(rows: list[dict], r: dict) -> list[dict]:
-    """D5: `r` and the `rows` on its page that say nearly the same (the `scorer` cut, same
-    `negated`), `r` first: what Keep first or second on a conflict card retires."""
+    """D5: `r` and the `rows` on its page that say the same (the `scorer` cut, W1
+    `same_facts`), `r` first: what Keep first or second on a conflict card retires."""
     same = [x for x in rows if x["page"] == r["page"] and x["id"] != r["id"]
-            and negated(x["text"]) == negated(r["text"])]
+            and same_facts(x["text"], r["text"])]  # W1: never a line holding another fact
     score, cut = scorer([r["text"], *(x["text"] for x in same)])
     return [r, *(x for i, x in enumerate(same, 1) if score(0, i) >= cut)]
 
 
 def collapse(items: list[dict], text=lambda x: x["text"]) -> list[dict]:
-    """D5: near-identical `items` (the `scorer` cut, same `negated`) as one: the first of each
+    """D5: near-identical `items` (the `scorer` cut, W1 `same_facts`) as one: the first of each
     group, with `members` (the group, itself first). A click on it covers every member."""
     if not items:
         return []
     texts = [text(x) for x in items]
     score, cut = scorer(texts)
-    no = [negated(t) for t in texts]
     groups: list[list[int]] = []
     for i in range(len(items)):
-        g = next((g for g in groups if no[g[0]] == no[i] and score(g[0], i) >= cut), None)
+        g = next((g for g in groups if score(g[0], i) >= cut
+                  and same_facts(texts[g[0]], texts[i])), None)  # W1: the same facts only
         if g is None:
             groups.append([i])
         else:
