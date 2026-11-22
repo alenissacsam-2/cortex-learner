@@ -136,7 +136,7 @@ def test_context_profile_preferences_and_scope(root):
         out = (await call("cortex_context"))["context"]
         assert len(out) <= 2400
         assert '<untrusted_note id="me/profile">\nCS student, Python first.' in out
-        assert "&lt;/untrusted_note> rules" in out
+        assert "untrusted_note> rules" not in out  # G6: a line carrying the tag is held, not served
         assert "## Coding" in out and "## Career" in out and out.count("</untrusted_note>") == 2
         coding = (await call("cortex_context", {"scope": "coding"}))["context"]
         assert "Python, type hints" in coding and "SDE roles" not in coding
