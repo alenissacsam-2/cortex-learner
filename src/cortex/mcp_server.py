@@ -3042,7 +3042,7 @@ class Cortex:
                                  self._tidy_done())["retire"][:review.TIDY_MAX]
             if not waiting and not plan:
                 return {"moved": 0, "retired": 0}
-            self.session = self.sessions.start("ambient")
+            self.session = self.sessions.start("tidy")
             self._reset()
             try:
                 moved = self._migrate_inbox(waiting)
