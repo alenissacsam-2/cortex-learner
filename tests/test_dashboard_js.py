@@ -8,6 +8,7 @@ one helpful sentence wherever a list is empty. Skipped without node or a Chromiu
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -924,7 +925,9 @@ def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
                            ["button", "Shaky", "Shaky: Hashing"],
                            ["button", "Knew it", "Knew it: Hashing"]]
     assert p["focusAfter"] == "Forgot"
-    assert p["said"] == "Saved: Shaky." and p["disabled"] == [True, True, True]
+    # the time from Reveal to the answer: measured in the page, never sent (the grade below)
+    assert re.fullmatch(r"Saved: Shaky, answered in \d+ s\.", p["said"]), p["said"]
+    assert p["disabled"] == [True, True, True]
     assert p["ticked"].endswith(" left") and p["ticked"] != p["timer"][1]
     assert p["closed"] and p["back"] == "cold-open"
     grades = [e for e in log.iter_events() if e["id"] not in before and e["kind"] == "grade"]
@@ -1072,3 +1075,36 @@ def test_a_table_cell_keeps_its_escaped_pipe(tmp_path):
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [["`log assessment|result|solved`", "Records results"],
                                     ["a", "b"], ["x |"]]
+
+
+LEECH_PROBE = r"""
+(async () => {
+  const $ = (id) => document.getElementById(id), sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  location.hash = 'study';
+  await sleep(150);
+  const line = $('plan').firstElementChild;
+  const tags = [...$('plan').querySelectorAll('.row .label')].filter((t) => t.textContent === 'leech');
+  const out = { line: line.textContent, tag: tags.map((t) => [t.className, t.title]) };
+  line.querySelector('button').click();
+  await sleep(150);
+  out.reader = document.body.innerText.includes('Leech: forgotten 5 times');
+  return out;
+})()
+"""  # noqa: E501  (JavaScript)
+
+
+def test_a_leech_row_is_tagged_and_the_line_opens_it(tmp_path):
+    from test_dashboard import _leech
+
+    root = tmp_path / "vault"
+    shutil.copytree(ROOT / "tests" / "fixtures" / "vault_mini", root)
+    _leech(root)
+    page = tmp_path / "leech.html"
+    page.write_text(dashboard.snapshot(Vault(root), now=NOW), encoding="utf-8")
+    out = _run(tmp_path, page, probe=LEECH_PROBE)
+    assert out["errors"] == []
+    p = out["probe"]
+    why = "Leech: forgotten 5 times after you learned it. Simplify or split its note."
+    assert p["line"] == "1 concept keeps slipping: simplify its note.", p
+    assert p["tag"] in ([], [["label muted", why]]), p  # tagged when it is in today's plan
+    assert p["reader"], p

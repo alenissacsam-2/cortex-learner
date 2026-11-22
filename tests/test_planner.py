@@ -96,6 +96,19 @@ def test_kind_order(v):
     assert track == ["Test sprint"] * 3  # the plan's title: no day, no date
 
 
+def test_a_leech_keeps_its_place_and_says_to_rewrite_its_note(v):
+    no_exam(v)
+    base = {f"c{n:02}": due(f"c{n:02}", n / 100) for n in range(5)}
+    before = [i["id"] for i in plan(v, base)]
+    states = {**base, "c02": due("c02", 0.02, lapses=6), "c03": due("c03", 0.03, lapses=4)}
+    items = plan(v, states)
+    assert [i["id"] for i in items] == before  # order, cap and interleave unchanged
+    why = {i["id"]: i["why"] for i in items}
+    assert why["c02"] == ("Leech: forgotten 6 times after you learned it. "
+                          "Simplify or split its note.")
+    assert not why["c03"].startswith("Leech")  # 4 lapses: not yet
+
+
 def test_cap_holds_with_40_due(v):
     no_exam(v)
     states = {f"c{n:02}": due(f"c{n:02}", n / 100) for n in range(40)}

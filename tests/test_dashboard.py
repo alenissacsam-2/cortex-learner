@@ -30,7 +30,7 @@ D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
         "counts_by_kind", "loops", "follow_ups", "resurface", "you", "help", "brain",
-        "confidence", "today_ids", "studies", "imported"}
+        "confidence", "today_ids", "studies", "imported", "leeches"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
 # its header comment names the sinks it avoids; comments are not code
@@ -798,3 +798,65 @@ def test_snapshot_parses_build_the_same_dashboard(root):
         got = dashboard.build_data(v, now=NOW)
     assert served and got == want
     assert not served & set(vault_mod._PARSED)  # scoped: later reads parse the files again
+
+
+# ---- L1: leeches and answer time (display only) --------------------------------------------
+
+def _leech(root):
+    """arrays-basics: learned 20 days ago, then forgotten on 5 later days (the fixture's
+    correct a day ago does not clear it)."""
+    log = EventLog(Vault(root))
+    for i, verdict in enumerate(["correct"] + ["wrong"] * 5):
+        log.append(session="cli", kind="grade", source="tutor", now=NOW - timedelta(days=20 - i),
+                   fields={"object": "concept:arrays-basics", "verdict": verdict})
+
+
+def test_a_leech_is_tagged_and_listed_for_someone_who_studies(root, monkeypatch):
+    _leech(root)
+    d = dashboard.build_data(Vault(root), now=NOW)
+    why = "Leech: forgotten 5 times after you learned it. Simplify or split its note."
+    assert d["leeches"] == [{"id": "arrays-basics", "title": "Array basics", "lapses": 5}]
+    assert d["details"]["arrays-basics"]["leech"] == why
+    assert "leech" not in d["details"]["two-pointers"]
+    assert all(i["why"] == why for i in d["today"] if i["id"] == "arrays-basics")
+    assert "keep slipping: simplify their notes." in JS and "'leech'" in JS
+    monkeypatch.setattr(dashboard, "studies", lambda *a, **k: False)
+    d = dashboard.build_data(Vault(root), now=NOW)
+    assert d["leeches"] == [] and "leech" not in d["details"]["arrays-basics"]
+
+
+def _timed(root, gaps):
+    """One ask and its grade on two-pointers per gap (seconds), a day apart, oldest first."""
+    log = EventLog(Vault(root))
+    for i, gap in enumerate(gaps):
+        t = NOW - timedelta(days=len(gaps) + 5 - i)
+        a = log.append(session="cli", kind="ask", source="tutor", now=t,
+                       fields={"object": "concept:two-pointers", "question": "q"})
+        log.append(session="cli", kind="grade", source="tutor", now=t + timedelta(seconds=gap),
+                   fields={"ref": a["id"], "verdict": "correct"})
+
+
+@pytest.mark.parametrize(("gaps", "want"), [
+    ([10, 30, 20], 20),  # the median
+    ([10, 30, 20, 16 * 60], 20),  # over 15 minutes: the person left
+    ([10, 16 * 60, 30], None),  # under 3 pairs left
+    ([600, 600, 600] + [5] * 10, 5),  # only the last 10
+])
+def test_answer_time_is_the_median_of_recent_pairs(root, gaps, want):
+    _timed(root, gaps)
+    det = dashboard.build_data(Vault(root), now=NOW)["details"]["two-pointers"]
+    assert det.get("answer_secs") == want
+    assert "Usually answers in about" in JS and "answered in" in JS
+
+
+def test_answer_time_is_display_only(root):
+    """The same answers given in 5 s or 14 minutes fold to the same states."""
+    slow, fast = root.parent / "slow", root.parent / "fast"
+    shutil.copytree(root, slow)
+    shutil.copytree(root, fast)
+    _timed(slow, [14 * 60] * 4)
+    _timed(fast, [5] * 4)
+    fold = [levels.fold(EventLog(Vault(r)).iter_events(), "2026-11-13")[0]["two-pointers"]
+            for r in (slow, fast)]
+    assert fold[0].attempts == fold[1].attempts == 6  # the fixture's 2 and 4 here
+    assert {**vars(fold[0]), "last_seen": None} == {**vars(fold[1]), "last_seen": None}

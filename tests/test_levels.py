@@ -574,3 +574,51 @@ def test_solved_after_a_graded_code_phase_is_plain_evidence(log):
         payload={"kind": "problem_status", "problem": "p1", "status": "solved"})
     st = fold(log.iter_events(), "2026-11-02", {"p1": "two-pointers"})[0]["two-pointers"]
     assert st.attempts == 2
+
+
+# ---- leeches (lapses) and answer time (L1) -------------------------------------------------
+
+def test_lapses_count_misses_after_learning_only(log):
+    from cortex.levels import LEECH_LAPSES, is_leech
+    for day in (1, 2):  # misses while still learning are not lapses
+        grades(log, "arrays-basics", day, ["wrong"])
+    grades(log, "arrays-basics", 3, ["correct"])
+    for day in (4, 5, 6, 7):
+        grades(log, "arrays-basics", day, ["wrong"])
+    st = states(log, "2026-11-07")[0]["arrays-basics"]
+    assert st.lapses == LEECH_LAPSES - 1 and not is_leech(st)
+    grades(log, "arrays-basics", 8, ["wrong"])
+    assert is_leech(states(log, "2026-11-08")[0]["arrays-basics"])
+    for day in (9, 10, 11):  # a later run of passes does not clear it
+        grades(log, "arrays-basics", day, ["correct"])
+    st = states(log, "2026-11-11")[0]["arrays-basics"]
+    assert st.lapses == LEECH_LAPSES and is_leech(st)
+
+
+def test_a_wrong_fixed_the_same_day_is_no_lapse(log):
+    grades(log, "arrays-basics", 1, ["correct"])
+    grades(log, "arrays-basics", 2, ["wrong", "correct"])  # remediation: Hard, not Again
+    assert states(log, "2026-11-02")[0]["arrays-basics"].lapses == 0
+
+
+def test_answer_time_never_changes_the_fold():
+    """Display-only timing: the same grades with their asks 3 s or 14 minutes before them, or
+    with no asks at all, fold to identical states."""
+    from dataclasses import asdict
+
+    def run(gap):
+        evs = []
+        for day, verdict in ((1, "correct"), (2, "wrong"), (4, "correct"), (9, "correct")):
+            g = {"id": f"g{day}", "ts": f"2026-11-{day:02}T12:20:00Z", "day": f"2026-11-{day:02}",
+                 "kind": "grade", "verdict": verdict}
+            if gap is None:
+                evs.append({**g, "object": "concept:c"})
+                continue
+            t = datetime(2026, 11, day, 12, 20, tzinfo=UTC) - timedelta(seconds=gap)
+            evs += [{"id": f"a{day}", "ts": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     "day": f"2026-11-{day:02}", "kind": "ask", "object": "concept:c"},
+                    {**g, "ref": f"a{day}"}]
+        return {c: asdict(s) for c, s in fold(evs, "2026-11-10")[0].items()}
+
+    assert run(3) == run(14 * 60) == run(None)
+    assert run(3)["c"]["lapses"] == 1
