@@ -455,6 +455,7 @@ def test_a_follow_up_and_the_older_answers_keep_their_routes(vault, fake):
 # ---- speed -----------------------------------------------------------------------------------
 
 @pytest.mark.slow
+@pytest.mark.perf
 def test_every_typed_answer_is_quick_on_5k_pages(tmp_path, home):
     from test_home import WORDS, _big
 
