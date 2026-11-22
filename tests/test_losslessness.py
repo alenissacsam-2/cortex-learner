@@ -133,7 +133,8 @@ def test_settle_never_retires_a_lossy_pair(warm, a, b, tiers, newer_first):
     for x, y in ((a, b), (b, a)):
         rows = rows_of(x, y, tiers, newer_first)
         got = review.settle(rows, [])
-        assert got == {"retire": [], "cards": []}, (x, y)
+        # W1b: a pair where only one says no ("Uses tabs" / "Refuses tabs") may clash: a card
+        assert got["retire"] == [] and {c["why"] for c in got["cards"]} <= {"maybe_opposite"}
         for old, new in (rows, rows[::-1]):  # a guessed update either way is left alone
             assert review.settle(rows, update(old, new))["retire"] == [], (x, y)
 

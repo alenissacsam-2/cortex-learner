@@ -114,7 +114,7 @@ def check(item, turns: list[str]) -> tuple[str, str] | None:
         return None
     fact = " ".join(fact.split()).removeprefix("- ").strip()
     if (page not in PAGES or not 3 <= len(fact) <= LINE_CHARS or "\n" in fact
-            or claims.unsafe(f"{PAGES[page]}\n{fact}") or secret_pattern(fact)
+            or claims.unsafe(f"{PAGES[page]}\n{fact}", page) or secret_pattern(fact)
             or not said(quote, turns) or not _backed(fact, quote)):
         return None
     return page, fact

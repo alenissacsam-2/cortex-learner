@@ -175,9 +175,10 @@ def test_conflict_pairs_and_the_three_buttons(root, app):  # noqa: F811
 
 
 def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
-    """22 Nov (D2): a recorded pair never makes a Review card. W1: a guessed pair whose newer
-    line says more ("… at work") is left alone, both live: retiring the older would narrow its
-    scope (a guessed pair of the same facts is settled: test_losslessness)."""
+    """22 Nov (D2): a recorded pair Cortex can settle makes no Review card. W1: a guessed pair
+    whose newer line says more ("… at work") is left alone, both live: retiring the older would
+    narrow its scope (a guessed pair of the same facts is settled: test_losslessness). W1b: it
+    is a `maybe_update` card instead, so prime.held's hold on the older line can end."""
     prefs(root, "Uses Vim for editing code")
     old = cid(root, "preferences", "Uses Vim")
 
@@ -187,7 +188,7 @@ def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
                                     "text": "- Uses Vim for editing code at work"})
 
     run(root, body)
-    assert app.review()["conflicts"] == []
+    assert [c["why"] for c in app.review()["conflicts"]] == ["maybe_update"]
     assert "## Past" not in (root / "me" / "preferences.md").read_text("utf-8")
     assert old in {r["id"] for r in live(root, "preferences")}
     assert [c for c in changes(root, "preferences") if c.get("auto")] == []
