@@ -389,6 +389,26 @@ def test_five_copies_and_five_opposites_ask_once(root, app):  # noqa: F811
     assert every_card(cards(root)) == 0
 
 
+def test_one_group_answer_is_one_undo(root, app):  # noqa: F811
+    """A2 item 2: Keep first on a card that stands for five near-copies a side retires the five
+    in one session, so one `cortex undo` brings all five back."""
+    from cortex.cli import app as cli
+    page(root, "preferences", [*DARK, *LIGHT])
+    commit(root)
+    (c,) = cards(root)["conflicts"]
+    gone = c["right"]["text"]
+    side = DARK if gone in DARK else LIGHT
+    app.review_conflict({"key": c["key"], "keep": "left"})
+    assert not set(side) & set(live(root, "preferences"))
+    retires = [e for e in events(root) if e["kind"] == "change"
+               and e["payload"]["change"].get("op") == "retire"]
+    assert len(retires) == 5
+    (sid,) = {e["session"] for e in retires}
+    r = CliRunner().invoke(cli, ["undo", sid, "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    assert set(side) <= set(live(root, "preferences"))
+
+
 def test_five_copies_and_five_opposites_after_the_sweep(root, app):  # noqa: F811
     page(root, "preferences", [*DARK, *LIGHT])
     commit(root)
