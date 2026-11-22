@@ -202,6 +202,7 @@ def call_find(server):
     return anyio.run(main)
 
 
+@pytest.mark.perf  # a 0.5 s budget: under -n auto the machine is busy
 def test_server_answers_before_index_is_built(tmp_path, monkeypatch):
     root = tmp_path / "vault"
     shutil.copytree(FIXTURE, root)
