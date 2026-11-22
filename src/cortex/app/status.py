@@ -572,26 +572,37 @@ def llm_row() -> dict:
     loaded = [x for x in m["loaded"] if want and x.lower() == want.lower()]
     in_ollama = bool(want and localllm._local_name(m["ollama"] or [], want))
     if m["runner"] == "ollama":
-        name, ready = "Ollama", in_ollama
+        name, ready, up = "Ollama", in_ollama, m["ollama"] is not None
     elif m["runner"] == "lmstudio":
-        name = "LM Studio"
+        name, up = "LM Studio", bool(m["lms"])  # LM Studio starts its server when needed
         ready = bool(m["lms"] and want and (loaded or any(
             want.lower() in (r["key"].lower(), r["name"].lower())
             for r in kept(("lms_models", m["lms"]), lms_models))))
-    else:
-        name = "Ollama" if in_ollama else "LM Studio" if loaded else ""
-        ready = bool(name)
+    else:  # auto: the runner holding the model, else whichever one is running
+        ready = bool(in_ollama or loaded)
+        name = ("Ollama" if in_ollama else "LM Studio" if loaded
+                else "Ollama" if m["ollama"] is not None
+                else "LM Studio" if m.get("server_port") else "")
+        up = bool(name)
     if not m["enabled"]:
         detail = "Off. Optional: a small AI that runs on this computer."
     elif ready:
         detail = ("On: sorts your browsing on this computer. "
                   + ("Loaded now." if loaded else "Loads when needed."))
+    elif not want:
+        detail = "On, but no model is chosen. Open Local model to choose one."
+    elif not name:
+        detail = "On, but neither Ollama nor LM Studio is running. Open Local model to start one."
+    elif not up:
+        detail = (f"On, but {name} is not running. Open Local model to start it."
+                  if name == "Ollama" else
+                  "On, but LM Studio is not on this computer. Open Local model to set it up.")
     else:
-        detail = (f"On, but {name or 'no runner'} does not have {want or 'a model'} ready. "
-                  "Open Local model to start it or choose another model.")
+        detail = (f"On, but {name} does not have {want}. "
+                  "Open Local model to get it or choose another model.")
     return {"id": "llm", "label": "Local model",
             "state": "off" if not m["enabled"] else "ok" if ready else "warn",
-            "value": f"{name or 'no runner'}, {want or 'no model chosen'}",
+            "value": f"{name or 'none running'}, {want or 'no model chosen'}",
             "detail": detail, "action": _go("llm", "Open")}
 
 

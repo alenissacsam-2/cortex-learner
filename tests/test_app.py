@@ -2803,8 +2803,38 @@ def test_status_git_row_installs_and_llm_row_judges_the_chosen_runner(vault, mon
     assert llm("ollama", ["llama3:8b"], lms="C:/lms.exe") == ("warn", "Ollama, qwen3.5:2b")
     assert llm("ollama", ["qwen3.5:2b"], lms="C:/lms.exe") == ("ok", "Ollama, qwen3.5:2b")
     assert llm("ollama", None) == ("warn", "Ollama, qwen3.5:2b")
-    assert llm("auto", None) == ("warn", "no runner, qwen3.5:2b")
+    assert llm("auto", None) == ("warn", "none running, qwen3.5:2b")
     assert llm("auto", ["QWEN3.5:2B"]) == ("ok", "Ollama, qwen3.5:2b")
+
+
+@pytest.mark.parametrize(("enabled", "runner", "ollama", "lms", "model", "value", "detail"), [
+    (False, "auto", ["llama3:8b"], None, None, "Ollama, no model chosen", "Off. Optional"),
+    (False, "auto", None, None, None, "none running, no model chosen", "Off. Optional"),
+    (True, "auto", ["llama3:8b"], None, None, "Ollama, no model chosen",
+     "On, but no model is chosen. Open Local model to choose one."),
+    (True, "ollama", None, None, None, "Ollama, no model chosen", "On, but no model is chosen."),
+    (True, "auto", None, None, "q:2b", "none running, q:2b",
+     "On, but neither Ollama nor LM Studio is running."),
+    (True, "ollama", None, None, "q:2b", "Ollama, q:2b", "On, but Ollama is not running."),
+    (True, "lmstudio", None, None, "q:2b", "LM Studio, q:2b",
+     "On, but LM Studio is not on this computer."),
+    (True, "ollama", ["llama3:8b"], None, "q:2b", "Ollama, q:2b",
+     "On, but Ollama does not have q:2b. Open Local model to get it"),
+    (True, "lmstudio", None, "C:/lms.exe", "q:2b", "LM Studio, q:2b",
+     "On, but LM Studio does not have q:2b."),
+    (True, "ollama", ["q:2b"], None, "q:2b", "Ollama, q:2b", "On: sorts your browsing"),
+])
+def test_status_llm_row_says_what_is_true(monkeypatch, enabled, runner, ollama, lms, model,
+                                          value, detail):
+    """The Local model row names the runner that is set or running and says in plain words
+    what is missing: a model, a running runner, LM Studio itself, or the model in it."""
+    monkeypatch.setattr(status, "lms_models", lambda: [])
+    monkeypatch.setattr(status, "llm", lambda quick=False: {
+        "enabled": enabled, "runner": runner, "model": model, "loaded": [],
+        "ollama": ollama, "lms": lms, "server_port": None})
+    r = status.llm_row()
+    assert r["value"] == value and r["detail"].startswith(detail), r
+    assert "no runner" not in r["detail"]
 
 
 def test_installer_wording(app, monkeypatch):
