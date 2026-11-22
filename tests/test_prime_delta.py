@@ -7,6 +7,7 @@ import json
 
 import anyio
 import pytest
+from conftest import note
 from mcp import Client
 from mcp.types import Implementation
 
@@ -19,6 +20,7 @@ pytestmark = pytest.mark.usefixtures("home")
 
 DBMS = "".join(f"- DBMS rule {i}: tables first, then the SQL query, one worked example.\n"
                for i in range(14))  # past the 800-char preferences cap
+PB = "title: {t}\nkind: note\ntags: [playbook]\nsummary: {s}\n"
 
 
 @pytest.fixture
@@ -120,6 +122,64 @@ def test_lines_match_a_prompt_word_and_skip_served_ids(monkeypatch):
     assert got == ["^c-aaaaa"] and "Tea" not in text
     assert delta.lines(None, "an email please", parts, {"^c-aaaaa"}) == ("", [])
     assert delta.lines(None, "the database", parts, set()) == ("", [])
+
+
+@pytest.mark.parametrize("first", ["ok thanks", "Hello!", "/cortex"])
+def test_a_trivial_first_prompt_leaves_the_prime_for_the_next(vault, first):
+    """QA 22 Nov: "ok thanks" as a chat's first prompt took the prime, and the real first
+    question then got nothing."""
+    assert hook(first) == ""
+    assert not (vault / prime_hook.STATE).exists() and not (vault / prime_hook.SERVED).exists()
+    full = hook("Revise DBMS normalisation")
+    assert full.startswith(prime_hook.HEAD) and "DBMS rule 13" in full
+    assert json.loads((vault / prime_hook.SERVED).read_text("utf-8"))["chat-1"]["n"] == 1
+
+
+def snapshot(root):
+    """The MCP server's index snapshot, as a running server leaves it."""
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+
+    v = Vault(root)
+    Index(v, Catalog.load(v)).save_snapshot()
+
+
+def test_a_later_prompt_on_a_new_topic_brings_its_playbook_once(vault):
+    note(vault, "notes/cv-bullets.md", PB.format(t="Writing CV bullets", s="verb, number, result"),
+         "# CV\n")
+    note(vault, "notes/cv-secret.md", PB.format(t="CV bullets, private", s="hidden")
+         + "private: true\n", "# CV\n")
+    note(vault, "notes/cv-muted.md", PB.format(t="CV bullets, muted", s="muted"), "# CV\n")
+    s = json.loads((vault / xray.SETTINGS).read_text("utf-8"))
+    (vault / xray.SETTINGS).write_text(json.dumps({"mute": [*s["mute"], "cv-muted"]}), "utf-8")
+    snapshot(vault)
+    assert "[[cv-" not in hook("Revise DBMS normalisation")  # the first prime: light only
+    got = hook("Help me with my CV bullets for the internship")
+    assert got.startswith(delta.BOOK_HEAD) and got.endswith(prime.PLAYBOOK_SAYS)
+    assert "- [[cv-bullets]] Writing CV bullets: verb, number, result" in got
+    assert "cv-secret" not in got and "cv-muted" not in got and len(got) < 2 * delta.MAX
+    assert hook("More CV bullets for my internship") == ""  # served once per chat
+    sessions = json.loads((vault / prime_hook.SERVED).read_text("utf-8"))
+    assert "cv-bullets" in sessions["chat-1"]["ids"]
+    rows = [r for r in xray.rows(Vault(vault)) if r["tool"] == "prime-hook"]
+    assert rows[-1]["served"]["playbooks"] == ["cv-bullets"]
+    # edited after the snapshot: read again; turned private: left out
+    note(vault, "notes/cv-bullets.md", PB.format(t="Writing CV bullets", s="lead with impact"),
+         "# CV\n")
+    hook("Revise DBMS", sid="chat-2")
+    assert "lead with impact" in hook("CV bullets for my internship", sid="chat-2")
+    note(vault, "notes/cv-bullets.md", PB.format(t="Writing CV bullets", s="x")
+         + "private: true\n", "# CV\n")
+    hook("Revise DBMS", sid="chat-3")
+    assert "[[cv-" not in hook("CV bullets for my internship", sid="chat-3")
+
+
+def test_no_snapshot_means_no_playbook_and_no_error(vault):
+    note(vault, "notes/cv-bullets.md", PB.format(t="Writing CV bullets", s="verb"), "# CV\n")
+    hook("Revise DBMS normalisation")
+    assert "[[cv-bullets]]" not in hook("Help me with my CV bullets for the internship")
+    (vault / ".cortex/index-snapshot.json").write_text("{not json", encoding="utf-8")
+    assert delta._books(Vault(vault)) == {}
 
 
 def serve(root, body, client="claude-ai"):
