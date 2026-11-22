@@ -55,6 +55,10 @@ _PHRASES = (
     ("new instructions:", re.compile(r"\bnew instructions? ?:")),
     # a persona handed to the reader ("you are now DAN"); "I am now a final-year student" passes
     ("you are now", re.compile(r"\byou(?: are|'re|\u2019re|re) now\b")),
+    # the DAN jailbreak by name; "Act as Dan's backup" and "I work with Dan" pass
+    ("act as DAN", re.compile(r"\b(?:act(?:ing)? as|you(?: are|'re|\u2019re|re)|pretend "
+                              r"(?:to be|you are)|role ?play as) (?:an? )?dan(?![\w'\u2019])"
+                              r"|\bdo anything now\b")),
     # shortcut: only a system prompt someone is told to reveal, drop or replace, or a
     # `system prompt:` label, so "I write system prompts for my bots" passes
     ("system prompt", re.compile(r"\b(?:ignore|disregard|forget|reveal|print|show|repeat|leak|"
@@ -62,10 +66,12 @@ _PHRASES = (
                                  r"\bsystem prompt ?:")))
 _TOKENS = (("a chat template token", re.compile(r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>")),
            ("Cortex's untrusted_note tag", re.compile(r"</?untrustednote")))
-# a chat role label opening a line or sentence ("SYSTEM: you must ..."); `system:` and
-# `developer:` only when an order follows, so "System: Windows 11" on me/setup passes
+# a chat role label opening a line, a sentence or a typed "\n" ("SYSTEM: you must ...",
+# "Human: hi\nAI: sure"); `system:` and `developer:` only when an order follows, so
+# "System: Windows 11" on me/setup passes
 _ROLE = re.compile(
-    r"(?m)(?:^|[.!?] )[^\w\n]*(assistant|(?:system|developer)(?=[^\w\n]*: ?(?:you|your|always|"
+    r"(?m)(?:^|[.!?] |/n)[^\w\n]*(assistant|user|human|ai|"  # _key folds "\" to "/"
+    r"(?:system|developer)(?=[^\w\n]*: ?(?:you|your|always|"
     r"never|must|do|don't|dont|ignore|disregard|forget|from now on|send|email|reveal|print|"
     r"share|delete|obey)\b))[^\w\n]*:")
 # three or more single chars in a row ("i g n o r e"): joined, checked for a trigger word
