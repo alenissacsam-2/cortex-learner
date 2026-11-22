@@ -28,6 +28,19 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 
 Searches, topic filing (`cortex topics`), the dashboard, the Claude Code hooks and every tool run offline.
 
+## Where Cortex connects: the registry
+
+Every place in Cortex's code that can reach the network is listed in one registry, `src/cortex/egress.py`. `cortex doctor --privacy` prints its lines, and the app shows them under Status, **Where Cortex connects**:
+
+- **github.com**: the newest Cortex version and, when there is a newer one, the installer and its checksum. A minute after the app starts, every 6 hours while it runs, and when you click Check for updates or Update now.
+- **ollama.com, git-scm.com and LM Studio's catalogue**: a model's size, and the downloads of Ollama, Git or a local model. Only when you click Install, Download or Get.
+- **pypi.org and huggingface.co**: the voice-memo speech model and its package. Only from `cortex model download --voice` or its Download button.
+- **huggingface.co**: the search model and the reranker. Only from `cortex model download` or Download search model, with Hugging Face's telemetry turned off (`HF_HUB_DISABLE_TELEMETRY`).
+- **Your cloud model's address**: titles of browsed pages in categories you set to cloud, with your API key. Only when you turn on cloud processing.
+- **github.com through Claude Code**: Claude Code downloads the Cortex plugin. Only when you connect Claude Code or say yes in `cortex setup`.
+
+Local model calls and the app's own page stay on 127.0.0.1. Windows' text recognition for scanned PDFs runs on this computer and makes no connection. A test (`tests/test_egress.py`) scans the code and fails when anything reaches the network without an entry in the registry, and another (`tests/test_egress_runtime.py`) runs indexing, prime, recall, Chat, Review, an import and the dashboard with every outside connection blocked.
+
 ## What the AI model sees
 
 Cortex is a tool that Claude (or another MCP client) calls. **Whatever a tool returns goes to the AI model you are chatting with**, which is Anthropic when you use Claude.

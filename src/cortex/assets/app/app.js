@@ -463,7 +463,10 @@
       board('This computer', { note: ['checked ', dm(hm, 2, hm)], btn: ['Check again', () => load('status', true)] },
         ...(rows.length ? rows : [note('Nothing to check yet. Check again in a moment.')])),
       d.first_run ? null : chatImportBoard(d.chat_import !== false),
-      d.update ? updatesBoard(d.update, wn.current) : null);
+      d.update ? updatesBoard(d.update, wn.current) : null,
+      d.connects && d.connects.length ? h('details', { class: 'review-more' },  // collapsed, like Review's "More"
+        h('summary', { text: 'Where Cortex connects' }),
+        h('ul', { class: 'pad' }, d.connects.map((t) => h('li', { text: t })))) : null);
   }
   /* app.chat_import: past AI chats saved as chat pages every 5 minutes, no model (on by default) */
   function chatImportBoard(on) {

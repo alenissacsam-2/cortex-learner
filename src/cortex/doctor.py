@@ -19,6 +19,13 @@ from cortex.session import _git, git_choice, git_exe
 from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault
 
 
+def connects() -> list[str]:
+    """The "Where Cortex connects" section: a heading, then one line per destination off this
+    PC (cortex.egress)."""
+    from cortex import egress
+    return ["Where Cortex connects:", *(f"  {s}" for s in egress.summary())]
+
+
 def check_python() -> tuple[str, str, str, str]:
     name = "Python and FTS5"
     ver = ".".join(map(str, sys.version_info[:3]))
