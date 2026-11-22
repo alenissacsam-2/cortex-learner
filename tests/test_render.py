@@ -180,7 +180,7 @@ def test_home_card_study_lines_only_for_someone_who_studies():
                                         "a 10-question sweep")
     other = home_card(domains=[], due=[], open_mistakes=0, studies=False)
     assert "**Due:**" not in other and "Open mistakes" not in other and "study" not in other
-    assert other.splitlines() == ["### Cortex", "**Your map:** no concepts yet", menu]
+    assert other.splitlines() == ["### Cortex", menu]  # no concept map without study
 
 
 def test_home_card_names_tests_that_need_a_date():

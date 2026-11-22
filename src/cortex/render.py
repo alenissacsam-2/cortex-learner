@@ -156,7 +156,7 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
     Solid / came back from Needs refresh this week; `revisit` decision ids; `edits` ambient
     contract/profile edits {session, day, pages}, latest first;
     `undated` ids of pending assessments with no date or a past one; without `studies`
-    (dashboard.studies) no Due line and no study menu.
+    (dashboard.studies) no concept map, Due line or study menu.
     Optional lines show only when non-empty; every item is raw text, escaped here."""
     parts = [f"{t} {GLYPH['learning']} {a} {GLYPH['solid']} {b} {GLYPH['not_started']} {c}"
              for t, a, b, c in domains]
@@ -204,7 +204,7 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
                     + (f" (+{len(edits) - 1} more)" if len(edits) > 1 else ""))
     return "\n".join([
         *lines, *life,
-        "**Your map:** " + (_few(parts) or "no concepts yet"),
+        *(["**Your map:** " + (_few(parts) or "no concepts yet")] if studies else []),
         *([f"**Due:** {due_s} · **Open mistakes:** {open_mistakes}"] if studies else []),
         *(["**Lately:** " + " · ".join(lately)] if lately else []),
         *(["**Waiting for you:** " + " · ".join(wait)] if wait else []),
