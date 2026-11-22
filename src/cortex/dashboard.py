@@ -102,6 +102,20 @@ def _plans(vault, catalog, hidden, pc) -> list[dict]:
             for p in planner.plans(vault, catalog, hidden, pc)]
 
 
+STUDY_KINDS = ("concept", "track", "assessment")
+
+
+def studies(vault: Vault, events: list[dict], notes: dict | None = None) -> bool:
+    """Whether the person studies: any concept, track (study plan) or assessment page, private
+    ones too, or any grade not voided (a removed sample's seed grades are voided). A fold over
+    pages and events, never stored. `notes`, build_data's parsed notes by kind; without them
+    the kind folders are only listed."""
+    if any(notes[k] if notes is not None else vault.note_paths(k) for k in STUDY_KINDS):
+        return True
+    voided = {e.get("ref") for e in events if e.get("kind") == "void"}
+    return any(e.get("kind") == "grade" and e.get("id") not in voided for e in events)
+
+
 def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                auto_relayout: bool = True, memo: dict | None = None) -> dict:
     """The dashboard blob; private notes never enter it.
@@ -295,6 +309,11 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         # an empty plan is "done" only after work today; never graded at all is a first run
         "plan_cleared": not today and any(e.get("day") == day for e in events),
         "first_run": not today and not any(e.get("kind") == "grade" for e in events),
+        # study features (the Study tab, exams, Tomorrow) show only for someone who studies
+        "studies": (study := studies(vault, events, notes)),
+        # any imported page yet (chats, notes, calendar, browsing), which ends the everyone
+        # Start here; only someone who does not study is asked (a body scan: ~20 µs a page)
+        "imported": not study and any(map(_imported, pages)),
         "assessments": coming,
         "mistakes": mistakes,
         "graph": {"nodes": nodes, "links": links},
@@ -538,8 +557,12 @@ def _today_ids(pages: list[dict], notes: list, day: str) -> list[str]:
     return [p["id"] for p in pages
             if p["kind"] != "rollup" and p["id"] not in hubs
             and not _is_ambient(p["kind"], p["id"])
-            and (p["date"] if p["source"] or p["kind"] == "browse" or _IMPORTED.search(p["body"])
-                 else p["updated"]) == day]
+            and (p["date"] if _imported(p) else p["updated"]) == day]
+
+
+def _imported(p: dict) -> bool:
+    """A page row an import wrote: a `Source:` line (an AI chat, notes, calendar) or browsing."""
+    return bool(p["source"] or p["kind"] == "browse" or _IMPORTED.search(p["body"]))
 
 
 def _ord(day) -> int:

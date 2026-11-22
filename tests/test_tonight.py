@@ -84,6 +84,14 @@ def test_the_view_on_a_synthetic_vault(root, monkeypatch):
     assert "secret-diary" not in str(v)  # the private concept is never named
     assert v["tomorrow"] == [{"id": "two-pointers", "title": "Two pointers",
                               "subject": "Data structures and algorithms"}]
+    assert v["studies"] is True  # vault_mini has concepts
+
+
+def test_the_view_says_whether_the_person_studies(tmp_path):
+    root = tmp_path / "v"
+    root.mkdir()
+    (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
+    assert tonight.view(Vault(root), [], at(22))["studies"] is False
 
 
 def test_chat_turns_from_the_live_logs(root):
@@ -200,7 +208,8 @@ PAGE_JS = KEYS_JS.replace(OPEN_REVIEW, OPEN_TONIGHT).replace(
 assert OPEN_REVIEW in KEYS_JS and "$('tonight').childNodes[1]" in PAGE_JS
 
 
-def test_the_tonight_section_and_y_on_a_card(tmp_path):
+@pytest.mark.parametrize("studies", [True, False])
+def test_the_tonight_section_and_y_on_a_card(tmp_path, studies):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -221,7 +230,7 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path):
             "learned": [{"session": "s_1", "client": "Claude Code", "rows": [
                 {"text": "<b>Likes tea</b>", "id": "me/profile", "time": "20:18"}]}],
             "tomorrow": [{"id": "two-pointers", "title": "Two Pointers", "subject": "DSA"}],
-            "tomorrow_day": "2026-11-21", "review": review}
+            "tomorrow_day": "2026-11-21", "studies": studies, "review": review}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "tonight", PAGE_JS, {
@@ -231,14 +240,17 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path):
                    "/api/review/conflict": {**after, "conflicts": [], "today": []}},
         "after": after, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["boards"] == ["Today", "Today’s 5", "What AI apps learned today", "Tomorrow"]
+    # no Tomorrow board for someone who does not study
+    assert out["boards"] == ["Today", "Today’s 5", "What AI apps learned today",
+                             *(["Tomorrow"] if studies else [])]
     assert out["cells"] == [["img", "04:00–05:00: 0 events", "pcell l0"],
                             ["img", "05:00–06:00: 0 events", "pcell l0"],
                             ["img", "14:00–15:00: 6 events", "pcell l3 now"]]
     assert ("1 page added · 2 pages changed · 3 chat turns · 1 thing recorded by AI apps"
             in out["text"])
     assert "Claude Code: 6" in out["text"] and "<b>Likes tea</b>" in out["text"]  # as text
-    assert "A 2-minute cold check tomorrow: ask any AI app /cortex review." in out["text"]
+    assert studies == ("A 2-minute cold check tomorrow: ask any AI app /cortex review."
+                       in out["text"])
     assert out["undo"] == ["Undo everything Claude Code saved in session s_1"]
     title, ok, ask, posted = out["undoAsk"]  # asked first: nothing posted before the OK
     assert (title, ok, posted) == ("Undo Claude Code’s session?", "Undo", False)

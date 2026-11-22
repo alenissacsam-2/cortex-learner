@@ -30,7 +30,7 @@ D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
         "counts_by_kind", "loops", "follow_ups", "resurface", "you", "help", "brain",
-        "confidence", "today_ids"}
+        "confidence", "today_ids", "studies", "imported"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
 # its header comment names the sinks it avoids; comments are not code
@@ -581,6 +581,53 @@ def test_empty_vault_is_a_first_run_not_done(tmp_path):
     assert d["today"] == [] and d["first_run"] is True and d["plan_cleared"] is False
     assert "Start here" in JS and "Add a test date" in JS and "Import your notes or chats" in JS
     assert "In the Cortex app: Setup → Add your history." in JS  # the app's guided imports
+
+
+def test_studies_is_false_on_an_empty_vault(tmp_path):
+    r = _empty_vault(tmp_path)
+    assert dashboard.studies(Vault(r), []) is False
+    d = dashboard.build_data(Vault(r), now=NOW)
+    assert d["studies"] is False and d["imported"] is False
+
+
+@pytest.mark.parametrize(("folder", "page"), [("concepts", "arrays-basics"),
+                                              ("tracks", "sprint-test"),
+                                              ("assessments", "acme-oa-2026")])
+def test_one_study_page_alone_means_studies(tmp_path, folder, page):
+    r = _empty_vault(tmp_path)
+    (r / folder).mkdir()
+    shutil.copy(FIXTURES / "vault_mini" / folder / f"{page}.md", r / folder)
+    assert dashboard.studies(Vault(r), []) is True  # the folders listed
+    assert dashboard.build_data(Vault(r), now=NOW)["studies"] is True  # build_data's notes
+
+
+def test_one_grade_alone_means_studies_until_voided(tmp_path):
+    from cortex.events import void_event
+    r = _empty_vault(tmp_path)
+    log = EventLog(Vault(r))
+    g = log.append(session="cli", kind="grade", source="external", now=NOW,
+                   fields={"object": "concept:x", "verdict": "correct"})
+    assert dashboard.build_data(Vault(r), now=NOW)["studies"] is True
+    void_event(log, session="cli", event_id=g["id"], reason="test", source="self")
+    assert dashboard.studies(Vault(r), list(log.iter_events())) is False
+
+
+def test_the_sample_vault_studies(tmp_path):
+    from cortex import sample
+    r = _empty_vault(tmp_path)
+    sample.seed(Vault(r), now=NOW)
+    assert dashboard.build_data(Vault(r), now=NOW)["studies"] is True
+
+
+def test_imported_pages_without_study(tmp_path):
+    # someone who never studies, 20 chats in: no study features, and `imported`, so the page
+    # shows them no Start here
+    r = _empty_vault(tmp_path)
+    for i in range(20):
+        _note(r, "resources", f"chat-{i}", {"kind": "resource"},
+              f"# Chat {i}\n\nTimeline: [[2026-03-01]] · Source: ChatGPT · Date: 2026-03-05\n")
+    d = dashboard.build_data(Vault(r), now=NOW)
+    assert d["studies"] is False and d["imported"] is True
 
 
 def test_empty_plan_is_done_only_after_work_today(tmp_path):

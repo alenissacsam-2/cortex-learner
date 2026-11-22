@@ -171,6 +171,18 @@ def test_home_card_due_slice_and_empty_lines():
         coming_up={"company": "Acme", "kind": None, "days": 1, "solid": 0, "total": 0})
 
 
+def test_home_card_study_lines_only_for_someone_who_studies():
+    menu = ("**What would you like to do?** recall something · save this chat · a project · "
+            "open the graph · today's plan")
+    student = home_card(domains=[], due=["Heaps"], open_mistakes=2)
+    assert "**Due:** Heaps · **Open mistakes:** 2" in student
+    assert student.splitlines()[-1] == (menu + " · study: learn a topic, review what's due, "
+                                        "a 10-question sweep")
+    other = home_card(domains=[], due=[], open_mistakes=0, studies=False)
+    assert "**Due:**" not in other and "Open mistakes" not in other and "study" not in other
+    assert other.splitlines() == ["### Cortex", menu]  # no concept map without study
+
+
 def test_home_card_names_tests_that_need_a_date():
     wait = "**Waiting for you:** "
     assert wait + "1 test needs a date (or a result): [[g-oa]]" in home_card(

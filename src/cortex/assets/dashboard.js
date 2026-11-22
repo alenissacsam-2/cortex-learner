@@ -773,7 +773,11 @@
   }
 
   /* ---- sections and routing ---- */
-  const SECTIONS = ['home', 'brain', 'library', 'you', 'timeline', 'ideas', 'study', 'help'];
+  // Study only for someone who studies (dashboard.studies), decided once per page load
+  const STUDIES = D.studies !== false;
+  const SECTIONS = ['home', 'brain', 'library', 'you', 'timeline', 'ideas', 'study', 'help']
+    .filter((s) => STUDIES || s !== 'study');
+  if (!STUDIES) { $('tab-study').remove(); $('view-study').remove(); }
   const TITLES = { home: 'Home', brain: 'Brain', library: 'Library', you: 'You', timeline: 'Timeline',
     ideas: 'Ideas', study: 'Study', help: 'Help' };
   const rendered = new Set(), stale = new Set();  // stale: rendered from older data (live home)
@@ -828,7 +832,7 @@
     // the brain uses + - 0, arrows and A M G S; the outline uses arrows
     if (e.target && e.target.closest && e.target.closest('.brain-host, .outline')) return;
     const n = +e.key;
-    if (n >= 1 && n <= 8) { e.preventDefault(); show(SECTIONS[n - 1]); }
+    if (n >= 1 && n <= SECTIONS.length) { e.preventDefault(); show(SECTIONS[n - 1]); }
   });
   function setHdr() {
     document.documentElement.style.setProperty('--hdr', $('top').offsetHeight + 'px');
@@ -1448,13 +1452,17 @@
     return { pct, label: `${pct}% of the test's weight solid · ${topics}` };
   }
 
-  // Nothing planned and nothing ever checked: three first steps instead of "Done for today".
+  // Nothing planned and nothing ever checked: three first steps instead of "Done for today";
+  // for someone who does not study, steps that fit everyone (shown until something is imported)
   function firstRunBoard() {
     const b = board('Start here', { cls: 'first-run' });
-    const steps = [
+    const steps = STUDIES ? [
       ['Add a test date', 'Tell any Claude chat about a test and its date, or add one in assessments/.', null],
       ['Run /cortex in Claude', 'Your home card, what is due and what is waiting for you.', '/cortex'],
-      ['Import your notes or chats', 'In the Cortex app: Setup → Add your history. Or in a terminal: cortex import <file>.', null]];
+      ['Import your notes or chats', 'In the Cortex app: Setup → Add your history. Or in a terminal: cortex import <file>.', null]] : [
+      ['Add your chats', 'In the Cortex app: Setup → Add your history. Your AI chats, notes and calendar become pages you can ask about.', null],
+      ['Connect an AI app', 'In the Cortex app: Connect AI apps. Claude, ChatGPT, Codex or Cursor then know your preferences.', null],
+      ['Ask Chat', "In the Cortex app: Chat. Ask about anything you've saved.", null]];
     steps.forEach(([title, sub, prompt], i) => b.body.append(brow({ title, sub, prompt,
       left: el('span', 'code', String(i + 1)) })));
     return b.root;
@@ -1801,8 +1809,9 @@
       if (PAGES.has(it.id)) syncRow(r, it.id);
       b.body.append(r);
     }
-    if (!items.length) b.root.append(el('div', 'foot', 'Board clear. Nothing due. Run /cortex in Claude to start something new.'));
-    else if (items.length > 8) b.root.append(moreFoot(items.length - 8, 'Study', 'study'));
+    if (!items.length) b.root.append(el('div', 'foot', STUDIES ? 'Board clear. Nothing due. Run /cortex in Claude to start something new.'
+      : 'Nothing next. Open loops and decisions that come due show here.'));
+    else if (items.length > 8) b.root.append(STUDIES ? moreFoot(items.length - 8, 'Study', 'study') : moreFoot(items.length - 8, 'Ideas', 'ideas'));
     else b.root.append(el('div', 'foot', 'That is everything due today.'));
     // how long each subject stays sharp (9 in 10 recalls right), as one plain line (home._keep)
     const keeps = (D.next_up || []).filter((g) => g.subject && g.keep);
@@ -1813,7 +1822,8 @@
     }
     // an open 90-second check stays where it is (a live update never takes its focus or clock)
     for (const c of [...host.children]) if ((!cold || c !== cold.root) && c !== pickupEl) c.remove();
-    host.append(D.first_run && !items.length ? firstRunBoard() : b.root);
+    // `imported` is computed only for someone who does not study
+    host.append((STUDIES ? D.first_run : !D.imported) && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;
       times.forEach((d, k) => {
@@ -1829,23 +1839,24 @@
     $('lobe-line').textContent = `${D.pages.length.toLocaleString('en')} pages in ${plural(lobes, 'lobe')}`;
 
     const exams = (D.exams || D.assessments.filter((a) => isDay(a.date))).slice().sort((a, c) => a.days_left - c.days_left);
-    const examsBoard = boardList(board('Exams and deadlines'), exams.map(examRow), 4,
-      'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']);
+    const examsBoard = STUDIES ? boardList(board('Exams and deadlines'), exams.map(examRow), 4,
+      'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']) : null;
     const loops = boardList(board('Open loops'), D.loops.map(loopRow), 5,
       "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']);
     const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
       'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
       ['Ideas', 'ideas']);
     const rowA = $('home-row-a'), rowB = $('home-row-b');
+    rowA.className = 'home-row ' + (STUDIES ? 'three' : 'two');  // without exams: two boards in it
     if (!LIVE) {  // the snapshot has no feed and no chat
-      rowA.replaceChildren(examsBoard, loops, back);
+      rowA.replaceChildren(...[examsBoard, loops, back].filter(Boolean));
       rowB.replaceChildren();
       return;
     }
     // the quick chat is built once: a live update never takes its text or focus
     if (!chatBoard) chatBoard = quickChat();
     for (const c of [...rowA.children]) if (c !== chatBoard) c.remove();
-    rowA.prepend(feedBoard(), examsBoard);
+    rowA.prepend(...[feedBoard(), examsBoard].filter(Boolean));
     if (!chatBoard.isConnected) rowA.append(chatBoard);
     rowB.className = 'home-row two';
     rowB.replaceChildren(loops, back);
@@ -2780,7 +2791,7 @@
     host.append(tb2.root);
     host.append(el('h3', null, 'Keyboard'));
     const keys = el('ul', 'prose');
-    for (const t of ['Ctrl+K: search pages, sections and commands', '1 to 8: switch sections',
+    for (const t of ['Ctrl+K: search pages, sections and commands', `1 to ${SECTIONS.length}: switch sections`,
       'Arrow keys in the section tabs: move between sections', 'Esc: close the reader or the search',
       'In the brain: drag to turn, scroll to zoom, arrows turn (in Today, Left and Right step through today\'s pages), + and − zoom, 0 resets the view',
       'In the brain: Esc goes back one level (page, region, overview); double-click empty space for the overview; double-click a page or region name to fly to it',

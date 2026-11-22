@@ -130,7 +130,7 @@ def _shown(vault, c: dict, hide: set[str], me_private: set[str], lines: dict) ->
 def view(vault, events: list[dict], now: datetime, tz: tzinfo | None = None) -> dict:
     """Everything the Tonight tab shows for the Cortex day of `now` (`tz`: the local zone,
     the system's by default)."""
-    from cortex import claims
+    from cortex import claims, dashboard
     day = local_day(now, tz)
     todays = [e for e in events if e.get("day") == day]
     apps = clients(events)
@@ -192,4 +192,4 @@ def view(vault, events: list[dict], now: datetime, tz: tzinfo | None = None) -> 
                        "chat_turns": len(turns), "recorded": counts["recorded"]},
             "sources": [{"source": s, "n": n} for s, n in sources.most_common(SOURCES_MAX)],
             "learned": list(groups.values()), "tomorrow": soon[:TOMORROW_MAX],
-            "tomorrow_day": tomorrow}
+            "tomorrow_day": tomorrow, "studies": dashboard.studies(vault, events)}
