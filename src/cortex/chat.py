@@ -274,11 +274,12 @@ _ORDS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fou
          "eighth": 8, "8th": 8, "ninth": 9, "9th": 9, "tenth": 10, "10th": 10, "last": -1}
 _ORD = "|".join(_ORDS)
 # "the second one", "the 2nd", "number 2", "#2", "the last one", "the first", "the other one";
-# never "the first time I ..." or "the last week"
+# never "the first time I ..." or "the last week"; a bare "the first" picks only when at most one
+# word ends the clause ("what does the 2nd cover?"), never "what was the first course I took?"
 _PICK = re.compile(
     rf"\bthe\s+({_ORD})\b(?!\s+(?:times?|days?|weeks?|months?|years?|steps?|part|half|place"
-    rf"|things?)\b)|\b({_ORD})\s+one\b|\bnumber\s+(\d{{1,2}})\b|#(\d{{1,2}})\b"
-    r"|\bthe\s+other\s+one\b", re.I)
+    rf"|things?)\b)(?=\s*(?:[\w'-]+\s*)?(?:[?.!,;:]|$))|\b({_ORD})\s+one\b"
+    rf"|\bnumber\s+(\d{{1,2}})\b|#(\d{{1,2}})\b|\bthe\s+other\s+one\b", re.I)
 
 
 def list_items(answer: str) -> list[str]:
@@ -1182,6 +1183,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                         found.append(p)
                     if "matched" in st:
                         stats["matched"] = stats.get("matched", 0) + st["matched"]
+                    if st.get("more"):  # C14: a full search makes the whole count a floor
+                        stats["more"] = True
             if files:
                 stats["matched"] = stats.get("matched", 0) + sum(h[1] for h in hits)
     if listed is not None or fq is not None:

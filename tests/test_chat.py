@@ -1546,6 +1546,8 @@ def test_list_items_are_plain_text_with_their_trailing_parentheses():
     ("what does it test?", 2, None),  # a pronoun, two items: no guess
     ("when was the last time I studied heaps?", 2, None),
     ("what is Dijkstra's algorithm?", 2, None),
+    ("What was the first course I took?", 2, None),  # a question of its own, not a pick
+    ("and the second, when is it?", 2, "Nimbus Tech Interview (2026-12-03)"),
 ])
 def test_a_follow_up_picks_an_item_of_the_last_list(text, items, want):
     lst = chat.list_items(ASSESSMENTS)[:items]
