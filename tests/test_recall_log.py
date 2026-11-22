@@ -48,6 +48,35 @@ def test_no_reranker_or_a_broken_one_keeps_the_current_order(idx, home, monkeypa
     assert semantic.search(idx, "vehicle")[0] == base  # switched off
 
 
+def test_two_threads_load_the_reranker_once(home, monkeypatch):
+    """Warm-up and a first Chat turn racing: one TextCrossEncoder is built, both get it."""
+    import threading
+    import time
+
+    from fastembed.rerank import cross_encoder
+
+    built = []
+
+    class Fake:
+        def __init__(self, *a, **kw):
+            built.append(1)
+            time.sleep(0.2)  # a slow load: the other thread arrives meanwhile
+
+        def rerank(self, query, texts):
+            return [0.0 for _ in texts]
+
+    monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Fake)
+    (home / ".cortex/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
+        parents=True)
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(REAL_LOAD())) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert built == [1] and len(got) == 2 and got[0] is got[1] is not None
+
+
 def logged(root):  # noqa: F811
     return [json.loads(x) for x in (root / recall_log.FILE).read_text("utf-8").splitlines()]
 
