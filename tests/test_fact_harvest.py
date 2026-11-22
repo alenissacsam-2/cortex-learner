@@ -1,7 +1,9 @@
 """Facts the owner states in chats become about-me guesses (cortex.fact_harvest), on vault_mini
 with synthetic chat pages and a fake runner returning canned JSON. Nothing real runs or loads."""
 
-from datetime import timedelta
+import json
+import time
+from datetime import datetime, timedelta
 
 import pytest
 from conftest import events, git
@@ -10,11 +12,13 @@ from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or
 from test_app import vault as vault  # noqa: F401 (fixture)
 from test_safety_net import AT, NOW, Runner, chat
 from typer.testing import CliRunner
+from ulid import ULID
 
-from cortex import claims, cli
+from cortex import claims, cli, dashboard, review
 from cortex import fact_harvest as fh
 from cortex import safety_net as sn
-from cortex.events import EventLog
+from cortex.app import server
+from cortex.events import EventLog, local_day
 from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -53,7 +57,7 @@ def test_a_verbatim_first_person_fact_is_saved_as_a_guess(root):
     c = change_of(root, "Lives in Pune")
     assert c["producer"] == "imports" and c["chat"] == "c1"
     assert {e["mode"] for e in events(root) if e["session"] == out["session"]
-            and "mode" in e} == {"tidy"}
+            and "mode" in e} == {"harvest"}
 
 
 def test_unsaid_third_person_and_question_statements_are_dropped(root):
@@ -155,5 +159,95 @@ def test_the_app_pass_waits_for_jobs_and_a_model_and_commits(app, monkeypatch): 
     assert fh.auto(app) == {} and fh.pending(Vault(app.root))
     monkeypatch.setattr(sn, "background_tools", lambda: (r, None))
     assert fh.auto(app)["saved"] == 1
-    assert "tidy" in git(app.root, "log", "-1", "--format=%s")
+    assert "harvest" in git(app.root, "log", "-1", "--format=%s")
     assert fh.auto(app) is None  # nothing new: no model probe
+
+
+# ---- RR-10 over undone passes, the harvest session ----------------------------------------
+
+def passes(root, *rows):
+    """Add pass records to STATE as `run` writes them."""
+    p = root / ".cortex" / "fact-harvest.json"
+    d = json.loads(p.read_text("utf-8")) if p.exists() else {}
+    d[fh.PASSES] = [*d.get(fh.PASSES, []), *rows]
+    p.write_text(json.dumps(d), encoding="utf-8")
+
+
+def gone(n, session=None):
+    """A pass of `n` lines whose session is not in the event log (it was undone)."""
+    return {"session": session or f"s_{ULID()}", "ts": NOW.isoformat(), "day": local_day(NOW),
+            "saved": n}
+
+
+def test_undone_passes_pause_the_producer_and_resume_clears_it(root):
+    chat(root, "c1", "I moved to Pune last month")
+    sid = go(root, facts(PUNE))["session"]
+    v = Vault(root)
+    assert fh.ledger(v) == {"accept": 0, "reject": 0, "paused": False}  # today: undecided
+    for p in (root / "events").rglob("*.jsonl"):  # undone: its events vanish (a git revert)
+        p.write_text("".join(ln for ln in p.read_text("utf-8").splitlines(keepends=True)
+                             if sid not in ln), encoding="utf-8")
+    assert fh.ledger(v)["reject"] == 1
+    passes(root, gone(review.PAUSE_AFTER - 2))
+    assert fh.ledger(v) == {"accept": 0, "reject": 19, "paused": False}  # 19 decided
+    passes(root, gone(1))
+    assert fh.ledger(v)["paused"] and fh.paused(v)
+    chat(root, "c2", "I'm on the payments team now")
+    r = facts({"page": "profile", "fact": "Works on the payments team",
+               "quote": "I'm on the payments team"})
+    assert go(root, r) == {} and r.calls == []  # paused: nothing happens, the chat waits
+    app = server.App(root)
+    (row,) = [x for x in app.status()["rows"] if x.get("resume")]
+    assert row["resume"] == "imports" and row["value"] == "Lines from imported chats paused"
+    assert "20 of the last 20" in row["detail"]
+    app.review_resume({"producer": "imports"})
+    assert fh.ledger(v) == {"accept": 0, "reject": 0, "paused": False}  # the count restarts
+    assert not [x for x in app.status()["rows"] if x.get("resume")]
+    assert go(root, r)["saved"] == 1
+
+
+def test_passes_kept_three_days_count_as_accepts(root):
+    chat(root, "c1", "I moved to Pune last month")
+    sid = go(root, facts(PUNE))["session"]
+    v = Vault(root)
+    passes(root, gone(30, sid))  # the same session: still in the log
+    later = NOW + timedelta(days=fh.KEEP_DAYS)
+    assert fh.ledger(v, now=later) == {"accept": 31, "reject": 0, "paused": False}
+    assert fh.ledger(v, now=later - timedelta(days=1))["accept"] == 0  # too young to judge
+    passes(root, gone(25))
+    assert fh.ledger(v, now=later) == {"accept": 31, "reject": 25, "paused": False}
+
+
+def test_tonight_lists_a_pass_with_its_undo_and_the_receipt_names_it(root):
+    chat(root, "c1", "I moved to Pune last month")
+    sid = go(root, facts(PUNE))["session"]
+    (receipt,) = (root / "sessions").glob("*-harvest-*.md")
+    d = dashboard.build_data(Vault(root), now=datetime.now().astimezone())
+    title = {p["id"]: p["title"] for p in d["pages"]}[receipt.stem]
+    assert title.startswith("Cortex saved lines about you from your chats, ")
+    assert receipt.stem not in d["today_ids"]
+    app = server.App(root)
+    (g,) = app.tonight()["learned"]
+    assert g["session"] == sid and g["client"] == "Cortex, from your chats"
+    assert "Lives in Pune" in g["rows"][0]["text"]
+    app.tonight_undo({"session": sid})
+    while app.jobs.running():
+        time.sleep(0.05)
+    job = app.jobs.view()["job"]
+    assert job["error"] is None and job["result"]["ok"], job
+    assert "Lives in Pune" not in live(root, "profile")
+    assert fh.ledger(Vault(root))["reject"] == 1  # the undo is the owner's reject
+
+
+def test_an_ai_app_cannot_start_a_harvest_session(root):
+    import anyio
+    from mcp import Client
+
+    from cortex.mcp_server import build_server
+
+    async def start():
+        async with Client(build_server(Vault(root))) as c:
+            tool = {t.name: t for t in (await c.list_tools()).tools}["cortex_start"]
+            assert "harvest" not in tool.input_schema["properties"]["mode"]["enum"]
+            return await c.call_tool("cortex_start", {"mode": "harvest"})
+    assert anyio.run(start).is_error

@@ -8,8 +8,17 @@ It skips what the safety net skips (safety_net.skip_reason: a private chat, one 
 is older than RECENT_DAYS, one about a hidden concept) and coding summaries.
 
 It needs a runner whose local model is already loaded (the app: also the PC idle,
-safety_net.background_tools). With none, or while the owner has paused the "imports" producer
-in Review (review.ledger, RR-10), it does nothing and records nothing: the chats stay pending.
+safety_net.background_tools). With none, or while the "imports" producer is paused
+(`paused`), it does nothing and records nothing: the chats stay pending.
+
+RR-10 for its lines (`ledger`, a fold over the event log and STATE): STATE also remembers each
+pass that saved lines (its session id, time, day and number of lines saved). A pass whose
+session's events are gone from the log (the owner undid it: Tonight's Undo or `cortex undo`,
+a git revert) counts its lines as rejects; one still there KEEP_DAYS after it was saved counts
+them as accepts; a younger one is undecided. Only passes after the latest clicked `resume` of
+"imports" count. Paused when review.PAUSE_AFTER or more lines are decided and rejects exceed
+accepts, or when review.ledger pauses "imports" on Review clicks; Status then shows the row
+with its Resume (app/server.py `_paused_rows`), and Resume starts the count again.
 
 The model reads only the user's own turns of one chat (wrapped as untrusted data) and names at
 most PER_CHAT facts the user stated about themself, each with its page (PAGES) and the user's
@@ -22,8 +31,9 @@ Each survivor is written as cortex_patch writes an about-me line without user_co
 inferred guess, tier `agent`, served (ask)), so near-copies are dropped, a clash with the
 owner's own line is not saved, and the tidy settles them. Its change carries `producer:
 imports` and `chat: <page id>`. All saves of a pass share one background session (mode
-`tidy`, as Cortex.tidy), closed and committed at once, so one `cortex undo <session>` takes
-the whole pass back. me/core and me/setup are never written.
+`harvest`, opened as Cortex.tidy opens its own), closed and committed at once, so one
+`cortex undo <session>` (or Tonight's Undo on its "Cortex, from your chats" row) takes the
+whole pass back. me/core and me/setup are never written.
 """
 
 from __future__ import annotations
@@ -32,18 +42,20 @@ import json
 import re
 from collections import Counter
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from cortex import chat_import, claims, harvest, localllm, planner, review
 from cortex import safety_net as sn
 from cortex.catalog import Catalog
-from cortex.events import EventLog
+from cortex.events import EventLog, local_day, parse_ts
 from cortex.index import _wrap
 from cortex.vault import Vault, VaultError, secret_pattern
 
 STATE, LOCK = ".cortex/fact-harvest.json", ".cortex/fact-harvest.lock"
 BUSY = "A fact-harvest pass is already running."
 PRODUCER = "imports"  # review.PRODUCERS: "Lines from imported chats"
+PASSES = "_passes"  # STATE's list of passes that saved lines (never a page id: vault.ID_RE)
+KEEP_DAYS, PASSES_MAX = 3, 500  # a pass kept this long is accepted; passes remembered
 MAX_CHATS, PER_CHAT = 10, 3
 MODEL_CHARS, LINE_CHARS, QUOTE_CHARS, MIN_QUOTE = 3000, 160, 300, 8
 # claims.PAGES minus core, setup (copied into every agent's rules file) and voice; the section
@@ -125,9 +137,39 @@ def ask_model(runner, turns: list[str]) -> list[tuple[str, str]] | None:
     return out
 
 
+def ledger(vault: Vault, events=None, now: datetime | None = None) -> dict:
+    """RR-10 for the lines these passes saved: {accept, reject, paused} (the module
+    docstring's rules), over STATE's passes and the event log (`events`, read when None)."""
+    events = list(EventLog(vault).iter_events() if events is None else events)
+    voided = review._voided(events)
+    since = max((parse_ts(e["ts"]) for e in events if e.get("kind") == "change"
+                 and e.get("id") not in voided and isinstance(
+                     c := review._payload(e).get("change"), dict)
+                 and c.get("tool") == "resume" and c.get("producer") == PRODUCER
+                 and c.get("confirm") == "clicked" and e.get("ts")), default=None)
+    sessions = {e.get("session") for e in events}
+    cut = local_day((now or datetime.now(UTC)) - timedelta(days=KEEP_DAYS))
+    n = {"accept": 0, "reject": 0}
+    for p in sn._load(vault, STATE).get(PASSES) or ():
+        try:
+            at, day, saved = datetime.fromisoformat(p["ts"]), str(p["day"]), int(p["saved"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if since is not None and at <= since:
+            continue
+        if p.get("session") not in sessions:
+            n["reject"] += saved
+        elif day <= cut:
+            n["accept"] += saved
+    return {**n, "paused": n["accept"] + n["reject"] >= review.PAUSE_AFTER
+            and n["reject"] > n["accept"]}
+
+
 def paused(vault: Vault) -> bool:
-    """RR-10: has the owner's Review paused the imports producer?"""
-    return review.ledger(EventLog(vault).iter_events())[PRODUCER]["paused"]
+    """RR-10: is the imports producer paused, by Review clicks (review.ledger) or by the
+    passes the owner undid (`ledger`)?"""
+    events = list(EventLog(vault).iter_events())
+    return review.ledger(events)[PRODUCER]["paused"] or ledger(vault, events)["paused"]
 
 
 def pending(vault: Vault) -> bool:
@@ -143,7 +185,7 @@ def _save(vault: Vault, found: list[tuple[str, str, str]]) -> tuple[Counter, str
     counts: Counter = Counter()
     core = Cortex(vault, build=False)  # me/ pages only: no index (as tags.apply_in)
     core._ready.set()
-    core.session = core.sessions.start("tidy")
+    core.session = core.sessions.start("harvest")
     core._reset()
     sid = core.session.id
     try:
@@ -170,8 +212,8 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
     if runner is None or paused(vault):
         return {}
     now = now or datetime.now(UTC)
-    ledger = sn._load(vault, STATE)
-    todo = sn._todo(vault, ledger, False)
+    state = sn._load(vault, STATE)
+    todo = sn._todo(vault, state, False)
     if not todo:
         return {}
     with vault.job_lock(LOCK, 0, BUSY):
@@ -183,12 +225,12 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
             except VaultError:
                 continue
             h = chat_import._hash(note.body)
-            rec = ledger.get(path.stem) if isinstance(ledger.get(path.stem), dict) else {}
+            rec = state.get(path.stem) if isinstance(state.get(path.stem), dict) else {}
             if rec.get("hash") == h:
-                ledger[path.stem] = {**rec, "sig": sig}  # only frontmatter or Topics: changed
+                state[path.stem] = {**rec, "sig": sig}  # only frontmatter or Topics: changed
             elif (chat := sn.chat_of(note)) is None:
                 counts["skipped_not_chat"] += 1
-                ledger[path.stem] = {"what": "not_chat", "sig": sig, "hash": h}
+                state[path.stem] = {"what": "not_chat", "sig": sig, "hash": h}
             else:
                 work.append((note, chat, sig, h))
         work.sort(key=lambda x: (x[1].last_day(), x[0].id), reverse=True)  # newest first
@@ -201,7 +243,7 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
             for note, chat, sig, h in work:
                 if why := sn.skip_reason(note, chat, ctx, hidden, now):
                     counts[f"skipped_{why}"] += 1
-                    ledger[note.id] = {"what": why, "sig": sig, "hash": h}
+                    state[note.id] = {"what": why, "sig": sig, "hash": h}
                     continue
                 if counts["chats"] >= MAX_CHATS:
                     counts["left"] += 1  # next pass
@@ -217,9 +259,13 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
                 with guard or nullcontext():
                     saved, sid = _save(vault, found)
                 counts.update(saved)
-            ledger.update(done)
+                if saved["saved"]:  # RR-10: `ledger` judges the pass by its session later
+                    state[PASSES] = [*(state.get(PASSES) or ()), {
+                        "session": sid, "ts": now.isoformat(), "day": local_day(now),
+                        "saved": saved["saved"]}][-PASSES_MAX:]
+            state.update(done)
         finally:
-            vault.write_text(vault.root / STATE, json.dumps(ledger, sort_keys=True))
+            vault.write_text(vault.root / STATE, json.dumps(state, sort_keys=True))
     return {**counts, **({"session": sid} if sid else {})}
 
 

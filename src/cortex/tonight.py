@@ -23,6 +23,7 @@ TOMORROW_MAX = 3
 SOURCES_MAX = 5
 IMPORTED = {"imported", "safety_net"}  # event sources the app's own imports stamp
 OWN_CLIENTS = {"unknown", "cortex-app"}  # not an AI app: the app's own 90-second check
+HARVEST = "Cortex, from your chats"  # a fact_harvest pass's row (its session's mode)
 
 
 def hour_of(when: datetime, tz: tzinfo | None = None) -> int:
@@ -43,12 +44,15 @@ def levels(counts: list[int]) -> list[int]:
 def clients(events) -> dict[str, str]:
     """session -> its AI app's name: the `client` its open event carries (server-stamped
     from the MCP handshake), else a grade's `grader.client`. App clicks and the CLI have
-    none and the app's own check is `cortex-app`, so they are never an AI app's session."""
+    none and the app's own check is `cortex-app`, so they are never an AI app's session. A
+    fact_harvest pass (mode `harvest`) is HARVEST, so Tonight lists it with its Undo."""
     out: dict[str, str] = {}
     for e in events:
         s = e.get("session")
-        c = _payload(e).get("client") if e.get("kind") == "open" else (
-            e["grader"].get("client") if isinstance(e.get("grader"), dict) else None)
+        if e.get("kind") == "open":
+            c = HARVEST if e.get("mode") == "harvest" else _payload(e).get("client")
+        else:
+            c = e["grader"].get("client") if isinstance(e.get("grader"), dict) else None
         if (isinstance(s, str) and s.startswith("s_") and s not in out and isinstance(c, str)
                 and c.strip() and c not in OWN_CLIENTS):
             out[s] = plain(c, 60)
