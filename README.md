@@ -280,7 +280,8 @@ git clone https://github.com/alenissacsam-2/cortex-learner cortex
 cd cortex
 uv sync
 uv run pytest -m "not slow"   # the quick loop
-uv run pytest                 # the full suite, before a commit
+uv run pytest -n auto         # the full suite on every core, before a commit
+uv run pytest -m perf         # the timing benchmarks, alone (they skip under -n)
 uv run ruff check
 ```
 
