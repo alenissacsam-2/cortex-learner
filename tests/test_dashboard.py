@@ -248,6 +248,7 @@ def test_1000_note_vault_is_fast_and_small(tmp_path):
     assert len(blob(html)["pages"]) == 1000
 
 
+@pytest.mark.perf
 def test_build_data_500_concepts_is_fast(tmp_path):
     r = tmp_path / "big"
     r.mkdir()

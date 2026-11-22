@@ -218,7 +218,7 @@ def test_server_answers_before_index_is_built(tmp_path, monkeypatch):
 def test_tool_times_out_while_indexing(tmp_path, monkeypatch):
     root = tmp_path / "vault"
     shutil.copytree(FIXTURE, root)
-    slow_index(monkeypatch, 2)
+    slow_index(monkeypatch, 6)  # wide margin: under -n load the client can take over 2 s to connect
     monkeypatch.setattr(mcp_server, "READY_WAIT", 0.1)
     out = call_find(mcp_server.build_server(Vault(root)))
     assert out["error"] == "vault_locked" and "still indexing" in out["message"]
