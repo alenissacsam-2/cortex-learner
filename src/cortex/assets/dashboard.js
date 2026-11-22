@@ -922,7 +922,8 @@
   const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
   let theme = 'night', themeChosen = false;
   try {
-    const t = localStorage.getItem('cortex-theme');
+    // one key with Manage (app.js); 'cortex-app-theme' was Manage's own key before
+    const t = localStorage.getItem('cortex-theme') || localStorage.getItem('cortex-app-theme');
     if (t === 'night' || t === 'day') { theme = t; themeChosen = true; }
   } catch (e) { /* storage off: follow the system */ }
   if (!themeChosen) theme = darkMq.matches || !window.matchMedia('(prefers-color-scheme: light)').matches ? 'night' : 'day';

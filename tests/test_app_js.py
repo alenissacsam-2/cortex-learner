@@ -1346,3 +1346,13 @@ def test_setup_texts_copy_paths_skill_switch_and_get_claude_desktop():
     assert "copyBtn(() => d.skill_zip," in js
     assert "First turn on Code execution and file creation on that page, then upload" in js
     assert "ext('https://claude.ai/download', 'Get Claude Desktop')" in js
+
+
+def test_home_and_manage_keep_the_theme_under_one_key():
+    """Home (dashboard.js) and Manage (app.js) save the theme under one localStorage key and read
+    Manage's old key as a fallback, so a choice on either page holds on both."""
+    for js in (APP_JS, server.ASSETS.parent / "dashboard.js"):
+        text = js.read_text(encoding="utf-8")
+        assert re.findall(r"localStorage\.setItem\('([\w-]+)'", text) == ["cortex-theme"], js
+        assert ("localStorage.getItem('cortex-theme') || localStorage.getItem('cortex-app-theme')"
+                in text), js
