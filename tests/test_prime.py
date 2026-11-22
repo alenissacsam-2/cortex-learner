@@ -559,7 +559,7 @@ def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, mon
 
     monkeypatch.setattr(prime_hook, "LOCK_WAIT", 0.2)
     lock = vault / ".cortex" / "lock"  # another live process's write, as the hook sees it
-    lock.write_text(f"{os.getpid()} {time.time():.3f} {socket.gethostname()}")
+    lock.write_text(f"{os.getppid()} {time.time():.3f} {socket.gethostname()}")
     try:
         t = time.perf_counter()
         out = prime_hook.run(payload(sid="busy"))

@@ -92,6 +92,9 @@ CHECKED_RE = re.compile(r"^\s*[-*] \[[xX]\] ")
 
 LOCK_STALE_S = 120
 REPLACE_TRIES = 8
+# lock tokens this process holds now: a lock file with this pid and another token is one it
+# failed to delete (Windows refuses while another process reads it), so never a live holder
+_HELD: set[str] = set()
 
 
 class VaultError(Exception):
@@ -496,9 +499,11 @@ class Vault:
         deadline = time.monotonic() + timeout
         while True:
             token = f"{os.getpid()} {time.time():.3f} {socket.gethostname()}"
+            _HELD.add(token)  # before the file shows it, so no reader takes it for a leftover
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except (FileExistsError, PermissionError):
+                _HELD.discard(token)
                 if self._steal_if_stale(path):
                     continue
                 if time.monotonic() >= deadline:
@@ -527,7 +532,10 @@ class Vault:
             local = not host or host[0] == socket.gethostname()
         except ValueError:
             local = False
-        if local and _pid_alive(pid):
+        if local and pid == os.getpid():
+            if content in _HELD:
+                return False  # another Vault object or thread of this process holds it
+        elif local and _pid_alive(pid):
             started = _pid_started(pid)
             if (started <= ts + 5 if started is not None  # 5 s of clock slack
                     else age <= 10 * LOCK_STALE_S):
@@ -549,11 +557,16 @@ class Vault:
 
     @staticmethod
     def _drop(path: Path, token: str) -> None:
-        try:
-            if path.read_text() == token:
-                path.unlink()
-        except OSError:
-            pass
+        _HELD.discard(token)  # a file left behind is now a leftover this process may steal
+        for attempt in range(REPLACE_TRIES):
+            try:
+                if path.read_text() == token:
+                    path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except OSError:  # Windows: another process is reading the file; it lets go soon
+                time.sleep(0.01 * (attempt + 1))
 
     # ---- writing --------------------------------------------------------------
 
