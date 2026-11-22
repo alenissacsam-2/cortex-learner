@@ -1,4 +1,17 @@
 {
+  "0.4.1": {
+    "items": [
+      "Review no longer merges two different facts: \"reads news every morning\" and \"reads papers every morning\" both stay. Lines 0.4.0 merged by mistake are put back by themselves.",
+      "Cortex's own tidying shows in your sessions as \"Cortex tidied lines about you\", not as an AI chat, and each Review answer is one Undo.",
+      "Status tells you when Claude Code runs an older Cortex than the app; its Fix puts the app's copy first.",
+      "Review's More fold no longer repeats Today's cards, and its buttons say Keep first and Keep second.",
+      "Lines that try to steer an AI are also refused when they say \"act as DAN\" or start with a chat label such as \"assistant:\"."
+    ],
+    "do": [
+      "Restart Claude once after updating.",
+      "If Status shows a Claude Code row, press Fix, then quit Claude completely and open it again."
+    ]
+  },
   "0.4.0": {
     "items": [
       "Review finishes: Cortex keeps one of lines that say nearly the same and settles replaced lines itself. It asks only when two of your own lines clash, one answer covers every rewording, and after Today's 5 it says Done for today.",
