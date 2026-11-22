@@ -301,6 +301,7 @@ class App:
                     "/api/browse/private-chats": self.private_chats}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
+            "/api/connect/path": self.connect_path,
             "/api/profiles": self.profiles_set,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
@@ -1130,6 +1131,21 @@ class App:
         return self.jobs.start("Connecting AI apps", "connect",
                                lambda job: {"ok": True,
                                             "rows": targets.apply_all(want, base, job.say)})
+
+    def connect_path(self, body: dict) -> dict:
+        """Status's Claude Code Fix (status.claude_code_row): the installed Cortex's bin folder
+        first on the user PATH, so the `cortex` Claude Code starts is the app's."""
+        from cortex import clients
+        from cortex.app import winpath
+        exe = clients.installed_cortex()
+        if exe is None:
+            raise ValueError("This Cortex was not installed with CortexSetup.exe.")
+        winpath.put_first(str(exe.parent))
+        # this app's own PATH too, so Status and what it starts see the change at once
+        os.environ["PATH"] = winpath.first(os.environ.get("PATH", ""), str(exe.parent))
+        print("PATH: Cortex moved first")  # never the PATH itself: it may name private folders
+        return {"ok": True, "say": "Done. Quit Claude completely and open it again, so its "
+                                   f"Cortex tools use {update.current()}."}
 
     def llm_settings(self, body: dict) -> dict:
         from cortex import taint

@@ -451,6 +451,7 @@
           r.import && r.import.length ? btn('Import new history now', () => job('/api/browse/import', { sources: r.import, from: 'browse' }), 'btn lit') : null,
           r.login_hint ? loginBtn() : null,
           r.resume ? btn('Resume', () => post('/api/review/resume', { producer: r.resume }, () => { toast.ok('Resumed: Review offers these cards again.'); load('status'); }), 'btn lit', { 'aria-label': `Resume: ${r.value}` }) : null,
+          r.fix ? btn(r.fix.label, () => post(r.fix.post, {}, (d) => { toast.ok(d.say); load('status', true); }), 'btn lit', { 'aria-label': `${r.fix.label}: ${r.value}` }) : null,
           r.install ? btn(r.install.label, () => job('/api/setup/git', { from: 'status' }), 'btn lit') : null,
           r.install ? ext(r.install.license, 'License') : null,
           r.page ? ext(r.page, 'Get Git') : null,
