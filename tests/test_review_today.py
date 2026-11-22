@@ -147,7 +147,8 @@ def test_the_keys_and_todays_five_on_the_page(tmp_path):
     pair = {"key": "p1", "why": "update",
             "left": {"page": "preferences", "id": "c-bbbbb", "text": "Uses Vim"},
             "right": {"page": "preferences", "id": "c-ccccc", "text": "Uses Helix"}}
-    rules = [{"key": f"r{n}", "text": f"Stop {n}", "chats": 2} for n in (1, 2, 3)]  # r1 in Today's 5: two left for Approve all
+    # r1 is in Today's 5, so two are left for Approve all
+    rules = [{"key": f"r{n}", "text": f"Stop {n}", "chats": 2} for n in (1, 2, 3)]
     view = {"pending": [pend], "expired": [], "stale": [], "conflicts": [pair], "rules": rules,
             "decisions": [], "forget": [], "count": 4, "today_left": 5,
             "today": [{"type": "pending", "key": "k1"}, {"type": "conflict", "key": "p1"},
