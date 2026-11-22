@@ -229,3 +229,18 @@ def test_promote_skips_core_inferred_private_and_unknown(root, app):  # noqa: F8
     for bad in ({"id": k["Already core"]}, {"id": "c-zzzzz"}, {}):
         with pytest.raises(server.NotFound):
             app.review_promote_later(bad)
+
+
+def test_a_near_copy_dropped_at_write_time_reinforces_the_kept_line(root):
+    k = prefs(root, ["Uses Vim for editing code"])
+    out = patch(root, "cursor", "Uses Vim for code editing")
+    assert out["changed"] is False and out["duplicate_of"]["id"] == k["Uses Vim for editing code"]
+    (e,) = [e for e in events(root) if e["kind"] == "change"
+            and e["payload"].get("note") == review.REINFORCE]
+    assert e["payload"] == {"note": "reinforce", "page": "preferences",
+                            "claim": k["Uses Vim for editing code"], "client": "cursor"}
+    v = Vault(root)
+    got = review.reinforced(EventLog(v).iter_events(), review.known_texts(v))
+    assert got[k["Uses Vim for editing code"]]["apps"] == {"cursor"}
+    assert patch(root, "cursor", "Drinks green tea at night")["changed"] is True  # no sighting
+    assert sum(e.get("payload", {}).get("note") == review.REINFORCE for e in events(root)) == 1

@@ -3050,6 +3050,9 @@ class Cortex:
                 "next": "Not saved: it clashes with a line the user gave. Ask them in one "
                         "question whether that changed; on yes, cortex_patch it again with "
                         f"user_confirmed=true and supersedes=['{keep['id']}']."}}
+        if (s := self.sessions.current) is not None:  # R13b: the kept line came back
+            review.reinforce(self.log, s.id, lost["keep"]["page"], lost["keep"]["id"],
+                             self.sessions.client)
         return {"lost": {"changed": False, "duplicate_of": keep,
                          "summary": f"not saved: {keep['page']} already says this "
                                     f"(^{keep['id']})",
