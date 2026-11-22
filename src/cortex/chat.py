@@ -15,7 +15,9 @@ import re
 import threading
 import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from typing import NamedTuple
 
 from cortex import (
     access,
@@ -49,6 +51,8 @@ DEFAULTS = {"length": "normal", "temperature": 0.2, "passages": 5,  # of ask.PAS
             "sources": dict(ask.SOURCES), "history": True}
 NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
+PAGES_READ = 4  # pages of an inventory, schedule or decisions answer the model reads
+FRONT_MAX = 2000  # characters of a routed half's data answer (a site list) the model gets
 SAID_NOTHING = ("{model} gave no answer, twice. These are the pages it searched; open one to "
                 "read it, or ask again in other words.")
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
@@ -263,6 +267,52 @@ def follow_up(text: str, got=None) -> bool:
     return not got and not topic(text, (0, 0))  # nothing of its own to search for
 
 
+_ITEM = re.compile(r"(?:\d{1,2}[.)]|[-*•])\s+(\S.*)")
+_CITES = re.compile(r"\s*\[\d{1,3}(?:\s*,\s*\d{1,3})*\]")
+_ORDS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4,
+         "4th": 4, "fifth": 5, "5th": 5, "sixth": 6, "6th": 6, "seventh": 7, "7th": 7,
+         "eighth": 8, "8th": 8, "ninth": 9, "9th": 9, "tenth": 10, "10th": 10, "last": -1}
+_ORD = "|".join(_ORDS)
+# "the second one", "the 2nd", "number 2", "#2", "the last one", "the first", "the other one";
+# never "the first time I ..." or "the last week"; a bare "the first" picks only when at most one
+# word ends the clause ("what does the 2nd cover?"), never "what was the first course I took?"
+_PICK = re.compile(
+    rf"\bthe\s+({_ORD})\b(?!\s+(?:times?|days?|weeks?|months?|years?|steps?|part|half|place"
+    rf"|things?)\b)(?=\s*(?:[\w'-]+\s*)?(?:[?.!,;:]|$))|\b({_ORD})\s+one\b"
+    rf"|\bnumber\s+(\d{{1,2}})\b|#(\d{{1,2}})\b|\bthe\s+other\s+one\b", re.I)
+
+
+def list_items(answer: str) -> list[str]:
+    """The items of the list in an assistant's `answer`: top-level lines starting 1. 1) - * or
+    •, as plain text (citations, links and markup out; a trailing "(...)" kept)."""
+    out = []
+    for ln in answer.splitlines():
+        if len(ln) - len(ln.lstrip()) < 2 and (m := _ITEM.fullmatch(ln.strip())) \
+                and (item := chat_study._title(_CITES.sub("", m[1]))):
+            out.append(item)
+    return out
+
+
+def picked(text: str, got, items: list[str], prev: str) -> str | None:
+    """The item of the assistant's last list (`items`) that `text` picks ("the second one",
+    "#2", "the last one", "the other one" of two: the one `prev` did not name), or with a pronoun
+    and no pick the only item of a one-item list; None otherwise. `got`: `text`'s date phrase."""
+    m = _PICK.search(text)
+    if m and m[0].lower().startswith("the other"):
+        named = [i for i in items if i.split(" (")[0].casefold() in prev.casefold()]
+        return next(i for i in items if i not in named) if len(items) == 2 and len(named) == 1 \
+            else None
+    if m:
+        w = (m[1] or m[2] or "").lower()
+        n = _ORDS[w] if w else int(m[3] or m[4])
+        return items[n - 1 if n > 0 else n] if items and -1 <= n <= len(items) and n else None
+    own = text[:got[2][0]] + " " + text[got[2][1]:] if got else text
+    own = _THIS_YEAR.sub(" ", _RELATIVE_THAT.sub(" ", own))
+    if len(items) == 1 and _POINTS_BACK & set(re.findall(r"[\w']+", own.lower())):
+        return items[0]
+    return None
+
+
 # ---- storage ---------------------------------------------------------------------------------
 
 def _path(vault: Vault, id: str):
@@ -418,11 +468,11 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
                     unknown += n
                     continue
                 # ids are source keys ("comet/Default"); a bare browser name is accepted too
-                got = [_count(c) for k, c in w.items()
+                per = [_count(c) for k, c in w.items()
                        if isinstance(k, str) and k.split("/")[0] == browser]
-                if None in got:
+                if None in per:
                     continue
-                b = sum(got)
+                b = sum(per)
                 n = min(n, b)  # a forget lowers "n" only
                 if n <= 0:
                     continue
@@ -867,6 +917,71 @@ def _inert(text: str) -> str:
     return _clean(text).translate({ord("["): "(", ord("]"): ")", ord("*"): None, ord("`"): "'"})
 
 
+class Route(NamedTuple):
+    """A question Cortex answers from its own data: the step line, and either `data` (its
+    words, no model) or `fq` (a chat_facts query: counted by code, a model may word it)."""
+    step: str
+    data: Callable[[], str] | None = None
+    fq: dict | None = None
+
+
+def _route(vault: Vault, text: str, own, today: date, first: bool, s: dict,
+           leans: bool = False) -> Route | None:
+    """The data answer for `text`, or None (the passages answer it): a site list, a digest, a
+    study answer, then chat_facts' typed answers (not for a follow-up). `own`: chat._when of
+    `text`'s own date phrase; `first`: the chat's first question."""
+    span = f" from {_span(own[0], own[1], today)}" if own else ""
+    if asks_sites(text, today):
+        return Route("Counting the sites you visited" + span,
+                     lambda: site_list(vault, text, own, s["sources"], today))
+    if (asked := chat_study.kind(text, own, today, first)) == "digest":
+        lo, hi, unit = chat_study.digest_days(text, own, today)
+        return Route("Putting together your " + ("day" if (unit, lo) == ("day", today) else
+                                                 f"{unit} {'on' if lo == hi else 'from'} "
+                                                 f"{_span(lo, hi, today)}"),
+                     lambda: digest(vault, lo, hi, s["sources"], today, unit))
+    if asked is not None:
+        return Route(chat_study.STEP[asked] + (span if asked == "range" else ""),
+                     lambda: chat_study.study_answer(vault, text, own, today, first,
+                                                     bool(s["sources"].get("private")))
+                     if s["sources"].get("notes") else NOTES_OFF)
+    if not leans and (fq := chat_facts.route(text, own, today)) is not None:
+        return Route(chat_facts.step(fq, today), fq=fq)  # a model, if any, only words it
+    return None
+
+
+def _by_code(vault: Vault, r: Route, sources: dict, today: date) -> str:
+    """Route `r`'s answer in Cortex's own words, no model."""
+    return r.data() if r.data else chat_facts.say(chat_facts.facts(vault, r.fq, sources), today)
+
+
+_SPLIT = re.compile(r",?\s+and\s+|\s*;\s+", re.I)
+_WH = re.compile(r"\b(?:what|which|who|whom|whose|when|where|why|how)\b", re.I)
+_AUX = re.compile(r"\s*(?:is|are|was|were|do|does|did|can|could|should|would|will|have|has"
+                  r"|had)\b", re.I)
+_NO_SPLIT = re.compile(r"^\s*compare\b|\bvs\.?(?!\w)|\bversus\b", re.I)
+HALF_WORDS = 3  # "where and when ...?" is one question
+
+
+def _asks(half: str) -> bool:
+    return len(re.findall(r"[\w'.-]+", half)) >= HALF_WORDS and bool(
+        _WH.search(half) or _AUX.match(half))
+
+
+def halves(text: str, routes) -> list[str]:
+    """`text` as its two questions ("what does X use and how many times did I visit Y?"), split
+    at the first " and " or "; " where both halves read as questions (a question word, or the
+    second half `routes`), else []. "compare X and Y", "X vs Y" and an "and" inside one noun
+    phrase ("the pros and cons of B-trees") are never split."""
+    if _NO_SPLIT.search(text):
+        return []
+    for m in _SPLIT.finditer(text):
+        a, b = text[:m.start()].strip(" ,"), text[m.end():].strip()
+        if _asks(a) and (_asks(b) or routes(b)):
+            return [a, b]
+    return []
+
+
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None,
           files: list | None = None) -> str:
@@ -904,62 +1019,71 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     msgs = load(vault, convo_id)  # validates the id
     t0, today = time.monotonic(), today or _today()
     prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
+    # the last answer as the model would still see it (`history`): its list, if any, is what
+    # "the second one" points at
+    last = next((m["text"] for m in reversed(msgs) if m["role"] == "assistant"
+                 and not m.get("unanswered") and not _made_with_off(m, s["sources"])), "")
     got, said = _when(text, today), text
-    leans = follow_up(text, got)
+    item = picked(text, got, list_items(last), prev)
+    leans = item is not None or follow_up(text, got)
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
-    query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
+    query = f"{text.strip()}\n{item or prev}".strip() if leans else text.strip()
     # a site list or a study answer is read from Cortex's own data with no model, so it needs
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
     # borrowed ones are for passages only), and so does its step line
     own = got if said is text else None
-    span = f" from {_span(own[0], own[1], today)}" if own else ""
     # which data answer, if any, is decided first and cheaply; it is read after `start` and its
     # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
-    step = data = fq = None
-    if files:
-        pass  # an attached file is asked about: passages, never a data answer
-    elif asks_sites(text, today):
-        step = "Counting the sites you visited" + span
-
-        def data():
-            return site_list(vault, text, own, s["sources"], today)
-    elif (asked := chat_study.kind(text, own, today, not prev)) == "digest":
-        lo, hi, unit = chat_study.digest_days(text, own, today)
-        step = "Putting together your " + ("day" if (unit, lo) == ("day", today) else
-                                           f"{unit} {'on' if lo == hi else 'from'} "
-                                           f"{_span(lo, hi, today)}")
-
-        def data():
-            return digest(vault, lo, hi, s["sources"], today, unit)
-    elif asked is not None:
-        step = chat_study.STEP[asked] + (span if asked == "range" else "")
-
-        def data():
-            return chat_study.study_answer(vault, text, own, today, not prev,
-                                           bool(s["sources"].get("private"))) \
-                if s["sources"].get("notes") else NOTES_OFF
-    elif not leans and (fq := chat_facts.route(text, own, today)) is not None:
-        step = chat_facts.step(fq, today)  # counted by code; a model, if any, only words it
-    listed = None if data is None else ""  # a data answer: filled in after its step
+    # (an attached file is asked about: passages, never a data answer)
+    # a two-part question ("what does X use and how many times did I visit Y?"; not one that
+    # leans on the last turn): each half routed on its own, both by code, one in front of the
+    # other half's passages, or two searches. A half that routes wins over the whole question
+    # routing ("how many times did I visit X and how many times did I visit Y?")
+    def half(h: str) -> Route | None:
+        return _route(vault, h, _when(h, today), today, not prev, s)
+    split = [(h, half(h)) for h in halves(text, lambda h: half(h) is not None)] \
+        if not files and not (leans and prev) else []
+    route = None if files or any(r for _, r in split) else \
+        _route(vault, text, own, today, not prev, s, leans)
+    split = split if route is None else []
+    codes = [route] if route and route.fq is None else \
+        [r for _, r in split] if split and all(r for _, r in split) else []
+    front = next((r for _, r in split if r), None) if split and not codes else None
+    if front:  # the other half is searched alone, with its own dates
+        query = said = next(h for h, r in split if r is None)
+        got = _when(said, today)
+    searches = [(h, _when(h, today), n) for (h, _), n in zip(
+        split, ((s["passages"] + 1) // 2, s["passages"] // 2), strict=True)] \
+        if split and not codes and not front else None
+    fq = route.fq if route else None
+    listed = "" if codes else None  # a data answer: filled in after its step
     passages = listed is None and fq is None  # the search model and a runner are needed
+    blocked = None  # with a routed half: why its other half gets no model answer
     if passages and not files and semantic.load_embedder() is None:
-        emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
-        return convo_id
-    if passages and callable(runner) and not isinstance(runner, localllm.Runner):
+        if front is None:
+            emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP,
+                  "id": convo_id})
+            return convo_id
+        blocked = semantic.NOT_SET_UP
+    if passages and not blocked and callable(runner) \
+            and not isinstance(runner, localllm.Runner):
         try:  # the app passes localllm.find: it may start LM Studio, so only when needed
             runner = runner()
         except ValueError as e:  # a refused localllm setting (cloud model, non-loopback url)
-            if not files:
+            if not files and front is None:
                 emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
                 return convo_id
-            runner = None
-    if passages and not _local(runner):
-        if not files:
+            runner, blocked = None, None if files else str(e)
+    if passages and not blocked and not _local(runner):
+        if not files and front is None:
             emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL,
                   "id": convo_id})
             return convo_id
-        runner = None  # a file never reaches any other runner: its passages are shown instead
+        # a file never reaches any other runner: its passages are shown instead
+        runner, blocked = None, None if files else ask.NO_MODEL
+    if blocked:  # the routed half by code, and why the rest has no answer
+        codes, listed, passages = [front], "", False
     model = runner.model if passages and runner is not None else "Cortex"
     msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
     _save(vault, convo_id, msgs, s["history"])
@@ -970,14 +1094,21 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     parts: list = []
     messages = facts = kept = None
     max_tokens = LENGTH[s["length"]]
+    front_text = ""  # a routed half's answer, in front of the other half's passages
     if listed is not None:
-        emit({"t": "step", "s": step})
-        listed = data()
-        if not (cancel is not None and cancel.is_set()):  # Stop while counting: nothing shown
-            parts.append(listed)
-            emit({"t": "tok", "s": listed})
+        for r in codes:
+            emit({"t": "step", "s": r.step})
+            listed = _by_code(vault, r, s["sources"], today)
+            if cancel is not None and cancel.is_set():  # Stop while counting: nothing shown
+                break
+            piece = ("\n\n" if parts else "") + listed
+            parts.append(piece)
+            emit({"t": "tok", "s": piece})
+        if blocked and parts:
+            parts.append("\n\n" + blocked)
+            emit({"t": "tok", "s": parts[-1]})
     elif fq is not None:
-        emit({"t": "step", "s": step})
+        emit({"t": "step", "s": route.step})
         facts = chat_facts.facts(vault, fq, s["sources"])
         if cancel is not None and cancel.is_set():
             pass
@@ -995,6 +1126,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             elif fq["kind"] == "compare":  # each side's top page, read from its start
                 found = _page_passages(vault, [r["page"]["id"] for r in facts["rows"]
                                                if r["page"] and r["page"]["id"]])
+            elif fq["kind"] in chat_facts.PAGE_KINDS:  # the pages counted, read to be cited
+                found = _page_passages(vault, [*dict.fromkeys(
+                    r["id"] for r in facts["rows"])][:PAGES_READ])
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})
@@ -1002,6 +1136,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 today=f"{today:%A}, {today.isoformat()}")},
                         {"role": "user", "content": chat_facts.prompt(facts, found, text, today)}]
     else:
+        if front:
+            emit({"t": "step", "s": front.step})
+            if front.fq:
+                facts = chat_facts.facts(vault, front.fq, s["sources"])
+                emit({"t": "facts", "facts": facts})
+                front_text = "\n".join(chat_facts._lines(facts, today))
+            else:
+                front_text = front.data()[:FRONT_MAX]
         # pages are dated by when they were written: a future range ("tomorrow's exam") keeps
         # no page, so it does not narrow the search; a range running past today stops at today
         past = got and got[0] <= today
@@ -1016,17 +1158,33 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             found = [askfile.passage(f, n, t) for _, ok, f, n, t in hits if ok][:askfile.LEAD]
             k = s["passages"] - len(found)
             if k > 0 and (not files or semantic.load_embedder() is not None):
-                also = relatives(vault, query)  # "my sister": her name is searched too
                 left = ask.BUDGET - sum(len(p["text"]) for p in found)
-                for p in ask._passages(vault, "\n".join([query, *also]), k,
-                                       between=(got[0].isoformat(),
-                                                min(got[1], today).isoformat())
-                                       if past else None, sources=s["sources"],
-                                       topic=topic(said, got[2]) if got else "", stats=stats):
-                    if len(p["text"]) > left:  # the file's passages took their share
-                        break
-                    left -= len(p["text"])
-                    found.append(p)
+                seen = {p["path"] for p in found}
+                # two halves: half the passages each, merged; a half leaning on the other
+                # ("... and what course does he teach?") is searched with it
+                for q, g, n in searches or [(query, got, k)]:
+                    if searches and follow_up(q, g):
+                        q = f"{q}\n{next(h for h, _ in split if h != q)}"
+                    more = relatives(vault, q)  # "my sister": her name is searched too
+                    also += [a for a in more if a not in also]
+                    pg, st = g and g[0] <= today, {}
+                    for p in ask._passages(vault, "\n".join([q, *more]), n,
+                                           between=(g[0].isoformat(),
+                                                    min(g[1], today).isoformat())
+                                           if pg else None, sources=s["sources"],
+                                           topic=topic(said if g is got else q, g[2])
+                                           if g else "", stats=st):
+                        if p["path"] in seen:
+                            continue
+                        if len(p["text"]) > left:  # the file's passages took their share
+                            break
+                        seen.add(p["path"])
+                        left -= len(p["text"])
+                        found.append(p)
+                    if "matched" in st:
+                        stats["matched"] = stats.get("matched", 0) + st["matched"]
+                    if st.get("more"):  # C14: a full search makes the whole count a floor
+                        stats["more"] = True
             if files:
                 stats["matched"] = stats.get("matched", 0) + sum(h[1] for h in hits)
     if listed is not None or fq is not None:
@@ -1044,17 +1202,20 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         kept = "\n\n".join(head + (["\n".join(f"- {p['title']} [{n}]" for n, p in
                                               enumerate(found, 1))] if found
                                    else [askfile.NO_MATCH]))
-    elif not found:
+    elif not found and not front_text:
         parts.append(NO_ANSWER)
         emit({"t": "tok", "s": NO_ANSWER})
     else:
         emit({"t": "step", "s": f"Reading {len(found)} page{'s' * (len(found) != 1)} with "
                                 f"{runner.model}"})
         me = about(vault, s["sources"], today)
+        # a routed half's answer goes first, as data the model words with the passages
+        head = _wrap("facts", "Facts computed by Cortex:\n" + front_text) + "\n\n" \
+            if front_text else ""
         messages = [{"role": "system",
                      "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}") + me},
                     *history(msgs[:-1], s["sources"], len(me)),
-                    {"role": "user", "content": ask.prompt(found, text) + CITE}]
+                    {"role": "user", "content": head + ask.prompt(found, text) + CITE}]
     if messages:
         thought = []
 
@@ -1115,7 +1276,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     # quote proof: a quoted span must be in a cited passage (any read one when none is cited)
     unquoted = ask.unquoted(answer, [text, *(f"{p['title']}\n{p['text']}" for n, p in
                                              enumerate(found, 1) if n in cited or not sources),
-                                     *(chat_facts._lines(facts, today) if facts else [])]
+                                     *(chat_facts._lines(facts, today) if facts else []),
+                                     front_text]
                             ) if by_model else []
     msgs.append({"role": "assistant", "text": kept or answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),

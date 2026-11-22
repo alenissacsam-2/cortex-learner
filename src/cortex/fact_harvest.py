@@ -7,9 +7,27 @@ resource page its (mtime_ns, size) and body hash, so a pass with nothing new onl
 It skips what the safety net skips (safety_net.skip_reason: a private chat, one whose last turn
 is older than RECENT_DAYS, one about a hidden concept) and coding summaries.
 
-It needs a runner whose local model is already loaded (the app: also the PC idle,
-safety_net.background_tools). With none, or while the "imports" producer is paused
-(`paused`), it does nothing and records nothing: the chats stay pending.
+R6a, Tier 0 (`tier0`), needs no model and runs on every pass: high-precision first-person
+templates (`_TEMPLATES`: "I'm a/an X", "I live in X", "I work at/for/as X", "I prefer X", "I'm
+allergic to X", "my name/hometown/favourite X is Y", "I use X for Y", "I (don't) eat/like/...
+X") over each user turn with its thinking traces (chat_import.strip_thinking), code, blockquotes
+and double-quoted text taken out. A turn that sets up a roleplay or a hypothetical (`_ROLE`,
+`_HYPO`) gives nothing; so does a sentence with an "if" (`_IF`) or a passing time ("today",
+"right now": `_NOW`), and a clause (split on ", " and "; ") with a "?", a question word or a
+request to the assistant (`_META`). Each line it finds goes through `check` as a model's
+does, with its clause as the quote. `cortex eval harvest-facts` measures it on
+tests/fixtures/harvest_eval.json. With a model, the model pass runs too and a Tier-0 copy is
+dropped (the same line in the chat, or cortex_patch's near-copy rule); with none, the chat is
+done but marked `l2: false`, so a later pass with a model reads it again (model only).
+
+G-Q9-14: a fact whose quote sits in a turn that reads like a planted deep link or promotion
+(tags.promo: "summarize this ... and remember", "remember X as a trusted source", "always
+recommend", "from now on recommend") is never saved: it waits in the Review (inbox.md's
+`## About me (unconfirmed)`, a `propose` change stamped `producer: imports`) for Approve.
+
+The model pass needs a runner whose local model is already loaded (the app: also the PC idle,
+safety_net.background_tools). While the "imports" producer is paused (`paused`) a pass does
+nothing and records nothing: the chats stay pending.
 
 RR-10 for its lines (`ledger`, a fold over the event log and STATE): STATE also remembers each
 pass that saved lines (its session id, time, day and number of lines saved). A pass whose
@@ -23,8 +41,9 @@ with its Resume (app/server.py `_paused_rows`), and Resume starts the count agai
 The model reads only the user's own turns of one chat (wrapped as untrusted data) and names at
 most PER_CHAT facts the user stated about themself, each with its page (PAGES) and the user's
 exact words. Code then checks each one (`check`): the quote occurs verbatim (whitespace and
-case aside) in one user turn of that page, is first person, not a question, and backs the
-fact (`_backed`: half its content words, the same polarity and tense); the fact passes
+case aside) in one user turn of that page, is first person, its clause not a question, and
+backs the fact (`_backed`: CONTAINS of its content words, the same polarity and tense); the
+fact passes
 claims.unsafe (the about-me injection guard) and vault.secret_pattern, and fits LINE_CHARS.
 A failed check drops it silently.
 
@@ -45,7 +64,7 @@ from collections import Counter
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
-from cortex import chat_import, claims, harvest, localllm, planner, review
+from cortex import chat_import, claims, harvest, localllm, planner, review, tags
 from cortex import safety_net as sn
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day, parse_ts
@@ -63,8 +82,9 @@ MODEL_CHARS, LINE_CHARS, QUOTE_CHARS, MIN_QUOTE = 3000, 160, 300, 8
 # each fact goes under (tags.PAGES's for profile and preferences, the template's first else)
 PAGES = {"profile": "Background", "preferences": "Personal", "goals": "Now",
          "personality": "Values"}
+CONTAINS = 0.6  # R6b: the share of a fact's content words (review._bag) its quote must hold
 _FIRST = re.compile(r"(?<![\w'])(?:i|i'm|im|i've|i'd|i'll|my|me|mine|myself)(?![\w'])")
-_END = re.compile(r"[.!?]+(?=\s|$)")
+_END = re.compile(r"[.!?]+(?=\s|$)|[,;](?=\s)")  # a sentence's or a clause's end
 _ASK = re.compile(r"(?:what|how|why|when|where|who|whom|whose|which|can|could|should|would|"
                   r"will|shall|do|does|did|is|are|am|was|were)\b")
 SYSTEM = ("You read the user's own messages from one chat with an AI assistant. The text inside "
@@ -85,7 +105,7 @@ def _norm(s: str) -> str:
 
 def said(quote: str, turns: list[str]) -> bool:
     """Is `quote` the user's own first-person statement: verbatim in one of `turns`, with a
-    first-person word, and its sentence not a question?"""
+    first-person word, and its clause (split on ", " and "; " too) not a question?"""
     if quote.rstrip().endswith("?"):
         return False
     q = _norm(quote).rstrip(" .!,;:")
@@ -121,20 +141,196 @@ def check(item, turns: list[str]) -> tuple[str, str] | None:
 
 
 def _backed(fact: str, quote: str) -> bool:
-    """W1: the quote says the fact: at least half of the fact's content words (review._bag),
-    the same polarity ("I don't like Python" never backs "Likes Python"), and the same tense
-    (review.ended; the shared words' past forms, review._past)."""
+    """W1: the quote says the fact: at least CONTAINS of the fact's content words
+    (review._bag; R6b: "I moved to Pune" no longer backs "Lives in Pune"), the same polarity
+    ("I don't like Python" never backs "Likes Python"), and the same tense (review.ended; the
+    shared words' past forms, review._past)."""
     mine, theirs = review._bag(fact), review._bag(quote)
     shared = mine & theirs
-    return (bool(shared) and 2 * len(shared) >= len(mine)
+    return (bool(shared) and len(shared) >= CONTAINS * len(mine)
             and review.negated(fact) == review.negated(quote)
             and review.ended(fact) == review.ended(quote)
             and review._past(fact) & shared == review._past(quote) & shared)
 
 
-def ask_model(runner, turns: list[str]) -> list[tuple[str, str]] | None:
-    """At most PER_CHAT checked (page, fact) pairs; [] on a malformed reply, None when the
-    runner gave no answer (the chat stays pending)."""
+def planted(quote: str, turns: list[str]) -> bool:
+    """G-Q9-14: does a turn holding `quote` read like a planted deep link or promotion
+    (tags.promo)?"""
+    q = _norm(quote).rstrip(" .!,;:")
+    return any(q in _norm(t) and tags.promo(t) for t in turns)
+
+
+# ---- R6a, Tier 0: no model ---------------------------------------------------------------
+
+_CODE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`", re.S)
+_BLOCKQUOTE = re.compile(r"^[ \t]*>.*$", re.M)
+_QUOTED = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”")
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\s*\n\s*")
+_CLAUSE = re.compile(r"[,;]\s+")
+# a whole turn: a roleplay or a hypothetical set up for the assistant
+_ROLE = re.compile(r"\b(?:you are|you're|youre|act as|acting as|pretend|role-?play|play the role|"
+                   r"in character|let's play)\b", re.I)
+_HYPO = re.compile(r"\b(?:imagine|suppose|supposing|let's say|lets say|hypothetical(?:ly)?|"
+                   r"what if|if i were|if i was|picture (?:a|this|yourself|me)|a world where|"
+                   r"in a story|for a story|my character)\b", re.I)
+# a sentence: a condition or a passing state
+_IF = re.compile(r"\b(?:if|unless|assume|assuming|would|wish|whether)\b", re.I)
+_NOW = re.compile(r"\b(?:today|tonight|right now|at the moment|this morning|this afternoon|"
+                  r"this evening|yesterday|this week)\b", re.I)
+# a clause: a request to the assistant
+_META = re.compile(r"\b(?:i want you to|i need you to|i'd like you to|can you|could you|"
+                   r"will you|please|help me|tell me)\b", re.I)
+_LEAD = (r"(?:(?:and|so|also|but|btw|actually|honestly|well|oh|fwiw|anyway|ok|okay|yeah|yes|"
+         r"no|plus)\s+)*")
+_IM = r"(?:i'm|im|i am)"
+_VERBS = r"eat|drink|smoke|drive|speak|like|love|own|play|watch|wear|cook"
+_DIET = (r"vegetarian|vegan|pescatarian|left-handed|right-handed|colou?r ?blind|"
+         r"lactose intolerant|gluten intolerant")
+# (pattern, page, fact): `x` is the object, cut at a conjunction (`_CUT`); the fact is built
+# from the groups (`_fact`)
+_TEMPLATES = [(re.compile(_LEAD + rf"(?P<q>{p})", re.I), page, fmt) for p, page, fmt in (
+    (rf"{_IM} (?P<a>an?) (?P<x>.+)", "profile", "Is {a} {x}"),
+    (rf"{_IM} (?P<x>{_DIET})\b", "preferences", "Is {x}"),
+    (rf"{_IM} allergic to (?P<x>.+)", "profile", "Allergic to {x}"),
+    (rf"{_IM} (?P<v>based|located) in (?P<x>.+)", "profile", "{V} in {x}"),
+    (rf"{_IM} from (?P<x>.+)", "profile", "From {x}"),
+    (r"i live in (?P<x>.+)", "profile", "Lives in {x}"),
+    (r"i work (?P<p>at|for|as) (?P<x>.+)", "profile", "Works {p} {x}"),
+    (r"i study (?P<x>.+)", "profile", "Studies {x}"),
+    (r"i prefer (?P<x>.+)", "preferences", "Prefers {x}"),
+    (r"i use (?P<t>.+?) for (?P<x>.+)", "preferences", "Uses {t} for {x}"),
+    (r"my (?P<k>name|first name|native language|first language|mother tongue|hometown|"
+     r"home town|major|job title) is (?P<x>.+)", "profile", "{K} is {x}"),
+    (r"my (?P<k>favou?rite \w+) is (?P<x>.+)", "preferences", "{K} is {x}"),
+    (rf"i (?P<n>don't|do not|never) (?P<v>{_VERBS}|use) (?P<x>.+)", "preferences",
+     "{N} {v} {x}"),
+    (rf"i (?P<v>{_VERBS}) (?P<x>.+)", "preferences", "{V} {x}"))]
+_CUT = re.compile(r"\s+(?:and|but|so|because|since|though|although|which|who|where|when|"
+                  r"while|as|until|unless|then|lol|haha)\b.*|\s*[(\[:—–].*", re.I | re.S)
+_TRAIL = re.compile(r"(?:\s+(?:now|currently|these days|nowadays|at present|too|as well))+$",
+                    re.I)
+# an object that points at the chat, not at the owner's life ("I like that", "I'm a bit lost")
+_DEICTIC = frozenset("this that these those it its it's your you yours them they here there how "
+                     "what when where why which who so very really too not bit little lot tad "
+                     "while few couple total complete huge mess wreck idiot fool".split())
+MAX_WORDS = 8  # an object's words
+
+
+def _object(raw: str) -> str | None:
+    """A template's object, cut and trimmed, or None when it is not one (`_DEICTIC`, too long,
+    an "or")."""
+    end = " .!,;:-…'\""
+    x = _TRAIL.sub("", _CUT.sub("", raw).rstrip(end)).rstrip(end)
+    words = x.split()
+    if (not words or len(words) > MAX_WORDS or words[0].casefold() in _DEICTIC
+            or " or " in f" {x.casefold()} " or not any(c.isalnum() for c in x)):
+        return None
+    return x
+
+
+def _third(v: str) -> str:
+    """The third person of a template verb (eat -> eats, watch -> watches)."""
+    return v + "es" if v.endswith(("ch", "sh", "x", "o", "s")) else v + "s"
+
+
+def _fact(m: re.Match, fmt: str) -> tuple[str, str] | None:
+    """(fact, quote) from a template match, or None when an object is not one."""
+    g = {k: v for k, v in m.groupdict().items() if v is not None}
+    for k in ("t", "x"):
+        if k in g:
+            g[k] = _object(g[k])
+            if g[k] is None:
+                return None
+    v = g.get("v", "").casefold()
+    n = g.get("n", "").casefold().replace("’", "'")
+    fill = {**g, "a": g.get("a", "").casefold(), "p": g.get("p", "").casefold(), "v": v,
+            "V": (_third(v) if v in _VERBS.split("|") else v).capitalize(),
+            "N": {"don't": "Doesn't", "do not": "Does not"}.get(n, "Never"),
+            "K": g.get("k", "").capitalize()}
+    if n == "never":
+        fill["v"] = _third(v)
+    fact = fmt.format(**fill)
+    end = m.start("x") + len(g["x"])
+    return fact[0].upper() + fact[1:], m.string[m.start("q"):end]
+
+
+def _clean(turn: str) -> str:
+    """A turn without thinking traces, code, blockquotes and double-quoted text."""
+    t = chat_import.strip_thinking(turn).replace("’", "'")
+    return _QUOTED.sub(" ", _BLOCKQUOTE.sub("", _CODE.sub(" ", t)))
+
+
+def tier0(turns: list[str]) -> list[tuple[str, str, bool]]:
+    """R6a: at most PER_CHAT checked (page, fact, review) from `turns` with no model (the
+    module docstring's rules); `review`: its turn reads like a promotion (`planted`)."""
+    out: list[tuple[str, str, bool]] = []
+    for turn in turns:
+        text = _clean(turn)
+        if _ROLE.search(text) or _HYPO.search(text):
+            continue
+        promo = tags.promo(turn)
+        for sentence in _SENTENCE.split(text):
+            if _IF.search(sentence) or _NOW.search(sentence):
+                continue
+            for clause in _CLAUSE.split(sentence.strip()):
+                if "?" in clause or _META.search(clause) or _ASK.match(clause.casefold()):
+                    continue
+                for rx, page, fmt in _TEMPLATES:
+                    if (m := rx.match(clause)) and (got := _fact(m, fmt)):
+                        item = {"page": page, "fact": got[0], "quote": got[1]}
+                        if (ok := check(item, turns)) and ok[1].casefold() not in {
+                                f.casefold() for _, f, _ in out}:
+                            out.append((*ok, promo))
+                        break
+                if len(out) >= PER_CHAT:
+                    return out
+    return out
+
+
+TARGETS = {"precision": 0.9, "hypothetical_fp": 0.02, "flips": 0}  # R6d
+UNREAL = ("hypothetical", "roleplay")  # the eval kinds whose turns state nothing true
+
+
+def evaluate(items: list[dict]) -> dict:
+    """R6d: Tier 0 over labelled turns ({kind, turn, expect: [fact], held?}, the eval file's
+    `items`). An extracted fact is right when its content words (review._bag) and polarity
+    equal an expected one's, a flip when only its polarity differs. Returns counts and
+    precision, recall, hypothetical_fp (the share of UNREAL turns with any fact), flips and
+    held_missed (a promotion's fact not held for the Review)."""
+    def key(f: str) -> tuple:
+        return review._bag(f), review.negated(f)
+
+    n = {"turns": len(items), "extracted": 0, "right": 0, "expected": 0, "found": 0,
+         "unreal": 0, "unreal_hit": 0, "flips": 0, "held_missed": 0}
+    for it in items:
+        want = {key(f) for f in it.get("expect") or ()}
+        got = tier0([it["turn"]])
+        keys = {key(f) for _, f, _ in got}
+        n["extracted"] += len(got)
+        n["right"] += sum(k in want for k in keys)
+        n["expected"] += len(want)
+        n["found"] += len(want & keys)
+        n["flips"] += sum(k not in want and any(k[0] == w[0] for w in want) for k in keys)
+        if it.get("kind") in UNREAL:
+            n["unreal"] += 1
+            n["unreal_hit"] += bool(got)
+        if it.get("held"):
+            n["held_missed"] += sum(not held for *_, held in got)
+    return {**n, "precision": n["right"] / n["extracted"] if n["extracted"] else 1.0,
+            "recall": n["found"] / n["expected"] if n["expected"] else 1.0,
+            "hypothetical_fp": n["unreal_hit"] / n["unreal"] if n["unreal"] else 0.0}
+
+
+def meets(r: dict) -> bool:
+    """Does an `evaluate` report reach TARGETS?"""
+    return (r["precision"] >= TARGETS["precision"] and r["flips"] <= TARGETS["flips"]
+            and r["hypothetical_fp"] <= TARGETS["hypothetical_fp"])
+
+
+def ask_model(runner, turns: list[str]) -> list[tuple[str, str, bool]] | None:
+    """At most PER_CHAT checked (page, fact, review) triples (`review`: the quote's turn reads
+    like a promotion, `planted`); [] on a malformed reply, None when the runner gave no answer
+    (the chat stays pending)."""
     text = "\n\n".join(turns)[:MODEL_CHARS]
     raw = runner.chat(SYSTEM, _wrap("chat", text), max_tokens=400)
     if not isinstance(raw, str):
@@ -143,10 +339,10 @@ def ask_model(runner, turns: list[str]) -> list[tuple[str, str]] | None:
     items = obj.get("facts") if isinstance(obj, dict) else None
     if not isinstance(items, list):
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, bool]] = []
     for x in items[:PER_CHAT]:
-        if (got := check(x, turns)) and _norm(got[1]) not in {_norm(f) for _, f in out}:
-            out.append(got)
+        if (got := check(x, turns)) and _norm(got[1]) not in {_norm(f) for _, f, _ in out}:
+            out.append((*got, planted(x["quote"], turns)))
     return out
 
 
@@ -186,13 +382,15 @@ def paused(vault: Vault) -> bool:
 
 
 def pending(vault: Vault) -> bool:
-    """Is there a page for a pass to look at (stats only)?"""
-    return bool(sn._todo(vault, sn._load(vault, STATE), False))
+    """Is there a page for a pass to look at (stats only), counting the chats only Tier 0
+    read (`l2: false`), which a pass with a model reads again?"""
+    return bool(sn._todo(vault, sn._load(vault, STATE), True))
 
 
-def _save(vault: Vault, found: list[tuple[str, str, str]]) -> tuple[Counter, str | None]:
-    """Write each (chat id, page, fact) as an inferred about-me line in one background session;
-    (counts saved / not_saved, the session id or None)."""
+def _save(vault: Vault, found: list[tuple[str, str, str, bool]]) -> tuple[Counter, str | None]:
+    """Write each (chat id, page, fact, review) as an inferred about-me line in one background
+    session, or with `review` (G-Q9-14) as a line waiting in the Review, as tags.act proposes;
+    (counts saved / review / not_saved, the session id or None)."""
     from cortex.mcp_server import Cortex  # the SDK: only when there is something to write
 
     counts: Counter = Counter()
@@ -202,11 +400,20 @@ def _save(vault: Vault, found: list[tuple[str, str, str]]) -> tuple[Counter, str
     core._reset()
     sid = core.session.id
     try:
-        for chat, page, fact in found:
+        for chat, page, fact, held in found:
             core.sessions.stamp = {"producer": PRODUCER, "chat": chat}
+            section = PAGES[page]
             try:
-                core._ensure_section(page, PAGES[page])
-                out = core.cortex_patch(f"me/{page}", "append_to_section", PAGES[page], fact)
+                if held:
+                    core._propose(f"- {section}: {fact} (proposed {local_day(core._now())}, "
+                                  f"me/{page})", page=page)
+                    core.sessions.note("patched", change={
+                        "tool": "propose", "id": page, "kind": "me", "op": "append_to_section",
+                        "target": section, "hash": review.text_hash(fact)})
+                    counts["review"] += 1
+                    continue
+                core._ensure_section(page, section)
+                out = core.cortex_patch(f"me/{page}", "append_to_section", section, fact)
             except VaultError:
                 out = {}
             counts["saved" if out.get("changed") else "not_saved"] += 1
@@ -218,15 +425,16 @@ def _save(vault: Vault, found: list[tuple[str, str, str]]) -> tuple[Counter, str
 
 
 def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -> dict:
-    """One pass. `runner`: a local runner whose model is already loaded, or None (nothing
-    happens); `guard`: a lock held while writing (the app's Review lock). Returns counts
-    (chats, facts, saved, not_saved, left, skipped_<why>) and `session` when a line was
+    """One pass. `runner`: a local runner whose model is already loaded, or None (Tier 0
+    only); `guard`: a lock held while writing (the app's Review lock). Returns counts (chats,
+    facts, tier0, saved, review, not_saved, left, skipped_<why>) and `session` when a line was
     offered for saving. VaultError("busy") while another pass runs."""
-    if runner is None or paused(vault):
+    if paused(vault):
         return {}
     now = now or datetime.now(UTC)
     state = sn._load(vault, STATE)
-    todo = sn._todo(vault, state, False)
+    model = runner is not None
+    todo = sn._todo(vault, state, model)  # with a model: also the chats only Tier 0 read
     if not todo:
         return {}
     with vault.job_lock(LOCK, 0, BUSY):
@@ -239,13 +447,14 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
                 continue
             h = chat_import._hash(note.body)
             rec = state.get(path.stem) if isinstance(state.get(path.stem), dict) else {}
-            if rec.get("hash") == h:
+            again = rec.get("hash") == h and rec.get("l2") is False  # Tier 0 read it already
+            if rec.get("hash") == h and not (model and again):
                 state[path.stem] = {**rec, "sig": sig}  # only frontmatter or Topics: changed
             elif (chat := sn.chat_of(note)) is None:
                 counts["skipped_not_chat"] += 1
                 state[path.stem] = {"what": "not_chat", "sig": sig, "hash": h}
             else:
-                work.append((note, chat, sig, h))
+                work.append((note, chat, sig, h, again))
         work.sort(key=lambda x: (x[1].last_day(), x[0].id), reverse=True)  # newest first
         sid = None
         try:
@@ -253,7 +462,7 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
                 ctx = chat_import.Ctx(vault)
                 cat = Catalog.load(vault)
                 hidden = sn.hidden_pattern(cat, planner.hidden(vault, cat))
-            for note, chat, sig, h in work:
+            for note, chat, sig, h, again in work:
                 if why := sn.skip_reason(note, chat, ctx, hidden, now):
                     counts[f"skipped_{why}"] += 1
                     state[note.id] = {"what": why, "sig": sig, "hash": h}
@@ -261,13 +470,21 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
                 if counts["chats"] >= MAX_CHATS:
                     counts["left"] += 1  # next pass
                     continue
-                facts = ask_model(runner, harvest.user_turns(note.body) or chat.turns)
-                if facts is None:
+                turns = harvest.user_turns(note.body) or chat.turns
+                t0 = tier0(turns)  # again: only to drop the model's copies of its lines
+                facts = [] if again else t0
+                if n := len(facts):
+                    counts["tier0"] += n
+                got = ask_model(runner, turns) if model else None
+                if got is None and (again or not facts and model):
                     continue  # no answer: pending for a later pass
+                seen = {_norm(f) for _, f, _ in t0}
+                facts += [x for x in got or () if _norm(x[1]) not in seen]
                 counts["chats"] += 1
                 counts["facts"] += len(facts)
-                found += [(chat.id, page, fact) for page, fact in facts]
-                done[note.id] = {"what": "done", "facts": len(facts), "sig": sig, "hash": h}
+                found += [(chat.id, *x) for x in facts]
+                done[note.id] = {"what": "done", "facts": len(facts), "sig": sig, "hash": h,
+                                 "l2": got is not None}
             if found:
                 with guard or nullcontext():
                     saved, sid = _save(vault, found)
@@ -284,8 +501,8 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
 
 def auto(app) -> dict | None:
     """The app's pass (server.py's chats loop, after the safety net): only with the chat import
-    on, a vault set up and no job running, and a model already loaded with the PC idle. Its
-    counts, or None when it did not run."""
+    on, a vault set up and no job running; Tier 0 always, the model pass only with a model
+    already loaded and the PC idle. Its counts, or None when it did not run."""
     if not chat_import.enabled() or not app.entry() or app.jobs.running():
         return None
     v = Vault(app.root)

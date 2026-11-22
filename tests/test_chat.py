@@ -1504,3 +1504,261 @@ def test_a_future_date_does_not_narrow_the_search(vault, stream, monkeypatch):
     _turn(vault, None, "explain car motors for tomorrow's exam", s.runner())
     _turn(vault, None, "what did I read about car motors yesterday?", s.runner())
     assert asked == [None, ("2026-11-17", "2026-11-17")]
+
+
+# ---- the router, follow-ups on the assistant's list, two-part questions (R4) -------------------
+
+@pytest.mark.parametrize("text, leans, want", [
+    ("which sites did I visit yesterday?", False, "Counting the sites you visited from 17 Nov"),
+    ("what did I do yesterday?", False, "Putting together your day on 17 Nov"),
+    ("what is due?", False, "Reading your due reviews"),
+    ("how many times did I visit github?", False, 'Counting "github"'),
+    ("how many times did I visit github?", True, None),  # a follow-up: no typed answer
+    ("what is Dijkstra's algorithm?", False, None),
+])
+def test_the_router_picks_one_data_answer(vault, text, leans, want):
+    r = chat._route(vault, text, chat._when(text, TODAY), TODAY, True, chat.get_settings(),
+                    leans)
+    assert (r.step if r else None) == want
+    assert r is None or (r.data is None) is (r.fq is not None)
+
+
+ASSESSMENTS = "1. Apex Systems OA (2026-11-24)\n2. Nimbus Tech Interview (2026-12-03)"
+
+
+def test_list_items_are_plain_text_with_their_trailing_parentheses():
+    assert chat.list_items("Here:\n" + ASSESSMENTS + "\n\nThat is all.") == [
+        "Apex Systems OA (2026-11-24)", "Nimbus Tech Interview (2026-12-03)"]
+    assert chat.list_items("- **VeloxKV** [1]\n  - a nested line\n* `TinySQL` (14 commits)\n"
+                           "• [notes-cli](https://x.example)\n2) Last") == [
+        "VeloxKV", "TinySQL (14 commits)", "notes-cli", "Last"]
+
+
+@pytest.mark.parametrize("text, items, want", [
+    ("And what does the second one test?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("what does the 2nd cover?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("tell me about number 1", 2, "Apex Systems OA (2026-11-24)"),
+    ("and #2?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("what about the last one?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("and the first?", 2, "Apex Systems OA (2026-11-24)"),
+    ("and the third one?", 2, None),  # the list has no third
+    ("what does it test?", 1, "Apex Systems OA (2026-11-24)"),  # a pronoun, one item
+    ("what does it test?", 2, None),  # a pronoun, two items: no guess
+    ("when was the last time I studied heaps?", 2, None),
+    ("what is Dijkstra's algorithm?", 2, None),
+    ("What was the first course I took?", 2, None),  # a question of its own, not a pick
+    ("and the second, when is it?", 2, "Nimbus Tech Interview (2026-12-03)"),
+])
+def test_a_follow_up_picks_an_item_of_the_last_list(text, items, want):
+    lst = chat.list_items(ASSESSMENTS)[:items]
+    assert chat.picked(text, chat._when(text, TODAY), lst, "List my assessments") == want
+
+
+def test_the_other_one_is_the_item_the_last_question_did_not_name():
+    lst = chat.list_items(ASSESSMENTS)
+    assert chat.picked("and the other one?", None, lst, "what does Apex Systems OA test?") == \
+        lst[1]
+    assert chat.picked("and the other one?", None, lst, "list them") is None
+
+
+def _prior(vault, turns):
+    cid = chat.new()
+    chat._save(vault, cid, [{"role": r, "text": t, "ts": chat._now(),
+                             **({"sources": [], "switches": dict(ask.SOURCES)}
+                                if r == "assistant" else {})} for r, t in turns], True)
+    return cid
+
+
+def _asked(monkeypatch):
+    asked = []
+    real = ask._passages
+    monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
+                                                                                      **kw))
+    return asked
+
+
+@pytest.mark.parametrize("prior, text, want", [
+    ([("user", "List my two upcoming assessments in date order."), ("assistant", ASSESSMENTS)],
+     "And what does the second one test?", "Nimbus Tech Interview"),  # Q38
+    ([("user", "List my active Rust projects."),
+      ("assistant", "1. VeloxKV (42 commits)\n2. TinySQL (14 commits)")],
+     "What does my git repo summary say about the second one?", "TinySQL"),  # Q39
+    ([("user", "my projects"), ("assistant", "- VeloxKV\n- TinySQL\n- notes-cli")],
+     "and #2?", "TinySQL"),
+    ([("user", "my projects"), ("assistant", "- VeloxKV\n- TinySQL\n- notes-cli")],
+     "what about the last one?", "notes-cli"),
+    ([("user", "my rust project"), ("assistant", "- VeloxKV (42 commits)")],
+     "what does it store?", "VeloxKV"),
+])
+def test_the_search_holds_the_picked_item(vault, stream, monkeypatch, prior, text, want):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    _turn(vault, _prior(vault, prior), text, s.runner())
+    assert len(asked) == 1 and want in asked[0] and prior[0][1] not in asked[0]
+    assert asked[0].startswith(text)
+
+
+def test_a_new_subject_is_not_mixed_with_the_list(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    cid = _prior(vault, [("user", "List my assessments."), ("assistant", ASSESSMENTS)])
+    _turn(vault, cid, "what is Dijkstra's algorithm?", s.runner())
+    assert asked == ["what is Dijkstra's algorithm?"]
+
+
+def test_a_list_made_with_a_switch_now_off_is_not_picked_from(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    cid = _prior(vault, [("user", "List my assessments."), ("assistant", ASSESSMENTS)])
+    off = {**chat.get_settings(), "sources": {**ask.SOURCES, "private": False}}
+    _turn(vault, cid, "And what does the second one test?", s.runner(), settings=off)
+    assert "Nimbus" not in asked[0]
+
+
+Q37 = ("With Private ON, what microcontroller does Project Kestrel use and how many times did "
+       "I visit synthdiy.example?")
+
+
+@pytest.mark.parametrize("text, want", [
+    (Q37, ["With Private ON, what microcontroller does Project Kestrel use",
+           "how many times did I visit synthdiy.example?"]),
+    ("Who is Arjun Kulkarni and when do we sync?", ["Who is Arjun Kulkarni",
+                                                     "when do we sync?"]),
+    ("What storage engine did I choose for VeloxKV, and did I reverse it later?",
+     ["What storage engine did I choose for VeloxKV", "did I reverse it later?"]),
+    ("What are the pros and cons of B-trees?", []),
+    ("compare heaps and stacks", []),
+    ("Compare my notes on rust and what go does", []),
+    ("what is the difference between heaps and stacks?", []),
+    ("rust vs go and which is faster?", []),
+    ("Where and when did I meet Priya?", []),
+    ("What do my PDFs and book highlights say about MVCC and write skew?", []),
+    ("which sites did I visit yesterday; what is due?", ["which sites did I visit yesterday",
+                                                         "what is due?"]),
+])
+def test_halves(text, want):
+    assert chat.halves(text, lambda h: False) == want
+
+
+def test_a_second_half_that_routes_is_a_question():
+    assert chat.halves("what is a heap and list my projects", lambda h: h.startswith(
+        "list")) == ["what is a heap", "list my projects"]
+    assert chat.halves("what is a heap and list my projects", lambda h: False) == []
+    assert chat.halves("tell me about heaps and list my projects", lambda h: True) == []
+
+
+def test_two_routed_halves_are_both_answered_by_code(vault):
+    events = []
+    chat.reply(vault, None, "how many times did I visit github and how many times did I "
+               "visit gitlab?", None, events.append, threading.Event(), chat.get_settings(),
+               today=TODAY)
+    assert [e["s"] for e in events if e["t"] == "step"] == ['Counting "github"',
+                                                            'Counting "gitlab"']
+    answer = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert answer == ('I found nothing about "github" in your archive.\n\n'
+                      'I found nothing about "gitlab" in your archive.')
+    assert events[0]["model"] == "Cortex" and events[-1]["t"] == "done"
+
+
+def test_a_routed_half_goes_in_front_of_the_other_halfs_passages(vault, stream, monkeypatch):
+    s = stream("ollama", ["A motor [1]; no visits."])
+    asked = _asked(monkeypatch)
+    text = "what is a car motor and how many times did I visit github?"
+    cid, events = _turn(vault, None, text, s.runner())
+    assert asked == ["what is a car motor"]  # Q37's shape: the other half searched alone
+    kinds = [e["t"] for e in events]
+    assert kinds.index("facts") < kinds.index("tok")
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert user.startswith('<untrusted_note id="facts">\nFacts computed by Cortex:\nI found '
+                           'nothing about "github"')
+    assert user.endswith(f"Question: {text}" + chat.CITE)
+    assert chat.load(vault, cid)[-1]["facts"]["query"] == "github"
+
+
+def test_without_a_model_the_routed_half_is_shown_and_the_rest_says_why(vault, monkeypatch):
+    events = []
+    chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
+               None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
+    assert events[0]["model"] == "Cortex" and "err" not in [e["t"] for e in events]
+    assert "".join(e["s"] for e in events if e["t"] == "tok") == (
+        f'I found nothing about "github" in your archive.\n\n{ask.NO_MODEL}')
+    monkeypatch.setattr(semantic, "_embedder", None)
+    monkeypatch.setattr(semantic, "load_embedder", lambda: None)
+    events = []
+    chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
+               None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
+    assert "".join(e["s"] for e in events if e["t"] == "tok").endswith(semantic.NOT_SET_UP)
+
+
+def test_unrouted_halves_take_half_the_passages_each(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = []
+    real = ask._passages
+
+    def passages(v, q, k, **kw):
+        asked.append((q, k))
+        return real(v, q, k, **kw)
+    monkeypatch.setattr(ask, "_passages", passages)
+    _, events = _turn(vault, None, "what is a car motor and what pasta did I cook?",
+                      s.runner())
+    assert asked == [("what is a car motor", 3), ("what pasta did I cook?", 2)]
+    src = next(e for e in events if e["t"] == "src")
+    paths = [p["path"] for p in src["searched"] + src["sources"]]
+    assert len(paths) == len(set(paths))  # merged without repeats
+    asked.clear()
+    cid, _ = _turn(vault, None, "who wrote the engines note and what did he say about it?",
+                   s.runner())  # a new chat: "he" and "it" point at the first half
+    assert asked[1][0] == "what did he say about it?\nwho wrote the engines note"
+    asked.clear()
+    _turn(vault, cid, "who wrote the kitchen note and what did he say about it?", s.runner())
+    assert len(asked) == 1  # mid-chat they may point at the last turn: no split
+
+
+# ---- passages: a me/ page's ## Past, and each passage's header (Q17-Q19) -----------------------
+
+def _prefs(vault):
+    note(vault.root, "me/preferences.md", "title: My preferences\nprivate: false\n",
+         "# My preferences\n\n## Coding\n- Always use uv for car motor scripts ^c-new\n\n"
+         "## Past\n- Use Pipenv for car motor scripts (until 2026-09-12 → ^c-new) ^c-old\n\n"
+         "## Not me\n- Car motor racing\n")
+
+
+@pytest.mark.parametrize("q", ["Which car motor tool do I prefer to use right now?",  # Q18
+                               "How do I like car motor scripts?",  # Q17
+                               "What are my coding rules for car motor scripts?"])  # Q19
+def test_the_past_of_a_me_page_never_reaches_the_model(vault, stream, q):
+    _prefs(vault)
+    s = stream("ollama", ["uv [1]."])
+    _turn(vault, None, q, s.runner())
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert "Always use uv" in user and "Pipenv" not in user and "## Past" not in user
+    assert "[undated | current]\nMy preferences\nFrom: your note" in user
+    assert "Car motor racing" in user  # the next section stays
+
+
+@pytest.mark.parametrize("q", ["Which car motor tool did I use before?",
+                               "what did I prefer for car motor scripts?",
+                               "what did I use to run car motor scripts with?"])
+def test_a_question_about_the_past_keeps_it(vault, stream, q):
+    _prefs(vault)
+    s = stream("ollama", ["Pipenv [1]."])
+    _turn(vault, None, q, s.runner())
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert "Use Pipenv for car motor scripts" in user
+    assert "[undated | past]\nMy preferences" in user
+
+
+def test_every_passage_starts_with_its_day_and_status():
+    p = {"path": "decisions/dec-a.md", "title": "A", "kind": "note", "day": "2026-07-05",
+         "text": "x", "stale": True}
+    assert ask.prompt([p], "q").startswith('<untrusted_note id="1">\n[2026-07-05 | replaced]\nA\n')
+    assert ask.header({"path": "notes/b.md", "day": ""}) == "[undated]"
+    assert ask.header({"path": "notes/b.md", "day": "2026-11-01"}) == "[2026-11-01]"
+
+
+def test_a_superseded_decision_is_marked_stale(vault):
+    note(vault.root, "decisions/dec-old.md", "title: Old car motor choice\nkind: decision\n"
+         "status: superseded\ndate: 2026-07-05\n", "# Old car motor choice\n\nCar motor A.")
+    found = ask._passages(vault, "car motor choice", 8, sources=ask.SOURCES)
+    old = next(p for p in found if p["path"] == "decisions/dec-old.md")
+    assert old["stale"] and ask.header(old) == "[2026-07-05 | replaced]"

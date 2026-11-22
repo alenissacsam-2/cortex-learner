@@ -170,7 +170,7 @@ def test_a_crashed_holder_never_leaves_the_lock_stuck(vault, hist, quick):
     lock.write_text(f"4194300 1.0 {socket.gethostname()}", encoding="utf-8")  # a dead pid
     forget.purge(Vault(vault), forget.Rule(hosts=("lichess.org",)), settings=OWNER)
     assert "lichess" not in priv(vault) and not lock.exists()
-    lock.write_text(f"{os.getpid()} 9999999999.0 {socket.gethostname()}", encoding="utf-8")
+    lock.write_text(f"{os.getppid()} 9999999999.0 {socket.gethostname()}", encoding="utf-8")
     with pytest.raises(VaultError):  # a live holder is never stolen from
         forget.purge(Vault(vault), forget.Rule(hosts=("chess.com",)), settings=OWNER)
 

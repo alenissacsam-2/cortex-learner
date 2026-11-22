@@ -354,6 +354,8 @@ class App:
             "/api/review/unsafe/keep": self.review_unsafe_keep,
             "/api/review/crowded/keep": self.review_crowded_keep,
             "/api/review/playbook/keep": self.review_playbook_keep,
+            "/api/review/promote/pin": self.review_promote_pin,
+            "/api/review/promote/later": self.review_promote_later,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
             "/api/xray/dryrun": self.xray_dryrun,
             "/api/tonight/undo": self.tonight_undo}
@@ -819,7 +821,7 @@ class App:
         v = self._vault()
         events = list(EventLog(v).iter_events())
         for x in review.stale(review.live_rows(v, events, self._today()), events,
-                              self._today()):
+                              self._today(), review.known_texts(v)):
             if cid in x["ids"]:
                 return [cid, *(i for i in x["ids"] if i != cid)]
         hidden = review._private(v)
@@ -882,6 +884,38 @@ class App:
         return self._click("cortex_patch", "_dismiss", {
             "page": "playbooks", "section": "Playbooks", "text": pid, "waiting": False},
             "unused")
+
+    def _promoted(self, body: dict) -> dict:
+        """R28a: the offered "Pin it to Core?" line (review.promote) whose id `body` names."""
+        from cortex import review
+        from cortex.events import EventLog
+        v, cid = self._vault(), body.get("id")
+        events = list(EventLog(v).iter_events())
+        x = next((x for x in review.promote(v, review.live_rows(v, events, self._today()),
+                                            events, self._today()) if x["id"] == cid), None)
+        if x is None:
+            raise NotFound
+        return x
+
+    def review_promote_pin(self, body: dict) -> dict:
+        """R28a: Pin to Core: the line written to me/core's `## Core` as Approve writes a
+        repeated correction there (`confirm: clicked`), stamped `promote_core` for the card's
+        monthly cap."""
+        from cortex import claims, review
+        x = self._promoted(body)
+        return self._click("cortex_patch", "cortex_patch", {
+            "id": "me/core", "op": "append_to_section", "target": "Core",
+            "text": " ".join(claims._MARK.sub("", x["text"]).split()),
+            "user_confirmed": True}, review.PROMOTE)
+
+    def review_promote_later(self, body: dict) -> dict:
+        """R28a: Not now: a `dismiss` change on id `promote_core` holding the line id's hash,
+        so it is not offered for review.PROMOTE_QUIET days; stamped for the monthly cap."""
+        from cortex import review
+        x = self._promoted(body)
+        return self._click("cortex_patch", "_dismiss", {
+            "page": review.PROMOTE, "section": "Core", "text": x["id"], "waiting": False},
+            review.PROMOTE)
 
     def _producer(self, p: dict) -> str:
         """RR-10: the producer of a waiting line (review.producer_of)."""

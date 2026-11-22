@@ -305,7 +305,7 @@ def test_live_holders_lock_is_never_stolen(v, monkeypatch):
     """R2-3: a lock older than LOCK_STALE_S whose holder is alive (a long sites.write) stays."""
     lock = v.root / ".cortex" / "lock"
     lock.parent.mkdir(exist_ok=True)
-    lock.write_text(f"{os.getpid()} {time.time() - vault_mod.LOCK_STALE_S - 1:.3f}")
+    lock.write_text(f"{os.getppid()} {time.time() - vault_mod.LOCK_STALE_S - 1:.3f}")
     monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: 0.0)  # started long before
     with pytest.raises(VaultError) as e:
         with v.lock(timeout=0.3):
@@ -340,6 +340,47 @@ def test_lock_of_a_reused_pid_is_stolen(v, monkeypatch):
     with v.lock(timeout=0.3):
         pass
     assert not lock.exists()
+
+
+def test_a_lock_this_process_failed_to_delete_is_taken_back(v, monkeypatch):
+    """Windows refuses to delete a file another process is reading: a release that keeps
+    failing leaves this pid's lock behind, and the long-running server must not wait on its own
+    leftover forever. A lock another Vault of this process holds still waits."""
+    from pathlib import Path
+    lock = v.root / ".cortex" / "lock"
+    real = Path.unlink
+    monkeypatch.setattr(Path, "unlink", lambda self, *a, **k: (_ for _ in ()).throw(
+        PermissionError("in use")) if self == lock else real(self, *a, **k))
+    with v.lock(timeout=0.3):
+        pass
+    assert lock.read_text().startswith(f"{os.getpid()} ")  # left behind
+    monkeypatch.setattr(Path, "unlink", real)
+    with v.lock(timeout=0.3):  # taken back, not "busy"
+        pass
+    assert not lock.exists()
+    other = Vault(v.root)
+    with other.lock(timeout=0.3):
+        with pytest.raises(VaultError):  # a live holder in this very process
+            with v.lock(timeout=0.3):
+                pass
+    assert not lock.exists()
+
+
+def test_release_retries_a_briefly_busy_lock_file(v, monkeypatch):
+    from pathlib import Path
+    lock = v.root / ".cortex" / "lock"
+    real, fails = Path.unlink, []
+
+    def busy_twice(self, *a, **k):
+        if self == lock and len(fails) < 2:
+            fails.append(1)
+            raise PermissionError("a reader has it open")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", busy_twice)
+    with v.lock(timeout=0.3):
+        pass
+    assert len(fails) == 2 and not lock.exists()
 
 
 def test_pid_started_reads_this_process():

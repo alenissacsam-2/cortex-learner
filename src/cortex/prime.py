@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import UTC, datetime
 
-from cortex import claims, render, xray
+from cortex import claims, render, review, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import local_day
@@ -429,12 +429,14 @@ def similarity(prompt: str, texts: list[str]) -> list[float] | None:
 
 def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[str],
               withheld: set[str] = frozenset(), allow=None, ids: dict | None = None,
-              xs: dict | None = None) -> list[list]:
+              xs: dict | None = None, back: dict | None = None) -> list[list]:
     """The preference, setup and personality lines as prime ranks them for `prompt`, best first:
     [-match, situational?, -served score, "- [Section] line", labelled?, "Section: text", id].
     Never a `pinned` line again, a `withheld` page, a section `allow(page, heading)` (an
     agent profile, access.scope_section) refuses, or an X-ray muted claim; X-ray pins lead.
-    `ids` (claim_ids) and `xs` (xray.settings) are read when not given."""
+    `ids` (claim_ids) and `xs` (xray.settings) are read when not given. R13b: of lines that
+    rank equal, the one that came back latest (`back`: `^c-…` id -> review.reinforced's last
+    day) goes first, and one that never came back after it."""
     ids = claim_ids(vault) if ids is None else ids
     xs = xray.settings(vault) if xs is None else xs
     words = re.findall(r"\w+", prompt.lower())
@@ -466,6 +468,8 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
     for r in rows:  # the owner's X-ray pins lead, still within the preferences cap
         if r[6] in xs["pin"]:
             r[0] = float("-inf")
+    if back:  # stable sorts: ties stay as they were unless a line came back
+        rows.sort(key=lambda r: back.get(r[6], ""), reverse=True)
     rows.sort(key=lambda r: r[:3])
     return rows
 
@@ -474,6 +478,8 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
          withheld: set[str] = frozenset(), xr: dict | None = None, allow=None
          ) -> tuple[list[str], list[int]]:
     """cortex_prime's blocks before Related, and the budget left: (parts, [chars left]).
+    Order: Core, Profile, Teaching contract (core), the legend, Preferences (the owner's
+    standing text), then the prompt's Attempt first line.
     `withheld`: bare ids of me/ pages left out (a non-owner server or an agent profile);
     `allow(page, heading)`: the preference and personality sections an agent profile allows
     (None: all). The X-ray's pinned claims lead Preferences and muted ones are left out; `xr`,
@@ -494,29 +500,34 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
                                                                waits)
     if summary:
         put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
-    rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,
-                     ids, xs)
-    # the legend only when an (ask) line can be served: the Preferences fit below has no more
-    # room than this one, so it serves a prefix of these lines
-    asks = {r[3] for r in rows if r[4]}
-    shown = fit([r[3] for r in rows], "me", pref_cap, left[0])
-    if asks.intersection(shown) or " (ask)" in summary:
-        put("How to read the claims", LEGEND)
-    cap, before = pref_cap, left[0]
-    if problem := named_problem(vault, prompt):
-        put(ATTEMPT_HEAD, attempt_line(problem))
-        cap -= before - left[0]  # budget-neutral: the line comes out of the preferences cap
-    if prefs := fit([r[3] for r in rows], "me", cap, left[0], "preference"):
-        put("Preferences", "\n".join(prefs), "me", cap,
-            more(len(rows) - len(prefs), "preference"))
-    elif n := len(withheld & {"preferences", "personality"}):
-        put("Preferences", WITHHELD.format(n=n))  # no "not recorded" nag: /cortex home asks
     if "teaching-contract" not in withheld and (rules := contract_core(contract(vault, set()))):
         # whole rules that fit, else the first one cut by put
         lines = fit(rules, "me/teaching-contract", PRIME_CAPS["contract"], left[0],
                     "contract") or rules[:1]
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
             PRIME_CAPS["contract"], more(len(rules) - len(lines), "contract"))
+    back = {xray.claim(c): x["last"]
+            for c, x in review.reinforced(events, review.known_texts(vault)).items()}
+    rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,
+                     ids, xs, back)
+    # the prompt's Attempt first line follows Preferences (the owner's standing text first, so
+    # it stays the same from chat to chat) and still comes out of the preferences cap
+    problem = named_problem(vault, prompt)
+    attempt = attempt_line(problem) if problem else ""
+    cap = pref_cap - (len(f"## {ATTEMPT_HEAD}\n{attempt}") + 2 if attempt else 0)
+    # the legend only when an (ask) line can be served: the Preferences fit below has no more
+    # room than this one, so it serves a prefix of these lines
+    asks = {r[3] for r in rows if r[4]}
+    shown = fit([r[3] for r in rows], "me", cap, left[0])
+    if asks.intersection(shown) or " (ask)" in summary:
+        put("How to read the claims", LEGEND)
+    if prefs := fit([r[3] for r in rows], "me", cap, left[0], "preference"):
+        put("Preferences", "\n".join(prefs), "me", cap,
+            more(len(rows) - len(prefs), "preference"))
+    elif n := len(withheld & {"preferences", "personality"}):
+        put("Preferences", WITHHELD.format(n=n))  # no "not recorded" nag: /cortex home asks
+    if attempt:
+        put(ATTEMPT_HEAD, attempt)
     if xr is not None:
         heads = {b.split("\n", 1)[0][3:] for b in parts}
         xr["served"] = {"core": [c for (p, _, t), c in ids.items()
