@@ -67,13 +67,13 @@ _PHRASES = (
 _TOKENS = (("a chat template token", re.compile(r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>")),
            ("Cortex's untrusted_note tag", re.compile(r"</?untrustednote")))
 # a chat role label opening a line, a sentence or a typed "\n" ("SYSTEM: you must ...",
-# "Human: hi\nAI: sure"); `system:` and `developer:` only when an order follows, so
-# "System: Windows 11" on me/setup passes
+# "Human: hi\nAI: sure"); `user:`, `ai:`, `system:` and `developer:` only when an order
+# follows or after a typed "\n", so "System: Windows 11" and "AI: Claude Pro" on me/setup pass
 _ROLE = re.compile(
-    r"(?m)(?:^|[.!?] |/n)[^\w\n]*(assistant|user|human|ai|"  # _key folds "\" to "/"
-    r"(?:system|developer)(?=[^\w\n]*: ?(?:you|your|always|"
+    r"(?m)(?:^|[.!?] |(?P<nl>/n))[^\w\n]*(?P<role>assistant|human|"  # _key folds "\" to "/"
+    r"(?:user|ai|system|developer)(?(nl)|(?=[^\w\n]*: ?(?:you|your|always|"
     r"never|must|do|don't|dont|ignore|disregard|forget|from now on|send|email|reveal|print|"
-    r"share|delete|obey)\b))[^\w\n]*:")
+    r"share|delete|obey)\b)))[^\w\n]*:")
 # three or more single chars in a row ("i g n o r e"): joined, checked for a trigger word
 _SPACED = re.compile(r"(?<!\S)(?:\S ){2,}\S(?!\S)")
 _TRIGGER = re.compile(r"ignore|disregard|forget|override|instruction|prompt|system")
@@ -102,7 +102,7 @@ def unsafe(text: str) -> str | None:
         if rx.search(loose):
             return f'the phrase "{name}"'
     if m := _ROLE.search("\n".join(lines)):
-        return f'the role label "{m.group(1)}:"'
+        return f'the role label "{m.group("role")}:"'
     for m in _SPACED.finditer(loose):
         if _TRIGGER.search(word := m.group().replace(" ", "")):
             return f'spaced-out letters ("{word}")'

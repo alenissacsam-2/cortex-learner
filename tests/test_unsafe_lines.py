@@ -33,7 +33,8 @@ PASS = ["Always act as a strict reviewer", "Never use emojis", "I prefer system 
         "User research is my job", "I assist users", "I work with Dan on the backend",
         "Act as Dan's backup reviewer", "Writes user: and assistant: roles in chat templates",
         "Prefers AI tools that ask first", "Human-computer interaction is my minor",
-        "Danish is my third language"]
+        "Danish is my third language", "AI: Claude Pro and Gemini",
+        "User: final-year student at IIT"]
 
 
 @pytest.mark.parametrize("text", PASS)
