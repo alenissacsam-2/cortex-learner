@@ -86,7 +86,7 @@ def test_a_pdf_is_parsed_in_the_child_page_by_page(tmp_path, spy):
     assert spy == [("pdfpages", True)]
     assert (f.name, f.unit, f.count, f.cut) == ("lecture.pdf", "page", 3, 0)
     assert [(n, t) for n, t in f.chunks] == list(enumerate(LECTURE, 1))
-    assert f.parsed == ("Lecture Four", "2025-03-04", " ".join(LECTURE), 0) and f.data == b""
+    assert f.parsed == ("Lecture Four", "2025-03-04", LECTURE, 3, 0) and f.data == b""
     assert f.vecs is None  # no search model: BM25 later
     assert f.info() == {"id": "", "name": "lecture.pdf", "unit": "page", "count": 3, "cut": 0,
                         "saved": None, "scan": False}
@@ -116,7 +116,7 @@ def test_a_scan_read_with_ocr_says_so_and_keeps_its_pages(tmp_path, in_process, 
     f = askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a", "b"])), "handout.pdf")
     assert f.scan and f.info()["scan"] is True and (f.unit, f.count, f.cut) == ("page", 2, 0)
     assert f.chunks == [(1, "Heaps are trees"), (2, "Heaps are trees")]
-    assert f.parsed[2:] == ("Heaps are trees Heaps are trees", 2)  # Save marks its page
+    assert f.parsed[2:] == (["Heaps are trees"] * 2, 2, 2)  # Save marks its page
     monkeypatch.setattr(more_sources, "OCR_PAGES", 1)  # the cap: read up to page 1 of 2
     assert askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a", "b"])), "h.pdf").cut == 1
     monkeypatch.setattr(more_sources, "_ocr", lambda engine, page: "")
@@ -349,6 +349,16 @@ def test_save_makes_one_page_through_the_documents_import_and_is_undoable(root, 
     # undone as other imports are: revert its commit and the page is gone
     _git(root, "revert", "--no-edit", commit)
     assert not (root / saved["path"]).exists()
+
+
+def test_save_keeps_the_whole_file_with_its_pages(root, tmp_path):
+    """R17: Save to your brain keeps every page, not the first 1,500 characters."""
+    pages = [f"Chapter {i} " + "heaps keep the smallest key on top " * 30 for i in (1, 2, 3)]
+    f = askfile.read(_write(tmp_path, "up.pdf", _pdf(pages)), "book.pdf")
+    page = (root / askfile.save(Vault(root), f)["path"]).read_text("utf-8")
+    assert "\n## Page 3\nChapter 3 heaps" in page
+    assert page.split("## Page 1")[1].count("smallest key") == 90
+    assert 'summary: "Chapter 1 heaps' in page
 
 
 def test_save_from_text_imports_the_note(root, tmp_path):

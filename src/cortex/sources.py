@@ -65,6 +65,7 @@ _DAY_LINE = re.compile(r"- (\d{4}-\d\d-\d\d): ")  # a month page's per-day summa
 HEADER = re.compile(r"^Source: (.+?) · Date: (\S+)(?: · From: (.*?))?"
                     r"(?: · body: ([0-9a-f]{16}))? · sha: [0-9a-f]{16}$", re.M)
 SHOWN_EDITED = 5  # Review cards of hand-edited imported pages shown at a time
+EDITED = "you edited the page; it was left as it is"  # a `keeps_edits` source's skip reason
 _WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 # "On Tue, 3 Nov 2026 at 09:30, Asha <her address> wrote:", which mail clients may wrap once
@@ -113,6 +114,11 @@ class Source:
     # `updates`: a page's figure (Spotify hours, mail messages); a re-import with a smaller one
     # (a partial export) leaves the page as it is
     size: Callable[[str], float] | None = None
+    # R17 (docs) `updates`: a page is rewritten only while its body is as the import wrote it
+    # (`_edited`); an owner-edited page stays as it is, counted under EDITED. A page another
+    # source wrote, or whose body is the same, is a duplicate
+    keeps_edits: bool = False
+    not_summary: re.Pattern | None = None  # lines never taken as a page's summary (docs' headings)
     # RR-18 (notes): a changed file at a known `From:` origin rewrites that page when its body
     # is as the import wrote it (the header's `body:` sha); `walk_errors` (folders the walk
     # could not read) keeps the report from counting pages as gone from the folder
@@ -378,11 +384,14 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         text = m.group(3) or m.group(2)
         return f"[[{to}|{text}]]" if to else text
 
+    def made(it, text):  # the body text (no facts) the import writes for `it` holding `text`
+        return scrub(_WIKI.sub(link, text), src).strip().removeprefix(f"# {it.title}\n")
+
     for nid, it, h, hidden, old in todo:
-        body = scrub(_WIKI.sub(link, it.text), src).strip() \
-            .removeprefix(f"# {it.title}\n")
-        first = next((s.strip("# ").strip() for s in body.splitlines()
-                      if s.strip("# ").strip()), it.title)
+        body = made(it, it.text)
+        first = next((s.strip("# ").strip() for s in body.splitlines() if s.strip("# ").strip()
+                      and not (src.not_summary and src.not_summary.fullmatch(s.strip()))),
+                     it.title)
         fields = {"title": scrub(it.title, src), "kind": "resource", "resource_type": "other",
                   "status": "reference", "covers": [], "related": [], "date": it.date,
                   "summary": first[:160]}
@@ -404,6 +413,14 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
             r["duplicate"] += 1  # `updates`: the same text as last time; the owner's edits stay
             continue
+        was = made(it, it.key or it.text) if src.keeps_edits else ""  # as its key's page holds
+        if src.keeps_edits and (m := HEADER.search(cur)) and (
+                m.group(1) not in _labels(src) or _rest(cur, m) == body):
+            r["duplicate"] += 1  # another source's page, or the same body (no mark yet)
+            continue
+        if src.keeps_edits and _edited(cur, was):
+            r["reasons"][EDITED] = r["reasons"].get(EDITED, 0) + 1
+            continue
         if src.size and src.size(body) < src.size(cur):
             r["reasons"]["less than the page already has"] = \
                 r["reasons"].get("less than the page already has", 0) + 1
@@ -418,9 +435,10 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             continue
         r["updated"] += 1
         r["private"] += hidden
-        if not dry_run:  # by_origin: a page edited since the check keeps its edit
-            vault.update_text(old, lambda cur, t=text: cur if src.by_origin
-                              and untouched(cur) is False else t)
+        if not dry_run:  # by_origin, keeps_edits: a page edited since the check keeps its edit
+            vault.update_text(old, lambda cur, t=text, was=was: cur if (
+                src.by_origin and untouched(cur) is False) or (
+                src.keeps_edits and _edited(cur, was)) else t)
 
 
 SUMMARY_CHARS = 200
@@ -446,7 +464,22 @@ def untouched(text: str) -> bool | None:
     m = HEADER.search(text)
     if not m or not m.group(4):
         return None
-    return _sha(text[m.end():].replace("\r\n", "\n").strip()) == m.group(4)
+    return _sha(_rest(text, m)) == m.group(4)
+
+
+def _rest(text: str, m: re.Match) -> str:
+    """An imported page's body under its header line, as `untouched` hashes it."""
+    return text[m.end():].replace("\r\n", "\n").strip()
+
+
+def _edited(cur: str, was: str) -> bool:
+    """R17: whether the owner edited an imported page: its body no longer matches its `body:`
+    sha, or (a page written with no sha: the docs import before R17) its text under the fact
+    lines is no longer `was`, the text the import wrote; a page whose header is gone too."""
+    m = HEADER.search(cur)
+    if not m:
+        return True
+    return untouched(cur) is False if m.group(4) else _rest(cur, m).split("\n\n", 1)[-1] != was
 
 
 def _by_origin(vault: Vault, src: Source) -> dict[str, tuple[Path, str]]:

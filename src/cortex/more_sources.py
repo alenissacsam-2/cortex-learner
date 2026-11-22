@@ -4,7 +4,10 @@ so the local Chat (a small model reading a few ~700-character passages) can answ
 
 - docs: one page per .pdf/.docx (pypdf; .docx through zipfile + its word/document.xml): the
   title (PDF metadata, else the file name), the date (PDF creation date, else the file's), the
-  first DOC_CHARS characters. .md/.txt go through importers.note_item, keyed as notes are, so a
+  full text up to DOC_FULL_CHARS (R17; a PDF's pages under `## Page N` headings, `_paged`).
+  Keyed by its first DOC_CHARS characters (all a page held before R17) with `updates`, so a
+  re-import refills a page imported clipped, unless the owner edited it (`keeps_edits`).
+  .md/.txt go through importers.note_item, keyed as notes are, so a
   note imported before is a duplicate here. Encrypted, scanned (no text) and oversized files are
   skipped with the reason. C2: on Windows a scanned PDF's pages are read with Windows' own
   offline OCR in the parse child (`_pdf_pages`), and the page ends with OCR_LINE.
@@ -46,6 +49,13 @@ from cortex.vault import VaultError, is_private
 
 DOC_SUFFIXES = (".pdf", ".docx")
 DOC_CHARS, README_CHARS, SUBJECTS, MANY = 1500, 800, 20, 50
+# R17: a document page keeps its full text up to this (about 250 dense pages), so embedding it
+# and opening it in Obsidian stay quick; DOC_CHARS is now only the dedupe key (what the import
+# kept before R17, so a page imported then is found and refilled)
+DOC_FULL_CHARS = 500_000
+KEPT = "Cortex kept the first {} of {} pages."  # a PDF page past DOC_FULL_CHARS or the OCR limits
+# the docs import's lines that are never a page's summary: its page headings and KEPT's line
+NOT_SUMMARY = re.compile(r"## Page \d+|Cortex kept the first \d+ of \d+ pages\.")
 MINED, SHOWN_DECISIONS = 200, 5  # subjects mined per repo; decision cards shown at a time
 DECISIONS = "Decisions in my commits"  # the repo page's section of decision-like subjects
 # RR-9's narrow set: bare remove, drop and rename are left out (too noisy)
@@ -102,11 +112,29 @@ def _origin(path: Path, name: str) -> str:
 
 # ---- docs ----
 
-def _pdf(data: bytes) -> tuple[str, str, str, int | None] | str:
-    """(title, YYYY-MM-DD or "", text, `_pdf_pages`' ocr) or a skip reason."""
-    got = _pdf_pages(data, 2 * DOC_CHARS)
-    return got if isinstance(got, str) else \
-        (got[0], got[1], " ".join(" ".join(got[2]).split()), got[4])
+def _pdf(data: bytes) -> tuple[str, str, list[str], int, int | None] | str:
+    """`_pdf_pages` read up to DOC_FULL_CHARS: the documents import's PDF parse."""
+    return _pdf_pages(data, DOC_FULL_CHARS)
+
+
+def _paged(pages: list[str], total: int) -> tuple[str, str]:
+    """(a PDF page's text, the text as one line): each page with text on one line under a
+    `## Page N` heading (an empty page is skipped, the numbers stay true), whole pages up to
+    DOC_FULL_CHARS (a first page longer than that is clipped), and KEPT's line first when pages
+    were left out here or by `_pdf_pages` (its char or OCR limits)."""
+    flat = [(n, " ".join(p.split())) for n, p in enumerate(pages, 1)]
+    flat = [(n, p) for n, p in flat if p]
+    parts, size, kept = [], 0, len(pages)
+    for n, p in flat:
+        part = f"## Page {n}\n{p}"
+        if size + len(part) > DOC_FULL_CHARS:
+            kept = n - 1 if parts else n
+            parts = parts or [_clip(part, DOC_FULL_CHARS)]
+            break
+        parts.append(part)
+        size += len(part) + 2
+    head = [KEPT.format(kept, total)] if kept < total else []
+    return "\n\n".join(head + parts), " ".join(p for _, p in flat)
 
 
 @functools.cache
@@ -326,15 +354,20 @@ def docs_source(path: Path, skip: tuple[str, ...] = ()) -> sources.Source:
         finally:
             parse.close()
 
-    return sources.Source("docs", "Documents", "folder", items, skips=DOC_SKIPS)
+    return _docs(items)
+
+
+def _docs(items) -> sources.Source:
+    """R17: `updates` (keyed by the text the import kept before), so a page imported clipped
+    gets its full text, unless the owner edited it (`keeps_edits`)."""
+    return sources.Source("docs", "Documents", "folder", items, skips=DOC_SKIPS, updates=True,
+                          keeps_edits=True, not_summary=NOT_SUMMARY)
 
 
 def doc_source(name: str, size: int, mtime: float, read, parse) -> sources.Source:
     """The documents import of one file already read (the app Chat's Save to your brain,
     askfile): `read` gives its bytes, `parse` stands in for the child (`_Parser`'s result)."""
-    return sources.Source("docs", "Documents", "folder",
-                          lambda: _doc_items(Path(name), [(name, size, mtime, read)], (), parse),
-                          skips=DOC_SKIPS)
+    return _docs(lambda: _doc_items(Path(name), [(name, size, mtime, read)], (), parse))
 
 
 def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
@@ -363,14 +396,19 @@ def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
         if isinstance(got, str):
             yield got
             continue
-        title, made, text, *ocr = got  # a PDF's has `_pdf`'s ocr count too
+        if isinstance(got[2], list):  # a PDF: `_pdf_pages`' pages
+            title, made, pages, total, ocr = got
+            text, flat = _paged(pages, total)
+        else:
+            (title, made, flat), ocr = got, 0
+            text = _clip(flat, DOC_FULL_CHARS)
         if not text.strip():
             yield "scanned or no text"
             continue
-        yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime),
-                           # the mark last: the first body line is the page's summary
-                           _clip(text, DOC_CHARS) + ("\n\n" + OCR_LINE) * bool(ocr and ocr[0]),
-                           _origin(path, name))
+        mark = ("\n\n" + OCR_LINE) * bool(ocr)  # last: the first body line is the page's summary
+        # the key is the text the import kept before R17, so its page is found and refilled
+        yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime), text + mark,
+                           _origin(path, name), key=_clip(flat, DOC_CHARS) + mark)
 
 
 # ---- repos ----
