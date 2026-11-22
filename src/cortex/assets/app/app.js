@@ -1726,6 +1726,12 @@
         const o = btn('Open', () => post('/api/open', { what: 'page', path: x.path }), null, { 'aria-label': `Open in Obsidian: ${x.title}` });
         return card(x.title, 'Playbook', `No AI app was served it in the last ${x.calls} calls Cortex keeps` + (x.since ? ` (since ${x.since})` : '') + `; last changed ${x.changed}`, [y[0], o], { y }, `unused:${x.id}`);
       }), 'Every playbook reached an AI app lately.')),
+      // R28a: a preferences line that keeps coming back, offered for Core (one a month at most)
+      ...(d.promote || []).filter((x) => !reviewSkipped.has(`promote:${x.id}`)).map((x) => board('You keep coming back to this. Pin it to Core?', { note: '1' }, (() => {
+        const y = kb('Pin to Core', () => act('/api/review/promote/pin', { id: x.id }, 'Added to your core lines.'), 'btn lit', `Pin to Core: ${x.text}`);
+        const n = kb('Not now', () => act('/api/review/promote/later', { id: x.id }, 'Not asked again for 6 months.'), null, `Not now: ${x.text}`);
+        return card(x.text, where(x), null, [y[0], n[0]], two(y, n), `promote:${x.id}`);
+      })())),
       board('Lines that may conflict', { note: String(pairs.length) }, ...list(pairs.map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
       board('Corrections you repeat', { note: String(rules.length), btn: allRules }, ...list(rules.map((x) => ruleCard(x)),
