@@ -16,6 +16,10 @@ dependencies = [
     "pywebview>=6.2,<7 ; sys_platform == 'win32'",
     "pystray>=0.19.5,<0.20 ; sys_platform == 'win32'",
     "winrt-windows-security-credentials-ui>=4!10.0.28000.2957 ; sys_platform == 'win32'",
+    # C2: Windows' own offline OCR reads scanned PDFs (more_sources._ocr)
+    "winrt-windows-media-ocr>=4!10.0.28000.2957 ; sys_platform == 'win32'",
+    "winrt-windows-graphics-imaging>=4!10.0.28000.2957 ; sys_platform == 'win32'",
+    "winrt-windows-storage-streams>=4!10.0.28000.2957 ; sys_platform == 'win32'",
     "pypdf>=6.9.2,<7",
 ]
 

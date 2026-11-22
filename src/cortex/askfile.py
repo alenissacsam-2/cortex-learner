@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import re
 import secrets
+import sys
 import threading
 import time
 from collections import Counter
@@ -50,7 +51,9 @@ NO_MODEL = "No local model is running, so here are the passages that match."
 LOCAL_ONLY = "Files are answered on this computer only."
 NO_MATCH = "No passage in the file matches these words."
 ORIGIN = "imported from an attached file"  # its From line: never the person's own words
-SCAN = "This PDF has no text layer (it is a scan). Cortex can't read scans yet."
+SCAN = "This PDF has no text layer (it is a scan). Cortex can't read scans yet."  # not Windows
+NO_OCR = ("This PDF is a scan, and Windows has no text-recognition language installed, so "
+          "Cortex can't read it.")
 WHY = {"encrypted": "This file is password-protected. Remove the password, then attach it "
                     "again.",
        "parse timed out": "Reading this file took too long, so Cortex stopped. Try a smaller "
@@ -72,7 +75,8 @@ class File:
     size: int
     mtime: float
     data: bytes  # .txt and .md: the bytes the notes import reads; else b""
-    parsed: tuple | None  # PDF and .docx: (title, date, text) as the child gives the import
+    parsed: tuple | None  # PDF and .docx: (title, date, text[, ocr]) as the child gives the import
+    scan: bool = False  # C2: a PDF read with Windows OCR; its line says "(read from a scan)"
     id: str = ""
     used: float = 0.0
     vecs: np.ndarray | None = None
@@ -82,7 +86,7 @@ class File:
 
     def info(self) -> dict:
         return {"id": self.id, "name": self.name, "unit": self.unit, "count": self.count,
-                "cut": self.cut, "saved": self.saved}
+                "cut": self.cut, "saved": self.saved, "scan": self.scan}
 
 
 def _paras(text: str):
@@ -135,7 +139,7 @@ def read(path: Path, name: str) -> File:
         raise ValueError(f"This file is over {LIMIT[suffix] // 2**20} MB, the most Cortex reads "
                          f"from one {suffix} file.")
     raw = path.read_bytes()
-    data, parsed, total = b"", None, 0
+    data, parsed, total, ocr = b"", None, 0, 0
     if suffix in (".pdf", ".docx"):
         parse = more_sources._Parser()
         try:
@@ -145,12 +149,15 @@ def read(path: Path, name: str) -> File:
         if isinstance(got, str):
             raise ValueError(WHY.get(got, WHY["unreadable"]))
         if suffix == ".pdf":
-            title, made, pages, total = got
-            parsed = (title, made, " ".join(" ".join(pages).split()))  # as more_sources._pdf
+            title, made, pages, total, ocr = got
+            parsed = (title, made, " ".join(" ".join(pages).split()), ocr)  # as more_sources._pdf
         else:
             parsed, pages = tuple(got), [got[2]]
         if not parsed[2].strip():
-            raise ValueError(SCAN if suffix == ".pdf" else WHY["empty"])
+            # C2: ocr None is a PDF with no text and no OCR in the child (as before C2); a number
+            # means Windows OCR ran and read nothing
+            raise ValueError(SCAN if suffix == ".pdf" and sys.platform != "win32" else
+                             NO_OCR if suffix == ".pdf" and ocr is None else WHY["empty"])
     else:
         try:
             text = raw.decode("utf-8-sig") if b"\0" not in raw else None
@@ -172,7 +179,7 @@ def read(path: Path, name: str) -> File:
     elif suffix == ".pdf" and len(pages) < total:  # the child stopped at PAGES_CHARS
         cut = len(pages)
     f = File(name, "page" if suffix == ".pdf" else "part", total, chunks, cut, st.st_size,
-             st.st_mtime, data, parsed)
+             st.st_mtime, data, parsed, scan=bool(ocr))
     if (embed := semantic.load_embedder()) is not None:
         f.vecs = semantic.embed_all(embed, [t for _, t in chunks])
     return f

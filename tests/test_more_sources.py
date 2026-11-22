@@ -141,6 +141,115 @@ def test_a_parse_that_hangs_or_crashes_is_a_skip(tmp_path, monkeypatch):
     assert list(more_sources.docs_source(d).items()) == ["unreadable"] * 2
 
 
+def scan_pdf(pages: list[str], size: tuple[int, int] = (400, 120)) -> bytes:
+    """C2: a scanned PDF made with Pillow: each page one image of its words, no text layer."""
+    from PIL import Image, ImageDraw, ImageFont
+    try:
+        font = ImageFont.truetype("arial.ttf", size[0] // 28)
+    except OSError:
+        font = ImageFont.load_default(size[0] // 28)
+    ims = []
+    for words in pages:
+        im = Image.new("RGB", size, "white")
+        ImageDraw.Draw(im).text((size[0] // 12, size[1] // 10), words, fill="black", font=font)
+        ims.append(im)
+    buf = io.BytesIO()
+    ims[0].save(buf, "PDF", resolution=200, save_all=True, append_images=ims[1:])
+    return buf.getvalue()
+
+
+@pytest.fixture
+def ocr(monkeypatch):
+    """Windows OCR mocked in this process: each page OCR'd reads "read page <n>"."""
+    seen = []
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: "engine")
+
+    def fake(engine, page):
+        seen.append(len(page.images))
+        return f"read page {len(seen)}"
+    monkeypatch.setattr(more_sources, "_ocr", fake)
+    return seen
+
+
+def _with_text(scan: bytes, text: str) -> bytes:
+    """`scan`'s first page with `text` laid over it: a page with text and an image."""
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter(clone_from=PdfReader(io.BytesIO(scan)))
+    w.pages[0].merge_page(PdfReader(io.BytesIO(_pdf(text))).pages[0])
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def test_only_pages_with_no_text_and_an_image_are_ocrd(ocr):
+    assert more_sources._pdf_pages(scan_pdf(["Heaps"]), 10**6)[2:] == (["read page 1"], 1, 1)
+    mixed = _with_text(scan_pdf(["Heaps"]), "Typed words")
+    _, _, pages, total, n = more_sources._pdf_pages(mixed, 10**6)
+    assert "Typed words" in pages[0] and (total, n) == (1, 0) and ocr == [1]  # not OCR'd
+    # a blank page has no image: nothing to OCR, and it is not a scan
+    assert more_sources._pdf_pages(_pdf(), 10**6)[2:] == ([""], 1, 0) and ocr == [1]
+
+
+def test_ocr_reads_at_most_ocr_pages_and_stops_past_its_time(ocr, monkeypatch):
+    assert more_sources.OCR_PAGES == 100 and more_sources.OCR_BUDGET < more_sources.PARSE_TIMEOUT
+    monkeypatch.setattr(more_sources, "OCR_PAGES", 2)
+    got = more_sources._pdf_pages(scan_pdf(["a", "b", "c"]), 10**6)
+    assert got[2:] == (["read page 1", "read page 2"], 3, 2)  # read up to page 2 of 3
+    monkeypatch.setattr(more_sources, "OCR_BUDGET", -1.0)
+    assert more_sources._pdf_pages(scan_pdf(["a"]), 10**6)[2:] == ([], 1, 0)
+
+
+def test_one_page_that_fails_ocr_is_skipped_not_the_file(monkeypatch):
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: "engine")
+    calls = []
+
+    async def recognize(engine, images):
+        calls.append(len(images))
+        if len(calls) == 2:
+            raise OSError("WinRT could not decode it")
+        return f"line {len(calls)}"
+    monkeypatch.setattr(more_sources, "_recognize", recognize)
+    got = more_sources._pdf_pages(scan_pdf(["a", "b", "c"]), 10**6)
+    assert got[2:] == (["line 1", "", "line 3"], 3, 2) and calls == [1, 1, 1]
+
+
+def test_without_ocr_a_scan_is_skipped_as_before(root_plain, monkeypatch):
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: None)
+    data = scan_pdf(["Heaps"])
+    assert more_sources._pdf_pages(data, 10**6)[2:] == ([""], 1, None)
+    src = more_sources.doc_source("scan.pdf", len(data), 0.0, lambda *a, **k: data,
+                                  lambda kind, d: more_sources._pdf(d))
+    assert list(src.items()) == ["scanned or no text"]
+
+
+def test_an_ocrd_document_page_says_so(root_plain, ocr):
+    data, v = scan_pdf(["Heaps", "Tries"]), Vault(root_plain)
+    src = more_sources.doc_source("lecture-scan.pdf", len(data), 0.0, lambda *a, **k: data,
+                                  lambda kind, d: more_sources._pdf(d))
+    assert sources.run(v, src, C)["imported"] == 1
+    page = _page(v, "docs-lecture-scan")
+    assert f"{more_sources.OCR_LINE}\n\nread page 1 read page 2" in page
+    text = sources.run(v, more_sources.doc_source(
+        "typed.pdf", 9, 0.0, lambda *a, **k: _pdf("Typed"), lambda kind, d: more_sources._pdf(d)),
+        C)
+    assert text["imported"] == 1 and more_sources.OCR_LINE not in _page(v, "docs-typed")
+
+
+@pytest.mark.slow
+def test_windows_ocr_reads_a_scan_in_the_child(tmp_path):
+    """The real engine, through the parse child; skipped off Windows or with no OCR language."""
+    if sys.platform != "win32" or more_sources._ocr_engine() is None:
+        pytest.skip("no Windows OCR on this computer")
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "scan.pdf").write_bytes(scan_pdf(["Photosynthesis makes glucose", "Mitochondria 1234"],
+                                          size=(1700, 2200)))
+    it = next(iter(more_sources.docs_source(d).items()))
+    assert not isinstance(it, str), it
+    assert it.text.startswith(more_sources.OCR_LINE)
+    assert "Photosynthesis makes glucose" in it.text and "Mitochondria 1234" in it.text
+
+
 def test_docs_reuse_an_earlier_notes_import(root_plain, tmp_path):
     v, d = Vault(root_plain), _docs_folder(tmp_path / "docs")
     importers.import_notes(v, d)

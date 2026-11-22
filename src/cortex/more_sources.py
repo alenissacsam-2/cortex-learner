@@ -6,7 +6,8 @@ so the local Chat (a small model reading a few ~700-character passages) can answ
   title (PDF metadata, else the file name), the date (PDF creation date, else the file's), the
   first DOC_CHARS characters. .md/.txt go through importers.note_item, keyed as notes are, so a
   note imported before is a duplicate here. Encrypted, scanned (no text) and oversized files are
-  skipped with the reason.
+  skipped with the reason. C2: on Windows a scanned PDF's pages are read with Windows' own
+  offline OCR in the parse child (`_pdf_pages`), and the page starts with OCR_LINE.
 - repos: one page per git repo one or two folders down (or the folder itself): the README's
   start, the stack from manifest file names, and from `git log --author=<that repo's
   user.email>` the commit count, first and last dates and the last SUBJECTS subjects. Code,
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import calendar
 import csv
+import functools
 import io
 import json
 import os
@@ -31,6 +33,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from collections import defaultdict
 from datetime import datetime
@@ -61,6 +64,11 @@ SKIP_DIRS = frozenset({"node_modules", ".git", ".venv", "__pycache__"})
 POINTERS = (".url", ".lnk", ".gdoc", ".gsheet", ".gslides")
 FOLD_CASE = os.name == "nt"  # Windows folder names ignore case (tests patch it)
 PARSE_TIMEOUT = 30.0  # seconds one PDF or .docx may take in the child before it is a skip
+# C2 limits on Windows OCR of scanned pages (`_pdf_pages`): at most OCR_PAGES pages per file, and
+# no page started past OCR_BUDGET seconds into the file, so a long scan returns the pages read
+# so far well inside PARSE_TIMEOUT (unchanged) instead of being killed with nothing
+OCR_PAGES, OCR_BUDGET = 100, 20.0
+OCR_LINE = "Read with Windows OCR: check names and numbers."  # an OCR'd document page's mark
 _CHILD = [sys.executable, "-c", "from cortex.more_sources import _parse_child; _parse_child()"]
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
@@ -94,16 +102,71 @@ def _origin(path: Path, name: str) -> str:
 
 # ---- docs ----
 
-def _pdf(data: bytes) -> tuple[str, str, str] | str:
-    """(title, YYYY-MM-DD or "", text) or a skip reason."""
+def _pdf(data: bytes) -> tuple[str, str, str, int | None] | str:
+    """(title, YYYY-MM-DD or "", text, `_pdf_pages`' ocr) or a skip reason."""
     got = _pdf_pages(data, 2 * DOC_CHARS)
-    return got if isinstance(got, str) else (got[0], got[1], " ".join(" ".join(got[2]).split()))
+    return got if isinstance(got, str) else \
+        (got[0], got[1], " ".join(" ".join(got[2]).split()), got[4])
 
 
-def _pdf_pages(data: bytes, limit: int) -> tuple[str, str, list[str], int] | str:
+@functools.cache
+def _ocr_engine():
+    """C2: Windows' offline OCR engine in the person's own languages, or None (not Windows, no
+    text-recognition language installed, or the winrt packages missing). Only the parse child
+    calls it: nothing is OCR'd in the server, and nothing leaves the computer."""
+    if sys.platform != "win32":
+        return None
+    try:
+        from winrt.windows.media.ocr import OcrEngine
+        return OcrEngine.try_create_from_user_profile_languages()
+    except Exception:  # noqa: BLE001 - an import or WinRT failure: no OCR, as before C2
+        return None
+
+
+def _ocr(engine, page) -> str:
+    """C2: the text OCR reads in `page`'s images, a line per line read, in reading order; ""
+    when the page fails, so that one page is skipped, not the file."""
+    import asyncio
+    try:
+        return asyncio.run(_recognize(engine, [im.image for im in page.images]))
+    except Exception:  # noqa: BLE001 - an image pypdf or Windows cannot decode, a WinRT error
+        return ""
+
+
+async def _recognize(engine, images) -> str:
+    from winrt.windows.graphics.imaging import BitmapDecoder
+    from winrt.windows.media.ocr import OcrEngine
+    from winrt.windows.storage.streams import Buffer, InMemoryRandomAccessStream
+    most, lines = OcrEngine.max_image_dimension, []
+    for im in images:
+        im = im.convert("RGB")  # a fresh copy in a mode BMP holds (CMYK, 1-bit, palette...)
+        im.thumbnail((most, most))  # only ever scales down, keeping the aspect
+        out = io.BytesIO()
+        im.save(out, "BMP")  # uncompressed: the quickest for Windows to decode
+        data = out.getvalue()
+        buf = Buffer(len(data))  # in memory only: nothing is written to disk
+        buf.length = len(data)
+        memoryview(buf)[:] = data
+        stream = InMemoryRandomAccessStream()
+        await stream.write_async(buf)
+        stream.seek(0)
+        bmp = await (await BitmapDecoder.create_async(stream)).get_software_bitmap_async()
+        lines += [ln.text for ln in (await engine.recognize_async(bmp)).lines]
+    return "\n".join(lines)
+
+
+def _pdf_pages(data: bytes, limit: int) -> tuple[str, str, list[str], int, int | None] | str:
     """(title, YYYY-MM-DD or "", each page's text up to about `limit` characters in all, the
-    page count) or a skip reason. The app's Chat reads an attached PDF this way (askfile)."""
+    page count, ocr) or a skip reason. The app's Chat reads an attached PDF this way (askfile).
+
+    C2: a page with no text but with images (a scan) is read with Windows OCR (`_ocr`); a page
+    with some text is never OCR'd. `ocr` is how many pages OCR read text from, or None when no
+    page has text and this computer has no OCR (`_ocr_engine`): then nothing changes from
+    before C2. Limits: at most OCR_PAGES pages are OCR'd per file, and none is started past
+    OCR_BUDGET seconds; at either the reading stops there, so `pages` is shorter than the page
+    count (askfile says where it stopped)."""
     from pypdf import PdfReader
+    start = time.monotonic()
     try:
         rd = PdfReader(io.BytesIO(data))
         if rd.is_encrypted:
@@ -112,9 +175,16 @@ def _pdf_pages(data: bytes, limit: int) -> tuple[str, str, list[str], int] | str
                     return "encrypted"
             except Exception:  # noqa: BLE001 - AES needs a crypto library pypdf may lack
                 return "encrypted"
-        pages, n = [], 0
+        pages, n, tried, read = [], 0, 0, 0
         for page in rd.pages:
-            pages.append(page.extract_text() or "")
+            text = page.extract_text() or ""
+            if not text.strip() and _has_images(page) and (engine := _ocr_engine()) is not None:
+                if tried >= OCR_PAGES or time.monotonic() - start > OCR_BUDGET:
+                    break
+                tried += 1
+                text = _ocr(engine, page)
+                read += bool(text.strip())
+            pages.append(text)
             n += 1 + len(pages[-1])
             if n > limit:
                 break
@@ -127,7 +197,16 @@ def _pdf_pages(data: bytes, limit: int) -> tuple[str, str, list[str], int] | str
             made = ""
     except Exception:  # noqa: BLE001 - pypdf raises many types on a damaged file
         return "unreadable"
-    return title, made, pages, total
+    # the engine is only asked for when no page has text, so a text PDF never loads it
+    ocr = read if any(p.strip() for p in pages) or _ocr_engine() is not None else None
+    return title, made, pages, total, ocr
+
+
+def _has_images(page) -> bool:
+    try:
+        return len(page.images) > 0
+    except Exception:  # noqa: BLE001 - a damaged resource: no OCR, the page as before C2
+        return False
 
 
 def _docx(data: bytes) -> tuple[str, str, str] | str:
@@ -284,12 +363,13 @@ def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
         if isinstance(got, str):
             yield got
             continue
-        title, made, text = got
+        title, made, text, *ocr = got  # a PDF's has `_pdf`'s ocr count too
         if not text.strip():
             yield "scanned or no text"
             continue
         yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime),
-                           _clip(text, DOC_CHARS), _origin(path, name))
+                           (OCR_LINE + "\n\n") * bool(ocr and ocr[0]) + _clip(text, DOC_CHARS),
+                           _origin(path, name))
 
 
 # ---- repos ----
