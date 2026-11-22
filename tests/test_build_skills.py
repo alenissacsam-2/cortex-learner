@@ -59,7 +59,11 @@ def test_modes_have_rows_and_files():
 
     skill = ROOT / "skills" / "cortex"
     core = (skill / "SKILL.md").read_text(encoding="utf-8")
-    hint = typing.get_type_hints(Cortex.cortex_start)["mode"]
+    from mcp.server import mcpserver as sdk
+
+    # Context resolves in mcp_server's globals only after build_server: name it here, so the
+    # test passes alone and under -n auto too
+    hint = typing.get_type_hints(Cortex.cortex_start, localns={"Context": sdk.Context})["mode"]
     for mode in typing.get_args(hint):
         assert f"| `{mode}` |" in core, mode
     refs = set(re.findall(r"`(modes/[\w-]+\.md)`", core))
