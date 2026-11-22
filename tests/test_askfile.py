@@ -86,10 +86,10 @@ def test_a_pdf_is_parsed_in_the_child_page_by_page(tmp_path, spy):
     assert spy == [("pdfpages", True)]
     assert (f.name, f.unit, f.count, f.cut) == ("lecture.pdf", "page", 3, 0)
     assert [(n, t) for n, t in f.chunks] == list(enumerate(LECTURE, 1))
-    assert f.parsed == ("Lecture Four", "2025-03-04", " ".join(LECTURE)) and f.data == b""
+    assert f.parsed == ("Lecture Four", "2025-03-04", " ".join(LECTURE), 0) and f.data == b""
     assert f.vecs is None  # no search model: BM25 later
     assert f.info() == {"id": "", "name": "lecture.pdf", "unit": "page", "count": 3, "cut": 0,
-                        "saved": None}
+                        "saved": None, "scan": False}
 
 
 def test_a_docx_is_parsed_in_the_child_into_parts(tmp_path, spy, monkeypatch):
@@ -102,8 +102,41 @@ def test_a_docx_is_parsed_in_the_child_into_parts(tmp_path, spy, monkeypatch):
     assert f.vecs.shape == (2, 4)  # embedded once, when read
 
 
+@pytest.fixture
+def in_process(monkeypatch):
+    """The child's PDF parse run in this process, so its OCR can be mocked (C2)."""
+    monkeypatch.setattr(more_sources._Parser, "__call__", lambda self, kind, data:
+                        more_sources._pdf_pages(data, more_sources.PAGES_CHARS))
+
+
+def test_a_scan_read_with_ocr_says_so_and_keeps_its_pages(tmp_path, in_process, monkeypatch):
+    from test_more_sources import scan_pdf
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: "engine")
+    monkeypatch.setattr(more_sources, "_ocr", lambda engine, page: "Heaps are trees")
+    f = askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a", "b"])), "handout.pdf")
+    assert f.scan and f.info()["scan"] is True and (f.unit, f.count, f.cut) == ("page", 2, 0)
+    assert f.chunks == [(1, "Heaps are trees"), (2, "Heaps are trees")]
+    assert f.parsed[2:] == ("Heaps are trees Heaps are trees", 2)  # Save marks its page
+    monkeypatch.setattr(more_sources, "OCR_PAGES", 1)  # the cap: read up to page 1 of 2
+    assert askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a", "b"])), "h.pdf").cut == 1
+    monkeypatch.setattr(more_sources, "_ocr", lambda engine, page: "")
+    with pytest.raises(ValueError, match=r"^This file has no text to read\.$"):
+        askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a"])), "blank.pdf")
+
+
+@pytest.mark.parametrize(("platform", "said"), [("win32", askfile.NO_OCR),
+                                                ("linux", askfile.SCAN)])
+def test_a_scan_without_ocr_says_why(tmp_path, in_process, monkeypatch, platform, said):
+    from test_more_sources import scan_pdf
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: None)
+    monkeypatch.setattr(askfile.sys, "platform", platform)
+    for data in (scan_pdf(["a"]), _pdf([""])):  # a scan, and a PDF with no text at all
+        with pytest.raises(ValueError) as e:
+            askfile.read(_write(tmp_path, "up.pdf", data), "scan.pdf")
+        assert str(e.value) == said
+
+
 @pytest.mark.parametrize(("name", "data", "said"), [
-    ("scan.pdf", _pdf([""]), askfile.SCAN),
     ("locked.pdf", _pdf(["secret plans"], encrypt="pw"), askfile.WHY["encrypted"]),
     ("broken.docx", b"not a zip", askfile.WHY["unreadable"]),
     ("a.exe", b"MZ", "Attach a .pdf, .docx, .txt or .md file."),
@@ -341,7 +374,8 @@ def test_the_app_attaches_removes_saves_and_forgets_on_clear(root, tmp_path, hom
         app.chat_attach({"upload": "u1", "name": "x.pdf"})
     bad = _write(tmp_path, "upload-2-scan.pdf", _pdf([""]))
     app.uploads["u2"] = bad
-    with pytest.raises(ValueError, match="no text layer"):
+    # an empty PDF: "no text layer" (not Windows), "is a scan" or "no text to read" (C2)
+    with pytest.raises(ValueError, match="no text layer|is a scan|no text to read"):
         app.chat_attach({"upload": "u2", "name": "scan.pdf"})
     assert not bad.exists()
     r = app.chat_file_save({"id": got["id"]})
