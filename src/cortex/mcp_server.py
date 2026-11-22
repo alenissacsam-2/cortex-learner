@@ -3389,8 +3389,9 @@ class Cortex:
                 raise invalid(f"A {kind} takes only aliases and requires in fields.")
             nid = self.catalog.add(kind, title, parent, fields.get("aliases") or [],
                                    fields.get("requires") or [], force, areas or [])
-        else:
-            nid = self._add_note(kind, title, parent, fields, force, raw_text)
+        else:  # G-Q9-15: a page added after the chat read outside text says so (`exposed`)
+            nid = self._add_note(kind, title, parent, fields, force, raw_text,
+                                 exposed=self.session.exposed)
         adopted = kind in CATALOG_KINDS and self.catalog.adopted
         hint = self.sessions.note("added", nid if kind == "concept" else None, change={
             "tool": "add", "id": nid, "kind": kind, "op": "adopt" if adopted else "create",
@@ -3445,7 +3446,7 @@ class Cortex:
                         "text='<hub id>'); else leave the page unfiled. "}
 
     def _add_note(self, kind: str, title: str, parent: str | None, fields: dict,
-                  force: bool, raw_text: str | None = None) -> str:
+                  force: bool, raw_text: str | None = None, exposed: bool = False) -> str:
         extra = set(fields) - ADD_FIELDS[kind]
         if extra:
             raise invalid(f"Fields not allowed on a {kind}: {', '.join(sorted(extra))}; allowed: "
@@ -3502,6 +3503,8 @@ class Cortex:
             body = f"# {title}\n\n## Steps\n\n## Pitfalls\n\n## Done when\n"  # G4, filled by patch
         if kind in WIKI_DEFAULTS:
             fields = {"kind": kind, **fields}
+        if exposed:  # server-stamped: never in ADD_FIELDS, so never from tool input
+            fields = {**fields, "exposed": True}
         if raw_text is None:
             self.vault.create_note(kind, nid, {"title": title, **fields}, body)
             return nid

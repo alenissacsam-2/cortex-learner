@@ -199,13 +199,14 @@ def test_keep_both_covers_only_lines_saying_the_same_facts(warm):
     ("Worked at Acme", "I work at Acme"),
     ("Works on the payments team at Acme in Pune", "I'm on the payments team"),  # low overlap
     ("Uses Vim", "I stopped using Vim"),
+    ("Lives in Pune", "I moved to Pune last month"),  # R6b: half its words, under 60%
 ])
 def test_harvest_drops_a_fact_its_quote_does_not_back(fact, quote):
     assert fh.check({"page": "preferences", "fact": fact, "quote": quote}, [quote]) is None
 
 
 @pytest.mark.parametrize("fact,quote", [
-    ("Lives in Pune", "I moved to Pune last month"),
+    ("Moved to Pune", "I moved to Pune last month"),
     ("Works on the payments team", "I'm on the payments team"),
     ("Uses Neovim", "I use Neovim"),
     ("Used to live in Delhi", "I used to live in Delhi"),

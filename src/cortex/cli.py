@@ -2311,6 +2311,34 @@ def eval_learning(since: Annotated[str | None, typer.Option(
     typer.echo(json.dumps(r, indent=1) if json_out else learning_eval.text(r))
 
 
+@eval_app.command("harvest-facts")
+@_errors
+def eval_harvest_facts(file: Annotated[Path | None, typer.Option(
+        "--file", help="A labelled eval file (default: the repo's "
+                       "tests/fixtures/harvest_eval.json).")] = None) -> None:
+    """R6d: run the no-model fact finder (Tier 0) over labelled chat turns: precision,
+    recall, hypothetical false positives and polarity flips against their targets. Reads no
+    vault and writes nothing."""
+    from cortex import fact_harvest as fh
+
+    p = file or Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "harvest_eval.json"
+    try:
+        items = json.loads(p.read_text(encoding="utf-8"))["items"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise VaultError("invalid_argument", f"Cannot read the eval file {p}: {e}") from None
+    r = fh.evaluate(items)
+    t = fh.TARGETS
+    typer.echo(f"turns: {r['turns']}  facts extracted: {r['extracted']}  right: {r['right']}")
+    typer.echo(f"precision: {r['precision']:.1%} (target >= {t['precision']:.0%})")
+    typer.echo(f"recall: {r['recall']:.1%} ({r['found']} of {r['expected']} expected facts)")
+    typer.echo(f"hypothetical false positives: {r['hypothetical_fp']:.1%} ({r['unreal_hit']} of "
+               f"{r['unreal']} hypothetical or roleplay turns; target <= "
+               f"{t['hypothetical_fp']:.0%})")
+    typer.echo(f"polarity flips: {r['flips']} (target {t['flips']})")
+    typer.echo(f"promotion facts not held for the Review: {r['held_missed']}")
+    typer.echo("targets: met" if fh.meets(r) else "targets: NOT met")
+
+
 @eval_app.command("all")
 @_errors
 def eval_all(k: Annotated[int, typer.Option(help="Score the top k recall hits.")] = 8,

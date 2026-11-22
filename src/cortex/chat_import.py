@@ -95,6 +95,15 @@ EXPORT = chats.EXPORT_DIRS["claude"]  # (folder, source) of claude.ai export con
 SAME_CHAT = timedelta(minutes=15)
 OPENING = 200  # characters of the first message compared
 TAGS = 50  # //tags kept per chat (R3-5)
+# R6: a model's thinking trace in a turn (a pasted DeepSeek or Qwen answer): a closed <think> or
+# <thinking> block anywhere, or an unclosed one that opens the turn; never indexed or harvested
+_THINK = re.compile(r"<(think|thinking)>.*?</\1\s*>|\A\s*<(?:think|thinking)>(?!.*</think).*",
+                    re.S | re.I)
+
+
+def strip_thinking(text: str) -> str:
+    """`text` without its model thinking traces (`_THINK`)."""
+    return _THINK.sub("", text).strip() if "<think" in text.lower() else text
 
 
 def enabled() -> bool:
@@ -212,7 +221,7 @@ class Chat:
         return c
 
     def turn(self, ts: str, text: str) -> None:
-        r = chats.redact(text)
+        r = chats.redact(strip_thinking(text))
         t = r[:chats.LINE_CHARS + 1]  # redact, then cut
         w = _when(ts)
         # R3-5: the owner's own words; `one` acts on them. Only a tag that starts a line: one

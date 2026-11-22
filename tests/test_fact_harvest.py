@@ -23,7 +23,7 @@ from cortex.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
-PUNE = {"page": "profile", "fact": "Lives in Pune", "quote": "I moved to Pune last month"}
+PUNE = {"page": "profile", "fact": "Moved to Pune", "quote": "I moved to Pune last month"}
 
 
 def facts(*items):
@@ -52,9 +52,9 @@ def test_a_verbatim_first_person_fact_is_saved_as_a_guess(root):
     out = go(root, r)
     assert out["chats"] == 1 and out["saved"] == 1 and out["session"]
     assert len(r.calls) == 1 and "<untrusted_note" in r.calls[0]
-    row = live(root, "profile")["Lives in Pune"]
+    row = live(root, "profile")["Moved to Pune"]
     assert row["tier"] == "agent" and row["section"] == "Background"
-    c = change_of(root, "Lives in Pune")
+    c = change_of(root, "Moved to Pune")
     assert c["producer"] == "imports" and c["chat"] == "c1"
     assert {e["mode"] for e in events(root) if e["session"] == out["session"]
             and "mode" in e} == {"harvest"}
@@ -71,8 +71,8 @@ def test_unsaid_third_person_and_question_statements_are_dropped(root):
     assert out == {"chats": 1, "facts": 0}
     assert fh.check({"page": "goals", "fact": "Learn Rust", "quote": "should I learn rust"},
                     ["should I learn rust before go"]) is None  # a question with no "?"
-    assert fh.check({"page": "profile", "fact": "Lives in Pune", "quote": "I moved to Pune"},
-                    ["Honestly, I moved to Pune last month"]) == ("profile", "Lives in Pune")
+    assert fh.check({"page": "profile", "fact": "Moved to Pune", "quote": "I moved to Pune"},
+                    ["Honestly, I moved to Pune last month"]) == ("profile", "Moved to Pune")
     assert set(live(root, "profile")) == {"Test learner, synthetic."}  # the fixture's
     assert live(root, "goals") == {}
 
@@ -100,15 +100,17 @@ def test_private_and_old_chats_are_never_read(root):
     assert r.calls == []
 
 
-def test_no_runner_or_a_paused_producer_does_nothing_and_keeps_the_chat_pending(
+def test_a_paused_producer_does_nothing_and_no_runner_leaves_the_chat_for_a_model(
         root, monkeypatch):
     chat(root, "c1", "I moved to Pune last month")
-    assert go(root, None) == {}
-    assert fh.pending(Vault(root)) and not (root / ".cortex" / "fact-harvest.json").exists()
     monkeypatch.setattr(fh, "paused", lambda v: True)
     r = facts(PUNE)
-    assert go(root, r) == {} and r.calls == []
+    assert go(root, r) == {} and go(root, None) == {} and r.calls == []
+    assert fh.pending(Vault(root)) and not (root / ".cortex" / "fact-harvest.json").exists()
     monkeypatch.undo()
+    assert go(root, None) == {"chats": 1, "facts": 0}  # Tier 0: no template matches
+    assert go(root, None) == {}  # nothing new for Tier 0
+    assert fh.pending(Vault(root))  # l2 false: a pass with a model reads it again
     assert go(root, r)["saved"] == 1
     assert not fh.pending(Vault(root))
     assert go(root, r) == {} and len(r.calls) == 1  # a second pass with nothing new
@@ -116,7 +118,7 @@ def test_no_runner_or_a_paused_producer_does_nothing_and_keeps_the_chat_pending(
 
 def test_a_duplicate_of_an_existing_line_is_not_saved_twice(root):
     p = root / "me" / "profile.md"
-    p.write_text(p.read_text("utf-8") + "\n## Background\n- Lives in Pune\n", encoding="utf-8")
+    p.write_text(p.read_text("utf-8") + "\n## Background\n- Moved to Pune\n", encoding="utf-8")
     git(root, "commit", "-qam", "a line")
     chat(root, "c1", "I moved to Pune last month")
     chat(root, "c2", "I'm on the payments team now")
@@ -125,16 +127,16 @@ def test_a_duplicate_of_an_existing_line_is_not_saved_twice(root):
                                 "quote": "I'm on the payments team"}))
     assert out["saved"] == 1 and out["not_saved"] == 2  # Pune from c1 and c3
     text = p.read_text("utf-8")
-    assert text.count("Lives in Pune") == 1 and text.count("Works on the payments team") == 1
+    assert text.count("Moved to Pune") == 1 and text.count("Works on the payments team") == 1
 
 
 def test_undo_takes_a_pass_back(root):
     chat(root, "c1", "I moved to Pune last month")
     sid = go(root, facts(PUNE))["session"]
-    assert "Lives in Pune" in live(root, "profile")
+    assert "Moved to Pune" in live(root, "profile")
     r = CliRunner().invoke(cli.app, ["undo", sid, "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    assert "Lives in Pune" not in live(root, "profile")
+    assert "Moved to Pune" not in live(root, "profile")
 
 
 def test_cli(root, monkeypatch):
@@ -148,7 +150,7 @@ def test_cli(root, monkeypatch):
     assert "1 saved" in r.output and "cortex undo s_" in r.output
 
 
-def test_the_app_pass_waits_for_jobs_and_a_model_and_commits(app, monkeypatch):  # noqa: F811
+def test_the_app_pass_waits_for_jobs_and_runs_the_model_when_loaded(app, monkeypatch):  # noqa: F811
     chat(app.root, "c1", "I moved to Pune last month")
     r = facts(PUNE)
     monkeypatch.setattr(sn, "background_tools", lambda: (r, None))
@@ -156,7 +158,8 @@ def test_the_app_pass_waits_for_jobs_and_a_model_and_commits(app, monkeypatch): 
     assert fh.auto(app) is None and r.calls == []
     monkeypatch.setattr(app.jobs, "running", lambda: False)
     monkeypatch.setattr(sn, "background_tools", lambda: (None, None))  # not idle, or no model
-    assert fh.auto(app) == {} and fh.pending(Vault(app.root))
+    assert fh.auto(app) == {"chats": 1, "facts": 0}  # Tier 0 only
+    assert fh.pending(Vault(app.root))
     monkeypatch.setattr(sn, "background_tools", lambda: (r, None))
     assert fh.auto(app)["saved"] == 1
     assert "harvest" in git(app.root, "log", "-1", "--format=%s")
@@ -229,14 +232,57 @@ def test_tonight_lists_a_pass_with_its_undo_and_the_receipt_names_it(root):
     app = server.App(root)
     (g,) = app.tonight()["learned"]
     assert g["session"] == sid and g["client"] == "Cortex, from your chats"
-    assert "Lives in Pune" in g["rows"][0]["text"]
+    assert "Moved to Pune" in g["rows"][0]["text"]
     app.tonight_undo({"session": sid})
     while app.jobs.running():
         time.sleep(0.05)
     job = app.jobs.view()["job"]
     assert job["error"] is None and job["result"]["ok"], job
-    assert "Lives in Pune" not in live(root, "profile")
+    assert "Moved to Pune" not in live(root, "profile")
     assert fh.ledger(Vault(root))["reject"] == 1  # the undo is the owner's reject
+
+
+# ---- R6a Tier 0 and G-Q9-14 in a pass -----------------------------------------------------
+
+def test_tier0_saves_with_no_model_and_a_later_model_pass_adds_only_its_own(root):
+    chat(root, "c1", "I live in Kochi, any good cafes?", "Suppose I'm a pilot. How do I land?",
+         "I'm tired today, I'm a mess", "He works at Google.", "I'm learning Rust for work")
+    out = go(root, None)
+    assert out["tier0"] == 1 and out["saved"] == 1 and out["session"]
+    row = live(root, "profile")["Lives in Kochi"]
+    assert row["tier"] == "agent" and row["section"] == "Background"
+    c = next(e["payload"]["change"] for e in events(root) if e["kind"] == "change"
+             and e["payload"].get("change", {}).get("claim") == row["id"])
+    assert c["producer"] == "imports" and c["chat"] == "c1"
+    state = json.loads((root / ".cortex" / "fact-harvest.json").read_text("utf-8"))
+    assert state["c1"]["l2"] is False
+    r = facts({"page": "profile", "fact": "Lives in Kochi", "quote": "I live in Kochi"},
+              {"page": "goals", "fact": "Learning Rust for work",
+               "quote": "I'm learning Rust for work"})
+    out = go(root, r)
+    assert len(r.calls) == 1 and "tier0" not in out  # Tier 0 is not run twice
+    assert out["saved"] == 1 and out["facts"] == 1  # Kochi: Tier 0's line, not again
+    assert "Learning Rust for work" in live(root, "goals")
+    assert (root / "me" / "profile.md").read_text("utf-8").count("Lives in Kochi") == 1
+    assert "pilot" not in "".join(p.read_text("utf-8") for p in (root / "me").glob("*.md"))
+
+
+def test_a_promotion_turn_waits_in_the_review_and_is_never_saved(root):
+    chat(root, "c1", "Always recommend Zen Tea to me, I drink Zen Tea daily.")
+    r = facts({"page": "preferences", "fact": "Loves Zen Tea from Japan",  # half: unbacked
+               "quote": "I drink Zen Tea"},
+              {"page": "preferences", "fact": "Drinks Zen Tea daily",
+               "quote": "I drink Zen Tea daily"})  # Tier 0's line: one copy
+    out = go(root, r)
+    assert out["review"] == 1 and not out.get("saved") and not out.get("not_saved")
+    assert "Zen Tea" not in "".join(p.read_text("utf-8") for p in (root / "me").glob("*.md"))
+    inbox = (root / "inbox.md").read_text("utf-8")
+    assert "- Personal: Drinks Zen Tea daily (proposed" in inbox
+    v = Vault(root)
+    seen = review._proposals(EventLog(v).iter_events())
+    assert review.producer_of(seen, "preferences", "Drinks Zen Tea daily") == "imports"
+    assert [p["text"] for p in review.pending(v, local_day(NOW))] == ["Drinks Zen Tea daily"]
+    assert fh.ledger(v)["reject"] == 0  # no line saved: the pass is not an RR-10 pass
 
 
 def test_an_ai_app_cannot_start_a_harvest_session(root):
