@@ -37,7 +37,7 @@ On macOS or Linux, or to work on Cortex's code, use the steps below.
 
 ## 1. What you get
 
-Cortex gives Claude a memory of you as a learner: what you know, what you keep getting wrong, your notes, goals and projects. Everything lives in a folder of plain Markdown and JSONL files on your own computer (the *vault*). You can open that folder in Obsidian. Cortex needs no account, and the only servers it runs listen on your own computer. [PRIVACY.md](PRIVACY.md) explains what stays on your machine and what the AI model sees.
+Cortex gives Claude a memory of you: what you work on, read, decide and know, your notes, goals and projects, and, if you study, what you keep getting wrong. Everything lives in a folder of plain Markdown and JSONL files on your own computer (the *vault*). You can open that folder in Obsidian. Cortex needs no account, and the only servers it runs listen on your own computer. [PRIVACY.md](PRIVACY.md) explains what stays on your machine and what the AI model sees.
 
 ## 2. Requirements
 
@@ -124,7 +124,7 @@ It asks a few questions. Press Enter to take the suggested answer. You can run i
 |---|---|---|
 | Checks | nothing | Checks Python and SQLite, looks for git and for `cortex` on your PATH |
 | Vault | Where to keep the vault (default `~/Cortex`) | Creates the folder with its subfolders, starter `me/` pages, a git repository with a push block, and `~/.cortex/config.yaml` (the pointer to your vault). A folder that already has files is used only after you say yes; your notes are never changed |
-| Sample | Add a sample vault? (new vaults only) | Copies 15 pages about a made-up learner, Sam, plus a few practice results, so you can try things at once |
+| Sample | Add a sample vault? (new vaults only) | Copies 15 pages about a made-up person, Sam (a student), plus a few practice results, so you can try things at once |
 | Model | Download the search model? | Downloads about 150 MB once from Hugging Face into `~/.cortex/models`. Without it, search uses keywords only and new notes are not filed under topics (`cortex topics`) |
 | Claude Code | Install the plugin? | Runs `claude plugin marketplace add` and `claude plugin install`, or prints the two commands to type |
 | Claude desktop | Add Cortex to this config file? | Adds a `cortex` entry to `claude_desktop_config.json` and keeps everything else. It saves the old file first as `claude_desktop_config.json.cortex-<date>-<time>.bak` beside it (the same backups as the app's Connect; an older `.bak` is never overwritten). A file it cannot read stays untouched, and setup prints the entry for you to add by hand (section 7) |
@@ -204,7 +204,7 @@ The setup adds the entry for you when it finds the app's config folder. When Cor
    If it already has `"mcpServers"`, add only the `"cortex": { ... }` part inside it, with a comma between it and the entry before it. Keep the rest of the file as it is.
 3. Fully quit Claude (tray icon or menu bar > **Quit**, not just closing the window) and open it again.
 4. In **Settings > Developer**, check that `cortex` shows as **running**.
-5. For the `/cortex` study skill, use `cortex-skill.zip`: with the Windows installer, download it from the release (the app's **Connect** page links it); from a source checkout, use `dist/cortex-skill.zip` in your Cortex-app folder (if it is missing, run `uv run python scripts/build_skills.py` there to build it). Upload it under **Settings > Capabilities > Skills**. Skills need **Code execution and file creation** turned on, on the same page. Upload the zip as it is; do not unpack it.
+5. For the `/cortex` skill, use `cortex-skill.zip`: with the Windows installer, download it from the release (the app's **Connect** page links it); from a source checkout, use `dist/cortex-skill.zip` in your Cortex-app folder (if it is missing, run `uv run python scripts/build_skills.py` there to build it). Upload it under **Settings > Capabilities > Skills**. Skills need **Code execution and file creation** turned on, on the same page. Upload the zip as it is; do not unpack it.
 
 The Chat tab has no hooks. Instead, Cortex asks Claude to call `cortex_prime` with your first message of each chat, which loads the same short context as the Claude Code hook.
 
@@ -213,7 +213,7 @@ If `cortex` shows as failed, read the MCP logs. On Windows they are in `%APPDATA
 ## 8. Your first conversation
 
 - **With the sample vault:** ask "what do you know about me?" Claude reads Sam's profile and goals. Then type `/cortex` for a short study session on loops or recursion.
-- **With an empty vault:** tell Claude about yourself ("I'm studying for a statistics exam in May"), or say "remember that I prefer short answers". Claude records what you tell it. What it only guesses about you waits in `inbox.md` as unconfirmed until you agree.
+- **With an empty vault:** tell Claude about yourself ("I'm on the payments team" or "I'm studying for a statistics exam in May"), or say "remember that I prefer short answers". Claude records what you tell it. What it only guesses about you waits in `inbox.md` as unconfirmed until you agree.
 
 ## 9. Using it with Obsidian
 

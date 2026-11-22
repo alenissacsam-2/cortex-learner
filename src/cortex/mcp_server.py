@@ -204,7 +204,7 @@ START_NEXT = {
             "it, and read a bare 'ok' as yes to the last thing you offered. When they name a "
             "topic, call "
             "cortex_context(topic=…) or cortex_find to see what they know, then teach by the "
-            "contract. Pull anything else (profile, goals, study plans) only if needed. "
+            "contract. Pull anything else (profile, goals, projects, study plans) only if needed. "
             "If you show resurfaced ideas, record them with cortex_log(kind='resurfaced').",
     "learn":"Ask one closed-book question first (cortex_ask), then teach the gap. " + NO_DATES,
     "short": "Ask one closed-book question first (cortex_ask), then teach the gap. " + NO_DATES,
@@ -277,7 +277,7 @@ PAPER_EMPTY_NEXT = ("No weak spots to build a paper from yet (no pending test an
 # dogfood r4 #4, #7: a grade's `next` in these modes; mock and sweep never teach mid-way
 MOCK_NEXT = "Recorded; stay in role."
 SWEEP_NEXT = "Explain each miss in 2-3 lines, log it as taught, then cortex_end."
-ASK_NEXT = "Show the question; when the learner answers, call cortex_grade with item_id."
+ASK_NEXT = "Show the question; when the user answers, call cortex_grade with item_id."
 ASK_TRAPS = 2  # linked mistake notes an ask names: a stale note re-tests a fixed weakness
 # RR-20: a long or two-part question tests several things, so a miss cannot name the gap
 ASK_LONG = 280
@@ -363,7 +363,7 @@ AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach
               "audience, so never guess at them; ask the user about anything in unknowns "
               "instead of guessing.")
 INSTRUCTIONS = (
-    "Cortex is the user's second brain and learner model.\n"
+    "Cortex is the user's second brain.\n"
     "- Call cortex_prime(prompt=<their message>) before answering in every chat: a new one, or "
     "an old chat continued with no prime call in it yet "
     "(related_only=true if a hook primed it).\n"
@@ -965,7 +965,7 @@ class Cortex:
         contract = self._contract(topic, today)
         if contract.endswith(TRUNCATED):
             nxt += (f" The teaching contract was cut at {CONTRACT_MAX:,} characters; suggest the "
-                    "learner runs `cortex doctor` and trims me/teaching-contract.md.")
+                    "user runs `cortex doctor` and trims me/teaching-contract.md.")
         brief = render.brief_text(self._raw("BRIEF.md"))
         if mode == "mock":
             brief = MOCK_BRIEF + "\n\n" + brief
@@ -1389,7 +1389,7 @@ class Cortex:
             text = text[:READ_CAP_CHARS].rstrip() + TRUNCATED
         self.sessions.expose()
         return {**out, "text": _wrap(rel, text), "next": self._next(
-            "Summarise it in the learner's own words; cite the resource with [[id]].")}
+            "Summarise it in the user's own words; cite the resource with [[id]].")}
 
     def cortex_context(self, scope: Literal[
             "all", "coding", "communication", "learning", "projects", "environment", "career",
@@ -3635,7 +3635,7 @@ class Cortex:
 
 
 DESCRIPTIONS = {
-    "cortex_start": "Open a Cortex learning session. Call ONLY when the user invoked /cortex or "
+    "cortex_start": "Open a Cortex session. Call ONLY when the user invoked /cortex or "
                     "the cortex prompt, or asked for a mock interview (mode='mock'); never on "
                     "your own. Show `display` verbatim and follow "
                     "`contract`.",
@@ -3649,7 +3649,7 @@ DESCRIPTIONS = {
                     "with cortex_log(kind=touch). Needs no session. In a Claude app Cortex has "
                     "no transcript of (the Chat tab) it starts the chat's log and returns "
                     "`chat`: log each later turn with cortex_log(kind=chat_turn).",
-    "cortex_find": "Search the learner's notes (concepts, mistakes, problems, resources, notes, "
+    "cortex_find": "Search the user's notes (concepts, mistakes, problems, resources, notes, "
                    "projects, decisions...) or list due, ready or weak concepts. A \"quoted "
                    "phrase\" matches exactly; -word leaves a word out. kind=problem: "
                    "todo problems first; a query also matches their linked concepts. "
@@ -3691,7 +3691,7 @@ DESCRIPTIONS = {
     "cortex_ask": "Register a question before showing it (optional). With answer_key the server "
                   "grades. Returns item_id. Ask one focused, precise question that needs recall "
                   "(the rubric is in modes/grading.md).",
-    "cortex_grade": "Record the learner's answer to one item: item_id from cortex_ask, or "
+    "cortex_grade": "Record the user's answer to one item: item_id from cortex_ask, or "
                     "concept + question. verdict is needed unless the ask had an answer_key. "
                     "Grade only an answer given before you showed or explained it (ask how "
                     "sure, 1-4, first); after explaining, cortex_log(kind=taught) instead; a "

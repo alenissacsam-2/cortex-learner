@@ -1,10 +1,10 @@
 # Cortex
 
-Cortex is a second brain and study planner that lives on your own computer and that Claude and other AI apps can read and write through MCP.
+Cortex is a local-first second brain: it remembers what you read, decide, work on and study, and every AI app you use knows you. It lives on your own computer, and Claude and other AI apps read and write it through MCP.
 
 ![The Cortex home on a sample vault: Next up, the live 3D brain with its stem of websites, the live feed, exams and deadlines, and quick chat](docs/images/dashboard-home.png)
 
-*Every screenshot in this README shows the bundled sample learner, Sam, plus made-up demo data. None of it is a real person's.*
+*Every screenshot in this README shows the bundled sample vault of Sam, a made-up student, plus made-up demo data. None of it is a real person's.*
 
 ## Contents
 
@@ -22,8 +22,9 @@ Cortex is a second brain and study planner that lives on your own computer and t
 
 ## What Cortex does
 
-Cortex keeps a model of you as a learner and a store of what you know, in a folder of plain Markdown and JSONL files (the *vault*). Every AI app you connect reads from it and adds to it, so a new chat already knows what you are studying, what you keep getting wrong and what is due.
+Cortex keeps a model of you and a store of what you know, in a folder of plain Markdown and JSONL files (the *vault*). Every AI app you connect reads from it and adds to it, so a new chat already knows what you work on, what you decided and, if you study, what is due. A software engineer can ask what they decided about a payments retry; a PhD student can ask which papers they read on contrastive learning.
 
+- **It remembers what you do.** Notes, decisions, projects, sources you read and facts about you are linked pages in the vault, and search finds them by meaning as well as by words.
 - **It remembers what you study.** Quiz answers, grades, mistakes and lessons are events in an append-only log. Mastery levels and FSRS-6 memory states are worked out from that log every time, never stored by hand, so a wrong grade can be cancelled and everything recomputes.
 - **It remembers what you get wrong.** Each mistake has its own page with the pattern and the fix. A wrong answer you were sure of (a *confident miss*) stays at the top of your plan until you get it right on a later day.
 - **It plans what to revise.** A daily plan (Today) orders lessons taught but not yet checked, confident misses, refreshes that are due, topics for the next test and new topics. You can cut it to the time you have.
@@ -88,6 +89,8 @@ The **Brain** tab draws your vault as a brain: each topic is a lobe with its own
 ![The 3D brain: lobes labelled Programming, Unfiled, About you and others, the stem of browsed websites below them, and filters with an outline on the left](docs/images/dashboard-brain.png)
 
 ### Study planning
+
+For people who study, Cortex also plans revision.
 
 - **Today.** `cortex today` prints the plan; `cortex today --minutes 30` keeps the plan's order and drops what does not fit (the minutes are estimates).
 - **Mock paper.** `/cortex mock paper 30` in Claude builds a timed practice paper from your weak spots for the next test, mixed across subjects.
@@ -206,7 +209,7 @@ The app's **Setup** walks through:
 5. **Local model** (optional). Finds or installs Ollama, suggests a model that fits this computer, downloads it, tests it with a made-up sentence and turns it on.
 6. **Try it.** A reminder to restart the apps you connected, and first things to say to Claude.
 
-Prefer a terminal? `cortex setup` asks the core questions (vault, sample, search model, Claude Code plugin, Claude desktop config) and runs the checks. `cortex setup --dry-run` shows the plan and changes nothing; `cortex setup --sample` adds the sample learner, Sam, so you can try things at once (`cortex sample remove` clears it later).
+Prefer a terminal? `cortex setup` asks the core questions (vault, sample, search model, Claude Code plugin, Claude desktop config) and runs the checks. `cortex setup --dry-run` shows the plan and changes nothing; `cortex setup --sample` adds the sample vault of Sam, a made-up student, so you can try things at once (`cortex sample remove` clears it later).
 
 After connecting, restart Claude Code or fully quit and reopen the Claude desktop app.
 
@@ -289,7 +292,7 @@ Always run Python through `uv run`. Tests use only synthetic data in `tests/fixt
 
 - **Windows installer:** `uv run python installer/build.py` builds `dist/CortexSetup.exe` (Windows only). The sources are in [installer/](installer/).
 - **The `/cortex` skill:** edit `skills/cortex/`, then run `uv run python scripts/build_skills.py` to refresh the plugin copy and `dist/cortex-skill.zip`.
-- **A demo vault:** `uv run cortex init <folder>` then `uv run python scripts/make_demo_vault.py <folder>` fills a throwaway vault with the sample learner and made-up study history, as in the screenshots. Never point it at a real vault.
+- **A demo vault:** `uv run cortex init <folder>` then `uv run python scripts/make_demo_vault.py <folder>` fills a throwaway vault with Sam, the made-up student, and made-up study history, as in the screenshots. Never point it at a real vault.
 
 Layout in brief: `src/cortex/` is the Python package (`vault.py` for every write, `events.py` for the log, `levels.py` for the folds, `planner.py` for Today, `mcp_server.py` for the tools, `cli.py` for the commands, `app/` for the Cortex app, `browse/` for browsing); `src/cortex/assets/` holds the dashboard and app pages; `plugin/` is the Claude Code plugin.
 
