@@ -642,11 +642,12 @@ def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
         return prime_hook.run(json.dumps({"session_id": sid, "hook_event_name": event, **kw}))
 
     assert prime_hook.run(payload()) != ""  # the first prompt primes the chat
-    for source in prime_hook.AGAIN_SOURCES:
+    for source, done in prime_hook.AGAIN_SOURCES.items():
         out = json.loads(hook("SessionStart", source=source))["hookSpecificOutput"]
         assert out["hookEventName"] == "SessionStart"
         ctx = out["additionalContext"]
-        assert ctx.startswith(prime_hook.AGAIN.format(source=source))
+        assert ctx.startswith(prime_hook.AGAIN.format(source=done))
+        assert f"the chat was {done} and" in ctx and done.endswith("ed")  # never "compactd"
         assert ctx.endswith(prime_hook.AGAIN_NEXT) and "motor racing" in ctx
         assert "## Teaching contract (core)" in ctx and len(ctx) < 10_000
     assert hook("SessionStart", source="startup") == ""
@@ -655,7 +656,7 @@ def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
     assert prime_hook.run(payload("next message")) == ""  # still primed once per chat
     monkeypatch.setattr(prime, "core", lambda *a: 1 / 0)
     assert json.loads(hook("SessionStart", source="compact"))["hookSpecificOutput"][
-        "additionalContext"] == prime_hook.AGAIN_NUDGE.format(source="compact")
+        "additionalContext"] == prime_hook.AGAIN_NUDGE.format(source="compacted")
     monkeypatch.setattr(prime_hook, "excluded", lambda *a: True)
     assert hook("PreCompact") == hook("SessionStart", source="compact") == ""
     assert events(vault) == []
