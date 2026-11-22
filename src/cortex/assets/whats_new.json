@@ -1,10 +1,16 @@
 {
-  "0.3.2": {
+  "0.4.0": {
     "items": [
+      "Review finishes: Cortex keeps one of lines that say nearly the same and settles replaced lines itself. It asks only when two of your own lines clash, one answer covers every rewording, and after Today's 5 it says Done for today.",
+      "What chats learn about you is saved at once as a guess; your own words always win over it. Teaching rules, your core and your setup still wait for your click.",
+      "Every AI app knows how you work: Claude, Cursor, Codex and VS Code get your profile, preferences, setup and playbooks (a note tagged playbook: how you want a kind of task done).",
+      "The local Chat knows who is asking and answers counts and timelines from your notes. The new Tonight tab shows your day, Today's 5 and what AI apps learned about you today, with Undo.",
+      "Agent X-ray shows what each AI app was given (pin, mute, scope, dry run), and lines that try to steer an AI (\"ignore previous instructions\") are refused and never reach another app.",
       "The Cortex capture browser extension is gone. Your history still comes in by itself from your browsers: every 10 minutes while the app runs, and from the receiver when it starts at login."
     ],
     "do": [
-      "Remove \"Cortex capture\" from your browser's extensions page."
+      "On Status, press Fix on the Claude Desktop row if it shows, then restart Claude once.",
+      "If you had \"Cortex capture\", remove it from your browser's extensions page."
     ]
   },
   "0.3.1": {
