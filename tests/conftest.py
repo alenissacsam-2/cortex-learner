@@ -92,6 +92,12 @@ def _status_probes_fresh(monkeypatch):
 
     monkeypatch.setattr(status, "kept", lambda key, fn: fn())
     monkeypatch.setattr(server, "WARM_STATUS", False)
+    # the Claude Code row: never a real `cortex --version` (the venv's cortex is on PATH) or
+    # the real system PATH; tests/test_status_copies.py sets its own
+    from cortex import update
+    from cortex.app import winpath
+    monkeypatch.setattr(status, "cortex_version", lambda exe: update.current())
+    monkeypatch.setattr(winpath, "in_system", lambda folder: False)
 
 
 @pytest.fixture(autouse=True)

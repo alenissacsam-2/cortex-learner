@@ -172,6 +172,8 @@ If the setup did not install the plugin for you, type these in Claude Code:
 
 Restart Claude Code. Type `/mcp` to check that `cortex` is connected, then type `/cortex` or just talk.
 
+Claude Code starts the first `cortex` on your PATH. If that is a different copy, of a different version from the installed app (for example a `uv tool` one in `~\.local\bin`), **Status** says "Claude Code runs Cortex 0.3.9, the app is 0.4.1"; its **Fix** puts the app's `bin` folder first on your user PATH, and then you quit Claude completely and open it again. When the other copy's folder is on the system PATH, which Windows reads first, the row names that folder instead: remove it from the system PATH, or update that copy.
+
 The plugin finds your vault through `~/.cortex/config.yaml`. It calls the `cortex` command by name, so `cortex` must be on your PATH (step 3).
 
 Besides the server and the `/cortex` skill, the plugin adds a few hooks (small commands Claude Code runs by itself). On the first message of each chat, in every project, one adds a short Cortex context that matches the message: your profile summary, matching preferences and your teaching contract. So the first reply of a chat can take a few seconds longer. The same context comes back when a long chat is compacted, resumed or cleared, and just before a compaction Claude is reminded to save what matters. The other two close Cortex sessions when Claude Code exits and note when Claude has read the web. [PRIVACY.md](PRIVACY.md) has the details. To turn all of it off, type `/plugin disable cortex@cortex`.

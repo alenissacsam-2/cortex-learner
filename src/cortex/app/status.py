@@ -12,6 +12,8 @@ import os
 import plistlib
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -522,10 +524,56 @@ def rows(root: Path | None) -> list[dict]:
                               "beside the file); then quit Claude Desktop from the tray and "
                               "open it again.",
                        action=_go("connect", "Fix"))
+    if row := claude_code_row():
+        out.append(row)
     out.append(llm_row())
     b = browse(root if v["ok"] else None)
     out.append(history_row(root if v["ok"] else None, b))
     return out
+
+
+def cortex_version(exe: str) -> str | None:  # tests replace this: never a real exe
+    """`<exe> --version`'s "cortex X.Y.Z", else None (unknown)."""
+    from cortex._proc import NO_WINDOW
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"\bcortex (\d[\w.+-]*)", r.stdout or "")
+    return m.group(1) if m else None
+
+
+def claude_code_row() -> dict | None:
+    """Claude Code starts the first `cortex` on PATH (its plugin's MCP entry and hooks): a warn
+    row when that is another copy than the installed Cortex, of another version; Fix puts the
+    installed bin folder first on the user PATH, unless the other copy's folder is on the
+    system PATH, which Windows reads first."""
+    from cortex import clients, update
+    from cortex.app import winpath
+    exe, found = clients.installed_cortex(), shutil.which("cortex")
+    if not exe or not found or Path(found).resolve() == exe.resolve():
+        return None
+    other = str(Path(found).resolve())
+    have, app_v = kept(("cortex_version", other), lambda: cortex_version(other)), update.current()
+    if have == app_v:
+        return None
+    try:
+        older = bool(have) and update.newer(update.parse_version(app_v), update.parse_version(have))
+    except update.UpdateError:  # a dev or odd version: say "different", not "older"
+        older = False
+    row = {"id": "claude-code", "label": "Claude Code", "state": "warn", "action": None,
+           "value": (f"Claude Code runs Cortex {have}, the app is {app_v}" if have else
+                     f"Claude Code runs an unknown Cortex version, the app is {app_v}")}
+    start = (f"Claude Code's hooks and tools start the first cortex on your PATH ({found}), "
+             f"{'an older' if older else 'a different'} copy.")
+    folder = str(Path(found).parent)
+    if winpath.in_system(folder):
+        return {**row, "detail": f"{start} Its folder ({folder}) is on the system PATH, which "
+                                 "comes first, so Cortex cannot fix this. Remove that folder "
+                                 "from the system PATH, or update that copy; then restart Claude."}
+    return {**row, "detail": f"{start} Fix puts the app's copy first; then restart Claude.",
+            "fix": {"post": "/api/connect/path", "label": "Fix"}}
 
 
 def archive_row(root: Path) -> dict | None:

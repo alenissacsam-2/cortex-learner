@@ -137,6 +137,7 @@ def uninstall_values(d: Path, version: str) -> dict:
 
 # ---- Windows: registry, PATH broadcast, shortcuts -------------------------------------------
 
+# twin: src/cortex/app/winpath.py (the app's Fix puts Cortex first); a fix belongs in both
 def get_user_path() -> str:
     import winreg
     try:
