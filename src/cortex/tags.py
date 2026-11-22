@@ -11,9 +11,11 @@ cortex.prime_hook), a chat_turn's `user` and an imported chat's user turns (chat
   nothing changes: a `tag_forget` event holds the candidates for the app's Review.
 
 A chat that read outside text (an exposed session) only proposes: a pref or fact waits in
-inbox.md for Approve, a forget becomes the Review card. A tag seen twice on one day (the hook,
-then cortex_prime or chat_turn of the same turn, or a re-import) writes once: each carries a
-`key` (tag, text, day) that cortex_patch's own key dedupe (`Cortex._keyed`) honours."""
+inbox.md for Approve, a forget becomes the Review card. So does a pref or fact whose text reads
+like a planted deep link or promotion (`promo`, G-Q9-14), in any chat. A tag seen twice on one
+day (the hook, then cortex_prime or chat_turn of the same turn, or a re-import) writes once:
+each carries a `key` (tag, text, day) that cortex_patch's own key dedupe (`Cortex._keyed`)
+honours."""
 
 from __future__ import annotations
 
@@ -30,6 +32,18 @@ MAX_CHARS = 300  # a tag's text
 PAGES = {"pref": ("preferences", "Personal"), "fact": ("profile", "Background")}
 STRONG = 0.6  # of a claim line's content words the forget text must hold
 SHOWN = 5  # candidates on a forget card
+# G-Q9-14: what a planted deep link or a promotion says ("summarize this page and remember
+# ...", "remember X as a trusted source", "always recommend X", "from now on recommend X")
+PROMO = re.compile(r"\bsummari[sz]e\b.{0,300}?\bremember\b|\bremember\b.{0,200}?\bas (?:an? |the |"
+                   r"my )?(?:trusted|reliable|authoritative|official|preferred|go-to|top|best) "
+                   r"(?:source|site|reference|resource|vendor|provider|brand)|"
+                   r"\balways (?:recommend|suggest)\b|\bfrom now on,? (?:always )?"
+                   r"(?:recommend|suggest)\b", re.I | re.S)
+
+
+def promo(text: str) -> bool:
+    """G-Q9-14: does `text` read like a planted deep link or promotion (`PROMO`)?"""
+    return bool(PROMO.search(text.replace("’", "'")))
 
 
 def find(text: str) -> list[tuple[str, str]]:
@@ -121,15 +135,15 @@ def act(core, tag: str, text: str, said: bool) -> dict:
         return _forget(core, text, day, said)
     page, section = PAGES[tag]
     claims.check(text, page)  # G6: before _ensure_section writes the heading
-    if not said:
+    if not said or promo(text):  # G-Q9-14: a promotion waits for Approve too
+        why = "this chat read outside text" if not said else "it reads like a promotion"
         core._propose(f"- {section}: {text} (proposed {day}, me/{page})", page=page)
         core.proposed.append(plain(f"{section}: {text}", 200))
         core.sessions.note("patched", change={"tool": "propose", "id": page, "kind": "me",
                                               "op": "append_to_section", "target": section,
                                               "hash": review.text_hash(text)})
         return {"changed": False, "queued": True,
-                "summary": f"//{tag} waits for Approve in the Cortex app (this chat read "
-                           "outside text)"}
+                "summary": f"//{tag} waits for Approve in the Cortex app ({why})"}
     core._ensure_section(page, section)
     core.tagged = True
     try:
