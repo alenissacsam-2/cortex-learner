@@ -1604,3 +1604,102 @@ def test_a_list_made_with_a_switch_now_off_is_not_picked_from(vault, stream, mon
     off = {**chat.get_settings(), "sources": {**ask.SOURCES, "private": False}}
     _turn(vault, cid, "And what does the second one test?", s.runner(), settings=off)
     assert "Nimbus" not in asked[0]
+
+
+Q37 = ("With Private ON, what microcontroller does Project Kestrel use and how many times did "
+       "I visit synthdiy.example?")
+
+
+@pytest.mark.parametrize("text, want", [
+    (Q37, ["With Private ON, what microcontroller does Project Kestrel use",
+           "how many times did I visit synthdiy.example?"]),
+    ("Who is Arjun Kulkarni and when do we sync?", ["Who is Arjun Kulkarni",
+                                                     "when do we sync?"]),
+    ("What storage engine did I choose for VeloxKV, and did I reverse it later?",
+     ["What storage engine did I choose for VeloxKV", "did I reverse it later?"]),
+    ("What are the pros and cons of B-trees?", []),
+    ("compare heaps and stacks", []),
+    ("Compare my notes on rust and what go does", []),
+    ("what is the difference between heaps and stacks?", []),
+    ("rust vs go and which is faster?", []),
+    ("Where and when did I meet Priya?", []),
+    ("What do my PDFs and book highlights say about MVCC and write skew?", []),
+    ("which sites did I visit yesterday; what is due?", ["which sites did I visit yesterday",
+                                                         "what is due?"]),
+])
+def test_halves(text, want):
+    assert chat.halves(text, lambda h: False) == want
+
+
+def test_a_second_half_that_routes_is_a_question():
+    assert chat.halves("what is a heap and list my projects", lambda h: h.startswith(
+        "list")) == ["what is a heap", "list my projects"]
+    assert chat.halves("what is a heap and list my projects", lambda h: False) == []
+    assert chat.halves("tell me about heaps and list my projects", lambda h: True) == []
+
+
+def test_two_routed_halves_are_both_answered_by_code(vault):
+    events = []
+    chat.reply(vault, None, "how many times did I visit github and how many times did I "
+               "visit gitlab?", None, events.append, threading.Event(), chat.get_settings(),
+               today=TODAY)
+    assert [e["s"] for e in events if e["t"] == "step"] == ['Counting "github"',
+                                                            'Counting "gitlab"']
+    answer = "".join(e["s"] for e in events if e["t"] == "tok")
+    assert answer == ('I found nothing about "github" in your archive.\n\n'
+                      'I found nothing about "gitlab" in your archive.')
+    assert events[0]["model"] == "Cortex" and events[-1]["t"] == "done"
+
+
+def test_a_routed_half_goes_in_front_of_the_other_halfs_passages(vault, stream, monkeypatch):
+    s = stream("ollama", ["A motor [1]; no visits."])
+    asked = _asked(monkeypatch)
+    text = "what is a car motor and how many times did I visit github?"
+    cid, events = _turn(vault, None, text, s.runner())
+    assert asked == ["what is a car motor"]  # Q37's shape: the other half searched alone
+    kinds = [e["t"] for e in events]
+    assert kinds.index("facts") < kinds.index("tok")
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert user.startswith('<untrusted_note id="facts">\nFacts computed by Cortex:\nI found '
+                           'nothing about "github"')
+    assert user.endswith(f"Question: {text}" + chat.CITE)
+    assert chat.load(vault, cid)[-1]["facts"]["query"] == "github"
+
+
+def test_without_a_model_the_routed_half_is_shown_and_the_rest_says_why(vault, monkeypatch):
+    events = []
+    chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
+               None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
+    assert events[0]["model"] == "Cortex" and "err" not in [e["t"] for e in events]
+    assert "".join(e["s"] for e in events if e["t"] == "tok") == (
+        f'I found nothing about "github" in your archive.\n\n{ask.NO_MODEL}')
+    monkeypatch.setattr(semantic, "_embedder", None)
+    monkeypatch.setattr(semantic, "load_embedder", lambda: None)
+    events = []
+    chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
+               None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
+    assert "".join(e["s"] for e in events if e["t"] == "tok").endswith(semantic.NOT_SET_UP)
+
+
+def test_unrouted_halves_take_half_the_passages_each(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = []
+    real = ask._passages
+
+    def passages(v, q, k, **kw):
+        asked.append((q, k))
+        return real(v, q, k, **kw)
+    monkeypatch.setattr(ask, "_passages", passages)
+    _, events = _turn(vault, None, "what is a car motor and what pasta did I cook?",
+                      s.runner())
+    assert asked == [("what is a car motor", 3), ("what pasta did I cook?", 2)]
+    src = next(e for e in events if e["t"] == "src")
+    paths = [p["path"] for p in src["searched"] + src["sources"]]
+    assert len(paths) == len(set(paths))  # merged without repeats
+    asked.clear()
+    cid, _ = _turn(vault, None, "who wrote the engines note and what did he say about it?",
+                   s.runner())  # a new chat: "he" and "it" point at the first half
+    assert asked[1][0] == "what did he say about it?\nwho wrote the engines note"
+    asked.clear()
+    _turn(vault, cid, "who wrote the kitchen note and what did he say about it?", s.runner())
+    assert len(asked) == 1  # mid-chat they may point at the last turn: no split
