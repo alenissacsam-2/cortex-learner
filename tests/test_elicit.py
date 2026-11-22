@@ -19,7 +19,7 @@ from cortex.vault import Vault
 pytestmark = pytest.mark.usefixtures("home")
 
 PREF = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
-        "text": "- Tabs over [spaces](http://x.test)", "user_confirmed": True}
+        "text": "- Tabs over [spaces](x.test/tabs)", "user_confirmed": True}
 YES = ElicitResult(action="accept", content={"yes": True})
 NO_CAPABILITY = object()
 MODES = ("legacy", "auto")
@@ -69,7 +69,7 @@ def test_accept_with_yes_stamps_clicked(root, reply, mode):
     (out,), (asked,) = drive(root, reply, mode=mode)
     assert out["changed"] is True and out["claim"].startswith("c-")
     assert "me/preferences.md" in asked.message and "Tabs over spaces" in asked.message
-    assert "http" not in asked.message  # note text is untrusted: plain, links stripped
+    assert "x.test" not in asked.message  # note text is untrusted: plain, links stripped
     assert asked.requested_schema["properties"]["yes"]["type"] == "boolean"
     assert asked.requested_schema["properties"]["yes"]["default"] is True
     assert "Accept to save it; untick or decline to skip." in asked.message

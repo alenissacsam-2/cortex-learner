@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
@@ -58,15 +59,27 @@ def backup(path: Path) -> Path | None:
     return dest
 
 
+REPLACE_TRIES = 6  # sleeps 0.02 s doubling between tries: 0.62 s in all
+
+
 def write(path: Path, text: str) -> None:
-    """Back up, then replace `path` atomically (a temp file beside it, then os.replace)."""
+    """Back up, then replace `path` atomically (a temp file beside it, then os.replace). A
+    PermissionError (Windows: another program holds the file a moment) is retried as
+    vault.py does; the last one is raised."""
     path.parent.mkdir(parents=True, exist_ok=True)
     backup(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
-        os.replace(tmp, path)
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.02 * 2**attempt)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

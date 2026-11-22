@@ -200,6 +200,10 @@ def test_api_counts_and_escapes_note_text(root, app):
         assert call(a, "GET", "/api/review/approve")[0] == 405  # writes are POST only
         assert call(a, "POST", "/api/review/approve", {"key": "nope"})[0] == 404
         code, js, _, _ = call(a, "POST", "/api/review/approve", {"key": js["pending"][0]["key"]})
+        assert code == 400 and "an image" in js["error"]  # S1: never written to a page
+        wait_line(root, "<script>alert(1)</script>Vim")
+        key = call(a, "GET", "/api/review")[1]["pending"][0]["key"]
+        code, js, _, _ = call(a, "POST", "/api/review/approve", {"key": key})
         assert code == 200 and js["more"] == 0
         assert "<script>" in (root / "me" / "preferences.md").read_text("utf-8")  # as proposed
     finally:

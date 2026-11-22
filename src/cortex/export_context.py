@@ -70,7 +70,7 @@ def build(vault: Vault, events: list[dict], now: datetime) -> tuple[str, int]:
         summary = str(prime.me(vault, "profile").fields.get("summary") or "")
         summary = "" if summary.strip() == prime.PROFILE_TEMPLATE else summary  # no fact in it
         summary = "" if claims.expired(summary, local_day(now)) or claims.unsafe(  # G6
-            summary) else _clean(claims._ANY_ID.sub("", summary), 600)
+            summary, "profile") else _clean(claims._ANY_ID.sub("", summary), 600)
         sections.append(("Profile", [summary] if summary else rows["profile"]))
     if _page_ok(vault, "teaching-contract"):
         rules = [s for s in map(_clean, prime.contract_core(prime.contract(vault, set()))) if s]

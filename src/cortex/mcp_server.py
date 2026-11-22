@@ -2718,11 +2718,11 @@ class Cortex:
         id = self.catalog.resolve(ref, CATALOG_KINDS)  # unknown -> did_you_mean
         return self.catalog.entries[id].kind, id
 
-    def _propose(self, text: str, heading: str = UNCONFIRMED) -> None:
+    def _propose(self, text: str, heading: str = UNCONFIRMED, page: str | None = None) -> None:
         """Append one line under `heading` (default `## About me (unconfirmed)`) in inbox.md
         (created if missing)."""
         scan_secrets(text)
-        claims.check(text)  # G6: every waiting line is an about-me line or a teaching rule
+        claims.check(text, page)  # G6: every waiting line is an about-me line or a teaching rule
 
         def add(page: str) -> str:  # B13: reruns on the reread page if the owner edited it
             lines = page.rstrip("\n").split("\n")
@@ -2765,7 +2765,7 @@ class Cortex:
                 and nid in claims.PAGES and not text.lstrip().startswith(("- ", "#"))):
             text = "- " + text.strip()  # a bare line would be no claim at all
         if kind == "me" and op in ("append_to_section", "revise"):  # G6: before any write path
-            claims.check(f"{target}\n{text}" if op == "append_to_section" else text)
+            claims.check(f"{target}\n{text}" if op == "append_to_section" else text, nid)
         sup = None if supersedes is None else self._supersedes(supersedes, kind, nid, op, text)
         # CONSENSUS item 3: every prime serves these as instructions, so outside text may not
         if kind == "me" and self.session.exposed and not self.app_clicks and op in (
@@ -2851,7 +2851,7 @@ class Cortex:
                         "summary": "not proposed: the harvest's about-me budget is used up",
                         "next": "Ask the user about the waiting lines now (a yes/no card), or "
                                 "leave them for /cortex reflect; go on without about-me lines."}
-            self._propose(f"- {target}: {text} (proposed {day}, me/{nid})")  # the page: Approve
+            self._propose(f"- {target}: {text} (proposed {day}, me/{nid})", page=nid)  # Approve
             self.proposed.append(render.plain(f"{target}: {text}", 200))  # as unconfirmed()
             hint = self.sessions.note("patched", change={
                 "tool": "propose", "id": nid, "kind": kind, "op": op, "target": target,
@@ -3122,7 +3122,7 @@ class Cortex:
         near-copy of or a clash with a line that stays, just leaves the inbox."""
         moved = 0
         for p in waiting:
-            if claims.unsafe(f"{p['section']}\n{p['text']}"):
+            if claims.unsafe(f"{p['section']}\n{p['text']}", p["page"]):
                 continue
             try:
                 out = self.cortex_patch(f"me/{p['page']}", "append_to_section", p["section"],
