@@ -3094,3 +3094,22 @@ def test_whats_new_ships_plain_entries():
         least = 1 if running and update.newer(news._v(v), running) else 3
         assert news._v(v) and least <= len(e["items"]) <= 6 and isinstance(e["do"], list), v
         assert all(isinstance(x, str) and x for x in e["items"] + e["do"]), v
+
+
+@pytest.mark.parametrize("gone", [ConnectionAbortedError, ConnectionResetError, BrokenPipeError])
+def test_a_browser_that_leaves_mid_answer_is_dropped_quietly(vault, gone):
+    """Leaving a page mid-response (WinError 10053 on Windows) is no error: `_send` drops it and
+    closes the connection instead of raising a traceback into app.log."""
+    srv, _ = server.make_server(vault)
+    try:
+        h = object.__new__(srv.RequestHandlerClass)
+
+        class Gone:
+            def write(self, b):
+                raise gone(10053, "aborted")
+        h.wfile, h.command, h.request_version, h.close_connection = Gone(), "GET", "HTTP/1.1", False
+        h.requestline, h.client_address = "GET / HTTP/1.1", ("127.0.0.1", 1)
+        h._send(200, {"ok": True})
+        assert h.close_connection is True
+    finally:
+        srv.server_close()
