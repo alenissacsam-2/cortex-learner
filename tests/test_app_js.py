@@ -295,7 +295,7 @@ const out = {};
     out.closed = bot.querySelector('.passage') === null;
     // a second answer that cites nothing lists the pages searched, marked as not cited
     DATA.stream = [ev({ t: 'start', id: chats[0].id, model: 'qwen3.5-2b' }) + ev({ t: 'tok', s: 'Probably heaps.' })
-      + ev({ t: 'src', sources: [], searched: [{ path: 'notes/heap.md', title: 'Heap notes', kind: 'note' }] })
+      + ev({ t: 'src', sources: [], searched: [{ path: 'notes/heap.md', title: 'Heap notes', kind: 'note' }], coverage: { read: 1, matched: 1, more: true } })
       + ev({ t: 'done', id: chats[0].id, model: 'qwen3.5-2b', seconds: 0.5, stopped: false, remembers: 2 })];
     $('chat-input').value = 'and the second one?';
     $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
@@ -304,6 +304,7 @@ const out = {};
     out.searched = [bot2.querySelector('.chat-src').querySelector('span').textContent, bot2.querySelectorAll('.chip').map((c) => c.textContent)];
     out.mem = log.childNodes.map((c) => c.className);  // the model's memory starts at message 2
     out.memText = log.querySelector('.chat-mem').textContent;
+    out.cov2 = bot2.querySelector('.cov').textContent;  // a full search: the count is a floor
     // the Local model page says why a refused config is not used
     DATA.routes['/api/llm'] = { available: true, enabled: true, runner: 'auto', model: 'm-cloud', lms: null, server_port: null, loaded: [], ollama: null, models: [], error: 'localllm: a cloud model is refused' };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'llm').fire('click');
@@ -504,6 +505,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
                             "1,234mentionsbrowsing1,230notes4"
                             "Counted all 1,234 matches in 5,000 items read · switched off: private")
     assert out["cov"] == "Read 1 of 4 matches · also searched: Asha Rao"
+    assert out["cov2"] == "Read 1 of 1+ matches"
     assert out["qflag"] == "Quote not found in a cited passage: “<b>made up</b> words”"  # as text
     assert out["passageGet"] == ["/api/chat/passage?path=browse%2Fprivate%2Fbrowse-private-"
                                  "2026-11-17.md&at=12&len=300"]

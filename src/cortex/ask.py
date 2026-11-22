@@ -236,7 +236,8 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
     pages of those days by `topic` (`_dated`); undated pages drop out. `at` and `len`: the
     passage's span in its page's body, for Chat's passage view (`chat.passage`). `stats` gets
     {"matched"}: how many pages the search found under the switches (and in the range), of
-    which at most `k` are read (Chat's coverage line). shortcut: `_dated` lists no private note
+    which at most `k` are read (Chat's coverage line), and "more": True when a source returned
+    its full `want` hits. shortcut: `_dated` lists no private note
     (only a search hit dated in range comes back); add them there if dated questions miss them."""
     src = {**SOURCES, "private": False, **(sources or {})}
     want = k if between is None else vectors.MAX_K  # the range filters after the search
@@ -281,6 +282,8 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         out.append(p)
     if stats is not None:
         stats["matched"] = len(seen | {p["path"] for p in searched if src[_switch(p)]})
+        if any(len(got) >= want for got in (browse, hits, private)):
+            stats["more"] = True  # a full source may have had more: "matched" is a floor
     return out
 
 

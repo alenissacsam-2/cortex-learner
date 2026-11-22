@@ -94,6 +94,7 @@ _MEM: dict[Path, tuple] = {}
 _embedder = None
 _EMBED_LOCK = threading.Lock()
 _reranker = None
+_RERANK_LOCK = threading.Lock()  # not _EMBED_LOCK: a query embedding never waits for this load
 
 
 def models_dir() -> Path:
@@ -262,24 +263,28 @@ def load_reranker(download: bool = False, config: bool = True):
         return None
     if _reranker is not None:
         return _reranker
-    # fastembed's HF cache folder; checked first so an absent model logs no fastembed ERROR
-    if not download and not (models_dir() / f"models--{RERANK_MODEL.replace('/', '--')}").is_dir():
-        return None
-    from fastembed.rerank.cross_encoder import TextCrossEncoder
+    with _RERANK_LOCK:  # warm-up and a first Chat turn may race: one load, not two
+        if _reranker is not None:
+            return _reranker
+        # fastembed's HF cache folder; checked first so an absent model logs no fastembed ERROR
+        if not download and not (models_dir()
+                                 / f"models--{RERANK_MODEL.replace('/', '--')}").is_dir():
+            return None
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-    try:
-        model = TextCrossEncoder(RERANK_MODEL, cache_dir=str(models_dir()),
-                                 local_files_only=not download)
-    except Exception:
-        if download:
-            raise
-        return None
+        try:
+            model = TextCrossEncoder(RERANK_MODEL, cache_dir=str(models_dir()),
+                                     local_files_only=not download)
+        except Exception:
+            if download:
+                raise
+            return None
 
-    def score(query, texts):
-        return [float(x) for x in model.rerank(query, list(texts))]
+        def score(query, texts):
+            return [float(x) for x in model.rerank(query, list(texts))]
 
-    _reranker = score
-    return score
+        _reranker = score
+        return score
 
 
 def is_chat(n: dict) -> bool:
@@ -403,6 +408,14 @@ def _header(title: str, path: list[str], day: str, kind: str) -> str:
     return f"{head[:HEADER_CHARS - len(tail) - 3]} · {tail}" if tail else head[:HEADER_CHARS]
 
 
+def _heads(body: str, code: bool = False):
+    """The heading lines of `body` outside fenced code blocks; with `code`, the heading-like
+    lines inside them instead (a "# install deps" comment: no heading, C13)."""
+    fences = [m.start() for m in _FENCE.finditer(body)]  # inside one: an odd count before
+    return (h for h in _HEAD_LINE.finditer(body)
+            if bisect.bisect(fences, h.start()) % 2 == code)
+
+
 def _chunks(n: dict) -> list[tuple[int, str]]:
     """(start in the filled body, text) per chunk. Chunk 0 is `_text` (start 0). The rest are
     windows of about CHUNK_CHARS over the body from BODY_CHARS - CHUNK_OVERLAP on, each under
@@ -414,9 +427,7 @@ def _chunks(n: dict) -> list[tuple[int, str]]:
     if len(body) <= BODY_CHARS:
         return out
     day = page_date("", n["fields"], n["body"])
-    fences = [m.start() for m in _FENCE.finditer(body)]  # inside one: an odd count before
-    heads = (h for h in _HEAD_LINE.finditer(body)
-             if bisect.bisect(fences, h.start()) % 2 == 0)  # "# comment" in code: no heading
+    heads = _heads(body)
     h, stack = next(heads, None), []  # [(level, "## heading")] open above the window start
 
     def header(s: int) -> str:
@@ -562,6 +573,19 @@ def _connect(root: Path, dim: int, write: bool = True):
     return con
 
 
+def _code_heads_once(con, index: Index) -> None:
+    """Once per store: delete the rows of pages with a "# line" in a fenced code block, whose
+    chunk headers C13 changed (the manifest key would keep their old vectors until an edit);
+    the refresh re-embeds just those. The "c13" meta flag makes it run once; the deletes bump
+    the store's stamp, so every process's `_sync` drops the rows from memory too."""
+    if vecstore.get_meta(con, "c13"):
+        return
+    vecstore.delete(con, [i for i in vecstore.manifests(con) if i in index._notes and next(
+        _heads(_filled(index._notes[i]["body"].strip()), code=True), None)])
+    with vecstore.tx(con):
+        vecstore.set_meta(con, "c13", True)
+
+
 def _sync(con, dim: int, st0, cache: dict) -> tuple[tuple, bool]:
     return vecstore.sync(con, dim, st0, cache, lambda m: tuple(json.loads(m)))
 
@@ -682,6 +706,8 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
     con = None
     try:
         con = _connect(root, dim, save)
+        if save and con is not None:
+            _code_heads_once(con, index)
         if con is None:  # a dry run with no usable store: nothing cached
             st, cache, stack = None, {}, None
         else:

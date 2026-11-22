@@ -267,6 +267,41 @@ def test_a_chunk_header_skips_comment_lines_in_code_blocks():
     assert head.startswith("Guide › ## Setup") and "install deps" not in head
 
 
+def test_c13_pages_with_code_comment_lines_are_embedded_again_once(root):
+    """C13's chunk headers changed only for pages with a "# line" in a code block: the first
+    load after it drops just their rows (a meta flag makes it once); a dry run changes nothing."""
+    note(root, "notes/guide.md", "title: Guide\n",
+         "# Guide\n\n```bash\n# install deps\nmotor tool\n```\n")
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    semantic.vectors(idx, FakeEmbed(), 4)
+    db = root / semantic.CACHE
+
+    def store():
+        with closing(vecstore.connect(db, create=False)) as con:
+            return (vecstore.get_meta(con, "c13"),
+                    {i: (m, s.tobytes(), x.tobytes()) for i, m, _, s, x in vecstore.rows(con, 4)})
+
+    flag, before = store()
+    assert flag is True and "guide" in before and "engines" in before
+    with closing(vecstore.connect(db)) as con, vecstore.tx(con):
+        vecstore.set_meta(con, "c13", False)  # a store from before C13's change
+    dry = FakeEmbed()
+    semantic.vectors(idx, dry, 4, save=False)
+    assert store() == (False, before) and dry.texts == []
+    fake = FakeEmbed()
+    semantic.vectors(idx, fake, 4)  # this process's memory still holds the old rows
+    flag, after = store()
+    assert flag is True and fake.texts and all(t.startswith("Guide") for t in fake.texts)
+    assert after.keys() == before.keys()
+    assert {i: e for i, e in after.items() if i != "guide"} == {
+        i: e for i, e in before.items() if i != "guide"}  # the rest untouched
+    semantic._MEM.clear()
+    again = FakeEmbed()
+    semantic.vectors(idx, again, 4)
+    assert again.texts == [] and store() == (True, after)
+
+
 def test_a_window_without_turns_or_paragraphs_cuts_at_a_line_sentence_or_space():
     """RR-32: the cut ladder never splits a word when the window has any whitespace."""
     assert semantic._cut("a\n\nb\nc. d e") == 1  # paragraph first
