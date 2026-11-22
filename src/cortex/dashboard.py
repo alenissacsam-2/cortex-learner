@@ -237,9 +237,12 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
             if ev.get("kind") == "grade" and it.concept not in hidden:
                 answers[ev.get("day")] += 1
                 if it.concept in visible and ev.get("ref") in asks:
-                    took.setdefault(it.concept, []).append(
-                        (datetime.fromisoformat(ev["ts"])
-                         - datetime.fromisoformat(asks[ev["ref"]]["ts"])).total_seconds())
+                    try:  # a hand-edited stamp skips this gap, never the dashboard
+                        took.setdefault(it.concept, []).append(
+                            (datetime.fromisoformat(ev["ts"])
+                             - datetime.fromisoformat(asks[ev["ref"]]["ts"])).total_seconds())
+                    except (KeyError, TypeError, ValueError):
+                        pass
             if it.concept in visible and it.verdict is not None:
                 payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                 kind = (ev.get("item_type") or asks.get(ev.get("ref"), {}).get("item_type")

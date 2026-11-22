@@ -860,3 +860,15 @@ def test_answer_time_is_display_only(root):
             for r in (slow, fast)]
     assert fold[0].attempts == fold[1].attempts == 6  # the fixture's 2 and 4 here
     assert {**vars(fold[0]), "last_seen": None} == {**vars(fold[1]), "last_seen": None}
+
+
+def test_a_hand_edited_stamp_skips_its_gap_not_the_dashboard(root):
+    _timed(root, [10, 30, 20, 40])
+    f = sorted((root / "events").glob("*/*/cli.jsonl"))[-1]
+    rows = [json.loads(x) for x in f.read_text("utf-8").splitlines()]
+    # the newest grade (its gap 40 s) gets a stamp no parser reads
+    max((r for r in rows if r.get("kind") == "grade" and r.get("ref")),
+        key=lambda r: r["ts"])["ts"] = "yesterday-ish"
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    det = dashboard.build_data(Vault(root), now=NOW)["details"]["two-pointers"]
+    assert det.get("answer_secs") == 20
