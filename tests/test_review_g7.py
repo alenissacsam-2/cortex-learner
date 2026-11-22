@@ -1,4 +1,4 @@
-"""G7: Review cards for lines that say nearly the same (Keep both / left / right), lines the
+"""G7: Review cards for lines the
 X-ray shows cut for space in most primes (Keep pins, Retire, Skip) and playbooks no AI app was
 served lately (Keep for 60 days, Open); crowded and unused share 3 cards a month, near-duplicates
 are never a card (D1), and a private page never shows."""
