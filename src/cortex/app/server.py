@@ -41,7 +41,8 @@ WARM_STATUS = True  # `start` asks Status's slow probes at once (tests turn it o
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
-UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox")
+UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox",
+              ".pdf", ".docx")  # the last two: a document, or a file attached in Chat (C1)
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
 IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar",
            "docs", "repos", "highlights", "mail", "selfchat", "location",
@@ -275,6 +276,8 @@ class App:
         self.scanned: dict = {}  # source key -> the last scan's counts
         self.uploads: dict[str, Path] = {}  # upload id -> its file under ~/.cortex/tmp
         self.chatting = threading.Lock()  # one chat answer at a time, beside any job
+        from cortex import askfile
+        self.files = askfile.Store()  # C1: files attached in Chat, in memory only
         self.last = time.monotonic()
         self.stop = threading.Event()
         self.desktop = None  # desktop.Desktop (window and tray) in the desktop app, else None
@@ -311,6 +314,8 @@ class App:
             "/api/chat": None,  # do_POST streams it
             "/api/chat/delete": self.chat_delete, "/api/chat/settings": self.chat_settings,
             "/api/chat/eval": self.chat_eval,
+            "/api/chat/attach": self.chat_attach, "/api/chat/file/remove": self.chat_file_remove,
+            "/api/chat/file/save": self.chat_file_save,
             "/api/browse/login": self.login,
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
@@ -504,7 +509,7 @@ class App:
                                      ("llm", runner is None)) if gone]
         return {"vault": True, "missing": missing, "llm_error": why,
                 "model": runner.model if runner else None, "settings": chat.get_settings(),
-                "chats": chat.list(self._vault())}
+                "chats": chat.list(self._vault()), "files": self.files.list()}
 
     def _vault(self):
         from cortex.vault import Vault
@@ -1416,12 +1421,52 @@ class App:
         if self.chatting.locked():  # the answer's final save would bring the chat back
             raise Busy("An answer is still being written; press Stop first, then delete.")
         if body.get("all") is True:
+            self.files.clear()  # the chats are cleared: their attached files go too
             return {"deleted": chat.delete_all(self._vault())}
         return {"deleted": int(chat.delete(self._vault(), body.get("id")))}
 
     def chat_settings(self, body: dict) -> dict:
         from cortex import chat
         return chat.save_settings(body)
+
+    # ---- C1: a file attached in Chat, kept in memory only (cortex.askfile) ----
+    def chat_attach(self, body: dict) -> dict:
+        """Read the file an upload brought (`body.upload`, named `body.name` by the page) into
+        the attached files: parsed in the child, chunked and embedded in memory. The uploaded
+        copy is deleted at once, read or not."""
+        from cortex import askfile
+        uid = body.get("upload")
+        p = self.uploads.pop(uid, None) if isinstance(uid, str) else None
+        if p is None:
+            raise ValueError("That file is gone; attach it again.")
+        try:
+            name = askfile.safe_name(body.get("name"))
+            if not name.lower().endswith(p.suffix.lower()):  # the upload's checked extension
+                name += p.suffix
+            f = askfile.read(p, name)
+        finally:
+            p.unlink(missing_ok=True)
+        return self.files.add(f).info()
+
+    def chat_file_remove(self, body: dict) -> dict:
+        if body.get("all") is True:
+            self.files.clear()
+        else:
+            self.files.remove(body.get("id"))
+        return {"files": self.files.list()}
+
+    def chat_file_save(self, body: dict) -> dict:
+        """Save to your brain: the attached file through the documents import (askfile.save),
+        committed as other imports are; {saved: {title, path}, files}."""
+        from cortex import askfile
+        from cortex.vault import Vault
+        got = self.files.get([body.get("id")])
+        if not got:
+            raise ValueError("That file is no longer attached; attach it again.")
+        v = Vault(self.need_root())
+        saved = askfile.save(v, got[0])
+        actions._commit(v, "docs")
+        return {"saved": saved, "files": self.files.list()}
 
     def chat_eval(self, body: dict) -> dict:
         """Run Chat's offline test (cortex.chat_eval) as a job: a made-up vault in a temp
@@ -2055,8 +2100,11 @@ def _handler(app: App):
                 self.close_connection = True  # no length: the end of the answer ends the body
                 self._head(200, "application/x-ndjson", None)
                 threading.Thread(target=keepalive, daemon=True, name="chat-keepalive").start()
-                # local only, never cloudllm; looked up only when the turn needs the model
-                chat.reply(vault, cid, text, localllm.find, emit, cancel)
+                # local only, never cloudllm; looked up only when the turn needs the model. An
+                # attached file (C1) takes only a model already loaded: none is ever loaded
+                files = app.files.get(body.get("files"))
+                chat.reply(vault, cid, text, localllm.find_loaded if files else localllm.find,
+                           emit, cancel, files=files)
             except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)
                 emit({"t": "err", "code": "internal",
                       "message": f"internal error ({type(e).__name__})"})
@@ -2077,7 +2125,7 @@ def _handler(app: App):
             ext = name.suffix.lower()
             if ext not in UPLOAD_EXT:
                 self._send(400, {"error": "Add the export as it came: a .zip, .json, .html, .md, "
-                                          ".txt, .ics or .mbox file."})
+                                          ".txt, .ics, .mbox, .pdf or .docx file."})
                 return
             stem = re.sub(r"[^A-Za-z0-9_-]", "", name.stem)[:40]
             try:
