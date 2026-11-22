@@ -1726,6 +1726,45 @@
     b.body.querySelector('.cold-item .btn').focus();
   }
 
+  /* B2-b: a chat export found in Downloads, else the claude.ai export reminder (/api/import/pickup;
+     the server looks at Downloads once a minute at most). One card at a time, above Next up. */
+  let pickupEl = null, pickupKey = '';
+  function pickupBoard(p) {
+    const f = p && p.found;
+    if (!f && !(p && p.remind)) return null;
+    const b = board(f ? 'Found in Downloads' : 'claude.ai chats', { cls: 'pickup' });
+    const r = brow(f ? { title: `You downloaded a ${f.name} export on ${fmtDay(f.day)}. Add its chats to Cortex?`, sub: f.file }
+      : { title: 'Export your claude.ai chats so Cortex keeps all of them (2 minutes)' });
+    const close = () => { b.root.remove(); pickupEl = null; $('view-home').focus(); };
+    const post = (path, body, said) => async () => {
+      try { await api(path, body); } catch (e) { toast(e.message, 'error'); return; }
+      close();
+      if (said) toast(said);
+    };
+    r.querySelector('.acts').append(...(f
+      ? [button('btn', 'Add chats', post('/api/import/pickup/add', { path: f.path }, 'Adding the chats. Settings shows when it is done.')),
+        button('btn', 'Not this one', post('/api/import/pickup/dismiss', { path: f.path }))]
+      : [button('btn', 'Show me how', () => location.assign('/manage#import-claude')),
+        button('btn', 'Later', post('/api/import/pickup/later', {}))]));
+    b.body.append(r);
+    return b.root;
+  }
+  async function loadPickup() {
+    if (document.hidden) return;
+    let p;
+    try { p = await api('/api/import/pickup'); } catch (e) { return; }
+    const key = JSON.stringify(p);
+    if (key === pickupKey && (pickupEl || !(p.found || p.remind))) return;  // unchanged: focus stays
+    pickupKey = key;
+    if (pickupEl) pickupEl.remove();
+    pickupEl = pickupBoard(p);
+    if (pickupEl) $('departures').prepend(pickupEl);
+  }
+  if (LIVE) {
+    loadPickup();
+    setInterval(loadPickup, 60000);
+  }
+
   let flicked = false;
   function renderHome() {
     const items = nextUp(), host = $('departures');
@@ -1773,7 +1812,7 @@
       b.root.append(k);
     }
     // an open 90-second check stays where it is (a live update never takes its focus or clock)
-    for (const c of [...host.children]) if (!cold || c !== cold.root) c.remove();
+    for (const c of [...host.children]) if ((!cold || c !== cold.root) && c !== pickupEl) c.remove();
     host.append(D.first_run && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;

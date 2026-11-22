@@ -30,7 +30,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from cortex import update
-from cortex.app import actions, news, status, targets, wizard
+from cortex.app import actions, exports, news, status, targets, wizard
 
 HOST = "127.0.0.1"
 IDLE_S = 30 * 60
@@ -288,7 +288,7 @@ class App:
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/home": self.home, "/api/home/version": self.home_version,
                     "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
-                    "/api/home/check": self.cold_check,
+                    "/api/home/check": self.cold_check, "/api/import/pickup": self.pickup,
                     "/api/vault/snapshot": None,
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
@@ -326,6 +326,9 @@ class App:
             "/api/setup/start": self.setup_start, "/api/setup/model": self.setup_model,
             UPLOAD: None,  # do_POST streams it
             "/api/import/preview": self.import_preview, "/api/import/run": self.import_run,
+            "/api/import/pickup/add": self.pickup_add,
+            "/api/import/pickup/dismiss": self.pickup_dismiss,
+            "/api/import/pickup/later": self.pickup_later,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
@@ -1704,6 +1707,26 @@ class App:
         fn = actions.import_run if body.get("tier") is None else \
             partial(actions.import_run, tier=body["tier"])
         return self._import(body, "Importing", fn, keep=False)
+
+    # B2-b: an export in Downloads, offered on Home (cortex.app.exports)
+    def pickup(self) -> dict:
+        return exports.offer()
+
+    def pickup_add(self, body: dict) -> dict:
+        """Add chats: the Import page's import of the offered zip, without its preview."""
+        c = exports.pick(body.get("path"))
+        out = self._import({"source": c["source"], "path": c["path"]}, "Importing",
+                           actions.import_run, keep=False)
+        exports.mark(c, "added")
+        return out
+
+    def pickup_dismiss(self, body: dict) -> dict:
+        exports.mark(exports.pick(body.get("path")), "dismissed")
+        return {"ok": True}
+
+    def pickup_later(self, body: dict) -> dict:
+        exports.later()
+        return {"ok": True}
 
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:

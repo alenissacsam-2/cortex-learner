@@ -151,6 +151,8 @@ Claude is asked to record the topics and concepts it teaches, but it can forget.
 
 To turn imported chats into context, run `cortex digest` when you want to. It lists each chat imported since your last digest with up to 3 topics from your catalog that it seems to be about (local search, no AI model; private topics are never proposed), and asks about each one. A yes records a topic touch: context for your plan, never a grade, so a topic's level moves only after a real check. The listed chats are not shown again. `--dry-run` only lists, `--yes` accepts every topic shown, and `--since DATE` and `--limit N` (default 10) narrow the list. Claude Code chats are left out: a connected Claude records topics as you talk.
 
+You may not need the Import page at all: when a claude.ai, ChatGPT or Google Takeout export lands in your Downloads folder, Home shows a card for it, and Add chats imports it in one click (Not this one hides it). If Claude Desktop is connected and no claude.ai export came in for 30 days, Home reminds you to export one, since Claude Desktop keeps no copy of its chats on your computer.
+
 The steps below match `GUIDES` in `src/cortex/chats.py` and `src/cortex/importers.py`.
 
 **Claude (claude.ai).** Wait: a few minutes. Add the downloaded .zip as it is.

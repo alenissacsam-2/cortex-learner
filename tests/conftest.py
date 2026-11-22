@@ -81,6 +81,7 @@ def _no_real_chat_export(tmp_path_factory, monkeypatch):
     """Tests never see the user's imported chat exports or Claude Code transcripts."""
     monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path_factory.mktemp("chat-export")))
     monkeypatch.setenv("CORTEX_CHATS_DIR", str(tmp_path_factory.mktemp("claude-projects")))
+    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(tmp_path_factory.mktemp("downloads")))
 
 
 @pytest.fixture(autouse=True)
