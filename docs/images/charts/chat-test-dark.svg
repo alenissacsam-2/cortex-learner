@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="346" viewBox="0 0 720 346" role="img" aria-labelledby="t d" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif'>
+<title id="t">The 40-question Chat test, with no model</title>
+<desc id="d">Stacked bar chart by the kind of search a question needs. An exact name: 3 pass, 0 fail, 4 need a local model; Plain words: 8 pass, 0 fail, 5 need a local model; Other words: 0 pass, 0 fail, 5 need a local model; Several pages: 0 pass, 0 fail, 4 need a local model; A changed history: 0 pass, 0 fail, 4 need a local model; An outdated fact: 0 pass, 0 fail, 2 need a local model; Nothing to find: 3 pass, 0 fail, 2 need a local model</desc>
+<text x="0.0" y="20.0" font-size="15" fill="#f0efec" text-anchor="start" font-weight="600">The 40-question Chat test, with no model</text>
+<text x="0.0" y="40.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">14 of 14 questions Cortex answers from its own data passed; 26 need a local model</text>
+<rect x="0" y="56" width="12" height="12" rx="2" fill="#3987e5"/>
+<text x="18.0" y="66.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">Pass</text>
+<rect x="62" y="56" width="12" height="12" rx="2" fill="#d95926"/>
+<text x="80.0" y="66.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">Fail</text>
+<rect x="124" y="56" width="12" height="12" rx="2" fill="#52514e"/>
+<text x="142.0" y="66.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">Needs a local model</text>
+<line x1="170.0" x2="170.0" y1="86" y2="320" stroke="#383835" stroke-width="1"/>
+<text x="170.0" y="336.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0</text>
+<line x1="303.3" x2="303.3" y1="86" y2="320" stroke="#2c2c2a" stroke-width="1"/>
+<text x="303.3" y="336.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">5</text>
+<line x1="436.7" x2="436.7" y1="86" y2="320" stroke="#2c2c2a" stroke-width="1"/>
+<text x="436.7" y="336.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">10</text>
+<line x1="570.0" x2="570.0" y1="86" y2="320" stroke="#2c2c2a" stroke-width="1"/>
+<text x="570.0" y="336.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">15</text>
+<text x="160.0" y="109.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">An exact name</text>
+<path d="M170.0,96.0h78.0a0.0,0.0 0 0 1 0.0,0.0v18.0a0.0,0.0 0 0 1 -0.0,0.0h-78.0z" fill="#3987e5"><title>An exact name: 3 pass</title></path>
+<text x="209.0" y="109.0" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="400">3</text>
+<path d="M250.0,96.0h102.7a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-102.7z" fill="#52514e"><title>An exact name: 4 needs a local model</title></path>
+<text x="303.3" y="109.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">4</text>
+<text x="364.7" y="109.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">3 of 3 run passed</text>
+<text x="160.0" y="141.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">Plain words</text>
+<path d="M170.0,128.0h211.3a0.0,0.0 0 0 1 0.0,0.0v18.0a0.0,0.0 0 0 1 -0.0,0.0h-211.3z" fill="#3987e5"><title>Plain words: 8 pass</title></path>
+<text x="275.7" y="141.0" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="400">8</text>
+<path d="M383.3,128.0h129.3a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-129.3z" fill="#52514e"><title>Plain words: 5 needs a local model</title></path>
+<text x="450.0" y="141.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">5</text>
+<text x="524.7" y="141.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">8 of 8 run passed</text>
+<text x="160.0" y="173.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">Other words</text>
+<path d="M170.0,160.0h129.3a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-129.3z" fill="#52514e"><title>Other words: 5 needs a local model</title></path>
+<text x="236.7" y="173.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">5</text>
+<text x="311.3" y="173.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">needs a local model</text>
+<text x="160.0" y="205.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">Several pages</text>
+<path d="M170.0,192.0h102.7a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-102.7z" fill="#52514e"><title>Several pages: 4 needs a local model</title></path>
+<text x="223.3" y="205.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">4</text>
+<text x="284.7" y="205.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">needs a local model</text>
+<text x="160.0" y="237.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">A changed history</text>
+<path d="M170.0,224.0h102.7a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-102.7z" fill="#52514e"><title>A changed history: 4 needs a local model</title></path>
+<text x="223.3" y="237.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">4</text>
+<text x="284.7" y="237.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">needs a local model</text>
+<text x="160.0" y="269.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">An outdated fact</text>
+<path d="M170.0,256.0h49.3a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-49.3z" fill="#52514e"><title>An outdated fact: 2 needs a local model</title></path>
+<text x="196.7" y="269.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">2</text>
+<text x="231.3" y="269.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">needs a local model</text>
+<text x="160.0" y="301.0" font-size="12" fill="#f0efec" text-anchor="end" font-weight="400">Nothing to find</text>
+<path d="M170.0,288.0h78.0a0.0,0.0 0 0 1 0.0,0.0v18.0a0.0,0.0 0 0 1 -0.0,0.0h-78.0z" fill="#3987e5"><title>Nothing to find: 3 pass</title></path>
+<text x="209.0" y="301.0" font-size="11" fill="#ffffff" text-anchor="middle" font-weight="400">3</text>
+<path d="M250.0,288.0h49.3a4,4 0 0 1 4,4v10.0a4,4 0 0 1 -4,4h-49.3z" fill="#52514e"><title>Nothing to find: 2 needs a local model</title></path>
+<text x="276.7" y="301.0" font-size="11" fill="#f0efec" text-anchor="middle" font-weight="400">2</text>
+<text x="311.3" y="301.0" font-size="12" fill="#c3c2b7" text-anchor="start" font-weight="400">3 of 3 run passed</text>
+</svg>

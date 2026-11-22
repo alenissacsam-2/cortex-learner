@@ -216,7 +216,8 @@ def main() -> None:
                 encoding="utf-8")
             build(root, days=args.days, keys=args.keys, urls=args.urls, sites=args.sites,
                   notes=args.notes, n_events=args.events)
-        size = (root / ".cortex/browse/site-days.json").stat().st_size / 1e6
+        # the import's one-time migration renamed it after reading it into the store
+        size = (root / ".cortex/browse/site-days.json.migrated").stat().st_size / 1e6
         print(f"built in {time.perf_counter() - t:.1f} s: site-days.json {size:.0f} MB")
         from cortex.vault import Vault
         vault = Vault(root)
