@@ -69,11 +69,12 @@ def test_only_confirmed_and_typed_live_lines_leave(root):
     text, skipped = _build(root)
     assert text.startswith("# About me (Cortex snapshot, 2026-11-16)")
     for want in ("Test learner, synthetic.", "- Ask before you teach.",
-                 "- [Communication] Short answers please", "Typed by hand, see docs",
+                 "- [Communication] Short answers please",
                  "- [Communication] Direct talker", "- Finish thesis"):
         assert want in text, want
-    for leak in ("emoji", "long essays", "sk-", "tabs", "meetings", "jazz", "Honesty",
-                 "Rust", "^c-", "(confirmed", "evil.example", "<untrusted_note"):
+    # S1/W1b: a web link on me/preferences is held (G6) until Keep it, so that line stays out
+    for leak in ("Typed by hand", "emoji", "long essays", "sk-", "tabs", "meetings", "jazz",
+                 "Honesty", "Rust", "^c-", "(confirmed", "evil.example", "<untrusted_note"):
         assert leak not in text, leak
     assert skipped == 2  # the agent and the exposed line
     assert text.index("## Profile") < text.index("## How to help me") < text.index(

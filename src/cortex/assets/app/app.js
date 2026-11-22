@@ -1638,7 +1638,7 @@
       const left = kb('Keep first', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.left.text}`);
       const right = kb('Keep second', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.right.text}`);
       // a recorded pair's right line is the newer one: Y takes it; N keeps both (G7's near-duplicates too)
-      const keys = c.why === 'opposite' || c.why === 'same' ? { n: both } : { y: right, n: both };
+      const keys = c.why === 'opposite' || c.why === 'same' || c.why === 'maybe_opposite' ? { n: both } : { y: right, n: both };
       return card(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [both[0], left[0], right[0]], keys, id);
     };
     const ruleCard = (x, id) => {

@@ -6,10 +6,12 @@
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
 - conflicts (plan 5b, D2): pairs of live lines that clash (Keep both, Keep first, Keep second):
-  two lines that say opposite things (`opposed`), both the owner's or both inferred.
-  Everything else `settle` resolves itself: lines that say the same facts (D1, W1
-  `same_facts`), recorded `possible_update_of` / `supersedes` pairs and an owner's line against an
-  inferred one (D2); mcp_server.Cortex._tidy retires the loser through the retire path;
+  two lines that say opposite things (`opposed`), both the owner's or both inferred; two lines
+  on one page that may clash (close, exactly one negated, not `opposed`; W1b); a guessed
+  update pair `settle` left alone (W1b). Everything else `settle` resolves itself: lines that
+  say the same facts (D1, W1 `same_facts`), recorded `possible_update_of` / `supersedes`
+  pairs and an owner's line against an inferred one (D2); mcp_server.Cortex._tidy retires the
+  loser through the retire path;
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
 - decisions (RR-9): decision-like commit subjects of imported git repos
@@ -37,6 +39,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import hashlib
+import itertools
 import re
 import sys
 
@@ -281,17 +284,23 @@ def kept_cover(rows: list[dict], events, known: dict | None = None):
 
 def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()) -> dict:
     """D1, D2, D5 over `rows` (tiered live claim rows, none private): {retire: [{retire, keep,
-    why}] with raw rows, cards: [{key, why: "opposite", left, right}]}.
+    why}] with raw rows, cards: [{key, why, left, right}]} (why `opposite`, `maybe_update` or
+    `maybe_opposite`).
     - a recorded pair (claims.recorded_pairs) whose lines agree: the newer stays, unless the
       older is the owner's and the newer inferred (why `update` or `supersedes`); a guessed
-      `update` pair is applied only when `same_facts` or `opposed` (W1), else left alone;
+      `update` pair is applied only when `same_facts` or `opposed` (W1), else it is a card
+      (why `maybe_update`, the older line left), so prime.held's hold can end;
     - lines on one page that say the same facts (`scorer` cut and `same_facts`): the one
       `rank` puts first stays (why `duplicate`), so n copies are one line;
     - two of the lines left that are `opposed` (or a recorded pair exactly one of which is
       negated): the owner's stays over an inferred one (why `opposite`); two of the owner's or two
-      inferred are a card, one per pair of near-copy groups.
-    A pair the user kept both of (`kept_cover`) or whose key is in `skip` is left alone, and
-    so is a line whose `page/id` is in `skip` (an automatic retire the user undid)."""
+      inferred are a card, one per pair of near-copy groups;
+    - W1b: two lines left on one page, at least the `scorer` cut, exactly one negated but not
+      `opposed` ("Likes spicy food" / "Doesn't like very spicy Thai food"): a card (why
+      `maybe_opposite`) whoever wrote them, never retired by itself.
+    `conflicts` shows SHOWN_PAIRS cards at a time. A pair the user kept both of (`kept_cover`)
+    or whose key is in `skip` is left alone, and so is a line whose `page/id` is in `skip`
+    (an automatic retire the user undid)."""
     events = list(events)
     covered, score, cut, no = kept_cover(rows, events, known)
     recorded, _ = claims.recorded_pairs(events)
@@ -308,13 +317,15 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
         out.append({"retire": rows[i], "keep": rows[k], "why": why})
         gone.add(i)
 
+    asks = []  # W1b: guessed updates left alone: a card, so prime.held's hold on the older ends
     for old, new, why in recorded.values():
         o, n = at.get(old), at.get(new)
         if o is None or n is None or o in gone or n in gone or not free(o, n):
             continue
         a, b = rows[o]["text"], rows[n]["text"]
         if why == "update" and not (same_facts(a, b) or opposed(a, b)):
-            continue  # W1: a guessed pair that would lose a fact: both stay (the agent decides)
+            asks.append((o, n))  # W1: a guessed pair that would lose a fact: both stay
+            continue
         if no[o] != no[n]:
             forced.append((o, n))
         elif owned(rows[o]) and not owned(rows[n]):
@@ -350,17 +361,34 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
             if not kept(lose):
                 drop(lose, win, "opposite")
         else:
-            cards.append((a, b))
+            cards.append((a, b, "opposite"))
+    for a, b in asks:  # older left, newer right: the app's Y keeps the right line
+        if frozenset((a, b)) not in seen:
+            seen.add(frozenset((a, b)))
+            cards.append((a, b, "maybe_update"))
+    # W1b: lines on one page as close as `scorer`'s cut, exactly one negated, not `opposed`:
+    # they may clash, so a card whoever wrote them, never a retire
+    sides: dict[str, tuple] = {}
+    for a in keep:
+        if a not in gone:
+            sides.setdefault(rows[a]["page"], ([], []))[no[a]].append(a)
+    for yes, nay in sides.values():
+        for a, b in sorted(tuple(sorted(p)) for p in itertools.product(yes, nay)):
+            if (frozenset((a, b)) not in seen and score(a, b) >= cut and free(a, b)
+                    and not opposed(rows[a]["text"], rows[b]["text"])):
+                seen.add(frozenset((a, b)))
+                cards.append((a, b, "maybe_opposite"))
     return {"retire": out, "cards": [
-        {"key": pair_key(rows[a], rows[b]), "why": "opposite", "left": rows[a], "right": rows[b]}
-        for a, b in cards if a not in gone and b not in gone]}
+        {"key": pair_key(rows[a], rows[b]), "why": why, "left": rows[a], "right": rows[b]}
+        for a, b, why in cards if a not in gone and b not in gone]}
 
 
 def conflicts(rows: list[dict], events: list[dict], known: dict | None = None) -> list[dict]:
     """D2: up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that clash and Cortex
     does not settle itself (`settle`'s cards: an opposite pair of two of the owner's lines or
-    two inferred ones), as {key, why, left, right} with raw rows; Keep first or second retires
-    the other line, Keep both covers near-copies of the pair too (`kept_cover`)."""
+    two inferred ones, a guessed update left alone, a pair that may clash), as {key, why,
+    left, right} with raw rows; Keep first or second retires the other line, Keep both
+    covers near-copies of the pair too (`kept_cover`)."""
     return settle(rows, events, known)["cards"][:SHOWN_PAIRS]
 
 
@@ -519,8 +547,8 @@ def unsafe_lines(vault, events) -> list[dict]:
             kept.add(c.get("hash"))
     out = []
     for r in claims.rows(vault):
-        if r["status"] != "live" or not (what := claims.unsafe(r["text"])
-                                         or claims.unsafe(r["section"])):
+        if r["status"] != "live" or not (what := claims.unsafe(r["text"], r["page"])
+                                         or claims.unsafe(r["section"], r["page"])):
             continue
         key = hashlib.sha256(f"{r['page']}\n{r['section']}\n{r['text']}".encode()).hexdigest()[:16]
         if text_hash(key) not in kept:
