@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import importers, more_sources, sources
+from cortex import importers, more_sources, semantic, sources
 from cortex.cli import app
 from cortex.vault import Vault
 
@@ -228,7 +228,7 @@ def test_an_ocrd_document_page_says_so(root_plain, ocr):
                                   lambda kind, d: more_sources._pdf(d))
     assert sources.run(v, src, C)["imported"] == 1
     page = _page(v, "docs-lecture-scan")
-    assert f"read page 1 read page 2\n\n{more_sources.OCR_LINE}" in page
+    assert f"## Page 1\nread page 1\n\n## Page 2\nread page 2\n\n{more_sources.OCR_LINE}" in page
     assert 'summary: "read page 1' in page  # the mark is last, so it is not the summary
     text = sources.run(v, more_sources.doc_source(
         "typed.pdf", 9, 0.0, lambda *a, **k: _pdf("Typed"), lambda kind, d: more_sources._pdf(d)),
@@ -258,12 +258,198 @@ def test_docs_reuse_an_earlier_notes_import(root_plain, tmp_path):
     assert r["duplicate"] == 1 and r["imported"] == 2  # notes.md is already a notes page
 
 
-def test_long_documents_are_clipped(root_plain, tmp_path):
+def test_long_documents_are_whole(root_plain, tmp_path):
+    """R17: a .docx keeps every paragraph, as it is; its key is the 1,500 characters it kept
+    before."""
     d = tmp_path / "long"
     d.mkdir()
     (d / "big.docx").write_bytes(_docx([f"paragraph number {i} " * 5 for i in range(200)]))
     it = next(i for i in more_sources.docs_source(d).items() if not isinstance(i, str))
-    assert len(it.text) <= more_sources.DOC_CHARS + 2 and it.text.endswith(" …")
+    assert len(it.text) > 10 * more_sources.DOC_CHARS and "\nparagraph number 199" in it.text
+    assert it.key == more_sources._clip(it.text, more_sources.DOC_CHARS)
+
+
+WORDS = "heaps keep the smallest key on top "
+
+
+def _pdfs(pages: list[str]) -> bytes:
+    """A PDF of `pages`, each one line of text ("" is a page with none)."""
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+    w = PdfWriter()
+    font = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    for text in pages:
+        page = w.add_blank_page(612, 792)
+        if text:
+            page[NameObject("/Resources")] = DictionaryObject(
+                {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+            s = DecodedStreamObject()
+            s.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode())
+            page[NameObject("/Contents")] = w._add_object(s)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def _book(n: int = 3, empty: int = 2) -> list[str]:
+    """`n` pages of about 1,100 characters, page `empty` with no text."""
+    return ["" if i == empty else f"Chapter {i} " + WORDS * 30 for i in range(1, n + 1)]
+
+
+def _doc_run(v: Vault, data: bytes, name: str = "book.pdf") -> dict:
+    def parse(kind, d):
+        return more_sources._pdf(d) if kind == "pdf" else more_sources._docx(d)
+    return sources.run(v, more_sources.doc_source(name, len(data), 0.0, lambda *a, **k: data,
+                                                  parse), C)
+
+
+def test_a_pdf_keeps_every_page_under_its_page_heading(root_plain):
+    v = Vault(root_plain)
+    assert _doc_run(v, _pdfs(_book()))["imported"] == 1
+    page = _page(v, "docs-book")
+    assert "\n\n## Page 1\nChapter 1 heaps" in page and "## Page 2" not in page  # no text
+    assert "\n\n## Page 3\nChapter 3 heaps" in page
+    assert page.split("## Page 1")[1].count("smallest key") == 60
+    assert 'summary: "Chapter 1 heaps keep' in page and "Cortex kept" not in page
+    assert "Source: Documents · Date: " in page and "\n\nWhen: " in page  # the header as before
+    note = v.read_path(v.root / "resources" / "docs-book.md")
+    chunks = semantic._chunks({"title": "book", "kind": "resource", "fields": note.fields,
+                               "body": note.body})
+    assert len(chunks) > 1 and chunks[-1][1].startswith("book › ## Page 3 · ")
+
+
+def test_past_the_cap_whole_pages_are_kept_and_the_page_says_so(root_plain, monkeypatch):
+    monkeypatch.setattr(more_sources, "DOC_FULL_CHARS", 2500)
+    v = Vault(root_plain)
+    assert _doc_run(v, _pdfs(_book(4, empty=0)))["imported"] == 1
+    page = _page(v, "docs-book")
+    assert "\n\nWhen: " + more_sources._day(0.0) + "\n\nCortex kept the first 2 of 4 pages.\n\n"\
+        "## Page 1\nChapter 1" in page and "## Page 2\nChapter 2" in page
+    assert "Chapter 3" not in page and 'summary: "Chapter 1 heaps' in page
+    paged = more_sources._paged
+    assert paged(["a", " ", "b  c"], 5) == (
+        "Cortex kept the first 3 of 5 pages.\n\n## Page 1\na\n\n## Page 3\nb c", "a b c")
+    one, _ = paged(["x " * 2000], 1)  # one page over the cap alone: clipped, never dropped
+    assert one.startswith("## Page 1\nx x") and len(one) <= 2502 and "Cortex kept" not in one
+
+
+def test_a_long_scan_says_how_many_pages_ocr_read(root_plain, ocr, monkeypatch):
+    monkeypatch.setattr(more_sources, "OCR_PAGES", 1)
+    v = Vault(root_plain)
+    data = scan_pdf(["a", "b"])
+    assert _doc_run(v, data, "scan.pdf")["imported"] == 1
+    page = _page(v, "docs-scan")
+    assert "Cortex kept the first 1 of 2 pages.\n\n## Page 1\nread page 1\n\n" in page
+    assert page.endswith(more_sources.OCR_LINE + "\n") and 'summary: "read page 1"' in page
+
+
+def _old_import(v: Vault, data: bytes, name: str) -> None:
+    """The documents import as it was before R17: the first DOC_CHARS characters on one line
+    (a .docx: its paragraphs), no page headings and no `body:` mark."""
+    got = more_sources._pdf(data) if name.endswith(".pdf") else more_sources._docx(data)
+    text = " ".join(" ".join(got[2]).split()) if name.endswith(".pdf") else got[2]
+    it = sources.Item(got[0] or Path(name).stem, got[1] or more_sources._day(0.0),
+                      more_sources._clip(text, more_sources.DOC_CHARS), name)
+    sources.run(v, sources.Source("docs", "Documents", "folder", lambda: iter([it]),
+                                  skips=more_sources.DOC_SKIPS), C)
+
+
+def test_a_page_imported_clipped_is_refilled_once(root_plain):
+    v, data = Vault(root_plain), _pdfs(_book(4))
+    _old_import(v, data, "book.pdf")
+    old = _page(v, "docs-book")
+    assert "Chapter 4" not in old and " · body: " not in old and "## Page" not in old
+    v._edit_fields("resource", "docs-book", {"tags": ["mine"]})
+    r = _doc_run(v, data)
+    assert (r["imported"], r["updated"], r["duplicate"]) == (0, 1, 0)
+    page = _page(v, "docs-book")
+    assert "## Page 4\nChapter 4" in page and 'tags: ["mine"]' in page  # the owner's field
+    assert 'summary: "Chapter 1 heaps' in page and " · body: " in page
+    assert old.split(" · sha: ")[1][:16] == page.split(" · sha: ")[1][:16]  # the same key
+    assert sorted(p.name for p in (v.root / "resources").glob("docs-*")) == ["docs-book.md"]
+    again = _doc_run(v, data)
+    assert (again["imported"], again["updated"], again["duplicate"]) == (0, 0, 1)
+    # a short .docx imported before is the same text: a duplicate, its page untouched
+    short = _docx(["Study plan for spring", "Week one"])
+    _old_import(v, short, "plan.docx")
+    before = _page(v, "docs-plan")
+    r = _doc_run(v, short, "plan.docx")
+    assert (r["updated"], r["duplicate"]) == (0, 1) and _page(v, "docs-plan") == before
+
+
+def test_another_file_with_the_same_opening_never_rewrites_the_page(root_plain):
+    """Two files whose first DOC_CHARS characters match share a key: the second is a duplicate,
+    as before R17, and the first file's page keeps its own text."""
+    v = Vault(root_plain)
+    assert _doc_run(v, _pdfs(_book(4)), "book.pdf")["imported"] == 1
+    before = _page(v, "docs-book")
+    # pages 1 and 3 hold the key; page 4 differs
+    r = _doc_run(v, _pdfs(_book(4)[:3] + ["Chapter 4 something else entirely"]), "copy.pdf")
+    assert (r["imported"], r["updated"], r["duplicate"]) == (0, 0, 1)
+    assert _page(v, "docs-book") == before
+    assert sorted(p.name for p in (v.root / "resources").glob("docs-*")) == ["docs-book.md"]
+
+
+def _append(v: Vault, nid: str, line: str) -> None:
+    p = v.root / "resources" / f"{nid}.md"
+    p.write_bytes(p.read_bytes() + line.encode())
+
+
+def test_an_owner_edited_page_is_left_as_it_is(root_plain):
+    v, data = Vault(root_plain), _pdfs(_book())
+    _old_import(v, data, "book.pdf")
+    _append(v, "docs-book", "My own note.\n")
+    before = _page(v, "docs-book")
+    r = _doc_run(v, data)
+    assert r["updated"] == 0 and r["reasons"][sources.EDITED] == 1
+    assert _page(v, "docs-book") == before
+    assert "skipped 1 (1 you edited the page; it was left as it is)" in \
+        importers.report_line("Documents", r)
+    # a page with a `body:` mark: edited, then the file grows; the edit stays
+    assert _doc_run(v, _pdfs(["Lecture " + WORDS * 50]), "lecture.pdf")["imported"] == 1
+    _append(v, "docs-lecture", "Mine.\n")
+    edited = _page(v, "docs-lecture")
+    r = _doc_run(v, _pdfs(["Lecture " + WORDS * 50, "A new page"]), "lecture.pdf")
+    assert r["updated"] == 0 and r["reasons"][sources.EDITED] == 1
+    assert _page(v, "docs-lecture") == edited
+
+
+def test_other_updating_sources_still_rewrite_and_summarise_as_before(root_plain):
+    """Only the docs import keeps edits and skips its page headings in the summary."""
+    v = Vault(root_plain)
+
+    def src(text):
+        return sources.Source("repos", "Repos", "folder", lambda: iter(
+            [sources.Item("Planner", "2025-01-01", text, key="planner")]), updates=True)
+    sources.run(v, src("## Page 1\nfirst words"), C)
+    assert 'summary: "Page 1"' in _page(v, "repos-planner")
+    _append(v, "repos-planner", "My edit.\n")
+    r = sources.run(v, src("## Page 1\nsecond words"), C)
+    assert r["updated"] == 1 and sources.EDITED not in r["reasons"]
+    page = _page(v, "repos-planner")
+    assert "second words" in page and "My edit." not in page
+
+
+@pytest.mark.perf
+def test_a_250_page_pdf_parses_well_inside_the_timeout():
+    """R17: the docs import reads up to DOC_FULL_CHARS (about 250 dense pages) in the child,
+    measured at about 5 s, well inside PARSE_TIMEOUT."""
+    import time
+    data = _pdfs([f"Page {i} " + WORDS * 57 for i in range(1, 251)])  # ~2,000 characters each
+    parse = more_sources._Parser()
+    try:
+        t = time.perf_counter()
+        got = parse("pdf", data)
+        took = time.perf_counter() - t
+    finally:
+        parse.close()
+    assert not isinstance(got, str) and took < more_sources.PARSE_TIMEOUT / 3, took
+    text, _ = more_sources._paged(list(got[2]), got[3])
+    head, pages = text.split("\n\n", 1)  # KEPT's line, then whole pages up to the cap
+    assert head.startswith("Cortex kept the first 24") and head.endswith(" of 250 pages.")
+    assert 490_000 < len(pages) <= more_sources.DOC_FULL_CHARS
 
 
 def _git(repo: Path, *args: str, email: str = "me@test.invalid") -> None:

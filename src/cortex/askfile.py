@@ -75,7 +75,7 @@ class File:
     size: int
     mtime: float
     data: bytes  # .txt and .md: the bytes the notes import reads; else b""
-    parsed: tuple | None  # PDF and .docx: (title, date, text[, ocr]) as the child gives the import
+    parsed: tuple | None  # PDF and .docx: the child's parse, as the documents import takes it
     scan: bool = False  # C2: a PDF read with Windows OCR; its line says "(read from a scan)"
     id: str = ""
     used: float = 0.0
@@ -148,12 +148,12 @@ def read(path: Path, name: str) -> File:
             parse.close()
         if isinstance(got, str):
             raise ValueError(WHY.get(got, WHY["unreadable"]))
+        parsed = tuple(got)  # Save hands it to the import as the child's parse (more_sources._pdf)
         if suffix == ".pdf":
-            title, made, pages, total, ocr = got
-            parsed = (title, made, " ".join(" ".join(pages).split()), ocr)  # as more_sources._pdf
+            _, _, pages, total, ocr = got
         else:
-            parsed, pages = tuple(got), [got[2]]
-        if not parsed[2].strip():
+            pages = [got[2]]
+        if not "".join(pages).strip():
             # C2: ocr None is a PDF with no text and no OCR in the child (as before C2); a number
             # means Windows OCR ran and read nothing
             raise ValueError(SCAN if suffix == ".pdf" and sys.platform != "win32" else
