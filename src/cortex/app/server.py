@@ -2101,10 +2101,10 @@ def _handler(app: App):
                 self._head(200, "application/x-ndjson", None)
                 threading.Thread(target=keepalive, daemon=True, name="chat-keepalive").start()
                 # local only, never cloudllm; looked up only when the turn needs the model. An
-                # attached file (C1) takes only a model already loaded: none is ever loaded
+                # attached file (C1) is asked like any question: the person asked, so the
+                # configured local model may start, as for every Chat turn
                 files = app.files.get(body.get("files"))
-                chat.reply(vault, cid, text, localllm.find_loaded if files else localllm.find,
-                           emit, cancel, files=files)
+                chat.reply(vault, cid, text, localllm.find, emit, cancel, files=files)
             except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)
                 emit({"t": "err", "code": "internal",
                       "message": f"internal error ({type(e).__name__})"})
