@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -225,7 +226,7 @@ def test_light_core_is_the_prime_before_related(vault, monkeypatch):
     p = "How does a car motor work? Explain it."
     parts, left = prime.core(c.vault, p, list(c.log.iter_events()), c._now())
     assert [b.split("\n", 1)[0] for b in parts] == [
-        "## Profile", "## Preferences", "## Teaching contract (core)"]  # no (ask): no legend
+        "## Profile", "## Teaching contract (core)", "## Preferences"]  # no (ask): no legend
     ctx = c.cortex_prime(p)["context"]
     assert ctx.startswith("\n\n".join(parts) + "\n\n## Related\n") and 0 < left[0] < PRIME_MAX
     only = c.cortex_prime(p, related_only=True)
@@ -452,6 +453,9 @@ def test_attempt_first_is_budget_neutral(vault, monkeypatch):
     p.write_text(todo, "utf-8")
     got, left = blocks()
     assert "## Attempt first" in got and "## Attempt first" not in without
+    # P1: the owner's standing blocks first, the prompt's line after them
+    assert list(got) == ["## Profile", "## Teaching contract (core)", "## Preferences",
+                         "## Attempt first"]
     both = len(got["## Attempt first"]) + 2 + len(got["## Preferences"])
     assert both <= prime.PRIME_CAPS["preferences"] < len(without["## Preferences"]) + len(
         got["## Attempt first"])
@@ -533,6 +537,37 @@ def test_prime_hook_nudges_when_prime_is_slow_or_fails(vault, monkeypatch):
     prime_hook.pending.join(30)
     assert context("after-slow").startswith(prime_hook.HEAD)  # no lockout after a slow prime
     assert not list((vault / ".cortex").glob("prime-slow*"))
+
+
+def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, monkeypatch):
+    """P1: the primed list is read and written under the vault lock, so chats whose first
+    prompts land at once all stay marked; a lock held past LOCK_WAIT skips the mark (the chat
+    is still served) instead of blocking the hook."""
+    import socket
+
+    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    sids = ["chat-a", "chat-b"]  # two chats opened together: two hook processes
+    code = "import sys\nfrom cortex import prime_hook\nprime_hook.run(sys.stdin.read())\n"
+    runs = [subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, text=True,
+                             env={**os.environ, "CORTEX_VAULT": str(vault)}) for _ in sids]
+    for p, s in zip(runs, sids, strict=True):
+        p.stdin.write(payload(sid=s))
+        p.stdin.close()
+    for p in runs:
+        p.wait(120)
+    assert set(sids) <= set((vault / prime_hook.STATE).read_text("utf-8").split())
+
+    monkeypatch.setattr(prime_hook, "LOCK_WAIT", 0.2)
+    lock = vault / ".cortex" / "lock"  # another live process's write, as the hook sees it
+    lock.write_text(f"{os.getpid()} {time.time():.3f} {socket.gethostname()}")
+    try:
+        t = time.perf_counter()
+        out = prime_hook.run(payload(sid="busy"))
+        took = time.perf_counter() - t
+    finally:
+        lock.unlink()
+    assert out and took < prime_hook.BUDGET + 2 * prime_hook.LOCK_WAIT + 1
+    assert "busy" not in (vault / prime_hook.STATE).read_text("utf-8").split()
 
 
 def test_prime_hook_stays_light(vault):
@@ -705,5 +740,6 @@ def test_lately_lists_recent_pages_from_the_related_budget(vault, monkeypatch):
         assert gone not in block, gone
     related = ctx.split("## Related\n", 1)[1].split("\n\n## ", 1)[0]
     assert "[[engines]]" in related and "[[engines]]" not in block  # Related keeps its own
+    assert ctx.index(f"## {LATELY_HEAD}\n") < ctx.index("## Related\n")  # P1: the week's first
     lately = len(f"## {LATELY_HEAD}\n") + len(block)
     assert len("## Related\n") + len(related) + lately <= prime.PRIME_CAPS["related"]

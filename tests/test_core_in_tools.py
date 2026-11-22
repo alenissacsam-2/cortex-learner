@@ -102,3 +102,60 @@ def test_changed_core_shows_at_next_list(vroot):
     before, after = anyio.run(main)
     assert "short sentences" in before and "short sentences" not in after
     assert "- Always cite pages." in after
+
+
+def _prefix(root, client, monkeypatch, now):
+    """Everything a client caches in its prompt prefix from the server: the instructions and
+    each tool's name, description and annotations, at server time `now`."""
+    monkeypatch.setattr(mcp_server.Cortex, "_now", lambda self: now)
+    server = mcp_server.build_server(Vault(root))
+
+    async def main():
+        async with Client(server, client_info=Implementation(name=client, version="1")) as c:
+            return c.instructions, [(t.name, t.description, t.annotations.model_dump())
+                                    for t in (await c.list_tools()).tools]
+
+    return anyio.run(main)
+
+
+def test_prefix_text_is_the_same_bytes_across_a_day_with_no_edits(vroot, monkeypatch):
+    """P1: the server instructions, the tool list (core lines included) and the rules-file
+    block hold no date, count or recent item: the next day, with no edit, they are identical,
+    so a client's prompt cache keeps working. Only a line's own (until …) day ends it."""
+    from datetime import UTC, datetime, timedelta
+
+    from cortex import packs
+    from cortex.events import local_day
+
+    day1 = datetime(2026, 11, 23, 12, tzinfo=UTC)
+    day2 = day1 + timedelta(days=1)
+    v = Vault(vroot)
+    a, b = _prefix(vroot, "claude-ai", monkeypatch, day1), _prefix(vroot, "claude-ai",
+                                                                     monkeypatch, day2)
+    assert a == b and "short sentences" in dict((n, d) for n, d, _ in a[1])["cortex_prime"]
+    assert packs.rule_block(v, day1).encode() == packs.rule_block(v, day2).encode()
+    assert packs.rule_block(v, day1) == packs.rule_block(v, day1 + timedelta(days=30))
+
+    until = f"- Exam week focus (until {local_day(day1)})."
+    note(vroot, "me/core.md", "id: core\n", "# Core\n\n## Core\n" + CORE + until + "\n")
+    a, b = _prefix(vroot, "claude-ai", monkeypatch, day1), _prefix(vroot, "claude-ai",
+                                                                     monkeypatch, day2)
+    assert a[0] == b[0] and [t for t in a[1] if t[0] != "cortex_prime"] == [
+        t for t in b[1] if t[0] != "cortex_prime"]
+    prime_a, prime_b = (dict((n, d) for n, d, _ in x[1])["cortex_prime"] for x in (a, b))
+    assert "Exam week" in prime_a and prime_b == prime_a.replace("\n" + until, "")
+    assert "Exam week" in packs.rule_block(v, day1)
+    assert "Exam week" not in packs.rule_block(v, day2)
+
+
+def test_tool_annotations(vroot):
+    server = mcp_server.build_server(Vault(vroot))
+
+    async def main():
+        async with Client(server) as c:
+            return {t.name: t.annotations for t in (await c.list_tools()).tools}
+
+    got = anyio.run(main)
+    assert {n for n, a in got.items() if a.read_only_hint} == set(mcp_server.READ_ONLY_TOOLS)
+    assert all(a.open_world_hint is False for a in got.values())
+    assert got["cortex_patch"].read_only_hint is False
