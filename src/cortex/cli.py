@@ -1323,6 +1323,32 @@ def voice_import(file: Path,
     typer.echo(f"Imported {n} voice samples for {audience}.")
 
 
+@voice_app.command("measure")
+@_errors
+def voice_measure(propose: Annotated[bool, typer.Option(
+        "--propose", help="Save the lines to me/voice; each waits for your Approve.")] = False,
+                  vault: VaultOpt = None) -> None:
+    """Count how you write (sentence length, questions, greetings...) from your samples."""
+    from cortex import voice
+
+    v = _vault(vault)
+    m = voice.measure(v)
+    if not m:
+        typer.echo(f"Not enough voice samples yet (at least {voice.MIN_GROUP} per audience, "
+                   "not counting ones typed to an AI).")
+        return
+    for g, nums in m.items():
+        typer.echo(f"{render.esc(g, 60)}: " + ", ".join(
+            f"{k} {render.esc(str(x), 40)}" for k, x in nums.items()))
+        for line in voice.style_lines(m, g):
+            typer.echo(f"  - {render.esc(line, 200)}")
+    if propose:
+        n = voice.propose(v, m)
+        typer.echo(f"me/voice: {n.get('proposed', 0)} proposed, {n.get('kept', 0)} kept, "
+                   f"{n.get('withdrawn', 0)} withdrawn; they wait for your Approve in the Cortex "
+                   "app (Review).")
+
+
 # ---- brief ----------------------------------------------------------------------
 
 FIRST_STEPS = ("To start: 1. add a test date (tell any Claude chat, or add one in assessments/); "
