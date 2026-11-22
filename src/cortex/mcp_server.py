@@ -3096,7 +3096,7 @@ class Cortex:
             wrong = self._wrong_merges(events)
             if not waiting and not plan and not wrong:
                 return {"moved": 0, "retired": 0}
-            self.session = self.sessions.start("ambient")
+            self.session = self.sessions.start("tidy")
             self._reset()
             try:
                 restored = self._repair_merges(wrong) if wrong else 0

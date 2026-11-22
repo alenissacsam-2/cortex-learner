@@ -138,6 +138,41 @@ def test_sweep_retires_near_copies_undoably_and_is_idempotent(root):
     assert tidy(root) == {"moved": 0, "retired": 0}  # and the sweep never redoes it
 
 
+def test_the_tidy_has_its_own_session_mode(root):
+    """A2 item 1: the tidy's receipt is not an AI chat. It is titled "Cortex tidied lines about
+    you", stays out of Today like an AI chat's receipt, and one `cortex undo` takes it back.
+    An AI app can never start a "tidy" session."""
+    from datetime import datetime
+
+    import anyio
+    from mcp import Client
+
+    from cortex import dashboard
+    from cortex.cli import app as cli
+    from cortex.mcp_server import build_server
+    (root / ".cortex").mkdir(exist_ok=True)
+    page(root, "preferences", VIM)
+    commit(root)
+    assert tidy(root)["retired"] == 2
+    (sid,) = {e["session"] for e in events(root) if e["kind"] == "open"}
+    assert {e["mode"] for e in events(root) if e["session"] == sid} == {"tidy"}
+    (receipt,) = (root / "sessions").glob("*-tidy-*.md")
+    d = dashboard.build_data(Vault(root), now=datetime.now().astimezone())
+    title = {p["id"]: p["title"] for p in d["pages"]}[receipt.stem]
+    assert title.startswith("Cortex tidied lines about you, ")
+    assert receipt.stem not in d["today_ids"]
+    r = CliRunner().invoke(cli, ["undo", sid, "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    assert set(live(root, "preferences")) >= set(VIM)
+
+    async def start_tidy():
+        async with Client(build_server(Vault(root))) as c:
+            tool = {t.name: t for t in (await c.list_tools()).tools}["cortex_start"]
+            assert "tidy" not in tool.input_schema["properties"]["mode"]["enum"]
+            return await c.call_tool("cortex_start", {"mode": "tidy"})
+    assert anyio.run(start_tidy).is_error
+
+
 def test_sweep_is_bounded(root, monkeypatch):
     (root / ".cortex").mkdir(exist_ok=True)
     page(root, "preferences", DARK)
@@ -352,6 +387,26 @@ def test_five_copies_and_five_opposites_ask_once(root, app):  # noqa: F811
     view = app.review_conflict({"key": c["key"], "keep": "left"})
     assert every_card(view) == 0 and view["count"] == 0
     assert every_card(cards(root)) == 0
+
+
+def test_one_group_answer_is_one_undo(root, app):  # noqa: F811
+    """A2 item 2: Keep first on a card that stands for five near-copies a side retires the five
+    in one session, so one `cortex undo` brings all five back."""
+    from cortex.cli import app as cli
+    page(root, "preferences", [*DARK, *LIGHT])
+    commit(root)
+    (c,) = cards(root)["conflicts"]
+    gone = c["right"]["text"]
+    side = DARK if gone in DARK else LIGHT
+    app.review_conflict({"key": c["key"], "keep": "left"})
+    assert not set(side) & set(live(root, "preferences"))
+    retires = [e for e in events(root) if e["kind"] == "change"
+               and e["payload"]["change"].get("op") == "retire"]
+    assert len(retires) == 5
+    (sid,) = {e["session"] for e in retires}
+    r = CliRunner().invoke(cli, ["undo", sid, "--vault", str(root)])
+    assert r.exit_code == 0, r.output
+    assert set(side) <= set(live(root, "preferences"))
 
 
 def test_five_copies_and_five_opposites_after_the_sweep(root, app):  # noqa: F811
