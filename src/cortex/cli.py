@@ -2337,6 +2337,9 @@ def eval_harvest_facts(file: Annotated[Path | None, typer.Option(
     typer.echo(f"hypothetical false positives: {r['hypothetical_fp']:.1%} ({r['unreal_hit']} of "
                f"{r['unreal']} hypothetical or roleplay turns; target <= "
                f"{t['hypothetical_fp']:.0%})")
+    typer.echo(f"reactions saved as facts: {r['reaction_fp']:.1%} ({r['reaction_hit']} of "
+               f"{r['reaction']} reactions to the chat's own output; target <= "
+               f"{t['reaction_fp']:.0%})")
     typer.echo(f"polarity flips: {r['flips']} (target {t['flips']})")
     typer.echo(f"promotion facts not held for the Review: {r['held_missed']}")
     typer.echo("targets: met" if fh.meets(r) else "targets: NOT met")
