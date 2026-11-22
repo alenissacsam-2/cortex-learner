@@ -379,6 +379,19 @@ def test_a_page_imported_clipped_is_refilled_once(root_plain):
     assert (r["updated"], r["duplicate"]) == (0, 1) and _page(v, "docs-plan") == before
 
 
+def test_another_file_with_the_same_opening_never_rewrites_the_page(root_plain):
+    """Two files whose first DOC_CHARS characters match share a key: the second is a duplicate,
+    as before R17, and the first file's page keeps its own text."""
+    v = Vault(root_plain)
+    assert _doc_run(v, _pdfs(_book(4)), "book.pdf")["imported"] == 1
+    before = _page(v, "docs-book")
+    # pages 1 and 3 hold the key; page 4 differs
+    r = _doc_run(v, _pdfs(_book(4)[:3] + ["Chapter 4 something else entirely"]), "copy.pdf")
+    assert (r["imported"], r["updated"], r["duplicate"]) == (0, 0, 1)
+    assert _page(v, "docs-book") == before
+    assert sorted(p.name for p in (v.root / "resources").glob("docs-*")) == ["docs-book.md"]
+
+
 def _append(v: Vault, nid: str, line: str) -> None:
     p = v.root / "resources" / f"{nid}.md"
     p.write_bytes(p.read_bytes() + line.encode())

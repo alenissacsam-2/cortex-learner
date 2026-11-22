@@ -415,8 +415,11 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             continue
         was = made(it, it.key or it.text) if src.keeps_edits else ""  # as its key's page holds
         if src.keeps_edits and (m := HEADER.search(cur)) and (
-                m.group(1) not in _labels(src) or _rest(cur, m) == body):
-            r["duplicate"] += 1  # another source's page, or the same body (no mark yet)
+                m.group(1) not in _labels(src) or _rest(cur, m) == body
+                or (it.origin and m.group(3) and m.group(3) != scrub(it.origin, src))):
+            # another source's page, the same body (no mark yet), or another file that opens
+            # with the same text (the key): never rewrite a page another file made
+            r["duplicate"] += 1
             continue
         if src.keeps_edits and _edited(cur, was):
             r["reasons"][EDITED] = r["reasons"].get(EDITED, 0) + 1
