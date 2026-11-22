@@ -3,8 +3,8 @@
 Cortex is your second brain. It is a folder of notes (your vault, also an Obsidian vault) plus a small program that every Claude chat can read from and write to.
 
 It has two jobs:
-- **Remember you:** what you know, what you get wrong, your projects, decisions and preferences.
-- **Plan your study:** what to revise today, what you're forgetting, what an exam needs.
+- **Remember you:** what you know, what you work on, what you get wrong, your projects, decisions and preferences.
+- **Plan your study, if you study:** what to revise today, what you're forgetting, what an exam needs.
 
 Cortex acts only when a chat (or you, in the app or a terminal) asks it to. The one exception is browsing: after your first browsing import, the app and the receiver import new history by themselves every few hours (section 6).
 
@@ -70,7 +70,7 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 **Telling Cortex directly.** Start a line of any chat message with one of these, and Cortex itself (not the AI) saves it, in Claude, Claude Code or a chat you import later:
 
 - `//pref: short answers, no emoji` adds a line to your preferences.
-- `//fact: I study at IIT Madras` adds a line to your profile.
+- `//fact: I'm on the payments team` or `//fact: I study at IIT Madras` adds a line to your profile.
 - `//forget: tabs for indentation` retires the line about you it clearly matches (it moves to `## Past`, and `cortex undo` brings it back). If no line or several lines match, nothing changes and Review in the app lists the lines to pick from.
 
 They count as your own words. Only your messages are read, never the AI's replies, so a tag the AI writes does nothing. If the chat had read a web page or file first, a `//pref` or `//fact` waits in Review for your Approve instead. Typing the same tag twice on one day saves it once. Cortex refuses a line that reads like an instruction to an AI ("ignore previous instructions…") or hides invisible characters, and saves nothing; in Claude Code the chat is told why, so it can tell you to reword it. A chat Cortex imports as private (health and the like) never adds its tags to your shared profile or preferences.
@@ -89,7 +89,7 @@ Chats you import from Gemini, Perplexity and Claude are raw transcripts: searcha
 
 It never edits or deletes an imported chat, and it never counts an old chat as a revision today. `cortex harvest status` shows progress and the undo command for each run.
 
-Is it worth it now? It's not urgent while a test is close. Try it on an evening when you're too tired to study.
+Is it worth it now? It's not urgent while a test or a deadline is close. Try it on a quiet evening.
 
 ---
 
@@ -242,7 +242,7 @@ Each year becomes one page (`listening-spotify-YYYY`): total hours (music and po
 
 ### The Chat test
 
-The Chat test checks how well the app's Chat answers. It asks Chat 40 questions about a made-up learner and scores each answer in code, with no AI judge. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it.
+The Chat test checks how well the app's Chat answers. It asks Chat 40 questions about a made-up person and scores each answer in code, with no AI judge. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it.
 
 - **What it uses.** The test builds a made-up vault, browsing history and study record in a temp folder and deletes them afterwards. Your own vault, settings and browsing are never read.
 - **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "blocked: no local model" and the whole result is BLOCKED, not a fail. The 14 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run. An empty or failed answer counts as a fail.
@@ -409,6 +409,9 @@ Once a local model runs (Ollama or LM Studio; Qwen 3.5 2B is enough), talk with 
 ## 7. What to try, in order
 
 **This week:**
+
+For everyone: tell Cortex about you in any chat (`//fact: I'm on the payments team`, `//pref: short answers`), and save a decision when you make one. The steps below are for study.
+
 1. **Date your pending tests** in Obsidian (in `assessments/`; a best guess like `date: 2026-12-01` if you don't know the day). Until then the exam clock, the extra revision near exams and the readiness forecast are all off.
 2. **`/cortex`** once, to see the home card.
 3. **`/cortex learn`** (or `/cortex learn <subject>`) as your daily session.

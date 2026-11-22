@@ -566,7 +566,7 @@ def setup(
         typer.echo("Nothing changed. Run `cortex setup` again and pick another folder.")
         raise typer.Exit(1)
     if sample is None:
-        sample = new and ask("Add a small sample vault (a made-up learner, Sam) to try things? "
+        sample = new and ask("Add a small sample vault (a made-up person, Sam) to try things? "
                              "`cortex sample remove` clears it.")
     model = not no_model and ask("Download the search model now? About 150 MB, once, from "
                                  "huggingface.co; without it recall uses keywords only.")

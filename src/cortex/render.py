@@ -207,8 +207,9 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
         f"**Due:** {due_s} · **Open mistakes:** {open_mistakes}",
         *(["**Lately:** " + " · ".join(lately)] if lately else []),
         *(["**Waiting for you:** " + " · ".join(wait)] if wait else []),
-        "**What would you like to do?** learn a topic · recall something · review "
-        "what's due · a 10-question sweep · today's plan · save this chat · open the graph"])
+        "**What would you like to do?** recall something · save this chat · a project · "
+        "open the graph · today's plan · study: learn a topic, review what's due, "
+        "a 10-question sweep"])
 
 
 def start_card(*, mode: str, today: list[dict], assessments: list[dict],

@@ -481,8 +481,8 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["composer"] is True and out["pushed"] == ["push #connect", "push #chat"]
     assert out["needAbove"] == ["chat-bar", "board", "chat-log", "composer"]
     assert out["until"] == ["Ask about anything you've saved or browsed.",
-                            "Until then, Chat can still answer questions about your sites and "
-                            "your studying, like these:"]
+                            "Until then, Chat can still answer questions like these from what "
+                            "Cortex already has:"]
     # Chat: the example fills the composer; Enter sends; the stream renders safely with sources
     assert out["empty"] == "Ask about anything you've saved or browsed."
     assert out["filled"] == "Which sites did I visit yesterday?"

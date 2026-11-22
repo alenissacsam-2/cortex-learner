@@ -533,7 +533,7 @@
     embed: ['Search model', 'not downloaded', 'Finds the notes and pages that answer your question. A one-time download.', 'Set up the search model'],
     llm: ['Local model', 'not running', 'Writes the answer on this computer, never in the cloud. Start Ollama or LM Studio, or set one up (a download of a few GB).', 'Set up a local model'],
   };
-  const EXAMPLES = ['What did I read about binary search?', 'Which sites did I visit yesterday?', 'What mistakes do I keep making?'];
+  const EXAMPLES = ['What did I decide about the payments retry?', 'Which papers did I read on contrastive learning?', 'What did I read about binary search?', 'Which sites did I visit yesterday?'];
   // answered from Cortex's own data, with no search model and no local model (chat.site_list, chat_study)
   const DATA_EXAMPLES = ['Which sites did I visit yesterday?', 'What should I study today?', 'What is due for review?', 'Where am I weak?'];
   const KIND = { note: 'note', chat: 'chat', browse: 'browsing' };
@@ -789,7 +789,7 @@
     const missing = d.missing || [];
     if (!chatS.msgs.length) {  // the examples fill the message box
       log.append(h('div', { class: 'chat-empty' }, h('p', { text: 'Ask about anything you\'ve saved or browsed.' }),
-        missing.length ? h('p', { text: 'Until then, Chat can still answer questions about your sites and your studying, like these:' }) : null,
+        missing.length ? h('p', { text: 'Until then, Chat can still answer questions like these from what Cortex already has:' }) : null,
         h('div', { class: 'inline' }, (missing.length ? DATA_EXAMPLES : EXAMPLES).map((x) => btn(x, () => { chatS.draft = x; chatS.focus = true; renderChat(chatS.d); })))));
     }
     // something missing: what to set up, above the message box (site and study questions still work)

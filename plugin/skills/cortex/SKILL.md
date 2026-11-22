@@ -8,7 +8,7 @@ allowed-tools: mcp__plugin_cortex_cortex__*
 
 # /cortex
 
-Read and update the learner's model **only through the `cortex_*` tools**.
+Read and update the user's model **only through the `cortex_*` tools**.
 
 ## Every chat
 - **Call `cortex_prime(prompt=<their message>)` before answering in every chat**, old ones you continue too (if none is in it yet); if a hook primed it, pass `related_only=true`.
