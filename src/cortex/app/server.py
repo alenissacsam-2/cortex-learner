@@ -375,7 +375,7 @@ class App:
     # ---- GET (never changes anything) ----
     def status(self, q: dict | None = None) -> dict:
         """The Status board; its slow probes are `status.kept` (`?fresh=1`: asked again)."""
-        from cortex import chat_import
+        from cortex import chat_import, egress
         if self.warming not in (None, threading.current_thread()):
             self.warming.join()  # its probes are already under way: wait for them, not ask twice
         if (q or {}).get("fresh") == ["1"]:
@@ -388,6 +388,7 @@ class App:
         return {"rows": status.rows(self.root) + (self._paused_rows() if v["ok"] else []),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
+                "connects": egress.summary(),  # cortex.egress: where Cortex connects
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def _paused_rows(self) -> list[dict]:

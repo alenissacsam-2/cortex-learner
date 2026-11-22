@@ -6,14 +6,14 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 
 ## When Cortex uses the network
 
-**Downloads.** Only these reach the internet, and each one happens because you asked for it:
+**Downloads.** Only these reach the internet. Each one but the update check happens because you asked for it:
 
 - **The search model** (about 150 MB, from Hugging Face, huggingface.co), once, into `~/.cortex/models`. This is the one download Cortex makes for you: `cortex setup` runs it after you say yes, and the app runs it when you click **Download search model**. You can also run `cortex model download` yourself. Nothing else downloads it; searches never do.
+- **The update check.** While the app runs, it asks GitHub (api.github.com) for the latest Cortex release a minute after it starts and every 6 hours, and when you click **Check for updates** (Status → Updates). The request carries nothing about you, not even your Cortex version. If GitHub's API is limiting requests from your network, it reads the latest release from github.com's release page instead. When a newer release exists, a Cortex installed with `CortexSetup.exe` downloads the new installer and its checksum from that release in the background; nothing is installed until you click **Restart to update**.
 - **In the app, only when you click** (Setup, Local model and Status):
-  - **Check for updates** asks GitHub (api.github.com) for the latest Cortex release. The request carries nothing about you, not even your Cortex version. If GitHub's API is limiting requests from your network, it reads the latest release from github.com's release page instead. **Update now** then downloads the new `CortexSetup.exe` and its checksum from that GitHub release.
   - Ollama itself (about 1 GB): `winget install Ollama.Ollama` on Windows (from ollama.com) or `brew install ollama` on macOS (from Homebrew). On Linux the app only shows the install command.
   - A local model: `ollama pull` (from Ollama's library) or `lms get` (LM Studio's catalogue), about 2 to 6 GB depending on the model you pick.
-  - In Connect AI apps, adding the Claude Code plugin runs `claude plugin marketplace add` and `claude plugin install` on your Cortex folder.
+  - In Connect AI apps, adding the Claude Code plugin runs `claude plugin marketplace add` and `claude plugin install` on your Cortex folder (or, when Cortex has no source folder, on its GitHub repository, which Claude Code then downloads).
 - **Installing and upgrading** (uv, git and the Python packages) download from their usual sources.
 
 **Servers on this computer only.** These listen on 127.0.0.1 (loopback), so no other computer can reach them:
@@ -27,6 +27,19 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 **Facts from your chats.** Cortex saves facts you stated about yourself in your recent chats using your local model only. The model reads only your own messages of non-private chats, and nothing leaves this computer.
 
 Searches, topic filing (`cortex topics`), the dashboard, the Claude Code hooks and every tool run offline.
+
+## Where Cortex connects: the registry
+
+Every place in Cortex's code that can reach the network is listed in one registry, `src/cortex/egress.py`. `cortex doctor --privacy` prints its lines, and the app shows them under Status, **Where Cortex connects**:
+
+- **github.com**: the newest Cortex version and, when there is a newer one, the installer and its checksum. A minute after the app starts, every 6 hours while it runs, and when you click Check for updates or Update now.
+- **ollama.com, git-scm.com and LM Studio's catalogue**: a model's size, and the downloads of Ollama, Git or a local model. Only when you click Install, Download or Get.
+- **pypi.org and huggingface.co**: the voice-memo speech model and its package. Only from `cortex model download --voice` or its Download button.
+- **huggingface.co**: the search model and the reranker. Only from `cortex model download` or Download search model, with Hugging Face's telemetry turned off (`HF_HUB_DISABLE_TELEMETRY`).
+- **Your cloud model's address**: titles of browsed pages in categories you set to cloud, with your API key. Only when you turn on cloud processing.
+- **github.com through Claude Code**: Claude Code downloads the Cortex plugin. Only when you connect Claude Code or say yes in `cortex setup`.
+
+Local model calls and the app's own page stay on 127.0.0.1. Windows' text recognition for scanned PDFs runs on this computer and makes no connection. A test (`tests/test_egress.py`) scans the code and fails when anything reaches the network without an entry in the registry, and another (`tests/test_egress_runtime.py`) runs indexing, prime, recall, Chat, Review, an import and the dashboard with every outside connection blocked.
 
 ## What the AI model sees
 

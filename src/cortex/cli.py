@@ -440,9 +440,13 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
 
 
 @app.command()
-def doctor(vault: VaultOpt = None) -> None:
-    """Check Python/FTS5, the search model, PATH, the local model, OneDrive and the vault git;
-    exit 1 on any FAIL."""
+def doctor(vault: VaultOpt = None, privacy: Annotated[bool, typer.Option(
+        "--privacy", help="Print only where Cortex connects.")] = False) -> None:
+    """Check Python/FTS5, the search model, PATH, the local model, OneDrive and the vault git,
+    then list where Cortex connects; exit 1 on any FAIL."""
+    if privacy:
+        typer.echo("\n".join(doctor_mod.connects()))
+        return
     results = [doctor_mod.check_python(), doctor_mod.check_duplicate_servers(),
                doctor_mod.check_exclude(), doctor_mod.check_search_model(),
                doctor_mod.check_on_path(), doctor_mod.check_local_model(),
@@ -466,6 +470,7 @@ def doctor(vault: VaultOpt = None) -> None:
         typer.echo(f"{status:<4}  {name}: {detail}")
         if fix:
             typer.echo(f"      fix: {fix}")
+    typer.echo("\n" + "\n".join(doctor_mod.connects()))
     if any(r[0] == "FAIL" for r in results):
         raise typer.Exit(1)
 
@@ -1982,6 +1987,10 @@ def _download_setup() -> None:
     except Exception:  # noqa: BLE001  (certifi's certificates still work off campus)
         pass
     os.environ.update(proxy_env())
+    # unless this is set, huggingface_hub fetches its list of AI agents from huggingface.co and
+    # adds the agent it detects and the torch version to its User-Agent (read at its import,
+    # which comes after this)
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 
 @model_app.command("download")
