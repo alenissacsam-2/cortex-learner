@@ -226,6 +226,28 @@ def move_to_past(text: str, page: str, target: str, day: str,
     return "".join(lines), out_id
 
 
+_PAST_STAMP = re.compile(r"\s*\(until [^)]*\)\s*$")  # the stamp move_to_past adds
+
+
+def restore_from_past(text: str, page: str, target: str, section: str | None) -> str:
+    """move_to_past's inverse for a retire: the `## Past` line `target` goes back, unchanged
+    but for its `(until …)` stamp and with its id, to the end of `## section` when the page has
+    it, else of the page's first section."""
+    cid = target.strip().lstrip("^")
+    c = next((r for r in parse(page, text) if r["id"] == cid and r["status"] == "past"), None)
+    if c is None:
+        raise invalid(f"No past claim ^{cid} on me/{page}.")
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    del lines[c["line_no"]]
+    heads = [m.group(1) for ln in lines if (m := _H2.match(ln.rstrip("\r\n")))
+             and m.group(1).lower() not in RESERVED]
+    want = next((h for h in heads if section and h.lower() == section.lower()), None)
+    _append_under(lines, want or (heads[0] if heads else section or "Notes"),
+                  f"- {_PAST_STAMP.sub('', c['text'])} ^{cid}", nl)
+    return "".join(lines)
+
+
 def unpropose(inbox: str, target: str) -> tuple[str, str]:
     """Drop the `## About me (unconfirmed)` lines matching `target` (the full proposed line or
     its text after `<section>: `). Returns (new inbox text, the claim text without section)."""
