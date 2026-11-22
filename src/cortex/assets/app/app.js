@@ -1561,8 +1561,8 @@
     };
     const conflictCard = (c, id) => {
       const both = kb('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, `Keep both: ${c.left.text} and ${c.right.text}`);
-      const left = kb('Keep left', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.left.text}`);
-      const right = kb('Keep right', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.right.text}`);
+      const left = kb('Keep first', () => act('/api/review/conflict', { key: c.key, keep: 'left' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.left.text}`);
+      const right = kb('Keep second', () => act('/api/review/conflict', { key: c.key, keep: 'right' }, 'Kept one; the other is retired.'), null, `Keep only: ${c.right.text}`);
       // a recorded pair's right line is the newer one: Y takes it; N keeps both (G7's near-duplicates too)
       const keys = c.why === 'opposite' || c.why === 'same' ? { n: both } : { y: right, n: both };
       return card(c.left.text, where(c.left), `or: ${c.right.text} (${where(c.right)})`, [both[0], left[0], right[0]], keys, id);
@@ -1610,15 +1610,20 @@
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
     const m = reviewCards(act);
     const { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard } = m;
-    const rules = d.rules || [];
+    // D4: every board but Today's 5 sits folded under one section, closed until opened; the fold
+    // leaves out the cards Today's 5 shows above and counts only what it holds
+    const above = new Set((d.today || []).map((t) => `${t.type}:${t.key}`).filter((k) => !reviewSkipped.has(k)));
+    const rest = (type, rows) => (rows || []).filter((x) => !above.has(`${type}:${x.key}`));
+    const pending = rest('pending', d.pending), pairs = rest('conflict', d.conflicts), rules = rest('rule', d.rules), unsafe = rest('unsafe', d.unsafe);
+    const folded = (d.more || 0) - [[d.pending, pending], [d.conflicts, pairs], [d.rules, rules], [d.unsafe, unsafe]]
+      .reduce((n, [all, left]) => n + (all || []).length - left.length, 0);
     const allRules = rules.length > 1 ? ['Approve all', () => act('/api/review/rule/approve-all', { keys: rules.map((x) => x.key) }, 'Added to your lines.'),
       { 'aria-label': `Approve all ${rules.length} repeated corrections` }] : null;
-    // D4: every board but Today's 5 sits folded under one section, closed until opened
     const more = h('details', { class: 'review-more', open: reviewMoreOpen },
-      h('summary', { text: `More, only if you want (${d.more || 0})` }));
+      h('summary', { text: `More, only if you want (${folded})` }));
     more.addEventListener('toggle', () => { reviewMoreOpen = more.open; });
     more.append(
-      board('Waiting for your approval', { note: String(d.pending.length) }, ...list(d.pending.map((p) => pendingCard(p)),
+      board('Waiting for your approval', { note: String(pending.length) }, ...list(pending.map((p) => pendingCard(p)),
       'Nothing is waiting.')),
       board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) => {
         const r = retire(x);
@@ -1640,7 +1645,7 @@
         const o = btn('Open', () => post('/api/open', { what: 'page', path: x.path }), null, { 'aria-label': `Open in Obsidian: ${x.title}` });
         return card(x.title, 'Playbook', `No AI app was served it in the last ${x.calls} calls Cortex keeps` + (x.since ? ` (since ${x.since})` : '') + `; last changed ${x.changed}`, [y[0], o], { y }, `unused:${x.id}`);
       }), 'Every playbook reached an AI app lately.')),
-      board('Lines that may conflict', { note: String((d.conflicts || []).length) }, ...list((d.conflicts || []).map((c) => conflictCard(c)),
+      board('Lines that may conflict', { note: String(pairs.length) }, ...list(pairs.map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
       board('Corrections you repeat', { note: String(rules.length), btn: allRules }, ...list(rules.map((x) => ruleCard(x)),
       'No repeated corrections found.')),
@@ -1658,7 +1663,7 @@
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
         return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
       }), 'No edited imports.')),
-      board('Lines that may steer an AI', { note: String((d.unsafe || []).length) }, ...list((d.unsafe || []).map((x) => unsafeCard(x)),
+      board('Lines that may steer an AI', { note: String(unsafe.length) }, ...list(unsafe.map((x) => unsafeCard(x)),
       'No line looks like an instruction to an AI.')));
     put('review', todayBoard(d, m), more);
     cardsDrawn('review');

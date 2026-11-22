@@ -432,9 +432,11 @@ def _update_of(u: dict | None, out: dict) -> dict:
     if u:
         ref = f"me/{u['page']}"
         out["possible_update_of"] = {"id": u["id"], "page": ref, "text": _wrap(ref, u["text"])}
-        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). Cortex "
-                       "settles such a pair itself (the user's own line over a guess, else the "
-                       "newer); don't stop to ask. " + out["next"])
+        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). " + (
+            "Both stay: they may be two facts. Only if the new line replaces it, call "
+            f"cortex_patch(kind='me', id='{u['page']}', op='retire', target='{u['id']}'). "
+            if u.get("apart") else "Cortex settles such a pair itself (the user's own line "
+            "over a guess, else the newer); don't stop to ask. ") + out["next"])
     return out
 
 

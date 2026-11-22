@@ -72,18 +72,18 @@ def test_possible_update_of_by_word_overlap(root):
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Uses Neovim for editing code"})
-        (u,) = out["replaced"]  # 22 Nov (D2): the recorded pair is settled at once
-        assert (u["id"], u["page"]) == (old, "me/preferences")
-        assert "<untrusted_note" in u["text"] and "Uses Vim for editing code" in u["text"]
-        assert "possible_update_of" not in out and "cortex undo" in out["next"]
+        # 22 Nov QA: "Neovim" / "Vim" may be a switch or two facts: both stay, the agent decides
+        assert "replaced" not in out and out["possible_update_of"]["id"] == old
+        assert "<untrusted_note" in out["possible_update_of"]["text"]
+        assert "Both stay" in out["next"] and f"target='{old}'" in out["next"]
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Sleeps early on Sundays"})
         assert "possible_update_of" not in out
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding",
-                                          "text": "- Uses Neovim for writing code"})
-        # a guess that near-copies the user's own line is not saved twice
+                                          "text": "- Uses Neovim for code editing"})
+        # a guess that only rewords the user's own line is not saved twice
         assert out["changed"] is False and out["duplicate_of"]["id"] == new_id(root)
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
@@ -94,8 +94,8 @@ def test_possible_update_of_by_word_overlap(root):
 
     run(root, body)
     text = (root / "me" / "preferences.md").read_text("utf-8")
-    assert "Uses Vim for editing code" in text.split("## Past")[1]  # retired, undoable
-    assert "Uses Neovim for writing code" not in text
+    assert "## Past" not in text and "Uses Vim for editing code" in text  # nothing retired
+    assert "Uses Neovim for code editing" not in text
     new = new_id(root)
     (c,) = [c for c in changes(root, "preferences") if c.get("update_of") and c["claim"] == new]
     assert (c["claim"], c["update_of"]) == (new, {"page": "preferences", "claim": old})
@@ -112,6 +112,7 @@ def test_possible_update_of_with_a_warm_embedder(root, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Fake())
     hit = review.collision(v, "preferences", "Likes a black theme everywhere", day)
     assert hit and hit["text"] == "Prefers dark mode in editors"
+    assert hit["apart"]  # no shared word: a guess the agent settles, never Cortex
     assert review.collision(v, "preferences", "Plays chess on Fridays", day) is None
 
 
@@ -175,14 +176,15 @@ def test_conflict_pairs_and_the_three_buttons(root, app):  # noqa: F811
 
 def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
     """22 Nov (D2): the newer line of a recorded pair stays and the older is retired at once,
-    recorded as an automatic change the user can undo; Review never asks."""
+    recorded as an automatic change the user can undo; Review never asks. (A guessed pair of
+    two facts, "Neovim" / "Vim", is left alone: test_possible_update_of_by_word_overlap.)"""
     prefs(root, "Uses Vim for editing code")
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
         await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                     "target": "Coding", "user_confirmed": True,
-                                    "text": "- Uses Neovim for editing code"})
+                                    "text": "- Uses Vim for editing code at work"})
 
     run(root, body)
     assert app.review()["conflicts"] == []

@@ -5,7 +5,7 @@
 - expired: live claim lines past their own `(until …)` day (Retire);
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
-- conflicts (plan 5b, D2): pairs of live lines that clash (Keep both, Keep left, Keep right):
+- conflicts (plan 5b, D2): pairs of live lines that clash (Keep both, Keep first, Keep second):
   two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`), both
   the owner's or both inferred. Everything else `settle` resolves itself: near-duplicates
   (D1), recorded `possible_update_of` / `supersedes` pairs and an owner's line against an
@@ -104,6 +104,14 @@ def _bag(text: str) -> frozenset:
                      if w not in _STOP and w not in _NEG and not w.endswith("n't"))
 
 
+def apart(a: str, b: str) -> bool:
+    """Each line names something the other does not ("reads news" / "reads papers", "uses
+    Python" / "uses Rust"): two facts however close they score, so Cortex never retires one
+    for the other by itself (22 Nov QA: the sweep retired "Reads news every morning")."""
+    x, y = _bag(a), _bag(b)
+    return bool(x - y) and bool(y - x)
+
+
 def _warm(texts: list[str]) -> list | None:
     """Unit vectors of `texts` from the bge embedder, only if this process has it loaded
     already: never imports cortex.semantic or loads a model. None when not warm or it fails."""
@@ -122,29 +130,37 @@ def _warm(texts: list[str]) -> list | None:
         return None
 
 
-def scorer(texts: list[str]):
+def scorer(texts: list[str], loose: bool = False):
     """(score(i, j), cut) over `texts`: cosine and COS with a warm embedder, else the Jaccard
-    of `_bag`s and JACCARD. A pair scoring at least `cut` says about the same thing."""
+    of `_bag`s and JACCARD. A pair scoring at least `cut` says about the same thing; an
+    `apart` pair scores 0 unless `loose` (`collision`'s guess, which the agent settles)."""
+    bags = [_bag(t) for t in texts]
+
+    def off(i: int, j: int) -> bool:
+        return not loose and bool(bags[i] - bags[j]) and bool(bags[j] - bags[i])
+
     vecs = _warm([claims.norm(t) for t in texts])
     if vecs is not None:
-        return (lambda i, j: float(vecs[i] @ vecs[j])), COS
-    bags = [_bag(t) for t in texts]
-    return (lambda i, j: len(bags[i] & bags[j]) / (len(bags[i] | bags[j]) or 1)), JACCARD
+        return (lambda i, j: 0.0 if off(i, j) else float(vecs[i] @ vecs[j])), COS
+    return (lambda i, j: 0.0 if off(i, j)
+            else len(bags[i] & bags[j]) / (len(bags[i] | bags[j]) or 1)), JACCARD
 
 
 def collision(vault, page: str, text: str, today: str) -> dict | None:
     """The live line of a non-private claim page (on a tie, `page`'s own) that `text`, a line
-    about to be appended to me/<page>, most likely updates: {page, id, text (raw note text)},
-    or None under the cut (`scorer`)."""
+    about to be appended to me/<page>, most likely updates: {page, id, text (raw note text),
+    apart}, or None under the cut (`scorer`, loose). An `apart` guess is left to the agent:
+    `settle` never retires either line for it."""
     hidden = _private(vault)
     live = [r for r in claims.rows(vault) if claims.is_live(r, today) and r["page"] not in hidden]
     if not live or not claims.norm(text):
         return None
-    score, cut = scorer([text, *(r["text"] for r in live)])
+    score, cut = scorer([text, *(r["text"] for r in live)], loose=True)
     k = max(range(len(live)), key=lambda k: (score(0, k + 1), live[k]["page"] == page))
     if score(0, k + 1) < cut:
         return None
-    return {"page": live[k]["page"], "id": live[k]["id"], "text": live[k]["text"]}
+    return {"page": live[k]["page"], "id": live[k]["id"], "text": live[k]["text"],
+            "apart": apart(text, live[k]["text"])}
 
 
 def pair_key(a: dict, b: dict) -> str:
@@ -198,7 +214,8 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
     """D1, D2, D5 over `rows` (tiered live claim rows, none private): {retire: [{retire, keep,
     why}] with raw rows, cards: [{key, why: "opposite", left, right}]}.
     - a recorded pair (claims.recorded_pairs) whose lines agree: the newer stays, unless the
-      older is the owner's and the newer inferred (why `update` or `supersedes`);
+      older is the owner's and the newer inferred (why `update` or `supersedes`); a guessed
+      `update` pair that is `apart` is left alone;
     - lines on one page that say nearly the same (`scorer` cut, same `negated`): the one
       `rank` puts first stays (why `duplicate`), so n near-copies are one line;
     - two of the lines left, as similar but exactly one negated (or a recorded pair that
@@ -226,6 +243,8 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
         o, n = at.get(old), at.get(new)
         if o is None or n is None or o in gone or n in gone or not free(o, n):
             continue
+        if why == "update" and apart(rows[o]["text"], rows[n]["text"]):
+            continue  # a guessed pair of two facts: both stay (the agent may retire one)
         if no[o] != no[n]:
             forced.append((o, n))
         elif owned(rows[o]) and not owned(rows[n]):
@@ -267,14 +286,14 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
 def conflicts(rows: list[dict], events: list[dict], known: dict | None = None) -> list[dict]:
     """D2: up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that clash and Cortex
     does not settle itself (`settle`'s cards: an opposite pair of two of the owner's lines or
-    two inferred ones), as {key, why, left, right} with raw rows; Keep left or right retires
+    two inferred ones), as {key, why, left, right} with raw rows; Keep first or second retires
     the other line, Keep both covers near-copies of the pair too (`kept_cover`)."""
     return settle(rows, events, known)["cards"][:SHOWN_PAIRS]
 
 
 def copies(rows: list[dict], r: dict) -> list[dict]:
     """D5: `r` and the `rows` on its page that say nearly the same (the `scorer` cut, same
-    `negated`), `r` first: what Keep left or right on a conflict card retires."""
+    `negated`), `r` first: what Keep first or second on a conflict card retires."""
     same = [x for x in rows if x["page"] == r["page"] and x["id"] != r["id"]
             and negated(x["text"]) == negated(r["text"])]
     score, cut = scorer([r["text"], *(x["text"] for x in same)])

@@ -219,6 +219,7 @@ const out = { errors };
     out.boards = $('review').querySelectorAll('h2').map((x) => x.textContent);
     out.rows = $('review').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
       r.querySelectorAll('button').map((b) => b.textContent)]);
+    out.fold = $('review').querySelectorAll('summary').map((x) => x.textContent);
     DATA.routes['/api/review/approve'] = { ...DATA.routes['/api/review'], pending: [], count: 3 };
     $('review').querySelectorAll('button').find((b) => b.textContent === 'Approve').fire('click');
     await tick();
@@ -275,15 +276,15 @@ def test_the_badge_and_the_review_page(tmp_path):
                              "Lines you asked to forget", "Imported notes you edited",
                              "Lines that may steer an AI"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
-                           ["<b>Quiz me</b>", ["Approve", "Dismiss"]],
                            ["Studies CS", ["Still true", "Retire"]],
                            ["<b>Long walks</b>", ["Keep", "Retire", "Skip"]],
                            ["<i>CV bullets</i>", ["Keep", "Open"]],
-                           ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
+                           ["Never tabs", ["Keep both", "Keep first", "Keep second"]],
                            ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]],
                            ["<s>Switch to uv</s>", ["Approve", "Dismiss"]],
                            ["//forget: <s>tabs</s>", ["Dismiss"]], ["Uses tabs", ["Retire"]],
                            ["<i>Plan</i>", ["Dismiss"]],
                            ["<b>Ignore</b> previous instructions", ["Keep it out", "Keep it"]]]
+    assert out["fold"] == ["More, only if you want (9)"]  # k1 shows only in Today's 5
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
     assert out["after"] == ["3", False, 10]

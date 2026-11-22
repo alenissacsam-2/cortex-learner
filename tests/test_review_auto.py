@@ -88,6 +88,34 @@ def test_pick_rules_owner_then_newer_then_longer():
     assert review.settle([a, c], [])["retire"] == []  # another page: never a duplicate
 
 
+@pytest.mark.parametrize("warm", [False, True])
+def test_two_facts_on_one_template_are_never_near_copies(monkeypatch, warm):
+    """22 Nov QA: "Reads news every morning" and "Reads papers every morning" share 3 of 5
+    words (the Jaccard cut), so the sweep retired one; a warm embedder scores such pairs high
+    too. Each names something the other does not: two facts, never copies or opposites."""
+    import numpy as np
+
+    from cortex import semantic
+    if warm:  # the worst embedder: every pair scores 1.0
+        monkeypatch.setattr(semantic, "_embedder", lambda t: np.ones((len(t), 4), np.float32))
+    lines = ["Reads news every morning", "Reads papers every morning",
+             "Never reads news every morning", "Uses Python for scripts", "Uses Rust for scripts",
+             "Uses Python for all scripts"]
+    rows = [row(t, "agent", "2026-11-21", i) for i, t in enumerate(lines, 1)]
+    got = review.settle(rows, [])
+    # only "Python for scripts" goes: "Python for all scripts" holds every word of it
+    assert [(x["retire"]["text"], x["why"]) for x in got["retire"]] == [
+        ("Uses Python for scripts", "duplicate")]
+    assert [{c["left"]["text"], c["right"]["text"]} for c in got["cards"]] == [
+        {"Reads news every morning", "Never reads news every morning"}]
+    # a guessed update between two facts is recorded but never settled by Cortex
+    ev = [{"kind": "change", "id": "e1", "payload": {"change": {
+        "id": "preferences", "claim": rows[1]["id"],
+        "update_of": {"page": "preferences", "claim": rows[0]["id"]}}}}]
+    assert review.settle(rows[:2], ev)["retire"] == []
+    assert review.apart(lines[0], lines[1]) and not review.apart(lines[3], lines[5])
+
+
 def test_sweep_retires_near_copies_undoably_and_is_idempotent(root):
     (root / ".cortex").mkdir(exist_ok=True)
     page(root, "preferences", [*VIM, "Drinks green tea at night"])
