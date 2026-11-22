@@ -13,6 +13,7 @@ import hashlib
 import json
 import operator
 import re
+import statistics
 import string
 from collections import Counter
 from contextlib import contextmanager
@@ -42,6 +43,9 @@ from cortex.vault import TOOL_PROPS, Vault, is_private
 ASSETS = Path(__file__).parent / "assets"
 YOU = "@you"  # not a valid note id, so it never collides with one
 EVIDENCE_SHOWN, WEEKS, MISTAKE_DAYS = 10, 8, 30
+# answer time, display only (never a rating): the median of the last 10 ask-to-grade gaps, from
+# 3 gaps, leaving out gaps over 15 minutes (the person left)
+ANSWER_LAST, ANSWER_MIN, ANSWER_CUT = 10, 3, 15 * 60
 ITEM_TYPE = {"problem_status": "problem", "self_report": "self report"}
 _SLOT = re.compile(r"\{\{(\w+)\}\}")
 BODY_MAX = 20 * 1024
@@ -227,10 +231,15 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         asks = {e["id"]: e for e in events if e.get("kind") == "ask"}
         trail: dict[str, list[dict]] = {}
         answers = Counter()
+        took: dict[str, list[float]] = {}  # concept -> seconds from each ask to its grade
         for it in levels._items(events, pc):  # void and remap applied, as in the levels fold
             ev = it.ev
             if ev.get("kind") == "grade" and it.concept not in hidden:
                 answers[ev.get("day")] += 1
+                if it.concept in visible and ev.get("ref") in asks:
+                    took.setdefault(it.concept, []).append(
+                        (datetime.fromisoformat(ev["ts"])
+                         - datetime.fromisoformat(asks[ev["ref"]]["ts"])).total_seconds())
             if it.concept in visible and it.verdict is not None:
                 payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                 kind = (ev.get("item_type") or asks.get(ev.get("ref"), {}).get("item_type")
@@ -239,9 +248,15 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
                     "day": ev.get("day"), "verdict": it.verdict,
                     "item_type": plain(kind) if kind else None,
                     "source": plain(ev.get("source") or "") or None})
-        return trail, answers
+        return trail, answers, {c: n for c, xs in took.items()
+                                if (n := _answer_secs(xs)) is not None}
 
-    trail, answers = _once(memo, "evidence", (gen, pc, hidden, visible), evidence)
+    trail, answers, answer_secs = _once(memo, "evidence", (gen, pc, hidden, visible), evidence)
+    study = studies(vault, events, notes)
+    leeches = sorted(({"id": e.id, "title": plain(e.title) or e.id, "lapses": states[e.id].lapses}
+                      for e in concepts if study and levels.is_leech(states.get(e.id))),
+                     key=lambda r: (-r["lapses"], r["id"]))
+    leech_ids = {r["id"] for r in leeches}
     required_by: dict[str, list[str]] = {}
     for lk in links:
         if lk["type"] == "requires":
@@ -263,6 +278,10 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
              "required_by": required_by.get(e.id, []),
              "problems": problems.get(e.id, []),
              "mistakes": [m for m in st.open_mistakes if m not in private] if st else []}
+        if e.id in leech_ids:
+            d["leech"] = planner.leech_why(st)
+        if e.id in answer_secs:
+            d["answer_secs"] = answer_secs[e.id]
         if any(d.values()):
             details[e.id] = d
 
@@ -310,7 +329,9 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         "plan_cleared": not today and any(e.get("day") == day for e in events),
         "first_run": not today and not any(e.get("kind") == "grade" for e in events),
         # study features (the Study tab, exams, Tomorrow) show only for someone who studies
-        "studies": (study := studies(vault, events, notes)),
+        "studies": study,
+        # concepts forgotten LEECH_LAPSES+ times after they were learned, most lapses first
+        "leeches": leeches,
         # any imported page yet (chats, notes, calendar, browsing), which ends the everyone
         # Start here; only someone who does not study is asked (a body scan: ~20 µs a page)
         "imported": not study and any(map(_imported, pages)),
@@ -343,6 +364,12 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0]},
         "help": _help(),
     }
+
+
+def _answer_secs(gaps: list[float]) -> int | None:
+    """Median seconds of the last ANSWER_LAST gaps under ANSWER_CUT; None under ANSWER_MIN."""
+    kept = [g for g in gaps[-ANSWER_LAST:] if 0 <= g <= ANSWER_CUT]
+    return round(statistics.median(kept)) if len(kept) >= ANSWER_MIN else None
 
 
 def _once(memo: dict | None, name: str, key, fn):

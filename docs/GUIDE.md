@@ -43,6 +43,8 @@ Type these in a Claude chat. The word after `/cortex` is the mode; anything afte
 | `/cortex log` | You report results ("got 4/5 on the TCS aptitude test"); it records them | After a test outside Claude |
 | `/cortex week` | This week's numbers, and how often you were right at each "how sure" level (1–4) over all your answers; a level with fewer than 10 answers says "not enough answers yet". The dashboard's Study tab shows the same. It is only a mirror: it never changes your plan. | Weekly check |
 
+A topic you have forgotten 5 times after learning it is a **leech**: the Study tab tags it and says so above Today's plan, because rewriting or splitting its note helps more than drilling it again. A topic's page also shows how long your answers usually take, and the 90-second check shows each answer's time; timing is only shown, never used to grade or schedule.
+
 ### Second brain
 | Command | What it does |
 |---|---|

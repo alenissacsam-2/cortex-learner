@@ -475,6 +475,9 @@
       out.push(m, el('div', 'meta muted', [dom && dom.title, area && area.title].filter(Boolean).join(' › ')),
         el('div', 'meta', nextText(n.next_due)));
       const d = D.details[n.id] || {};
+      if (d.leech) out.push(el('div', 'meta', d.leech));
+      // display only: how long answers took never changes a grade or a schedule
+      if (d.answer_secs != null) out.push(el('div', 'meta muted', `Usually answers in about ${d.answer_secs} s`));
       const mist = new Map(D.mistakes.map((x) => [x.id, x]));
       out.push(...readerSection('Open mistakes', (d.mistakes || []).map((id) => {
         const mm = mist.get(id), li = el('li');
@@ -1704,7 +1707,9 @@
       const sum = el('p', 'cold-sum', it.summary || 'Its page has no summary yet.');
       sum.hidden = true;
       acts.hidden = true;
+      let shownAt = 0;  // answer time is shown here only: never sent, never stored
       const reveal = button('btn', 'Reveal', () => {
+        shownAt = performance.now();
         sum.hidden = false;
         acts.hidden = false;
         reveal.remove();
@@ -1712,11 +1717,12 @@
       }, `Reveal what you wrote about ${it.title}`);
       const btns = COLD_ANSWERS.map(([k, word]) => button('btn', word, async () => {
         btns.forEach((x) => { x.disabled = true; open.delete(x); });
+        const took = `answered in ${Math.round((performance.now() - shownAt) / 1000)} s`;
         try {
           await api('/api/home/check/answer', { id: it.id, answer: k });
-          said.textContent = `Saved: ${word}.`;
+          said.textContent = `Saved: ${word}, ${took}.`;
         } catch (e) {
-          said.textContent = 'Not saved. ' + e.message;
+          said.textContent = `Not saved, ${took}. ` + e.message;
         }
         if (!open.size && left > 0) finish('Done. Your answers are saved.');
       }, `${word}: ${it.title}`));
@@ -2593,6 +2599,13 @@
       tiles.append(b);
     }
     const plan = $('plan');
+    const leeches = D.leeches || [], leech = new Set(leeches.map((x) => x.id));
+    if (leeches.length) {  // concepts forgotten again and again after they were learned
+      const n = leeches.length, first = leeches[0].id, line = el('p', 'small');
+      const text = n === 1 ? '1 concept keeps slipping: simplify its note.' : `${n} concepts keep slipping: simplify their notes.`;
+      line.append(PAGES.has(first) || GN.has(first) ? button('linkbtn', text, () => openReader(first)) : text);
+      plan.append(line);
+    }
     if (D.first_run) plan.append(firstRunBoard());
     else if (D.plan_cleared) plan.append(el('div', 'board done-card', 'Done for today ✓'));
     else if (!D.today.length) plan.append(el('p', 'empty', 'Nothing planned yet. Run /cortex in Claude to pick what to learn next.'));
@@ -2606,6 +2619,11 @@
         const mid = el('span', 'title');
         mid.append(PAGES.has(i.id) || GN.has(i.id) ? button('linkbtn', i.title, () => openReader(i.id)) : i.title);
         if (i.state) mid.append(el('span', 'label muted', LABEL[i.state]));
+        if (leech.has(i.id)) {
+          const tag = el('span', 'label muted', 'leech');
+          tag.title = i.why;
+          mid.append(tag);
+        }
         li.append(glyph(i.state), mid, el('span', 'why', i.why === head ? '' : i.why));
         ul.append(li);
       }

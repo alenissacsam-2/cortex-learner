@@ -436,6 +436,9 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
     named = {_subject(catalog, c) for c in topic_ids}
     order = sorted(_by_recency(list(groups), active), key=lambda s: s not in named)
     out += warm + first + [i for s in order for i in groups[s]] + new
+    for i in out:  # a leech keeps its place; its why says to rewrite the note, not drill it
+        if levels.is_leech(states.get(i["id"])):
+            i["why"] = leech_why(states[i["id"]])
     if mode != "short":
         return out
     # tired evening: confident misses, then concepts an exam within SHORT_EXAM_DAYS tests, then
@@ -450,6 +453,10 @@ def today(vault, catalog, states, *, now: datetime, mode: str = "learn",
             ids.add(key)
             picked.append(out[n])
     return picked[:SHORT_CAP]
+
+
+def leech_why(st) -> str:
+    return f"Leech: forgotten {st.lapses} times after you learned it. Simplify or split its note."
 
 
 def sweep(vault, catalog, states, *, now: datetime, events: list[dict] | None = None,

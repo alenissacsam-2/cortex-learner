@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 
-from fsrs import Card, Rating, Scheduler
+from fsrs import Card, Rating, Scheduler, State
 
 from cortex import events as _events
 from cortex.events import EventLog
@@ -31,6 +31,7 @@ DEPTH = ("application", "transfer")
 # `log` payload kinds _items folds into learning evidence; keep in step with its checks.
 # The planner's warm-up gap counts only these logs, not always-on ledger lines (touch, need...).
 EVIDENCE_LOG_KINDS = ("taught", "self_report", "problem_status")
+LEECH_LAPSES = 5  # Anki's leech: forgotten this often after it was learned; rewrite, don't drill
 
 
 @dataclass
@@ -54,6 +55,11 @@ class ConceptState:
     confident_miss: str | None = None  # day of a recent confidence-4 wrong not yet passed
     gap_pass: bool = False  # a pass day ≥ SOLID_GAP_DAYS after the first, ≥ SOLID_REST_DAYS rest
     solid_after: str | None = None  # only the gap blocks Solid: a pass from this day would do
+    lapses: int = 0  # days rated Again after the card was learned (`_schedule`); never cleared
+
+
+def is_leech(st) -> bool:
+    return getattr(st, "lapses", 0) >= LEECH_LAPSES
 
 
 def gap_note(st) -> str:
@@ -293,15 +299,22 @@ def _day_rating(items: list[_Item], card: Card) -> Rating:
 
 
 def _schedule(per_day: dict[str, list[_Item]], retention: float = RETENTION,
-              ) -> tuple[Scheduler, Card]:
-    """One FSRS-6 card replayed with one review per local day (see `_day_rating`)."""
+              ) -> tuple[Scheduler, Card, int]:
+    """One FSRS-6 card replayed with one review per local day (see `_day_rating`), and its
+    lapses: days rated Again on a card in Review state that had a day rated above Again before.
+    With no learning steps py-fsrs puts a card in Review after its first day whatever the
+    rating, so the earlier non-Again day is what marks it learned (a miss while learning is not
+    a lapse)."""
     scheduler = Scheduler(desired_retention=retention, learning_steps=(), relearning_steps=(),
                           enable_fuzzing=False)
     card = Card(card_id=1)
+    lapses, learned = 0, False
     for day in sorted(per_day):
-        items = per_day[day]
-        card, _ = scheduler.review_card(card, _day_rating(items, card), _review_at(day))
-    return scheduler, card
+        rating = _day_rating(per_day[day], card)
+        lapses += rating == Rating.Again and learned and card.state == State.Review
+        learned = learned or rating != Rating.Again
+        card, _ = scheduler.review_card(card, rating, _review_at(day))
+    return scheduler, card, lapses
 
 
 def _jitter(concept: str, review_count: int, interval: int) -> int:
@@ -440,7 +453,8 @@ def fold(events: Iterable[dict], today: str,
         if st.confident_miss and (today_d - date.fromisoformat(st.confident_miss)).days >= 7:
             st.confident_miss = None
         if c in days:
-            scheduler, card = _schedule(days[c], HIGH_RETENTION if c in high else RETENTION)
+            scheduler, card, st.lapses = _schedule(days[c],
+                                                   HIGH_RETENTION if c in high else RETENTION)
             last = date.fromisoformat(max(days[c]))
             interval = (card.due.date() - last).days  # due is _review_at(last) + interval
             st.interval_days = interval + _jitter(c, len(days[c]), interval)
@@ -492,7 +506,7 @@ def predicted_p(events: Iterable[dict], concept: str, now: datetime,
             per_day.setdefault(it.ev["day"], []).append(_credit(it, concept))
     if not per_day:
         return 0.5
-    scheduler, card = _schedule(per_day)
+    scheduler, card, _ = _schedule(per_day)
     return _retrievability(scheduler, card, now)
 
 
