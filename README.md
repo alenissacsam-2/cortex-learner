@@ -1,6 +1,14 @@
 # Cortex
 
-Cortex is a local-first second brain: it remembers what you read, decide, work on and study, and every AI app you use knows you. It lives on your own computer, and Claude and other AI apps read and write it through MCP.
+Cortex is a second brain that lives on your own computer. It keeps what you read, decide, work on and study in a folder of plain files, and every AI app you connect (Claude, Cursor, VS Code, Codex, Gemini CLI and other MCP clients) reads from it and adds to it. A new chat already knows who you are, what you work on and what you decided.
+
+It is for anyone who works with AI apps every day:
+
+- **Students:** what is due today, the mistakes you keep making, mock papers and mock interviews, and how ready you are for the next test.
+- **Workers:** your projects, decisions and preferences, served to every coding agent you use, so you stop repeating yourself.
+- **Researchers:** the papers, notes and AI chats you collected, searchable by meaning, and a Chat on your own computer that answers from them with sources.
+
+After setup it runs by itself. It saves your AI chats every 5 minutes, brings in new browsing history every 10 minutes, records the topics a chat forgot to log, tidies what it learned about you, and plans your revision if you study. Nothing leaves your computer unless you turn it on.
 
 ![The Cortex home on a sample vault: Next up, the live 3D brain with its stem of websites, the live feed, exams and deadlines, and quick chat](docs/images/dashboard-home.png)
 
@@ -9,8 +17,10 @@ Cortex is a local-first second brain: it remembers what you read, decide, work o
 ## Contents
 
 - [What Cortex does](#what-cortex-does)
+- [How well it works](#how-well-it-works)
 - [A tour](#a-tour)
 - [How it works](#how-it-works)
+- [How Cortex differs](#how-cortex-differs)
 - [Privacy](#privacy)
 - [Install](#install)
 - [First run](#first-run)
@@ -22,25 +32,107 @@ Cortex is a local-first second brain: it remembers what you read, decide, work o
 
 ## What Cortex does
 
-Cortex keeps a model of you and a store of what you know, in a folder of plain Markdown and JSONL files (the *vault*). Every AI app you connect reads from it and adds to it, so a new chat already knows what you work on, what you decided and, if you study, what is due. A software engineer can ask what they decided about a payments retry; a PhD student can ask which papers they read on contrastive learning.
+Cortex keeps a model of you and a store of what you know, in a folder of plain Markdown and JSONL files (the *vault*). A software engineer can ask what they decided about a payments retry; a PhD student can ask which papers they read on contrastive learning; a student can ask what to revise tonight.
 
 - **It remembers what you do.** Notes, decisions, projects, sources you read and facts about you are linked pages in the vault, and search finds them by meaning as well as by words.
-- **It remembers what you study.** Quiz answers, grades, mistakes and lessons are events in an append-only log. Mastery levels and FSRS-6 memory states are worked out from that log every time, never stored by hand, so a wrong grade can be cancelled and everything recomputes.
-- **It remembers what you get wrong.** Each mistake has its own page with the pattern and the fix. A wrong answer you were sure of (a *confident miss*) stays at the top of your plan until you get it right on a later day.
-- **It plans what to revise.** A daily plan (Today) orders lessons taught but not yet checked, confident misses, refreshes that are due, topics for the next test and new topics. You can cut it to the time you have.
-- **It works with the AI apps you already use.** An MCP server gives Claude Code, the Claude desktop app, Gemini CLI, Cursor, VS Code, Windsurf, Codex, LM Studio and other MCP clients the same tools. A `/cortex` skill adds study modes to Claude.
-- **It brings in your history.** Import chat exports (claude.ai, ChatGPT, Gemini, Perplexity), notes (Obsidian, Notion, any folder), calendars (.ics), Google activity and your browser history.
-- **It stays on your computer.** No account, no telemetry. The vault is a normal Obsidian vault with its own git history, so every change can be reviewed and undone. Git is your choice: turn it off for a very large vault, or include your private browsing pages in it.
+- **Every AI app starts with your context.** In Claude Code, your first real message brings in your profile, your pinned core lines, the preferences that fit the message and a few related pages. Cursor, VS Code and Codex get your core in their rules file, and each app reads only what its agent profile allows.
+- **It saves your AI chats.** Claude Code, Cowork and Claude desktop chats are saved as pages by themselves, with no model involved; coding sessions become short summaries, never code. You can import older exports from claude.ai, ChatGPT, Gemini and Perplexity.
+- **It brings in the rest of your history.** Notes (Obsidian, Notion, any folder), calendars, documents (PDF, Word), your git projects, reading highlights (Kindle, Readwise, Pocket), sent mail, notes to yourself, Google activity (Search, YouTube and Chrome), location by city, photo dates, Spotify listening, voice memos (transcribed on your computer) and your browser history.
+- **It tidies by itself.** What a chat infers about you is saved at once as a guess that AI apps see marked "(ask)". Near-duplicate lines collapse into one, and a newer line replaces the one it says it replaces. Each change can be undone. **Review** asks you about at most five things a day.
+- **It answers from your own data.** **Chat**, on your computer, answers questions about your notes, saved chats, browsing and files you attach, with numbered sources. Counts, dates, site lists, day summaries and study questions are worked out by Cortex itself, so they work with no model at all.
+- **It plans your study, if you study.** Quiz answers, grades and mistakes are events in an append-only log. Mastery levels and FSRS-6 memory states are worked out from that log every time, never stored, so a wrong grade can be cancelled and everything recomputes. A daily plan orders what to revise. People who do not study never see these parts.
+- **It stays on your computer.** No account and no telemetry. The vault is a normal Obsidian vault with its own git history (your choice), so every change can be reviewed and undone.
+
+## How well it works
+
+Every number in this section is measured by scripts in this repository on made-up data in a temp folder, never on a real vault. One command runs them all again and redraws the charts and tables below:
+
+```
+uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py
+```
+
+The first script writes [docs/benchmarks/results.json](docs/benchmarks/results.json) (numbers only, with each benchmark's exact arguments); the second draws the charts and fills in the tables of this section.
+
+<!-- numbers:machine -->
+Measured on 2026-11-22 at commit `4bffbb2`, on AMD Ryzen 7 7435HS (16 logical cores), Windows-11-10.0.26200-SP0, Python 3.12.12. A section that says *Not measured yet* has no numbers in this run.
+<!-- /numbers:machine -->
+
+### Start-up and indexing
+
+When an AI app starts Cortex, it can call Cortex's tools once the MCP server has answered its first message. The first time Cortex opens a vault it builds a search index of every note; after that it starts from a saved snapshot and reads only the notes that changed. Script: [scripts/bench_index.py](scripts/bench_index.py) (a vault with the mix of note kinds and lengths of a real one).
+
+<!-- numbers:startup -->
+*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<!-- /numbers:startup -->
+
+### Search by meaning
+
+Search by meaning scores every chunk of every page against your question. Adding a page embeds only that page, so the store stays current as you write. These runs use a fast stand-in for the search model, so they time Cortex's own vector store and scoring; the real model adds the time it takes to embed your question. Script: [scripts/bench_scale.py](scripts/bench_scale.py) `vectors`.
+
+<!-- numbers:semantic -->
+*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<!-- /numbers:semantic -->
+
+### Chat's answers from your own data
+
+Questions such as "which sites did I visit this week?", "summarize my day" or "what's due?" are answered from Cortex's records, not by a model. The vault here is heavy on purpose: 90 days of browsing with 2,000 sites a day, 10,000 notes and 20,000 study events. The first call after an import also reads the data into memory; later calls reuse it. Script: [scripts/bench_chat_data.py](scripts/bench_chat_data.py).
+
+<!-- numbers:chat-data -->
+*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<!-- /numbers:chat-data -->
+
+### The Chat test
+
+The Chat test asks Chat 40 questions about a made-up person and scores each answer in code, with no AI judge (`cortex chat eval`, or **Run Chat test** in the app). These runs never load a model, so only the questions Cortex answers from its own data (counts, first and last dates, study states, an empty month, a private project with Private off) can run. The others are shown as needing a local model, not as failures. Source: [src/cortex/chat_eval.py](src/cortex/chat_eval.py), run by `readme_numbers.py` as `cortex chat eval --no-model` does.
+
+<!-- numbers:chat-test -->
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/chat-test-dark.svg"><img src="docs/images/charts/chat-test-light.svg" alt="The Chat test with no model: 14 of 14 data questions passed, 26 need a local model. An exact name: 3 pass, 0 fail, 4 need a model; Plain words: 8 pass, 0 fail, 5 need a model; Other words: 0 pass, 0 fail, 5 need a model; Several pages: 0 pass, 0 fail, 4 need a model; A changed history: 0 pass, 0 fail, 4 need a model; An outdated fact: 0 pass, 0 fail, 2 need a model; Nothing to find: 3 pass, 0 fail, 2 need a model"></picture>
+
+| The search a question needs | Pass | Fail | Needs a local model |
+|---|---|---|---|
+| An exact name | 3 | 0 | 4 |
+| Plain words | 8 | 0 | 5 |
+| Other words | 0 | 0 | 5 |
+| Several pages | 0 | 0 | 4 |
+| A changed history | 0 | 0 | 4 |
+| An outdated fact | 0 | 0 | 2 |
+| Nothing to find | 3 | 0 | 2 |
+| **All 40** | **14** | **0** | **26** |
+<!-- /numbers:chat-test -->
+
+### Browsing history
+
+The first import reads a whole year of history once. After that the app reads only what is new every 10 minutes, so a live read stays short. Script: [scripts/bench_scale.py](scripts/bench_scale.py) `browse` (no local model).
+
+<!-- numbers:browse -->
+*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<!-- /numbers:browse -->
+
+### Tests
+
+<!-- numbers:tests -->
+3,265 automated tests (`uv run pytest --collect-only -q`).
+<!-- /numbers:tests -->
+They use only made-up data in `tests/fixtures/` and temp folders.
+
+### What is not measured here
+
+- How good Chat's answers are with a local model: the 26 Chat test questions that need one. Run `cortex chat eval` with a 2B model loaded to see them.
+- The real search model's time to embed a question or a page (the vector runs use a fast stand-in).
+- How fast chat exports, notes, documents and the other sources import.
+- Memory and disk use (beyond the snapshot size), the app's page load and the 3D brain's frame rate.
+- macOS and Linux: every number above comes from one Windows laptop.
+- Whether the study plan and readiness forecasts predict real test results.
 
 ## A tour
 
 ### The Cortex app
 
-Cortex is its own Windows app: a window and a tray icon. It starts with Windows, and closing the window keeps it running in the tray. Its first page is the live home: the 3D brain, a feed of what you did today and this week, Next up, your exams and deadlines, and a quick chat box. It stays current by itself; new pages join the brain next to their neighbours. The gear button opens Settings (Setup, Chat, Status, Connect AI apps, Local model, Browsing, Vault). The window shows a page served on this computer only (127.0.0.1, with a key that changes each launch); `cortex app` opens the same page in a browser.
+Cortex is its own Windows app: a window and a tray icon. It starts with Windows, and closing the window keeps it running in the tray. Its first page is the live home: the 3D brain, a feed of what you did today and this week, Next up, and a quick chat box (and, if you study, your exams and deadlines). Opened between 8 p.m. and 4 a.m., it starts on **Tonight** instead. Its other sections are Setup, Chat, Status, Review, Agent X-ray, Connect AI apps, Local model, Browsing, and Dashboard and vault. The window shows a page served on this computer only (127.0.0.1, with a key that changes each launch); `cortex app` opens the same page in a browser.
 
 A **Private switch** in the header (Windows Hello) shows private notes and private browsing for 10 minutes; minimising the window locks it again. While it is off, private items are neither shown nor counted.
 
-**Every chat is logged.** Past and new Claude Code, Desktop Code and Cowork chats import themselves every 5 minutes, with no model; coding sessions become short project summaries, never code. In the Claude desktop app's Chat tab, Claude logs each chat through Cortex as it goes.
+**Every chat is saved.** Past and new Claude Code, Desktop Code and Cowork chats are saved as pages every 5 minutes, with no model; coding sessions become short project summaries, never code. In the Claude desktop app's Chat tab, Claude logs each chat through Cortex as it goes. After each pass, a safety net records the topics a chat discussed but forgot to log.
 
 **Setup** goes one step at a time, and every step can be skipped and done later.
 
@@ -50,7 +142,7 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 ![Status: vault, search model, AI apps, local model, browsing and dashboard, each Ready or Off](docs/images/app-status.png)
 
-**Add your history** has a three-step guide for each source: how to get the export, adding the file, then a check of what it found before anything is imported.
+**Add your history** has a three-step guide for each source: how to get the export, adding the file, then a check of what it found before anything is imported. When a claude.ai, ChatGPT or Google Takeout export lands in your Downloads folder, Home offers to import it in one click.
 
 ![Add your history with the ChatGPT guide open](docs/images/app-import.png)
 
@@ -58,11 +150,17 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 ![Browsing privacy: the cloud switch is off and each sensitive category has its own three-way choice](docs/images/app-privacy.png)
 
-**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. Questions about your own record are answered straight from Cortex's data, even with no local model or search model: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week". Esc stops an answer, and every answer has Copy.
+**Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. **Attach a file** (or drop one on the chat) to ask about a PDF, Word file or text file; the answer cites its pages, and **Save to your brain** imports it. Questions about your own record are answered straight from Cortex's data, even with no local model or search model: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week". Esc stops an answer, and every answer has Copy.
 
 ![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips](docs/images/app-chat.png)
 
 *A real run on the demo vault with Qwen 3.5 2B and the search model. A model this small can still get a detail wrong, so check the cited pages; a bigger model (4B, 9B) does better if your computer can run it.*
+
+**Review** asks you about what only you can decide, at most five cards a day (**Today's 5**): lines that may steer an AI, teaching rules a chat suggested, lines that clash, corrections you repeated in several chats, and decisions found in your commit messages. Everything else waits folded under **More, only if you want**. Keys: J and K move, Y approves, N dismisses.
+
+**Tonight** closes the day: your activity hour by hour, Today's 5, what each AI app saved today with one **Undo** per chat, and what is due tomorrow.
+
+**Agent X-ray** shows what Cortex told each AI app in its first calls: the pages and lines about you it served, what it cut for space and how many characters it used. **Pin** a page or line to serve it at the start of every chat, **Mute** one to never serve it, choose what each app may read, and use **Dry run** to see what an app would get for a message.
 
 **Local model** shows the runner (Ollama or LM Studio) and the chosen model, with **Save choice**, **Load** and **Test**, and downloads another Ollama model by name. An optional **Model for background work** lets browsing imports and site descriptions use a larger, slower model than Chat; with 8 GB of graphics memory or less, keep it the same model.
 
@@ -70,7 +168,7 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 ### The home page
 
-The app's home (also opened by `cortex dashboard`) has the tabs below. **Export snapshot** saves a single offline copy of your non-private pages wherever you choose; that file has no network access (its content security policy is `default-src 'none'`). Cortex no longer writes a `dashboard.html` into your vault.
+The app's home (also opened by `cortex dashboard`) has the tabs Home, Brain, Library, You, Timeline, Ideas and Help, plus Study once you study (a concept, a test or a grade in your vault). **Export snapshot** saves a single offline copy of your non-private pages wherever you choose; that file has no network access (its content security policy is `default-src 'none'`).
 
 The **Study** tab shows today's plan in order, the tests coming up with how ready you are, and your open mistakes.
 
@@ -96,6 +194,7 @@ For people who study, Cortex also plans revision.
 - **Mock paper.** `/cortex mock paper 30` in Claude builds a timed practice paper from your weak spots for the next test, mixed across subjects.
 - **Mock interview.** `/cortex mock` runs coding, aptitude, HR and project rounds, then a debrief. Weak topics come back in your plan for 14 days.
 - **Sweep.** `/cortex sweep` asks 10 cold questions across subjects, each with "how sure? 1-4", to catch what you only think you know.
+- **90-second check.** When something is due, Home's Next up board offers up to 3 due topics to recall, reveal and rate.
 - **Digest.** `cortex digest` goes through chats imported since the last digest and suggests up to 3 topics each, using local search only. A yes records that the chat touched the topic; it never counts as a grade.
 
 ## How it works
@@ -115,8 +214,8 @@ flowchart LR
         VAULT[("Vault in git<br/>Markdown notes + JSONL events")]
         IDX["Search<br/>SQLite FTS5 + local embeddings"]
         FOLD["Levels and FSRS states<br/>folded from events"]
-        DASH["Dashboard<br/>offline HTML, 3D brain"]
-        IMP["Importers<br/>chats, notes, calendar, Takeout"]
+        DASH["Home and dashboard<br/>3D brain, Review, X-ray"]
+        IMP["Importers<br/>chats, notes, calendar, Takeout, documents, more"]
         BR["Browse brain<br/>history import + receiver"]
         LLM["Local model<br/>Ollama or LM Studio"]
     end
@@ -137,7 +236,7 @@ flowchart LR
     BR -.->|"only 'cloud may read' categories"| CLOUD
 ```
 
-- **The vault is the source of truth.** Notes are Markdown with YAML front matter; learning evidence is JSONL events under `events/`. Every write goes through one module that takes a lock, writes a temp file and replaces the old one atomically, and refuses text that looks like a secret. Each chat's changes are one git commit.
+- **The vault is the source of truth.** Notes are Markdown with YAML front matter; learning evidence is JSONL events under `events/`. Every write goes through one module that takes a lock, writes a temp file and replaces the old one atomically, and refuses text that looks like a secret. With git on, each chat's changes are one git commit.
 - **Everything else is derived and disposable**: the search index, the vector cache, levels, the plan and the dashboard. Delete them and Cortex rebuilds them.
 - **Search** combines SQLite full-text search with a small embedding model that runs locally (about 150 MB, downloaded once).
 - **Note text is treated as untrusted.** Over MCP it is wrapped in `<untrusted_note>` tags so the model can tell your notes from instructions; in cards and the dashboard it is escaped and stripped of links and images.
@@ -152,13 +251,26 @@ flowchart LR
 
 The tool schemas are in [docs/tools.md](docs/tools.md).
 
+## How Cortex differs
+
+Other open-source memory projects, compared only on facts each one states in its own README and license. This table says nothing about their speed or quality.
+
+| Project | License | Where the data lives | Storage | Models its README names |
+|---|---|---|---|---|
+| Cortex | MIT | A folder on your computer | Markdown and JSONL files (an Obsidian vault), with a SQLite search index | A local embedding model for search by meaning (optional); an optional local chat model (Ollama or LM Studio) |
+| [Graphiti](https://github.com/getzep/graphiti) ([README](https://github.com/getzep/graphiti/blob/main/README.md)) | Apache-2.0 | A graph database you run (Neo4j, FalkorDB or Amazon Neptune); self-hosted | A temporal knowledge graph of entities, facts and episodes | An LLM and an embedder you supply; OpenAI by default, local servers such as Ollama or LM Studio through OpenAI-compatible endpoints |
+| [Basic Memory](https://github.com/basicmachines-co/basic-memory) ([README](https://github.com/basicmachines-co/basic-memory/blob/main/README.md)) | AGPL-3.0 | Your disk; an optional paid hosted cloud | Markdown files, searched on SQLite or Postgres | FastEmbed embeddings; an optional reranker (a local FastEmbed cross-encoder or a LiteLLM provider) |
+| [claude-mem](https://github.com/thedotmack/claude-mem) ([README](https://github.com/thedotmack/claude-mem/blob/main/README.md)) | Apache-2.0 | `~/.claude-mem` on your computer; cloud sync is opt-in | SQLite, with Chroma for semantic search | An observer model that turns tool activity into observations (its providers include Claude and OpenRouter) |
+
+Licenses are from each repository's license as GitHub reports it; the rest is from each README as of November 2026.
+
 ## Privacy
 
 Cortex is local-first. [docs/PRIVACY.md](docs/PRIVACY.md) has the full detail; in short:
 
 - **No account and no telemetry.** Your vault is a folder you choose; settings live in `~/.cortex/`.
-- **What reaches the internet** happens only because you asked: the one-time search model download, and in the app, downloading Ollama or a local model, or checking GitHub for a Cortex update, when you click. Installing or upgrading fetches Python packages as usual.
-- **Servers listen on 127.0.0.1 only.** The app needs a key that changes each launch and stops after 30 minutes idle. The MCP server talks over standard input and output.
+- **What reaches the internet:** the one-time search model download; in the app, downloading Ollama or a local model when you click; and the app's update check, which asks GitHub for the latest Cortex release a minute after the app starts and every 6 hours (an installed Cortex downloads a newer installer in the background, and nothing is installed until you click **Restart to update**). Installing or upgrading fetches Python packages as usual.
+- **Servers listen on 127.0.0.1 only.** The app needs a key that changes each launch. The MCP server talks over standard input and output.
 - **What the AI model sees.** Whatever a Cortex tool returns goes to the AI app you are chatting with (Anthropic, when you use Claude). Pages marked `private: true` are left out of search, recall and context. `cortex exclude add <folder>` turns Cortex off for chats in one folder.
 - **Browsing has three settings per category.** *Don't save* (adult, by default), *Local AI only* (health, money, betting, dating, sexuality, drugs and self-harm start here: only a model on this computer may read them), or *Cloud AI apps can read*. Nothing from browsing is visible to cloud AI apps until you turn that switch on. Sign-in, payment and bank pages are dropped and never stored.
 - **The cloud model is off by default.** If you opt in, it may sort and summarise only the *Cloud AI apps can read* categories. It needs an HTTPS endpoint, reads its API key from an environment variable you name (the app never takes a key), sends at most 500 requests a run unless you change the cap, refuses a request that looks like it holds a secret, and logs counts only. It never sees a skipped or local-only category, and if no local model is running, local-only data is skipped rather than sent.
@@ -174,7 +286,7 @@ Cortex is local-first. [docs/PRIVACY.md](docs/PRIVACY.md) has the full detail; i
 3. Click **Install**. It needs an internet connection this once, to download Python and Cortex's parts (a few minutes). It needs no admin rights and installs for your user only, in `%LOCALAPPDATA%\Programs\Cortex`, and adds `cortex` to your PATH.
 4. Click **Open Cortex**. Later, use the **Cortex** shortcut on the desktop or in the Start menu.
 
-To update, click **Check for updates** under **Status** → **Updates** in the app (Cortex 0.1.0 has no such button: run a newer `CortexSetup.exe` once). To uninstall, click **Quit** in the app, then remove **Cortex** under **Settings > Apps > Installed apps**. Your vault and `~/.cortex` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
+To update, click **Restart to update** when it appears, or **Check for updates** under **Status** → **Updates** (Cortex 0.1.0 has no such button: run a newer `CortexSetup.exe` once). To uninstall, click **Quit** in the app, then remove **Cortex** under **Settings > Apps > Installed apps**. Your vault and `~/.cortex` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
 
 ### macOS, Linux, and developers
 
@@ -217,7 +329,7 @@ After connecting, restart Claude Code or fully quit and reopen the Claude deskto
 
 ### With Claude
 
-Talk normally. In Claude Code, the plugin adds a short Cortex context to the first message of each chat; in the desktop app, Claude calls `cortex_prime` itself. Claude records lasting things as they come up and tells you briefly what it wrote. Anything about who you are (a preference or personality line) is saved only after you say yes.
+Talk normally. In Claude Code, the plugin's prime hook adds a short Cortex context to your first real message of each chat (a greeting does not count); in the desktop app, Claude calls `cortex_prime` itself. Claude records lasting things as they come up and tells you briefly what it wrote. A line about who you are that Claude inferred is saved as a guess, marked "(ask)" until you confirm it. Start a line with `//pref:`, `//fact:` or `//forget:` and Cortex saves it as your own words.
 
 Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
@@ -243,10 +355,11 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 |---|---|
 | `cortex app` | Open the Cortex app (`--no-open` prints the link only; `--port N` picks the port and stops if it is busy) |
 | `cortex today --minutes 30` | Today's plan, cut to 30 minutes |
-| `cortex import <file>` | Import a chat export, notes, a calendar or Google activity; `--dry-run` shows counts, `--private` keeps imported notes private |
+| `cortex import <file>` | Import a chat export, notes, a calendar, Google activity, documents, git projects, highlights and more; `--dry-run` shows counts, `--tier private` keeps imported pages private |
 | `cortex digest` | Review chats imported since the last digest and confirm their topics |
 | `cortex ask "question"` | Answer from your notes, saved AI chats and browsing with your local model, with sources; `--private` adds private notes and private browsing (run it yourself, not through an AI app) |
 | `cortex recall "query"` | Search your vault by meaning and keywords |
+| `cortex chat eval` | The 40-question Chat test on a made-up vault; `--no-model` runs only the questions Cortex answers itself |
 | `cortex dashboard` | Open the Cortex app's home (starts the app if needed) |
 | `cortex doctor` | Health check, with a fix for each problem |
 | `cortex backup` | Zip the whole vault, history included |
@@ -261,7 +374,7 @@ Type `/cortex [mode] [topic]` for a deliberate session. The main modes:
 
 ## Local models
 
-A local model is optional. Cortex uses it to sort and summarise your browsing and to answer in **Chat**. It never leaves your computer.
+A local model is optional. Cortex uses it to sort and summarise your browsing, to answer in **Chat** and to find facts about you in your recent chats while the computer is idle. It never leaves your computer.
 
 - **Ollama** is recommended: the app's Setup can install it (`winget` on Windows, Homebrew on macOS; on Linux it shows the command).
 - **LM Studio** is the alternative, through its own `lms` command.
@@ -290,6 +403,7 @@ uv run ruff check
 
 Always run Python through `uv run`. Tests use only synthetic data in `tests/fixtures/`; two read-only smoke tests run against a real vault only when `CORTEX_REAL_VAULT` is set. The rules for contributors and AI agents are in [CLAUDE.md](CLAUDE.md), and [filemap.md](filemap.md) describes every file.
 
+- **README numbers:** `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` re-measures everything in [How well it works](#how-well-it-works) on made-up data, redraws the charts and rewrites its tables. Run it on a quiet machine. `readme_numbers.py --quick` is a fast smoke run with small sizes.
 - **Windows installer:** `uv run python installer/build.py` builds `dist/CortexSetup.exe` (Windows only). The sources are in [installer/](installer/).
 - **The `/cortex` skill:** edit `skills/cortex/`, then run `uv run python scripts/build_skills.py` to refresh the plugin copy and `dist/cortex-skill.zip`.
 - **A demo vault:** `uv run cortex init <folder>` then `uv run python scripts/make_demo_vault.py <folder>` fills a throwaway vault with Sam, the made-up student, and made-up study history, as in the screenshots. Never point it at a real vault.
@@ -313,6 +427,8 @@ Start with `cortex doctor`: it checks each part and prints a fix for anything wr
 **`git push` is refused in my vault.** On purpose: the vault's pre-push hook keeps it local.
 
 **My day ends late.** Cortex starts a new day at 04:00 in your computer's time zone.
+
+**I don't study. Do I see the study parts?** No. The Study tab, exams and deadlines and the study lines on the home card appear only once your vault has a concept, a test or a grade.
 
 **Can I use it without Claude?** Yes. Any MCP client can connect, and the CLI, the app and the dashboard work on their own. The `/cortex` study modes are a Claude skill.
 

@@ -1,0 +1,148 @@
+{
+ "generated": "2026-11-22T20:23:36+05:30",
+ "git_sha": "4bffbb2",
+ "machine": {
+  "cpu": "AMD Ryzen 7 7435HS",
+  "logical_cores": 16,
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.12"
+ },
+ "runs": 1,
+ "statistic": "median of 1 runs",
+ "quick": true,
+ "chat_test": {
+  "source": "cortex.chat_eval.run(use_model=False) (`cortex chat eval --no-model`)",
+  "result": "BLOCKED",
+  "model_note": "model questions turned off",
+  "total": 40,
+  "ran": 14,
+  "passed": 14,
+  "failed": 0,
+  "needs_model": 26,
+  "by_query_kind": {
+   "exact_id": {
+    "pass": 3,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "multi_gold": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "lexical": {
+    "pass": 8,
+    "fail": 0,
+    "needs_model": 5
+   },
+   "conflicting_history": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "stale_negative": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 2
+   },
+   "synonym": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 5
+   },
+   "unanswerable": {
+    "pass": 3,
+    "fail": 0,
+    "needs_model": 2
+   }
+  },
+  "by_kind": {
+   "counts": {
+    "pass": 3,
+    "fail": 0,
+    "needs_model": 1
+   },
+   "first_last": {
+    "pass": 3,
+    "fail": 0,
+    "needs_model": 1
+   },
+   "period_timeline": {
+    "pass": 2,
+    "fail": 0,
+    "needs_model": 2
+   },
+   "everything_about": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "preferences": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "people": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "decisions_reversals": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 3
+   },
+   "learning_state": {
+    "pass": 3,
+    "fail": 0,
+    "needs_model": 1
+   },
+   "gaps": {
+    "pass": 2,
+    "fail": 0,
+    "needs_model": 1
+   },
+   "privacy": {
+    "pass": 1,
+    "fail": 0,
+    "needs_model": 2
+   },
+   "follow_up": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 3
+   }
+  },
+  "retrieval_cases": 0,
+  "facts_right": "11/11 (100%)",
+  "blockers": [
+   {
+    "name": "Private leak with Private off",
+    "state": "not run"
+   },
+   {
+    "name": "Stale preference served as current",
+    "state": "not run"
+   },
+   {
+    "name": "Made-up history for an empty month",
+    "state": "ok"
+   },
+   {
+    "name": "Computed count or study state wrong",
+    "state": "ok"
+   },
+   {
+    "name": "Deep passage missed (1.42 ms past character 700)",
+    "state": "not run"
+   }
+  ],
+  "latency_median_s": 0.09,
+  "latency_max_s": 0.16
+ },
+ "tests": {
+  "collected": 3265,
+  "command": "uv run pytest --collect-only -q"
+ },
+ "note": "Only the load-independent sections (chat_test, tests) are kept, from a --quick run; the timing sections were not measured on a quiet machine yet."
+}
