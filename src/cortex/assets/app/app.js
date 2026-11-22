@@ -596,6 +596,7 @@
   // the facts Cortex computed (chat_facts), above the model's words: exactly as counted
   const FACT_NOUN = { notes: 'notes', chats: 'saved AI chats', journal: 'journal lines', browsing: 'visits', study: 'study events' };
   const FACT_SRC = { notes: 'notes', chats: 'chats', journal: 'journal', browsing: 'browsing', study: 'study' };
+  const PAGE_KIND = { inventory: 'pages', schedule: 'coming up', decisions: 'decisions' };
   function factsBox(f) {
     const n = (x) => Number(x).toLocaleString();
     const period = f.period ? (f.period[0] === f.period[1] ? f.period[0] : `${f.period[0]} to ${f.period[1]}`) : 'all time';
@@ -605,6 +606,7 @@
     else if (f.kind === 'timeline') head = big(f.total, `items across ${n(f.rows.length + (f.more || 0))} ${f.unit}s`);
     else if (f.kind === 'about' || f.kind === 'compare') head = big(f.total, 'mentions');
     else if (f.kind === 'gaps') head = big(f.total, f.page ? `pages under ${f.page.title}` : 'topic pages found');
+    else if (PAGE_KIND[f.kind]) head = big(f.total, f.kind === 'inventory' ? f.query : PAGE_KIND[f.kind]);
     else head = f.item ? [h('span', { class: 'fx-n', text: f.item.day }), h('span', { text: `${f.kind} time: ${f.item.title} (${FACT_SRC[f.item.source] || f.item.source})` })]
       : big(0, 'matches');
     const line = (text) => h('div', { class: 'fx-line', text });
@@ -613,6 +615,11 @@
     if (f.kind === 'gaps') {
       extra = (f.rows || []).slice(0, 10).map((r) => line(`${r.title} · last changed ${r.day}`));
       if (f.unopened && f.unopened.length) extra.push(line(`Searched, opened nothing: ${f.unopened.join('; ')}`));
+    }
+    if (PAGE_KIND[f.kind]) {  // chat_pages: rows {title, day} and, for a decision, what replaced it
+      extra = (f.rows || []).slice(0, 10).map((r) => line(`${r.day || 'undated'} · ${r.title}`
+        + (r.replaced_by ? ` · replaced by ${r.replaced_by}` : r.replaced ? ` · ${r.status}` : '')));
+      if (f.total > extra.length) extra.push(line(`and ${n(f.total - extra.length)} more`));
     }
     const cov = f.coverage || {};
     return h('div', { class: 'facts', role: 'group', 'aria-label': 'Facts computed by Cortex' },
