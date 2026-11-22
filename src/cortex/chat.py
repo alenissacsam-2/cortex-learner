@@ -15,7 +15,9 @@ import re
 import threading
 import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from typing import NamedTuple
 
 from cortex import (
     access,
@@ -418,11 +420,11 @@ def _site_counts(vault: Vault, got, sources: dict, browser: str | None = None):
                     unknown += n
                     continue
                 # ids are source keys ("comet/Default"); a bare browser name is accepted too
-                got = [_count(c) for k, c in w.items()
+                per = [_count(c) for k, c in w.items()
                        if isinstance(k, str) and k.split("/")[0] == browser]
-                if None in got:
+                if None in per:
                     continue
-                b = sum(got)
+                b = sum(per)
                 n = min(n, b)  # a forget lowers "n" only
                 if n <= 0:
                     continue
@@ -867,6 +869,39 @@ def _inert(text: str) -> str:
     return _clean(text).translate({ord("["): "(", ord("]"): ")", ord("*"): None, ord("`"): "'"})
 
 
+class Route(NamedTuple):
+    """A question Cortex answers from its own data: the step line, and either `data` (its
+    words, no model) or `fq` (a chat_facts query: counted by code, a model may word it)."""
+    step: str
+    data: Callable[[], str] | None = None
+    fq: dict | None = None
+
+
+def _route(vault: Vault, text: str, own, today: date, first: bool, s: dict,
+           leans: bool = False) -> Route | None:
+    """The data answer for `text`, or None (the passages answer it): a site list, a digest, a
+    study answer, then chat_facts' typed answers (not for a follow-up). `own`: chat._when of
+    `text`'s own date phrase; `first`: the chat's first question."""
+    span = f" from {_span(own[0], own[1], today)}" if own else ""
+    if asks_sites(text, today):
+        return Route("Counting the sites you visited" + span,
+                     lambda: site_list(vault, text, own, s["sources"], today))
+    if (asked := chat_study.kind(text, own, today, first)) == "digest":
+        lo, hi, unit = chat_study.digest_days(text, own, today)
+        return Route("Putting together your " + ("day" if (unit, lo) == ("day", today) else
+                                                 f"{unit} {'on' if lo == hi else 'from'} "
+                                                 f"{_span(lo, hi, today)}"),
+                     lambda: digest(vault, lo, hi, s["sources"], today, unit))
+    if asked is not None:
+        return Route(chat_study.STEP[asked] + (span if asked == "range" else ""),
+                     lambda: chat_study.study_answer(vault, text, own, today, first,
+                                                     bool(s["sources"].get("private")))
+                     if s["sources"].get("notes") else NOTES_OFF)
+    if not leans and (fq := chat_facts.route(text, own, today)) is not None:
+        return Route(chat_facts.step(fq, today), fq=fq)  # a model, if any, only words it
+    return None
+
+
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None,
           files: list | None = None) -> str:
@@ -912,34 +947,13 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
     # borrowed ones are for passages only), and so does its step line
     own = got if said is text else None
-    span = f" from {_span(own[0], own[1], today)}" if own else ""
     # which data answer, if any, is decided first and cheaply; it is read after `start` and its
     # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
-    step = data = fq = None
-    if files:
-        pass  # an attached file is asked about: passages, never a data answer
-    elif asks_sites(text, today):
-        step = "Counting the sites you visited" + span
-
-        def data():
-            return site_list(vault, text, own, s["sources"], today)
-    elif (asked := chat_study.kind(text, own, today, not prev)) == "digest":
-        lo, hi, unit = chat_study.digest_days(text, own, today)
-        step = "Putting together your " + ("day" if (unit, lo) == ("day", today) else
-                                           f"{unit} {'on' if lo == hi else 'from'} "
-                                           f"{_span(lo, hi, today)}")
-
-        def data():
-            return digest(vault, lo, hi, s["sources"], today, unit)
-    elif asked is not None:
-        step = chat_study.STEP[asked] + (span if asked == "range" else "")
-
-        def data():
-            return chat_study.study_answer(vault, text, own, today, not prev,
-                                           bool(s["sources"].get("private"))) \
-                if s["sources"].get("notes") else NOTES_OFF
-    elif not leans and (fq := chat_facts.route(text, own, today)) is not None:
-        step = chat_facts.step(fq, today)  # counted by code; a model, if any, only words it
+    # (an attached file is asked about: passages, never a data answer)
+    route = None if files else _route(vault, text, own, today, not prev, s, leans)
+    step = route.step if route else None
+    data = route.data if route else None
+    fq = route.fq if route else None
     listed = None if data is None else ""  # a data answer: filled in after its step
     passages = listed is None and fq is None  # the search model and a runner are needed
     if passages and not files and semantic.load_embedder() is None:

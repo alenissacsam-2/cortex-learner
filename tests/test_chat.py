@@ -1497,3 +1497,20 @@ def test_a_future_date_does_not_narrow_the_search(vault, stream, monkeypatch):
     _turn(vault, None, "explain car motors for tomorrow's exam", s.runner())
     _turn(vault, None, "what did I read about car motors yesterday?", s.runner())
     assert asked == [None, ("2026-11-17", "2026-11-17")]
+
+
+# ---- the router, follow-ups on the assistant's list, two-part questions (R4) -------------------
+
+@pytest.mark.parametrize("text, leans, want", [
+    ("which sites did I visit yesterday?", False, "Counting the sites you visited from 17 Nov"),
+    ("what did I do yesterday?", False, "Putting together your day on 17 Nov"),
+    ("what is due?", False, "Reading your due reviews"),
+    ("how many times did I visit github?", False, 'Counting "github"'),
+    ("how many times did I visit github?", True, None),  # a follow-up: no typed answer
+    ("what is Dijkstra's algorithm?", False, None),
+])
+def test_the_router_picks_one_data_answer(vault, text, leans, want):
+    r = chat._route(vault, text, chat._when(text, TODAY), TODAY, True, chat.get_settings(),
+                    leans)
+    assert (r.step if r else None) == want
+    assert r is None or (r.data is None) is (r.fq is not None)
