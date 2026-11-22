@@ -669,8 +669,11 @@ def test_default_passages_are_five_short_ones(vault, stream):
 def test_coverage_counts_what_was_read_of_what_matched(vault, stream, monkeypatch):
     stats = {}
     found = ask._passages(vault, "car motor", 2, sources=ask.SOURCES, stats=stats)
-    every = ask._passages(vault, "car motor", 12, sources=ask.SOURCES)
+    big = {}
+    every = ask._passages(vault, "car motor", 12, sources=ask.SOURCES, stats=big)
     assert len(found) == 2 and stats["matched"] == len(every) > 2
+    # C14: a source that filled its 2 may have had more; none fills 12, so the count is exact
+    assert stats["more"] is True and "more" not in big
     s = stream("ollama", ["Forum [1]."])
     cid, ev = _turn(vault, None, "car motor", s.runner(),
                     settings=dict(chat.get_settings(), passages=4))
@@ -678,6 +681,10 @@ def test_coverage_counts_what_was_read_of_what_matched(vault, stream, monkeypatc
     n = len(ask._passages(vault, "car motor", 4, sources=chat.get_settings()["sources"]))
     assert cov == {"read": n, "matched": len(every)}
     assert chat.load(vault, cid)[-1]["coverage"] == cov
+    s = stream("ollama", ["Forum [1]."])
+    _, ev = _turn(vault, None, "car motor", s.runner(),
+                  settings=dict(chat.get_settings(), passages=2))
+    assert ev[-2]["coverage"]["more"] is True
 
 
 def test_pills_are_typed_and_titles_escaped(vault, stream):

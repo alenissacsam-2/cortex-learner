@@ -879,7 +879,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     `chat_facts.say` does with no model; saved on the answer as `facts`), {"t": "tok", "s"}
     per piece, {"t": "src", sources: [{n, path, title, kind, at, len}] (the passages cited;
     `passage` shows one), searched (the same without n, when none is cited), coverage: {read,
-    matched, also (names `relatives` added, when any)} when passages were searched (how many
+    matched, more (true when a search was full: "matched" is a floor), also (names
+    `relatives` added, when any)} when passages were searched (how many
     the model read of how many the search found; saved on the answer too), unquoted (quoted
     spans no cited passage holds, `ask.unquoted`; saved too) when any}; {"t": "text", "s"}
     replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
@@ -1109,6 +1110,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     # a small model often cites nothing: then show what it read, marked as not cited
     searched = [] if sources else [pill(p) for p in found[:SEARCHED]]
     coverage = {"read": len(found), "matched": stats["matched"],
+                **({"more": True} if stats.get("more") else {}),
                 **({"also": also} if also else {})} if "matched" in stats else None
     # quote proof: a quoted span must be in a cited passage (any read one when none is cited)
     unquoted = ask.unquoted(answer, [text, *(f"{p['title']}\n{p['text']}" for n, p in
