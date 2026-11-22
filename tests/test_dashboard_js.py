@@ -875,6 +875,64 @@ def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
         ("concept:hashing", "correct", 2, {"client": "cortex-app", "model": "self"})]
 
 
+PICKUP_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const out = {};
+  for (let i = 0; i < 200 && !document.querySelector('.board.pickup'); i++) await sleep(50);
+  const b = document.querySelector('.board.pickup');
+  out.first = b === document.getElementById('departures').firstElementChild;
+  out.title = b.querySelector('.ttl').textContent;
+  out.sub = b.querySelector('.sub').textContent;
+  out.html = b.querySelector('.sub').innerHTML;
+  const btns = [...b.querySelectorAll('.acts button')];
+  out.buttons = btns.map((x) => x.textContent);
+  btns[1].click();  // Not this one
+  for (let i = 0; i < 200 && document.querySelector('.board.pickup'); i++) await sleep(50);
+  out.gone = !document.querySelector('.board.pickup');
+  return out;
+})()
+"""
+
+
+def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
+    """B2-b: a claude.ai export in Downloads shows one card above Next up, its file name as
+    text; Not this one removes it and the server remembers."""
+    import zipfile
+
+    from test_app import _serve
+    from test_home import FIXTURES as HOME_FIXTURES
+
+    from cortex.app import desktop, exports, server
+
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(dl))
+    with zipfile.ZipFile(dl / "a&amp;b.zip", "w") as z:
+        for m in ("conversations.json", "users.json"):
+            z.writestr(m, "[]")
+    exports.forget()
+    root = tmp_path / "vault"
+    shutil.copytree(HOME_FIXTURES / "vault_mini", root)
+    (root / ".cortex").mkdir()
+    srv, app = _serve(root)
+    try:
+        out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   probe=PICKUP_PROBE)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == []
+    p = out["probe"]
+    assert p["first"] and p["title"].startswith("You downloaded a claude.ai export on ")
+    assert p["title"].endswith(". Add its chats to Cortex?")
+    assert p["sub"] == "a&amp;b.zip" and p["html"] == "a&amp;amp;b.zip"
+    assert p["buttons"] == ["Add chats", "Not this one"] and p["gone"]
+    seen = desktop.load_state()[exports.KEY]["seen"]
+    assert [v[2] for v in seen.values()] == ["dismissed"]
+
+
 def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, home,  # noqa: F811
                                                                  monkeypatch):
     """The live home's brain with a synthetic browsing store: websites in the stem, a chosen

@@ -1974,7 +1974,11 @@
   const want = location.hash.slice(1);
   let lastSection = null;
   try { lastSection = sessionStorage.getItem('cortex.section'); } catch (e) { /* storage off */ }
-  if (SECTIONS.includes(want)) show(want);
+  if (want === 'import-claude') {  // Home's claude.ai reminder: Setup, with that card's steps open
+    guide = { source: 'claude', step: 1 };
+    opened.add('history');
+    show('setup');
+  } else if (SECTIONS.includes(want)) show(want);
   else if (SECTIONS.includes(lastSection)) show(lastSection);
   else { landing = true; show('status'); }
   idle();
