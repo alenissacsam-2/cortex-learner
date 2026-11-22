@@ -67,9 +67,25 @@ MEDIA = {"youtube", "notebooklm"}
 CHATS = {"claude", "claude code", "chatgpt", "gemini", "perplexity"}  # page_source, lowercased
 
 
+_SESSION_ID = re.compile(r"(\d{4}-\d{2}-\d{2})-([\w-]+)-\w{8}")
+_STARTED = re.compile(r"^- Started: \d{4}-\d{2}-\d{2} (\d{1,2}:\d{2})\s*$", re.M)
+
+
+def _is_ambient(kind: str, nid: str) -> bool:
+    """A receipt session.py saved when an AI chat wrote to the vault (`<day>-ambient-<8>`)."""
+    m = _SESSION_ID.fullmatch(nid)
+    return kind == "session" and bool(m) and m[2] == "ambient"
+
+
 def _title(note) -> str:
     if note.kind == "me" and not note.fields.get("title"):  # me/teaching-contract -> words
         return note.id.replace("-", " ").capitalize()
+    if note.kind == "session" and not note.fields.get("title") and (
+            m := _SESSION_ID.fullmatch(note.id)):  # a receipt has no title: say what it was
+        t = _STARTED.search(note.body)
+        when = t[1] if t else m[1]
+        return (f"Chat with an AI app, {when}" if m[2] == "ambient"
+                else f"Study session ({m[2]}), {when}")
     return plain(note.fields.get("title") or note.id) or note.id
 
 
@@ -513,8 +529,10 @@ def _today_ids(pages: list[dict], notes: list, day: str) -> list[str]:
     line) or a browse page only when its own item is dated today, since an import rewrites
     the file; any other page by the Cortex day it was last saved."""
     hubs = {n.id for n in notes if topics.is_hub({"kind": n.kind, "fields": n.fields})}
+    # an AI chat's session receipt neither: the pages it changed are in Today already
     return [p["id"] for p in pages
             if p["kind"] != "rollup" and p["id"] not in hubs
+            and not _is_ambient(p["kind"], p["id"])
             and (p["date"] if p["source"] or p["kind"] == "browse" or _IMPORTED.search(p["body"])
                  else p["updated"]) == day]
 
