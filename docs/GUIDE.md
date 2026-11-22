@@ -121,7 +121,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex agent-text` | Every fixed text Cortex shows an AI app, with its size per app |
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |
-| `cortex chat eval` | The Chat test: 40 questions on a made-up vault, scored in code ([below](#the-chat-test)) |
+| `cortex chat eval` | The Chat test: 60 questions on a made-up vault, scored in code ([below](#the-chat-test)) |
 | `cortex backup` | Zips the whole vault, private browsing and its stored visit history included (not chat history; see [PRIVACY.md](PRIVACY.md#your-data)). Keep the zip as private as the vault |
 | `cortex exclude add <folder>` | Turns Cortex off in a folder (e.g. a work repo) |
 | `cortex kill` | Emergency stop for anything that acts as you |
@@ -245,10 +245,10 @@ Each year becomes one page (`listening-spotify-YYYY`): total hours (music and po
 
 ### The Chat test
 
-The Chat test checks how well the app's Chat answers. It asks Chat 40 questions about a made-up person and scores each answer in code, with no AI judge. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it.
+The Chat test checks how well the app's Chat answers. It asks Chat 60 questions about a made-up person and scores each answer in code, with no AI judge. They include questions that link two pages, ask about a past month, carry a hostile instruction inside a page, ask Chat to play a role, ask two things at once, or need a sum. Start it with **Run Chat test** in the Chat settings, or run `cortex chat eval` in a terminal. It runs only when you start it. A small model answers differently from run to run, so `cortex chat eval --runs 3` asks each model question three times and also reports pass^3: the questions that passed all three times.
 
 - **What it uses.** The test builds a made-up vault, browsing history and study record in a temp folder and deletes them afterwards. Your own vault, settings and browsing are never read.
-- **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "blocked: no local model" and the whole result is BLOCKED, not a fail. The 14 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run. An empty or failed answer counts as a fail.
+- **Which model.** Questions that need a model use your local model only if a 2B one is already loaded. The test never loads or downloads a model. Without one, those questions show as "blocked: no local model" and the whole result is BLOCKED, not a fail. The 15 questions Cortex answers from its own data (counts, first and last dates, study states, the empty month, the private project with Private off) still run. An empty or failed answer counts as a fail.
 - **The report.** It starts with PASS, FAIL, BLOCKED or STOPPED and a fingerprint of the made-up vault (two reports with the same fingerprint asked the same vault). Each question shows pass or fail, with the reason for a failure. It also shows:
   - the result for each kind of question, and for each kind of search it needs (an exact name, plain words, other words, several pages, a changed history, an outdated fact, nothing to find);
   - whether the search served the right pages (recall at 1, 3 and 5; "buried" means the right page came lower than third, "missed" means it did not come at all);

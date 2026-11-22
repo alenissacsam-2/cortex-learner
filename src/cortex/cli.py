@@ -2239,8 +2239,11 @@ def chat_eval_cmd(
         no_model: Annotated[bool, typer.Option(
             "--no-model", help="Run only the questions Cortex answers with no model.")] = False,
         served: Annotated[bool, typer.Option(
-            "--served", help="List the passages each answer was given.")] = False) -> None:
-    """Chat's offline test: 40 questions on a made-up vault in a temp folder, scored in code.
+            "--served", help="List the passages each answer was given.")] = False,
+        runs: Annotated[int, typer.Option(
+            "--runs", min=1, help="Ask each model question this many times; a question passes "
+                                  "pass^N only if every run passed.")] = 1) -> None:
+    """Chat's offline test: 60 questions on a made-up vault in a temp folder, scored in code.
     Questions that need a model run only when a 2B local model is already loaded; nothing is
     loaded or downloaded, and your vault, settings and browsing are not used."""
     from cortex import chat_eval
@@ -2249,7 +2252,7 @@ def chat_eval_cmd(
         typer.echo(f"error: {keep} already exists; --keep needs a new folder.", err=True)
         raise typer.Exit(1)
     try:
-        r = chat_eval.run(use_model=not no_model, keep=keep,
+        r = chat_eval.run(use_model=not no_model, keep=keep, runs=runs,
                           progress=lambda d, n, qid: typer.echo(f"{d}/{n} {qid}", err=True))
     except RuntimeError as e:
         typer.echo(f"error: {e}", err=True)

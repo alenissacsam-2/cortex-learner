@@ -132,8 +132,8 @@ def test_a_superseded_decision_is_shown_as_replaced(vault):
 @pytest.mark.slow
 def test_the_switches_decide_what_is_counted(vault):
     people = "how many people have I saved?"
-    assert _facts(vault, people)["total"] == 3  # Meera's page is private
-    assert _facts(vault, people, {**ON, "private": True})["total"] == 4
+    assert _facts(vault, people)["total"] == 5  # Meera's page is private
+    assert _facts(vault, people, {**ON, "private": True})["total"] == 6
     off = _facts(vault, "list my projects", {**ON, "notes": False})
     assert off["total"] == 0 and chat_facts.say(off, TODAY) == (
         "I found no projects in Cortex. Notes are switched off in Chat settings.")
