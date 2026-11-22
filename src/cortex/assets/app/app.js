@@ -536,8 +536,9 @@
   const EXAMPLES = ['What did I decide about the payments retry?', 'Which papers did I read on contrastive learning?', 'What did I read about binary search?', 'Which sites did I visit yesterday?'];
   // answered from Cortex's own data, with no search model and no local model (chat.site_list, chat_study)
   const DATA_EXAMPLES = ['Which sites did I visit yesterday?', 'What should I study today?', 'What is due for review?', 'Where am I weak?'];
-  const KIND = { note: 'note', chat: 'chat', browse: 'browsing' };
-  const chatS = { d: null, id: null, msgs: [], els: [], remembers: 0, draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null };
+  const KIND = { note: 'note', chat: 'chat', browse: 'browsing', file: 'file' };
+  const chatS = { d: null, id: null, msgs: [], els: [], remembers: 0, draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null,
+    files: [], reading: null, fileErr: null };
   const last = (e) => e.childNodes[e.childNodes.length - 1];
 
   function inline(text, cite) {  // **bold**, `code` and [n] citations; everything else is text
@@ -576,9 +577,12 @@
   }
   // each pill opens its passage (`open`); the pill of the open one is pressed
   function sourceRow(sources, searched, open, shown) {
-    const pill = (s, label) => h('button', { class: 'chip', type: 'button', 'data-n': s.n, 'aria-pressed': String(shown === s),
-      title: 'Show the passage', onclick: () => open(s) },
-    h('span', { class: 'ct', text: label }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind }));
+    // an attached file's passage lives only in the app's memory: its pill names it, opens nothing
+    const pill = (s, label) => (s.kind === 'file' ? h('span', { class: 'chip', 'data-n': s.n },
+      h('span', { class: 'ct', text: label }), h('span', { class: 'tag', text: KIND.file }))
+      : h('button', { class: 'chip', type: 'button', 'data-n': s.n, 'aria-pressed': String(shown === s),
+        title: 'Show the passage', onclick: () => open(s) },
+      h('span', { class: 'ct', text: label }), h('span', { class: 'tag', text: KIND[s.kind] || s.kind })));
     if ((!sources || !sources.length) && searched && searched.length)  // the model cited nothing
       return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Searched, not cited' }),
         searched.map((s) => pill(s, s.title || s.path)));
@@ -631,6 +635,7 @@
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
     const open = async (s) => {
+      if (s.kind === 'file') return;  // its text is not kept: the pill names the page
       if (shown === s) { shown = p = null; draw(live); return; }
       shown = s; p = {};
       draw(live);
@@ -693,9 +698,66 @@
       }));
   }
 
+  // C1: files attached to the chat (the server's askfile): sent through Setup's upload route,
+  // read into the app's memory only, saved to the vault only on Save to your brain
+  const FILE_MAX = { '.pdf': 200, '.docx': 200, '.txt': 5, '.md': 5 };  // MB, as askfile.LIMIT
+  function fileLine(f) {
+    const n = f.count.toLocaleString();
+    const what = `${f.name}, ${n} ${f.unit}${f.count === 1 ? '' : 's'}` + (!f.cut ? ''
+      : f.unit === 'page' ? ` (searched up to page ${f.cut})` : ` (the first ${f.cut.toLocaleString()} are searched)`);
+    const done = (r) => { chatS.files = r.files; drawFiles(); };
+    return h('p', { class: 'help chat-file' }, h('span', { text: what }), ' ',
+      ...(f.saved ? [h('span', { text: `Saved as ${f.saved.title} ` }),
+        btn('Open the page in Obsidian', () => post('/api/open', { what: 'page', path: f.saved.path }), 'btn quiet')]
+        : [btn('Save to your brain', () => post('/api/chat/file/save', { id: f.id }, done), 'btn quiet')]),
+      btn('Remove', () => post('/api/chat/file/remove', { id: f.id }, done), 'btn quiet', { 'aria-label': `Remove ${f.name}` }));
+  }
+  function drawFiles() {  // the attached files' lines above the message box, redrawn in place
+    const box = $('chat-files');
+    if (chatS.d) chatS.d.files = chatS.files;
+    if (!box) return;
+    box.replaceChildren(...chatS.files.map(fileLine),
+      chatS.reading ? h('p', { class: 'help', text: `Reading ${chatS.reading}…` }) : '',
+      chatS.fileErr ? h('p', { class: 'help', role: 'alert', text: chatS.fileErr }) : '');
+  }
+  function dropFiles() {  // the chat is cleared: its files leave the app's memory too
+    if (!chatS.files.length) return;
+    chatS.files = [];
+    if (chatS.d) chatS.d.files = [];
+    post('/api/chat/file/remove', { all: true });
+  }
+  async function attachFile(f) {
+    if (!f || chatS.reading) return;
+    const ext = (/\.[^.]+$/.exec(f.name) || [''])[0].toLowerCase();
+    chatS.fileErr = !(ext in FILE_MAX) ? 'Attach a .pdf, .docx, .txt or .md file.'
+      : f.size > FILE_MAX[ext] * 2 ** 20 ? `This file is over ${FILE_MAX[ext]} MB, the most Cortex reads from one ${ext} file.` : null;
+    if (!chatS.fileErr) chatS.reading = f.name;
+    drawFiles();
+    if (chatS.fileErr) return;
+    try {
+      const x = await new Promise((resolve, reject) => {  // the upload route Setup uses, with its checks
+        const r = new XMLHttpRequest();
+        r.open('POST', '/api/import/upload');
+        r.setRequestHeader('X-Cortex-Token', T);
+        r.setRequestHeader('Content-Type', 'application/octet-stream');
+        r.setRequestHeader('X-Cortex-Name', encodeURIComponent(f.name));
+        r.onload = () => resolve(r);
+        r.onerror = () => reject(new Error('The app is not answering.'));
+        r.send(f);
+      });
+      let data = {};
+      try { data = JSON.parse(x.responseText); } catch (e) { /* no body */ }
+      if (x.status < 200 || x.status > 299) throw new Error(data.error || `The app answered ${x.status}.`);
+      const got = await api('/api/chat/attach', { upload: data.upload, name: f.name });
+      chatS.files = [...chatS.files, got].slice(-3);  // the server keeps 3: the oldest drops
+    } catch (e) { chatS.fileErr = e.message; }
+    chatS.reading = null;
+    drawFiles();
+  }
+
   async function openChat(id) {
     if (chatS.busy) return;
-    if (!id) Object.assign(chatS, { id: null, msgs: [], remembers: 0 });
+    if (!id) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0 }); }
     else {
       try {
         const r = await api('/api/chat/get?id=' + encodeURIComponent(id));
@@ -761,7 +823,7 @@
       h('button', { class: 'chat-open', type: 'button', 'aria-current': c.id === chatS.id ? 'true' : null, onclick: () => openChat(c.id) },
         h('span', { class: 't', text: c.title }), h('span', { class: 'd', text: daysAgo(c.updated) })),
       btn('Delete', () => post('/api/chat/delete', { id: c.id }, () => {
-        if (chatS.id === c.id) Object.assign(chatS, { id: null, msgs: [], remembers: 0 });
+        if (chatS.id === c.id) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0 }); }
         load('chat');
       }), 'chat-del', { 'aria-label': `Delete chat: ${c.title}` }))));
     side.replaceChildren(btn('New chat', () => openChat(null), 'btn lit chat-new'),
@@ -783,6 +845,9 @@
     const side = h('div', { class: 'chat-side', id: 'chat-side' });
 
     const log = h('div', { class: 'chat-log', id: 'chat-log', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation' });
+    chatS.files = d.files || [];
+    log.addEventListener('dragover', (e) => e.preventDefault());  // a file dropped here is attached
+    log.addEventListener('drop', (e) => { e.preventDefault(); attachFile(e.dataTransfer && e.dataTransfer.files[0]); });
     chatS.els = chatS.msgs.map((m) => (m.role === 'user' ? userMsg(m) : botMsg(m).el));
     log.append(...chatS.els);
     memLine(log);
@@ -808,12 +873,16 @@
       });
       // shown while an answer streams and the reader has scrolled up: jumps to the end
       chatS.pill = h('button', { class: 'btn new-text', type: 'button', hidden: true, onclick: () => { chatS.follow = true; chatS.pill.hidden = true; toEnd(); } }, '↓ New text');
-      foot = h('div', { class: 'composer' }, chatS.pill, h('div', { class: 'crow' }, ta, go),
+      const pickF = h('input', { type: 'file', id: 'chat-file', accept: '.pdf,.docx,.txt,.md', hidden: true });
+      pickF.addEventListener('change', () => { const f = pickF.files && pickF.files[0]; pickF.value = ''; attachFile(f); });
+      foot = h('div', { class: 'composer' }, chatS.pill, h('div', { id: 'chat-files' }),
+        h('div', { class: 'crow' }, ta, btn('Attach a file', () => pickF.click()), go, pickF),
         h('p', { class: 'help', text: missing.length ? 'Runs on this computer. Nothing leaves it.' : `Runs on this computer with ${d.model || 'your local model'}. Nothing leaves it.` }));
     }
     const main = h('div', { class: 'chat-main' }, h('div', { class: 'chat-bar' }, pick, settingsPanel(d.settings)), need, log, foot);
     $('chat').replaceChildren(h('div', { class: 'chat' }, side, main));
     drawSide();
+    drawFiles();
     if (chatS.focus && $('chat-input')) $('chat-input').focus();
     chatS.focus = false;
   }
@@ -864,7 +933,7 @@
     try {
       const r = await fetch('/api/chat', {
         method: 'POST', headers: { 'X-Cortex-Token': T, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: chatS.id, text }), signal: ctrl.signal,
+        body: JSON.stringify({ id: chatS.id, text, ...(chatS.files.length ? { files: chatS.files.map((f) => f.id) } : {}) }), signal: ctrl.signal,
       });
       if (!r.ok) {
         let data = {};

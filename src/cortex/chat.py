@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from cortex import (
     access,
     ask,
+    askfile,
     chat_facts,
     chat_study,
     events,
@@ -860,8 +861,15 @@ def passage(vault: Vault, path, at, size, sources: dict) -> dict:
             "text": _clean(body[at:at + size])}
 
 
+def _inert(text: str) -> str:
+    """An attached file's passage shown as an answer: untrusted text (`_clean`) whose brackets,
+    stars and backticks never become citations or markup in the app's renderer."""
+    return _clean(text).translate({ord("["): "(", ord("]"): ")", ord("*"): None, ord("`"): "'"})
+
+
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
-          settings: dict | None = None, today: date | None = None) -> str:
+          settings: dict | None = None, today: date | None = None,
+          files: list | None = None) -> str:
     """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
     the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
     as the model starts reading (the app shows each with a live count), {"t": "think"} while a
@@ -880,7 +888,14 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     remembers (`remembers` of the chat now)}; or {"t": "err", code (not_set_up,
     no_local_model, no_answer), message}. A set `cancel` stops the stream; the partial answer
     is saved with `stopped: true`. Returns the chat id. `runner` is a local `localllm.Runner`
-    or None; never a cloud one."""
+    or None; never a cloud one.
+
+    `files` (C1, askfile): files attached in the app. Then every question searches them (no
+    data answer): their matching chunks lead (at most askfile.LEAD) and the vault's passages
+    fill the rest (none without the search model). A file is read only by a local runner: with
+    none (or a refused setting) the answer is the askfile.SHOWN best passages under
+    askfile.NO_MODEL (with askfile.LOCAL_ONLY first, once, when Chat's model is a cloud one),
+    saved as their labels only, never the file's text."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"Type a message (up to {MAX_TEXT:,} characters).")
     s = settings or get_settings()
@@ -901,7 +916,9 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     # which data answer, if any, is decided first and cheaply; it is read after `start` and its
     # step are sent, so the app shows the step (and Stop) while a heavy vault is counted
     step = data = fq = None
-    if asks_sites(text, today):
+    if files:
+        pass  # an attached file is asked about: passages, never a data answer
+    elif asks_sites(text, today):
         step = "Counting the sites you visited" + span
 
         def data():
@@ -925,19 +942,24 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         step = chat_facts.step(fq, today)  # counted by code; a model, if any, only words it
     listed = None if data is None else ""  # a data answer: filled in after its step
     passages = listed is None and fq is None  # the search model and a runner are needed
-    if passages and semantic.load_embedder() is None:
+    if passages and not files and semantic.load_embedder() is None:
         emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP, "id": convo_id})
         return convo_id
     if passages and callable(runner) and not isinstance(runner, localllm.Runner):
         try:  # the app passes localllm.find: it may start LM Studio, so only when needed
             runner = runner()
         except ValueError as e:  # a refused localllm setting (cloud model, non-loopback url)
-            emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
-            return convo_id
+            if not files:
+                emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
+                return convo_id
+            runner = None
     if passages and not _local(runner):
-        emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL, "id": convo_id})
-        return convo_id
-    model = runner.model if passages else "Cortex"
+        if not files:
+            emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL,
+                  "id": convo_id})
+            return convo_id
+        runner = None  # a file never reaches any other runner: its passages are shown instead
+    model = runner.model if passages and runner is not None else "Cortex"
     msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "start", "id": convo_id, "model": model})
@@ -945,7 +967,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     also: list = []  # people's names `relatives` added to the search
     stats: dict = {}  # ask._passages' match count, for the coverage line
     parts: list = []
-    messages = facts = None
+    messages = facts = kept = None
     max_tokens = LENGTH[s["length"]]
     if listed is not None:
         emit({"t": "step", "s": step})
@@ -982,16 +1004,45 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         # pages are dated by when they were written: a future range ("tomorrow's exam") keeps
         # no page, so it does not narrow the search; a range running past today stops at today
         past = got and got[0] <= today
-        emit({"t": "step", "s": "Searching your notes and browsing" + (
+        names = ", ".join(f.name for f in files or [])
+        emit({"t": "step", "s": "Searching " + (f"{names} and " if files else "")
+              + "your notes and browsing" + (
             f" from {_span(got[0], min(got[1], today), today)}" if past else "")})
-        also = relatives(vault, query)  # "my sister": her name is searched too
-        found = ask._passages(vault, "\n".join([query, *also]), s["passages"],
-                              between=(got[0].isoformat(), min(got[1], today).isoformat())
-                              if past else None,
-                              sources=s["sources"], topic=topic(said, got[2]) if got else "",
-                              stats=stats)
+        hits = askfile.rank(files, query) if files else []
+        if files and runner is None:  # no local model: the file's best passages, shown as found
+            found = [askfile.passage(f, n, t) for _, _, f, n, t in hits[:askfile.SHOWN]]
+        else:
+            found = [askfile.passage(f, n, t) for _, ok, f, n, t in hits if ok][:askfile.LEAD]
+            k = s["passages"] - len(found)
+            if k > 0 and (not files or semantic.load_embedder() is not None):
+                also = relatives(vault, query)  # "my sister": her name is searched too
+                left = ask.BUDGET - sum(len(p["text"]) for p in found)
+                for p in ask._passages(vault, "\n".join([query, *also]), k,
+                                       between=(got[0].isoformat(),
+                                                min(got[1], today).isoformat())
+                                       if past else None, sources=s["sources"],
+                                       topic=topic(said, got[2]) if got else "", stats=stats):
+                    if len(p["text"]) > left:  # the file's passages took their share
+                        break
+                    left -= len(p["text"])
+                    found.append(p)
+            if files:
+                stats["matched"] = stats.get("matched", 0) + sum(h[1] for h in hits)
     if listed is not None or fq is not None:
         pass
+    elif files and runner is None:
+        said_once = askfile.cloud_set() and not all(f.told for f in files)
+        for f in files if said_once else []:
+            f.told = True
+        head = [askfile.LOCAL_ONLY] * said_once + [askfile.NO_MODEL]
+        parts.append("\n\n".join(head + ([f"**{p['title']}** [{n}]\n{_inert(p['text'])}"
+                                          for n, p in enumerate(found, 1)]
+                                         or [askfile.NO_MATCH])))
+        emit({"t": "tok", "s": parts[0]})
+        # the saved chat names the file's passages, never their text
+        kept = "\n\n".join(head + (["\n".join(f"- {p['title']} [{n}]" for n, p in
+                                              enumerate(found, 1))] if found
+                                   else [askfile.NO_MATCH]))
     elif not found:
         parts.append(NO_ANSWER)
         emit({"t": "tok", "s": NO_ANSWER})
@@ -1064,7 +1115,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                              enumerate(found, 1) if n in cited or not sources),
                                      *(chat_facts._lines(facts, today) if facts else [])]
                             ) if by_model else []
-    msgs.append({"role": "assistant", "text": answer, "ts": _now(), "sources": sources,
+    msgs.append({"role": "assistant", "text": kept or answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
                  **({"unquoted": unquoted} if unquoted else {}),
                  **({"facts": facts} if facts is not None else {}),

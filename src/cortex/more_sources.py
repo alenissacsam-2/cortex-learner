@@ -96,6 +96,13 @@ def _origin(path: Path, name: str) -> str:
 
 def _pdf(data: bytes) -> tuple[str, str, str] | str:
     """(title, YYYY-MM-DD or "", text) or a skip reason."""
+    got = _pdf_pages(data, 2 * DOC_CHARS)
+    return got if isinstance(got, str) else (got[0], got[1], " ".join(" ".join(got[2]).split()))
+
+
+def _pdf_pages(data: bytes, limit: int) -> tuple[str, str, list[str], int] | str:
+    """(title, YYYY-MM-DD or "", each page's text up to about `limit` characters in all, the
+    page count) or a skip reason. The app's Chat reads an attached PDF this way (askfile)."""
     from pypdf import PdfReader
     try:
         rd = PdfReader(io.BytesIO(data))
@@ -105,11 +112,13 @@ def _pdf(data: bytes) -> tuple[str, str, str] | str:
                     return "encrypted"
             except Exception:  # noqa: BLE001 - AES needs a crypto library pypdf may lack
                 return "encrypted"
-        text = ""
+        pages, n = [], 0
         for page in rd.pages:
-            text += " " + (page.extract_text() or "")
-            if len(text) > 2 * DOC_CHARS:
+            pages.append(page.extract_text() or "")
+            n += 1 + len(pages[-1])
+            if n > limit:
                 break
+        total = len(rd.pages)
         meta = rd.metadata
         title = str(meta.title or "").strip() if meta else ""
         try:
@@ -118,7 +127,7 @@ def _pdf(data: bytes) -> tuple[str, str, str] | str:
             made = ""
     except Exception:  # noqa: BLE001 - pypdf raises many types on a damaged file
         return "unreadable"
-    return title, made, " ".join(text.split())
+    return title, made, pages, total
 
 
 def _docx(data: bytes) -> tuple[str, str, str] | str:
@@ -141,14 +150,20 @@ def _docx(data: bytes) -> tuple[str, str, str] | str:
     return title, "", "\n".join(p for p in paras if p)
 
 
+PAGES_CHARS = 2_400_000  # a "pdfpages" parse stops past this many characters (askfile's cap)
+
+
 def _parse_child() -> None:
     """The parse child's loop: `<kind> <n>\\n` and n bytes in on stdin, one JSON line out (the
-    `_pdf` / `_docx` result) per document, until stdin closes."""
+    `_pdf` / `_pdf_pages` / `_docx` result for kind pdf / pdfpages / docx) per document, until
+    stdin closes."""
     inp, out = sys.stdin.buffer, sys.stdout
     while head := inp.readline():
         kind, n = head.split()
         data = inp.read(int(n))
-        out.write(json.dumps(_pdf(data) if kind == b"pdf" else _docx(data)) + "\n")
+        out.write(json.dumps(_pdf(data) if kind == b"pdf" else
+                             _pdf_pages(data, PAGES_CHARS) if kind == b"pdfpages" else
+                             _docx(data)) + "\n")
         out.flush()
 
 
@@ -233,6 +248,14 @@ def docs_source(path: Path, skip: tuple[str, ...] = ()) -> sources.Source:
             parse.close()
 
     return sources.Source("docs", "Documents", "folder", items, skips=DOC_SKIPS)
+
+
+def doc_source(name: str, size: int, mtime: float, read, parse) -> sources.Source:
+    """The documents import of one file already read (the app Chat's Save to your brain,
+    askfile): `read` gives its bytes, `parse` stands in for the child (`_Parser`'s result)."""
+    return sources.Source("docs", "Documents", "folder",
+                          lambda: _doc_items(Path(name), [(name, size, mtime, read)], (), parse),
+                          skips=DOC_SKIPS)
 
 
 def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):

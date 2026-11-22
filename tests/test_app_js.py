@@ -1006,7 +1006,9 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     if node is None:
         pytest.skip("node is not installed")
     _stale_import(root_committed, monkeypatch)  # Status: the stale-import warning's two buttons
-    data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [], "skip": [],
+    # Attach a file opens the browser's file picker (test_chat_attaches_a_file covers it)
+    data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [],
+            "skip": ["Attach a file", "chat-file"],
             "sections": ["status", "connect", "llm", "browse", "vault", "chat", "setup"]}
     out = _run(node, tmp_path, "sweep", SWEEP, data)
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
@@ -1056,6 +1058,103 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     assert out["jobFail"] == {"toast": ["toast on error", "alert", "disk full"],
                               "line": "jobline bad"}
     assert out["closed"] == ["toast error", True]
+
+
+ATTACH = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    const box = () => $('chat-files');
+    const crow = $('chat').querySelector('.crow');
+    out.crow = crow.childNodes.map((c) => c.tagName + ':' + (c.id || c.textContent));
+    const pick = $('chat-file');
+    out.pick = [pick.getAttribute('type'), pick.getAttribute('accept'), pick.getAttribute('hidden') !== null];
+    // a wrong kind or too big a file says so, sends nothing
+    $('chat-log').fire('drop', { dataTransfer: { files: [{ name: 'a.exe', size: 1 }] } });
+    out.wrong = box().textContent;
+    pick.files = [{ name: 'big.txt', size: 6 * 2 ** 20 }];
+    pick.fire('change');
+    out.big = box().textContent;
+    // picked: Reading…, sent through the upload route, then attached by its upload id
+    pick.files = [{ name: 'notes.pdf', size: 1000 }];
+    pick.fire('change');
+    await tick();
+    out.reading = box().textContent;
+    const x = xhrs[xhrs.length - 1];
+    out.xhr = [x.method, x.url, x.headers['X-Cortex-Name'], x.headers['X-Cortex-Token']];
+    x.status = 200; x.responseText = JSON.stringify({ upload: 'u1' });
+    x.onload();
+    await tick();
+    out.attached = fetched.filter((f) => f.path === '/api/chat/attach').map((f) => f.body);
+    const fileP = () => box().querySelector('p');
+    out.line = [fileP().querySelector('span').textContent, fileP().querySelectorAll('button').map((b) => b.getAttribute('aria-label') || b.textContent)];
+    // a question sends the file's id; its sources name the file and page, opening nothing
+    const ev = (o) => JSON.stringify(o) + '\n';
+    DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'It is a heap [1].' })
+      + ev({ t: 'src', sources: [{ n: 1, path: '', title: 'notes.pdf, page 3', kind: 'file' }] }) + ev({ t: 'done', seconds: 1 })];
+    $('chat-input').value = 'what is it?';
+    $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+    await tick();
+    out.sent = fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body);
+    const bots = $('chat-log').querySelectorAll('.msg').filter((m) => m.className === 'msg bot');
+    const chip = bots[bots.length - 1].querySelector('.chip');
+    out.chip = [chip.tagName, chip.textContent];
+    chip.fire('click');
+    await tick();
+    out.passageGet = fetched.some((f) => f.path.startsWith('/api/chat/passage'));
+    // Save to your brain: the line then names the page, which opens in Obsidian
+    fileP().querySelectorAll('button').find((b) => b.textContent === 'Save to your brain').fire('click');
+    await tick();
+    out.save = fetched.filter((f) => f.path === '/api/chat/file/save').map((f) => f.body);
+    out.saved = [fileP().textContent, fileP().querySelectorAll('button').map((b) => b.getAttribute('aria-label') || b.textContent)];
+    // Remove: the line goes
+    fileP().querySelectorAll('button').find((b) => b.textContent === 'Remove').fire('click');
+    await tick();
+    out.removed = [fetched.filter((f) => f.path === '/api/chat/file/remove').map((f) => f.body), box().textContent];
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_chat_attaches_a_file_shows_its_line_saves_removes_and_names_it_in_sources(
+        root_committed, tmp_path, monkeypatch):
+    """C1: Attach a file (or a drop on the log) sends the file through the upload route, then
+    /api/chat/attach; the line above the composer names it with Save to your brain and Remove;
+    a question sends its id; a file source is a pill that opens nothing."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/chat"]["chats"] = []
+    f = {"id": "f1", "name": "notes.pdf", "unit": "page", "count": 12, "cut": 0, "saved": None}
+    saved = {**f, "saved": {"title": "Notes", "path": "imports/docs/notes.md"}}
+    routes.update({"/api/chat/attach": f, "/api/chat/file/save": {"saved": saved["saved"],
+                                                                  "files": [saved]},
+                   "/api/chat/file/remove": {"files": []}})
+    out = _run(node, tmp_path, "attach", ATTACH, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["crow"] == ["TEXTAREA:chat-input", "BUTTON:Attach a file", "BUTTON:chat-send",
+                           "INPUT:chat-file"]
+    assert out["pick"] == ["file", ".pdf,.docx,.txt,.md", True]
+    assert out["wrong"] == "Attach a .pdf, .docx, .txt or .md file."
+    assert out["big"] == "This file is over 5 MB, the most Cortex reads from one .txt file."
+    assert out["reading"] == "Reading notes.pdf…"
+    assert out["xhr"] == ["POST", "/api/import/upload", "notes.pdf", "KEY123"]
+    assert out["attached"] == [{"upload": "u1", "name": "notes.pdf"}]
+    assert out["line"] == ["notes.pdf, 12 pages", ["Save to your brain", "Remove notes.pdf"]]
+    assert out["sent"] == [{"id": None, "text": "what is it?", "files": ["f1"]}]
+    assert out["chip"] == ["SPAN", "1 · notes.pdf, page 3file"] and not out["passageGet"]
+    assert out["save"] == [{"id": "f1"}]
+    assert out["saved"][0].startswith("notes.pdf, 12 pages Saved as Notes")
+    assert out["saved"][1] == ["Open the page in Obsidian", "Remove notes.pdf"]
+    assert out["removed"] == [[{"id": "f1"}], ""]
 
 
 HIST = HARNESS[:HARNESS.index("const out = {};")] + r"""
