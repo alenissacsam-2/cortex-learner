@@ -2323,7 +2323,7 @@ def test_google_activity_html_says_how_many_rows_were_skipped(app, monkeypatch):
     monkeypatch.setattr(takeout, "records", lambda p: takeout.Rows())
     call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": str(path)})
     err = wait_job(app)["error"]
-    assert "only English Takeouts are read" in err and "JSON" not in err
+    assert "some languages are not read yet" in err and "JSON" not in err
 
 
 # ---- updates: only on a click; the network and the installer are faked ----------------------
