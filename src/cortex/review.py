@@ -25,7 +25,9 @@
 - crowded (G7): lines the X-ray shows cut for space in most of the latest primes that offered
   them (`crowded`; Keep pins it, Retire, Skip), and unused playbooks (G7): no X-ray call served
   them and their file is UNUSED_DAYS old (`unused`; Keep asks again in UNUSED_DAYS, Open);
-  together at most STALE_PER_MONTH a month (`_spare_left`).
+  together at most STALE_PER_MONTH a month (`_spare_left`);
+- promote (R28a): a preferences line that keeps coming back (`reinforced`) or that prime
+  serves near the top, offered for me/core (`promote`; Pin to Core, Not now), one a month.
 
 Similarity (`scorer`): cosine with the bge embedder when this process has it loaded already
 (never loaded or downloaded here), else word overlap: the Jaccard of the crudely stemmed words,
@@ -42,11 +44,12 @@ import hashlib
 import itertools
 import re
 import sys
+import unicodedata
 
 from cortex import claims
 from cortex.reflect import _PROPOSED, UNCONFIRMED, UNCONFIRMED_DAYS
 from cortex.render import plain
-from cortex.vault import is_private
+from cortex.vault import VaultError, is_private
 
 STALE_DAYS = {"preferences": 180, "personality": 180, "profile": 365}
 STALE_PER_MONTH = 3
@@ -76,7 +79,11 @@ CROWD_MIN = 5  # primes that must have offered a line before it counts as crowde
 UNUSED_DAYS = 60  # G7: a playbook's file this old and served by no X-ray call; Keep's quiet days
 SPARE_CARDS = ("crowded", "unused")  # the card stamps that spend the G7 monthly cap
 PLAYBOOK_TAG = "playbook"  # mcp_server.PLAYBOOK_TAG (it imports this module)
-_WORD = re.compile(r"[a-z0-9']+")
+REINFORCE = "reinforce"  # R13b: a change's note when a new line repeated a live one
+PROMOTE = "promote_core"  # R28a: the "Pin it to Core?" card's stamp and its Not now's id
+PROMOTE_PROOFS, PROMOTE_APPS = 4, 2  # sessions and AI apps a line came back in, to be offered
+PROMOTE_TOP, PROMOTE_SERVED = 5, 10  # or: primes that served it in their top 5 preferences
+PROMOTE_QUIET = 183  # days Not now keeps a line from being offered again
 _STOP = frozenset("a an the i me my mine to of and or in on at for with is are be am it its "
                   "this that so as by from you your".split())
 # a line "says no" with one of these, a `_NEG_PHRASE` or any word ending n't: never/always,
@@ -88,17 +95,35 @@ _NEG_PHRASE = re.compile(r"\b(?:no longer|g(?:ive|ives|ave|iving|iven) up)\b")
 # W1: a line that says something ended ("used to", "ex-") is never the same fact as one that
 # does not; past verb forms the stemmer merges ("lived") are `_past`'s
 _ENDED = re.compile(r"\b(?:used to|formerly|previously|no longer|back in \d{4})\b|\bex-")
-_NUM = re.compile(r"(\d+(?:[.,]\d+)*)\s*([a-z%]*)")  # a number and the word after it (its unit)
+_NUM = re.compile(r"(\d+(?:[.,]\d+)*)\s*([^\s\d]\S*|)")  # a number and the word after it
 _CMP = re.compile(r"\b(rather than|instead of|over|than|before|after)\b")  # comparative order
-_COMPARE = re.compile(r"([a-z0-9']+)\s+(rather than|instead of|over|than|before|after)\s+"
-                      r"([a-z0-9']+)")  # a comparative with the word on each side
+_COMPARE = re.compile(r"(\S+)\s+(rather than|instead of|over|than|before|after)\s+"
+                      r"(\S+)")  # a comparative with the word on each side (of `_words`)
 _SUFFIX = re.compile(r"(?:(?<=..)ing|(?<!e)ed|es|s)$")
 _VECS: dict = {}  # normalised line -> unit vector, from the embedder in _VECS_OF[0]
 _VECS_OF: list = [None]
 
 
+@functools.cache
+def _word() -> re.Pattern:
+    """R30c: a word is Unicode letters and digits (not `_`) with their combining marks (a Hindi
+    matra or virama, which Python's word class leaves out) and apostrophes, so "München",
+    "दिल्ली" and "東京" are words. Built on first use (about 30 ms), so importing this module
+    stays cheap.
+    shortcut: marks of the Basic Multilingual Plane only; all planes if a script needs it."""
+    spans: list[list[int]] = []
+    for c in range(0x300, 0x10000):
+        if unicodedata.category(chr(c))[0] == "M":
+            if spans and spans[-1][1] == c - 1:
+                spans[-1][1] = c
+            else:
+                spans.append([c, c])
+    marks = "".join(chr(a) if a == b else f"{chr(a)}-{chr(b)}" for a, b in spans)
+    return re.compile(rf"(?:[^\W_]|['{marks}])+")
+
+
 def _words(text: str) -> list[str]:
-    return _WORD.findall(claims.norm(text).replace("’", "'"))
+    return _word().findall(unicodedata.normalize("NFC", claims.norm(text)).replace("’", "'"))
 
 
 def negated(text: str) -> bool:
@@ -119,7 +144,7 @@ def _stem(w: str) -> str:
 
 
 def _bag(text: str) -> frozenset:
-    return frozenset(_stem(w) for w in _WORD.findall(_NEG_PHRASE.sub(" ", " ".join(_words(text))))
+    return frozenset(_stem(w) for w in _NEG_PHRASE.sub(" ", " ".join(_words(text))).split()
                      if w not in _STOP and w not in _NEG and not w.endswith("n't"))
 
 
@@ -609,10 +634,139 @@ def _shown(text: str) -> str:
     return plain(claims._MARK.sub("", text), SHOWN)
 
 
-def stale(rows: list[dict], events: list[dict], today: str) -> list[dict]:
+def reinforce(log, session: str, page: str, claim: str, client: str | None = None) -> None:
+    """R13b: a new line repeated live line `claim` of me/<page> (a near-copy dropped at write
+    time): a `change` event {note: reinforce, page, claim, client} in `session`. `client` is
+    the AI app as the server knows it (the MCP handshake), never tool input; id, day and
+    session are stamped by the log. History only (`reinforced` folds it); best effort."""
+    try:
+        log.append(session=session, kind="change", source="tutor", fields={"payload": {
+            "note": REINFORCE, "page": page, "claim": claim,
+            **({"client": client[:100]} if client else {})}})
+    except VaultError:
+        pass  # a sighting is never worth failing the write it rides on
+
+
+def reinforced(events, known: dict | None = None) -> dict[str, dict]:
+    """R13b: {claim id: {sessions, apps, last}} for each line that came back: a `reinforce`
+    change names it, or Cortex retired a near-copy of it (an `auto` retire whose `kept` it is:
+    why `duplicate`, or why `update` when `known` (`known_texts`) shows the two lines say the
+    same facts, as a repeat at write time is recorded; not a swapped comparative). A sighting
+    is the session that said the line again (for a retired copy, the session that wrote the
+    copy; a copy no change wrote is not counted), its AI app (the event's `client`, else its
+    session's `open` one) and its day. A kept line takes over its retired copy's sightings, so
+    a line said again and again keeps adding up; once a line has one, its own write counts
+    too. `len(sessions)` is its proofs, `len(apps)` its apps."""
+    events = list(events)
+    voided, apps, wrote, out = _voided(events), {}, {}, {}
+
+    def saw(cid, by) -> dict | None:
+        if not isinstance(cid, str) or by is None or not by[1]:
+            return None
+        x = out.setdefault(cid, {"sessions": set(), "apps": set(), "last": ""})
+        sid, day, app = by
+        x["sessions"].add(sid)
+        if app := app or apps.get(sid):
+            x["apps"].add(app)
+        x["last"] = max(x["last"], day)
+        return x
+
+    for e in events:
+        if e.get("id") in voided:
+            continue
+        pl, sid, day = _payload(e), e.get("session"), str(e.get("day") or "")
+        if e.get("kind") == "open" and isinstance(pl.get("client"), str):
+            apps[sid] = pl["client"]
+        if e.get("kind") != "change":
+            continue
+        if pl.get("note") == REINFORCE:
+            saw(pl.get("claim"), (sid, day, pl.get("client")))
+        c = pl.get("change")
+        if not isinstance(c, dict):
+            continue
+        if c.get("tier") and c.get("claim"):
+            for cid in c["claim"] if isinstance(c["claim"], list) else [c["claim"]]:
+                wrote[cid] = (sid, day, None)
+        if c.get("auto") and isinstance(k := c.get("kept"), dict) and (
+                c.get("why") == "duplicate" or c.get("why") == "update" and _same(
+                    known, (c.get("id"), c.get("claim")), (k.get("page"), k.get("claim")))):
+            copy = c.get("claim")
+            x = saw(c["kept"].get("claim"), wrote.get(copy) if isinstance(copy, str) else None)
+            if x is not None and (y := out.pop(copy, None)) is not None:
+                x["sessions"] |= y["sessions"]
+                x["apps"] |= y["apps"]
+                x["last"] = max(x["last"], y["last"])
+    for cid in list(out):
+        saw(cid, wrote.get(cid))
+    return out
+
+
+def _same(known: dict | None, a: tuple, b: tuple) -> bool:
+    """Do lines `a` and `b` ((page, id) in `known`) say the same facts, markers aside (a
+    retired line carries its `(until …)`)?"""
+    x, y = (known or {}).get(a), (known or {}).get(b)
+    return x is not None and y is not None and same_facts(claims._MARK.sub("", x),
+                                                          claims._MARK.sub("", y))
+
+
+def _clicked_this_month(events, card: str, today: str) -> bool:
+    """A click this calendar month whose change the app stamped with `card`."""
+    voided = _voided(events)
+    return any(isinstance(c := _payload(e).get("change"), dict) and c.get("card") == card
+               and e.get("kind") == "change" and e.get("id") not in voided
+               and str(e.get("day") or "")[:7] == today[:7] for e in events)
+
+
+def promote(vault, rows: list[dict], events, today: str) -> list[dict]:
+    """R28a: the "Pin it to Core?" card, at most one a calendar month (none once a click this
+    month was stamped PROMOTE): the owner's live preferences line (confirmed, typed or legacy;
+    not on me/core, not X-ray muted, not put off with Not now in the last PROMOTE_QUIET days: a
+    `dismiss` change on id PROMOTE holding its id's hash) that came back in PROMOTE_PROOFS
+    sessions from PROMOTE_APPS AI apps (`reinforced`), or that prime served in its top
+    PROMOTE_TOP Preferences lines PROMOTE_SERVED times (the X-ray's rows). Most proofs first,
+    then most served. As [{page, id, text (raw), proofs, apps, served}]."""
+    from cortex import xray
+    events = list(events)
+    if _clicked_this_month(events, PROMOTE, today):
+        return []
+    since = (dt.date.fromisoformat(today) - dt.timedelta(days=PROMOTE_QUIET)).isoformat()
+    voided, later = _voided(events), set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if (isinstance(c, dict) and c.get("tool") == "dismiss" and c.get("id") == PROMOTE
+                and e.get("id") not in voided and str(e.get("day") or "") > since):
+            later.add(c.get("hash"))
+    core = {claims.norm(r["text"]) for r in rows if r["page"] == "core"}
+    top: dict[str, int] = {}
+    for r in xray.rows(vault):
+        got = r.get("served")
+        prefs = got.get("preferences") if isinstance(got, dict) else None
+        if r.get("tool") in PRIMES and isinstance(prefs, list):
+            for i in prefs[:PROMOTE_TOP]:
+                top[i] = top.get(i, 0) + 1
+    back, mute = reinforced(events, known_texts(vault)), xray.settings(vault)["mute"]
+    out = []
+    for r in rows:
+        x = back.get(r["id"], {})
+        proofs, apps, served = len(x.get("sessions", ())), len(x.get("apps", ())), top.get(
+            xray.claim(r["id"]), 0)
+        if (r["page"] == "preferences" and r.get("tier") in ("confirmed", "legacy", "typed")
+                and claims.norm(r["text"]) not in core and xray.claim(r["id"]) not in mute
+                and text_hash(r["id"]) not in later
+                and ((proofs >= PROMOTE_PROOFS and apps >= PROMOTE_APPS)
+                     or served >= PROMOTE_SERVED)):
+            out.append({"page": r["page"], "id": r["id"], "text": r["text"], "proofs": proofs,
+                        "apps": apps, "served": served})
+    out.sort(key=lambda x: (-x["proofs"], -x["served"], x["id"]))
+    return out[:1]
+
+
+def stale(rows: list[dict], events: list[dict], today: str, known: dict | None = None
+          ) -> list[dict]:
     """Live confirmed lines on the STALE_DAYS pages whose last confirm (a `(confirmed DAY)`
-    marker, the confirming change event or a yes reconfirm) is older than the page's days,
-    oldest first; at most STALE_PER_MONTH minus this month's Review answers (clicked
+    marker, the confirming change event, a yes reconfirm or, R13b, the line coming back
+    (`reinforced`'s last day, `known`: `known_texts`)) is older than the page's days, oldest
+    first; at most STALE_PER_MONTH minus this month's Review answers (clicked
     reconfirms and retires; shortcut: an expired line retired in the Review counts too). D5:
     near-identical lines are one card, its `ids` every member's (Still true or Retire covers
     them all)."""
@@ -629,14 +783,15 @@ def stale(rows: list[dict], events: list[dict], today: str) -> list[dict]:
         c = pl.get("change") if e.get("kind") == "change" else None
         if isinstance(c, dict) and c.get("op") == "retire" and c.get("confirm") == "clicked":
             answered += this_month
-    out = []
+    out, back = [], reinforced(events, known)
     for r in rows:
         days = STALE_DAYS.get(r["page"])
         if days is None or r["tier"] not in ("confirmed", "legacy", "typed") or claims.expired(
                 r["text"], today):
             continue
         last = max([*_CONFIRMED.findall(r["text"]), said.get(r["id"], ""),
-                    str(r["day"] or "") if r["tier"] == "confirmed" else ""])
+                    str(r["day"] or "") if r["tier"] == "confirmed" else "",
+                    back.get(r["id"], {}).get("last", "")])
         if last and last < (dt.date.fromisoformat(today) - dt.timedelta(days=days)).isoformat():
             out.append({"page": r["page"], "id": r["id"], "text": _shown(r["text"]),
                         "since": last})
@@ -751,14 +906,15 @@ def view(vault, events, today: str) -> dict:
                 "keys": [m["key"] for m in g["members"]]}  # D5: one card per near-copy group
                for page in dict.fromkeys(p["page"] for p in waiting)
                for g in collapse([p for p in waiting if p["page"] == page])]
-    old = stale(rows, events, today)
+    known = known_texts(vault)
+    old = stale(rows, events, today, known)
 
     def side(r: dict) -> dict:
         return {"page": r["page"], "id": r["id"], "text": _shown(r["text"])}
 
     current = [r for r in rows if not claims.expired(r["text"], today)]  # = live_rows
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
-              "right": side(c["right"])} for c in conflicts(current, events, known_texts(vault))]
+              "right": side(c["right"])} for c in conflicts(current, events, known)]
     from cortex import corrections, more_sources  # read imported pages: only the Review asks
     rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"],
               "page": x["page"]}
@@ -789,18 +945,20 @@ def view(vault, events, today: str) -> dict:
              for x in lines[:spare]]
     books, calls, since = unused(vault, events, today) if spare > len(crowd) else ([], 0, None)
     books = [{**x, "calls": calls, "since": since} for x in books[:spare - len(crowd)]]
+    pin = [{**side(x), "proofs": x["proofs"], "apps": x["apps"], "served": x["served"]}
+           for x in promote(vault, current, events, today)]  # R28a: one a month at most
     left = max(0, TODAY_MAX - answered_today(events, today))
     first = [{"type": "unsafe", "key": x["key"]} for x in unsafe]  # G6: always asked, first
     today_ = first + _today(waiting, pairs, rules)[:max(0, left - len(first))]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
-            "unsafe": unsafe, "crowded": crowd, "unused": books,
+            "unsafe": unsafe, "crowded": crowd, "unused": books, "promote": pin,
             "today": today_, "today_left": left,
             "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(today_),  # D4: the badge counts only Today's 5 still unanswered
             "more": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
             + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(crowd)
-            + len(books)}
+            + len(books) + len(pin)}
 
 
 def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:

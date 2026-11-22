@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import UTC, datetime
 
-from cortex import claims, render, xray
+from cortex import claims, render, review, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import local_day
@@ -429,12 +429,14 @@ def similarity(prompt: str, texts: list[str]) -> list[float] | None:
 
 def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[str],
               withheld: set[str] = frozenset(), allow=None, ids: dict | None = None,
-              xs: dict | None = None) -> list[list]:
+              xs: dict | None = None, back: dict | None = None) -> list[list]:
     """The preference, setup and personality lines as prime ranks them for `prompt`, best first:
     [-match, situational?, -served score, "- [Section] line", labelled?, "Section: text", id].
     Never a `pinned` line again, a `withheld` page, a section `allow(page, heading)` (an
     agent profile, access.scope_section) refuses, or an X-ray muted claim; X-ray pins lead.
-    `ids` (claim_ids) and `xs` (xray.settings) are read when not given."""
+    `ids` (claim_ids) and `xs` (xray.settings) are read when not given. R13b: of lines that
+    rank equal, the one that came back latest (`back`: `^c-…` id -> review.reinforced's last
+    day) goes first, and one that never came back after it."""
     ids = claim_ids(vault) if ids is None else ids
     xs = xray.settings(vault) if xs is None else xs
     words = re.findall(r"\w+", prompt.lower())
@@ -466,6 +468,8 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
     for r in rows:  # the owner's X-ray pins lead, still within the preferences cap
         if r[6] in xs["pin"]:
             r[0] = float("-inf")
+    if back:  # stable sorts: ties stay as they were unless a line came back
+        rows.sort(key=lambda r: back.get(r[6], ""), reverse=True)
     rows.sort(key=lambda r: r[:3])
     return rows
 
@@ -502,8 +506,10 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
                     "contract") or rules[:1]
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
             PRIME_CAPS["contract"], more(len(rules) - len(lines), "contract"))
+    back = {xray.claim(c): x["last"]
+            for c, x in review.reinforced(events, review.known_texts(vault)).items()}
     rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,
-                     ids, xs)
+                     ids, xs, back)
     # the prompt's Attempt first line follows Preferences (the owner's standing text first, so
     # it stays the same from chat to chat) and still comes out of the preferences cap
     problem = named_problem(vault, prompt)
