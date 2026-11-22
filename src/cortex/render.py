@@ -147,7 +147,7 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
               coming_up: Mapping | None = None, solid: list[str] = (), back: list[str] = (),
               resolved: int = 0, unconfirmed: int = 0, revisit: list[str] = (),
               edits: list[Mapping] = (), unlearned: int = 0,
-              undated: list[str] = ()) -> str:
+              undated: list[str] = (), studies: bool = True) -> str:
     """The lean /cortex card, at most 10 lines (UX-7). `domains` are (title, in_progress, solid,
     not_started); `due` the due concept titles, most urgent first; `coming_up` an assessment
     dict with `days`, `solid`, `total`, `more` and an optional `forecast` (recall on its
@@ -155,7 +155,8 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
     that reached
     Solid / came back from Needs refresh this week; `revisit` decision ids; `edits` ambient
     contract/profile edits {session, day, pages}, latest first;
-    `undated` ids of pending assessments with no date or a past one.
+    `undated` ids of pending assessments with no date or a past one; without `studies`
+    (dashboard.studies) no Due line and no study menu.
     Optional lines show only when non-empty; every item is raw text, escaped here."""
     parts = [f"{t} {GLYPH['learning']} {a} {GLYPH['solid']} {b} {GLYPH['not_started']} {c}"
              for t, a, b, c in domains]
@@ -204,12 +205,12 @@ def home_card(*, domains: list[tuple], due: list[str], open_mistakes: int,
     return "\n".join([
         *lines, *life,
         "**Your map:** " + (_few(parts) or "no concepts yet"),
-        f"**Due:** {due_s} · **Open mistakes:** {open_mistakes}",
+        *([f"**Due:** {due_s} · **Open mistakes:** {open_mistakes}"] if studies else []),
         *(["**Lately:** " + " · ".join(lately)] if lately else []),
         *(["**Waiting for you:** " + " · ".join(wait)] if wait else []),
         "**What would you like to do?** recall something · save this chat · a project · "
-        "open the graph · today's plan · study: learn a topic, review what's due, "
-        "a 10-question sweep"])
+        "open the graph · today's plan"
+        + (" · study: learn a topic, review what's due, a 10-question sweep" if studies else "")])
 
 
 def start_card(*, mode: str, today: list[dict], assessments: list[dict],

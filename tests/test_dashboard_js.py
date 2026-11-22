@@ -105,7 +105,9 @@ setTimeout(() => {
   if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
   async function load() {
-    const loaded = new Promise((r) => once.push((m) => m.method === 'Page.loadEventFired' && (r(), true)));
+    // a URL with a #hash loaded again is a same-document navigation: no load event
+    const loaded = new Promise((r) => once.push((m) => (m.method === 'Page.loadEventFired'
+      || m.method === 'Page.navigatedWithinDocument') && (r(), true)));
     await send('Page.navigate', { url });
     await loaded;
     for (let i = 0; i < 100 && !(await ev('!!document.body.dataset.brainReadyMs')); i++) await sleep(50);
@@ -197,9 +199,10 @@ window.__T = (() => {
   Document.prototype.execCommand = function (...a) { return failCopy ? false : exec.apply(this, a); };
   const $ = (id) => document.getElementById(id);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const SECTIONS = ['home', 'brain', 'library', 'you', 'timeline', 'ideas', 'study', 'help'];
+  // the page's own tabs (no Study tab for someone who does not study)
+  const sections = () => [...document.querySelectorAll('#tabs [role="tab"]')].map((t) => t.id.slice(4));
   const visible = (e) => e.getClientRects().length > 0 && !e.closest('[hidden]') && !e.disabled;
-  const go = async (s) => { $('tab-' + s).click(); await sleep(40); };
+  const go = async (s) => { const t = $('tab-' + s); if (t) t.click(); await sleep(40); };
   const view = async (v) => {
     await go('brain');
     const b = $('viewswitch').querySelector(`[data-view="${v}"]`);
@@ -325,12 +328,12 @@ window.__T = (() => {
   async function texts() {  // every visible empty-state line, per section and brain view
     const out = {};
     const grab = (root) => [...root.querySelectorAll('.empty, .foot')].filter(visible).map((e) => e.textContent.trim());
-    for (const s of SECTIONS) { await go(s); out[s] = grab($('view-' + s)); }
+    for (const s of sections()) { await go(s); out[s] = grab($('view-' + s)); }
     await view('2d'); out['brain 2d'] = grab($('view-brain'));
     await view('list'); out['brain list'] = grab($('view-brain'));
     return out;
   }
-  return { SECTIONS, go, scopes: () => Object.keys(SCOPES), keys: async (s) => { await SCOPES[s][1](); return controls(s).map((c) => c.key); }, hit, focused, checks, texts };
+  return { get SECTIONS() { return sections(); }, go, scopes: () => Object.keys(SCOPES), keys: async (s) => { await SCOPES[s][1](); return controls(s).map((c) => c.key); }, hit, focused, checks, texts };
 })();
 """.replace("CHECK", CHECK).replace("COPY", COPY)  # noqa: E501  (JavaScript)
 
@@ -717,11 +720,65 @@ def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
     for s, lines in T.items():
         for line in lines:  # one sentence that says what fills it, never a bare "None"
             assert len(line.split()) >= 5 and line.endswith((".", "…")), (s, line)
-    for s in ("home", "brain", "brain 2d", "brain list", "library", "you", "timeline", "ideas",
-              "study"):
+    for s in ("home", "brain", "brain 2d", "brain list", "library", "you", "timeline", "ideas"):
         assert T[s], s
+    assert "study" not in T  # an empty vault does not study: no Study tab
     assert any("Import your chats or notes" in x for x in T["library"])
     assert any("No topics yet" in x for x in T["brain list"])
+
+
+NO_STUDY_PROBE = r"""
+(async () => {
+  const $ = (id) => document.getElementById(id), sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const out = {
+    tabs: [...$('tabs').children].map((t) => t.id), study: !!$('view-study'),
+    options: [...$('section-select').options].map((o) => o.value),
+    home: [$('view-home').hidden, $('tab-home').getAttribute('aria-selected'), $('tab-home').tabIndex],
+    heads: [...$('view-home').querySelectorAll('h2')].map((h) => h.textContent),
+    steps: [...document.querySelectorAll('#departures .first-run .brow')].map((r) => [r.querySelector('.code').textContent, r.textContent]),
+    foot: [...$('departures').querySelectorAll('.foot')].map((f) => f.textContent) };
+  $('tab-home').focus();
+  $('tab-home').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+  await sleep(40);
+  out.end = [document.activeElement.id, document.activeElement.getAttribute('aria-selected')];
+  location.hash = 'study';
+  await sleep(80);
+  out.hash = [$('view-home').hidden, $('tab-home').getAttribute('aria-selected')];
+  return out;
+})()
+"""  # noqa: E501  (JavaScript)
+
+
+def test_no_study_features_for_someone_who_does_not_study(tmp_path):
+    """dashboard.studies false: no Study tab, option or section (#study lands on Home), no
+    Exams board, and the everyone Start here only until something is imported."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    (empty / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
+    page = tmp_path / "empty.html"
+    page.write_text(dashboard.snapshot(Vault(empty), now=NOW), encoding="utf-8")
+    p = _run(tmp_path, page, url=page.as_uri() + "#study", probe=NO_STUDY_PROBE)["probe"]
+    assert "tab-study" not in p["tabs"] and len(p["tabs"]) == 7 and not p["study"], p
+    assert "study" not in p["options"] and p["home"] == [False, "true", 0], p
+    assert "Exams and deadlines" not in p["heads"] and "Start here" in p["heads"], p
+    assert [s[0] for s in p["steps"]] == ["1", "2", "3"], p
+    assert [s[1].split("In the Cortex app")[0] for s in p["steps"]] == [  # badge, then title
+        "1Add your chats", "2Connect an AI app", "3Ask Chat"], p
+    assert "Add a test date" not in str(p["steps"])
+    assert p["end"] == ["tab-help", "true"] and p["hash"] == [False, "true"], p
+
+    many = tmp_path / "many"  # 20 imported chats, still no study: no Start here
+    shutil.copytree(empty, many)
+    (many / "resources").mkdir()
+    for i in range(20):
+        (many / "resources" / f"chat-{i}.md").write_text(
+            f"---\nkind: resource\n---\n# Chat {i}\n\nTimeline: [[2026-03-01]] · Source: ChatGPT"
+            " · Date: 2026-03-05\n", encoding="utf-8")
+    page2 = tmp_path / "many.html"
+    page2.write_text(dashboard.snapshot(Vault(many), now=NOW), encoding="utf-8")
+    p = _run(tmp_path, page2, probe=NO_STUDY_PROBE)["probe"]
+    assert "Start here" not in p["heads"] and "Exams and deadlines" not in p["heads"], p
+    assert p["foot"][0] == "Nothing next. Open loops and decisions that come due show here.", p
 
 
 def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeypatch):  # noqa: F811

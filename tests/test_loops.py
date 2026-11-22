@@ -1,6 +1,7 @@
 """SPEC §0 U7: open loops, decision follow-ups, idea resurfacing, the portrait, the home card."""
 
 import datetime as dt
+import shutil
 from datetime import UTC, datetime
 
 import pytest
@@ -252,6 +253,19 @@ def test_home_card_sections_only_when_non_empty(root):
         assert "**Your map:**" in d and "**Due:** nothing today" in d
 
     run(root, body2)
+
+
+def test_home_card_without_study_has_no_due_line_or_study_menu(root):
+    for folder in ("concepts", "tracks", "assessments"):  # no study page and no grade left
+        shutil.rmtree(root / folder)
+    (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
+
+    async def body(call):
+        d = (await call("cortex_start"))["display"]
+        assert "**Due:**" not in d and "Open mistakes" not in d and "study:" not in d
+        assert d.splitlines()[-1].endswith("open the graph · today's plan")
+
+    run(root, body)
 
 
 def test_home_card_v3_lines(root, monkeypatch):

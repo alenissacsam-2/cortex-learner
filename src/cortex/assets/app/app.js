@@ -1704,7 +1704,7 @@
       five,
       board('What AI apps learned today', { note: String(d.learned.reduce((n, g) => n + g.rows.length, 0)) },
         ...list(learned, 'No AI app saved anything today.')),
-      board('Tomorrow', { note: d.tomorrow_day }, ...list(d.tomorrow.map((x) => row(x.title, x.subject, null, null)), 'Nothing due tomorrow.'),
+      d.studies === false ? null : board('Tomorrow', { note: d.tomorrow_day }, ...list(d.tomorrow.map((x) => row(x.title, x.subject, null, null)), 'Nothing due tomorrow.'),
         d.tomorrow.length ? h('p', { class: 'pad ink-2' }, 'A 2-minute cold check tomorrow: ask any AI app ', h('code', { text: '/cortex review' }), '.') : null));
     cardsDrawn('tonight');
   }

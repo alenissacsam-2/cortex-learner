@@ -977,6 +977,7 @@ class Cortex:
     def _home(self, s, states: dict, mistakes: dict, today_s: str,
               events: list[dict]) -> dict[str, Any]:
         """The lean /cortex start: a map, the contract's core rules and the preferences."""
+        from cortex import dashboard  # lazy: the brain's imports stay off the server's start
         hide = self._hidden()
         hush = planner.hidden_mistakes(mistakes, hide)
         by_domain: dict[str, list[int]] = {}  # domain -> [in progress, solid, not started]
@@ -1015,7 +1016,7 @@ class Cortex:
             unconfirmed=(waiting := len(unconfirmed(self.vault, today_s)[0])),
             revisit=[r["id"] for r in loops.follow_ups(self.vault, today_s)],
             edits=self._ambient_edits(s.id), unlearned=unlearned,
-            undated=self._undated(today_s))
+            undated=self._undated(today_s), studies=dashboard.studies(self.vault, events))
         return {"session": s.id, "mode": "home", "display": display, "unlearned": unlearned,
                 "contract": self._contract(None, []),
                 "preferences": self._home_preferences(),
