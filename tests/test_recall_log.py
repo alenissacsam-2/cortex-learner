@@ -77,6 +77,30 @@ def test_two_threads_load_the_reranker_once(home, monkeypatch):
     assert built == [1] and len(got) == 2 and got[0] is got[1] is not None
 
 
+def test_an_idle_reranker_is_dropped_and_loads_again(home, monkeypatch):
+    import time
+
+    from fastembed.rerank import cross_encoder
+
+    built = []
+
+    class Fake:
+        def __init__(self, *a, enable_cpu_mem_arena=True, **kw):
+            built.append(enable_cpu_mem_arena)
+
+        def rerank(self, query, texts):
+            return [1.0 for _ in texts]
+
+    monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Fake)
+    (home / ".cortex/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
+        parents=True)
+    score = REAL_LOAD()
+    assert score("q", ["a", "b"]) == [1.0, 1.0]
+    assert semantic.drop_idle(time.monotonic() + semantic.IDLE_UNLOAD + 1) == ["reranker"]
+    assert REAL_LOAD() is score and score("q", ["a"]) == [1.0]
+    assert built == [False, False]  # loaded again; never with onnxruntime's CPU arena
+
+
 def logged(root):  # noqa: F811
     return [json.loads(x) for x in (root / recall_log.FILE).read_text("utf-8").splitlines()]
 

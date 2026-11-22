@@ -13,7 +13,10 @@ embeds missing heads for at most HEAD_BUDGET seconds and
 other missing chunks for at most RECALL_BUDGET; `cortex model build` builds the rest.
 Private pages and raw/ never enter the index, so they are never embedded. Background work (the
 browse import) runs inside `background()`: a copy of the model capped at half the cores, at
-below-normal priority; a query never waits on the cap.
+below-normal priority; a query never waits on the cap. Each model (the embedder, the capped
+copy, the reranker) is dropped after IDLE_UNLOAD seconds unused and loaded again on its next
+use, and runs without onnxruntime's CPU arena (ARENA), so an idle process gives its memory back
+(docs/benchmarks/memory.md).
 
 An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) reorders the top
 `RERANK_POOL` hits; it never changes a hit's `score` or `match`. `rerank: false` in
@@ -104,36 +107,121 @@ def models_dir() -> Path:
 
 def load_embedder(download: bool = False):
     """The model as `embed(texts) -> array`, or None when it is not downloaded. Only
-    `download=True` (the `cortex model download` command) may fetch it."""
+    `download=True` (the `cortex model download` command) may fetch it. The function stays;
+    the model behind it is dropped when idle and loaded again by its next call (`_Held`)."""
     global _embedder
     with _EMBED_LOCK:  # the server's warm-up thread and a first tool call may race
         if _embedder is not None:
             return _embedder
         if not download and not models_dir().is_dir():
             return None
-        from fastembed import TextEmbedding  # slow import: keep it off CLI and server start
-
         try:
-            model = TextEmbedding(MODEL, cache_dir=str(models_dir()),
-                                  local_files_only=not download)
+            model = _text_embedding(download)
         except Exception:
             if download:
                 raise
             return None
+        _main.put(model)
+        _embedder = _embed_real
+        return _embedder
 
-        def embed(texts):
-            m = (_capped() or model) if getattr(_bg, "on", False) else model
-            return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
 
-        _embedder = embed
-        return embed
+def _text_embedding(download: bool = False, threads: int | None = None):
+    from fastembed import TextEmbedding  # slow import: keep it off CLI and server start
+
+    return TextEmbedding(MODEL, cache_dir=str(models_dir()), local_files_only=not download,
+                         threads=threads, enable_cpu_mem_arena=ARENA)
+
+
+def _embed_real(texts) -> np.ndarray:
+    """The real model's embed: in `background()` the capped copy, when it loads."""
+    if getattr(_bg, "on", False):
+        with _capped.use() as m:
+            if m:
+                return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
+    with _main.use() as m:
+        return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
+
+
+# ---- idle unload: a model unused for IDLE_UNLOAD seconds is dropped ---------------------------
+
+IDLE_UNLOAD = 600.0  # seconds unused before a model is dropped; its next use loads it again
+IDLE_CHECK = 60.0  # seconds between the idle thread's checks
+# onnxruntime's CPU arena keeps the largest batch's buffers for the session's life (after an
+# index build, 1.6 GB); without it a run frees them. A query is no slower; bulk embedding is
+# 7-40% slower (docs/benchmarks/memory.md)
+ARENA = False
+
+
+class _Held:
+    """A model made by `load()` on first use and dropped by `drop_idle` once unused for
+    IDLE_UNLOAD seconds; never while a call holds it (`use`). A load that returned a falsy
+    model (the capped copy that failed) stays as it is: never dropped, never tried again."""
+
+    def __init__(self, load):
+        self.load, self.lock = load, threading.Lock()
+        self.model, self.used, self.busy = None, 0.0, 0
+
+    def put(self, model) -> None:
+        with self.lock:
+            self.model, self.used = model, time.monotonic()
+        _watch()
+
+    @contextmanager
+    def use(self):
+        with self.lock:  # one load, not two: a racing call waits for it
+            if self.model is None:
+                self.model = self.load()
+                _watch()
+            self.busy += 1
+            m = self.model
+        try:
+            yield m
+        finally:
+            with self.lock:
+                self.busy -= 1
+                self.used = time.monotonic()
+
+    def drop(self, now: float) -> bool:
+        with self.lock:
+            if not self.model or self.busy or now - self.used < IDLE_UNLOAD:
+                return False
+            self.model = None
+            return True
+
+
+def drop_idle(now: float | None = None) -> list[str]:
+    """Drop every model unused for IDLE_UNLOAD seconds (`_watch`'s thread calls it every
+    IDLE_CHECK); the names of those dropped."""
+    now = time.monotonic() if now is None else now
+    return [name for name, h in (("embedder", _main), ("background copy", _capped),
+                                 ("reranker", _ranker)) if h.drop(now)]
+
+
+_WATCH_LOCK = threading.Lock()
+_watching = False
+
+
+def _watch() -> None:
+    """Start the idle thread (once per process, on the first model load)."""
+    global _watching
+    with _WATCH_LOCK:
+        if _watching:
+            return
+        _watching = True
+
+    def loop():
+        while True:
+            time.sleep(IDLE_CHECK)
+            drop_idle()
+
+    threading.Thread(target=loop, name="cortex-model-idle", daemon=True).start()
 
 
 # ---- background embedding: half the cores, below-normal priority -----------------------------
 
 BG_THREADS = max(1, (os.cpu_count() or 2) // 2)  # a background build leaves the rest to the owner
 _bg = threading.local()
-_bg_model = None
 
 
 @contextmanager
@@ -154,27 +242,25 @@ def background():
             _priority(old)
 
 
-def _capped():
-    """The capped copy of the model (made on first use), or None when it cannot be loaded."""
-    global _bg_model
-    with _EMBED_LOCK:
-        if _bg_model is None:
-            from fastembed import TextEmbedding
+def _capped_load():
+    """The capped copy of the model (made on first background use, again after an idle
+    drop), or False when it cannot be loaded: the full model does background work then."""
+    before = _threads()
+    try:
+        m = _text_embedding(threads=BG_THREADS)
+        list(m.embed(["cortex"]))  # onnxruntime has made its threads by now
+    except Exception as e:
+        log.warning("background embedding uses the full model: %s", type(e).__name__)
+        return False
+    # shortcut: a thread another part of the process made in this second is lowered
+    # too; harmless, as background work is all this process does then
+    _lower(_threads() - before)
+    return m
 
-            before = _threads()
-            try:
-                m = TextEmbedding(MODEL, cache_dir=str(models_dir()), local_files_only=True,
-                                  threads=BG_THREADS)
-                list(m.embed(["cortex"]))  # onnxruntime has made its threads by now
-            except Exception as e:
-                log.warning("background embedding uses the full model: %s", type(e).__name__)
-                _bg_model = False
-                return None
-            # shortcut: a thread another part of the process made in this second is lowered
-            # too; harmless, as background work is all this process does then
-            _lower(_threads() - before)
-            _bg_model = m
-        return _bg_model or None
+
+# the lambdas look the loaders up at load time, so tests can replace them
+_main = _Held(lambda: _text_embedding())
+_capped = _Held(lambda: _capped_load())
 
 
 _BELOW_NORMAL = -1  # THREAD_PRIORITY_BELOW_NORMAL
@@ -270,21 +356,30 @@ def load_reranker(download: bool = False, config: bool = True):
         if not download and not (models_dir()
                                  / f"models--{RERANK_MODEL.replace('/', '--')}").is_dir():
             return None
-        from fastembed.rerank.cross_encoder import TextCrossEncoder
-
         try:
-            model = TextCrossEncoder(RERANK_MODEL, cache_dir=str(models_dir()),
-                                     local_files_only=not download)
+            model = _cross_encoder(download)
         except Exception:
             if download:
                 raise
             return None
+        _ranker.put(model)
+        _reranker = _score_real
+        return _reranker
 
-        def score(query, texts):
-            return [float(x) for x in model.rerank(query, list(texts))]
 
-        _reranker = score
-        return score
+def _cross_encoder(download: bool = False):
+    from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+    return TextCrossEncoder(RERANK_MODEL, cache_dir=str(models_dir()),
+                            local_files_only=not download, enable_cpu_mem_arena=ARENA)
+
+
+def _score_real(query, texts) -> list[float]:
+    with _ranker.use() as m:
+        return [float(x) for x in m.rerank(query, list(texts))]
+
+
+_ranker = _Held(lambda: _cross_encoder())
 
 
 def is_chat(n: dict) -> bool:
