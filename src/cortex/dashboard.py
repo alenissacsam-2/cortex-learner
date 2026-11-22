@@ -73,9 +73,10 @@ _STARTED = re.compile(r"^- Started: \d{4}-\d{2}-\d{2} (\d{1,2}:\d{2})\s*$", re.M
 
 def _is_ambient(kind: str, nid: str) -> bool:
     """A receipt session.py saved when an AI chat wrote to the vault (`<day>-ambient-<8>`)
-    or when Cortex tidied the about-me lines (`<day>-tidy-<8>`)."""
+    or when Cortex tidied the about-me lines (`<day>-tidy-<8>`) or saved some from imported
+    chats (`<day>-harvest-<8>`)."""
     m = _SESSION_ID.fullmatch(nid)
-    return kind == "session" and bool(m) and m[2] in ("ambient", "tidy")
+    return kind == "session" and bool(m) and m[2] in ("ambient", "tidy", "harvest")
 
 
 def _title(note) -> str:
@@ -87,6 +88,8 @@ def _title(note) -> str:
         when = t[1] if t else m[1]
         return (f"Chat with an AI app, {when}" if m[2] == "ambient"
                 else f"Cortex tidied lines about you, {when}" if m[2] == "tidy"
+                else f"Cortex saved lines about you from your chats, {when}"
+                if m[2] == "harvest"
                 else f"Study session ({m[2]}), {when}")
     return plain(note.fields.get("title") or note.id) or note.id
 

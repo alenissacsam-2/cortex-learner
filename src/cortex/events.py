@@ -28,7 +28,8 @@ KINDS = {"ask", "grade", "log", "taught", "void", "remap", "resume", "close", "o
 MODES = {"home", "learn", "short", "review", "log", "about", "week", "ambient", "capture",
          "reflect",
          "project", "save", "history", "sweep", "mock",
-         "tidy"}  # tidy: the app's sweep of about-me lines (Cortex.tidy), never a study mode
+         "tidy",  # tidy: the app's sweep of about-me lines (Cortex.tidy), never a study mode
+         "harvest"}  # harvest: facts from imported chats saved as guesses (fact_harvest)
 STUDY_MODES = frozenset({"home", "learn", "short", "review", "log", "reflect",
                          "sweep"})  # not ambient
 

@@ -535,7 +535,9 @@ def _feed(vault: Vault, data: dict, parts: dict, day: str) -> list[dict]:
         mode = e.get("mode") or (s.get("open") or {}).get("mode")
         add(e["ts"], str(e["day"]), "session", None,
             "Study session" if mode in STUDY_MODES
-            else "Cortex tidied lines about you" if mode == "tidy" else "Chat session",
+            else "Cortex tidied lines about you" if mode == "tidy"
+            else "Cortex saved lines about you from your chats" if mode == "harvest"
+            else "Chat session",
             str((s.get("close") or {}).get("summary") or ""), "study", Audience.CLOUD)
     try:
         rows = recall_log.rows(vault)

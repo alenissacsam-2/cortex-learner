@@ -386,18 +386,31 @@ class App:
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
 
     def _paused_rows(self) -> list[dict]:
-        """RR-10: one Status row per paused Review producer, with its Resume."""
-        from cortex import review
+        """RR-10: one Status row per paused Review producer, with its Resume; "imports" also
+        when the owner undid most of the lines fact_harvest saved (fact_harvest.ledger)."""
+        from cortex import fact_harvest, review
         from cortex.events import EventLog
         try:
-            led = review.ledger(EventLog(self._vault()).iter_events())
+            v = self._vault()
+            events = list(EventLog(v).iter_events())
+            led = review.ledger(events)
+            undone = fact_harvest.ledger(v, events)
         except Exception:  # noqa: BLE001  (a Status row must never cost the board)
             return []
-        return [{"id": f"review-{p}", "label": "Review", "state": "warn",
+        rows = [{"id": f"review-{p}", "label": "Review", "state": "warn",
                  "value": f"{review.PRODUCERS[p]} paused",
                  "detail": f"You dismissed {x['reject']} of the last {x['accept'] + x['reject']} "
                            "of these cards, so Review stopped offering them.", "resume": p}
                 for p, x in led.items() if x["paused"]]
+        if undone["paused"] and not led[fact_harvest.PRODUCER]["paused"]:
+            n = undone["accept"] + undone["reject"]
+            rows.append({"id": f"review-{fact_harvest.PRODUCER}", "label": "Review",
+                         "state": "warn",
+                         "value": f"{review.PRODUCERS[fact_harvest.PRODUCER]} paused",
+                         "detail": f"You undid {undone['reject']} of the last {n} lines Cortex "
+                                   "saved from your chats, so it stopped saving them.",
+                         "resume": fact_harvest.PRODUCER})
+        return rows
 
     def warm_status(self) -> None:
         """Status and Setup read once in the background at start: a first read waits ~3-4 s
@@ -874,10 +887,11 @@ class App:
 
     def review_resume(self, body: dict) -> dict:
         """RR-10: Resume a paused Review producer (a `resume` change; Status names it)."""
-        from cortex import review
+        from cortex import fact_harvest, review
         from cortex.events import EventLog
         p, v = body.get("producer"), self._vault()
-        if not review.ledger(EventLog(v).iter_events()).get(p, {}).get("paused"):
+        if not review.ledger(EventLog(v).iter_events()).get(p, {}).get("paused") and not (
+                p == fact_harvest.PRODUCER and fact_harvest.ledger(v)["paused"]):
             raise NotFound
         return self._click("cortex_patch", "_resume", {"producer": p})
 
@@ -2324,6 +2338,11 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: the chat safety net failed ({type(e).__name__}); retried in "
                      f"{chat_import.EVERY_S // 60} minutes")
+            try:  # facts the owner stated in those chats, saved as about-me guesses
+                from cortex import fact_harvest
+                fact_harvest.auto(app)
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: saving facts from chats failed ({type(e).__name__})")
             try:
                 app.chat_import_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
