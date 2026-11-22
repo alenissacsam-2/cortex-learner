@@ -6,9 +6,9 @@ event, the only thing stored) brings the cards back and starts the count again."
 import shutil
 
 import pytest
-from conftest import events, run
+from conftest import events
 from test_app_js import HARNESS, _run
-from test_review import PREF, app, changes  # noqa: F401  (app is a fixture)
+from test_review import app, changes, wait_line  # noqa: F401  (app is a fixture)
 from test_review_conflicts import corrections_vault
 from ulid import ULID
 
@@ -98,10 +98,7 @@ def test_a_paused_producer_leaves_review_and_status_offers_resume(root, app):  #
 
 
 def test_clicks_stamp_their_producer(root, app):  # noqa: F811
-    async def body(call):
-        await call("cortex_patch", PREF)
-
-    run(root, body)
+    wait_line(root, "Tabs over spaces")  # D3: only an older Cortex queued about-me lines
     (p,) = app.review()["pending"]
     app.review_dismiss({"key": p["key"]})
     (c,) = [c for c in changes(root, "preferences") if c.get("op") == "reject"]

@@ -1,7 +1,7 @@
-"""G7: Review cards for lines that say nearly the same (Keep both / left / right), lines the
+"""G7: Review cards for lines the
 X-ray shows cut for space in most primes (Keep pins, Retire, Skip) and playbooks no AI app was
 served lately (Keep for 60 days, Open); crowded and unused share 3 cards a month, near-duplicates
-show 3 at a time, and a private page never shows."""
+are never a card (D1), and a private page never shows."""
 
 import datetime as dt
 import os
@@ -54,44 +54,22 @@ def cards(root, events_=None, day=None):
 
 # ---- near-duplicates ----
 
-def test_near_duplicates_on_one_page_three_at_a_time(root, app):  # noqa: F811
+def test_near_duplicates_are_never_a_card(root, app):  # noqa: F811
+    """22 Nov (D1): Cortex keeps one of near-copies itself (test_review_auto); Review never
+    asks about them, and a clash among them is still a conflict card."""
     page(root, "preferences", [
-        "Uses Vim for editing code", "Uses Vim for code editing",  # a pair
+        "Uses Vim for editing code", "Uses Vim for code editing",
         "Drinks green tea at night", "Drinks green tea at nights",
-        "Writes Rust on weekends", "Writes Rust on the weekends",
-        "Reads papers on trains", "Reads papers on the trains",  # a fourth pair: not shown yet
-        "Never uses tabs for indentation", "Uses tabs for indentation"])  # a conflict, not a dup
-    page(root, "profile", ["Uses Vim for editing code daily"])  # another page: never paired
+        "Never uses tabs for indentation", "Uses tabs for indentation"])
     view = cards(root)
-    dups = view["duplicates"]
-    assert len(dups) == review.DUP_SHOWN == 3
-    assert all(d["why"] == "same" and d["left"]["page"] == d["right"]["page"] == "preferences"
-               for d in dups)
-    assert [d["left"]["text"] for d in dups] == ["Uses Vim for editing code",
-                                                 "Drinks green tea at night",
-                                                 "Writes Rust on weekends"]
+    assert "duplicates" not in view
     assert [c["why"] for c in view["conflicts"]] == ["opposite"]  # the tabs pair stays there
-    # Keep both: never shown again for that pair; the fourth pair takes its place
-    view = app.review_conflict({"key": dups[0]["key"], "keep": "both"})
-    assert dups[0]["key"] not in [d["key"] for d in view["duplicates"]]
-    assert view["duplicates"][-1]["left"]["text"] == "Reads papers on trains"
-    *_, c = changes(root, "preferences")
-    assert (c["op"], c["pair"], c["card"]) == ("keep_both", dups[0]["key"], "duplicate")
-    # Keep left retires the right line through the retire route
-    d = view["duplicates"][0]
-    view = app.review_conflict({"key": d["key"], "keep": "left"})
-    text = (root / "me" / "preferences.md").read_text("utf-8")
-    assert d["right"]["text"] in text.split("## Past")[1]
-    assert d["left"]["text"] in text.split("## Past")[0]
-    *_, c = changes(root, "preferences")
-    assert (c["op"], c["target"], c["card"]) == ("retire", d["right"]["id"], "duplicate")
-    assert d["key"] not in [x["key"] for x in view["duplicates"]]
 
 
 def test_near_duplicates_never_on_a_private_page(root, app):  # noqa: F811
     page(root, "preferences", ["Uses Vim for editing code", "Uses Vim for code editing"],
          private=True)
-    assert cards(root)["duplicates"] == []
+    assert cards(root)["conflicts"] == []
     with pytest.raises(server.NotFound):
         app.review_conflict({"key": review.pair_key(
             {"page": "preferences", "id": "c-aaaaa"}, {"page": "preferences", "id": "c-bbbbb"}),
@@ -111,7 +89,7 @@ def test_a_line_cut_in_most_primes_is_offered_and_keep_pins_it(root, app):  # no
     view = cards(root)
     assert [(x["id"], x["cut"], x["seen"], x["window"]) for x in view["crowded"]] == [
         (a, 5, 6, 10)]  # d was cut in 3 of 6: not most
-    assert view["crowded"][0]["text"] == "Crowded line" and view["count"] == 1
+    assert view["crowded"][0]["text"] == "Crowded line" and view["more"] == 1
     view = app.review_crowded_keep({"id": a})
     assert xray.settings(Vault(root))["pin"] == {xray.claim(a)}
     assert view["crowded"] == []  # pinned: prime serves it first from now on

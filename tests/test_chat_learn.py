@@ -92,10 +92,10 @@ def test_user_only_read_does_not_expose(root, chats_dir):
         await call("cortex_patch", {**p, "text": "- Uses Vim"})
         await call("cortex_chats", {"action": "read", "id": ALPHA})  # assistant turns too
         out = await call("cortex_patch", {**p, "text": "- Uses tabs"})
-        assert out["queued"] is True  # R3-2: exposed, so the relayed yes waits in Review
+        assert out["changed"] is True and "(ask)" in out["next"]  # R3-2: exposed: a guess
 
     run(root, body)
     tiers = [e["payload"]["change"]["tier"] for e in events(root) if e["kind"] == "change"
              and isinstance(e.get("payload", {}).get("change"), dict)
              and e["payload"]["change"].get("tier")]
-    assert tiers == ["confirmed"]
+    assert tiers == ["confirmed", "exposed"]

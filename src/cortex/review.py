@@ -5,10 +5,11 @@
 - expired: live claim lines past their own `(until …)` day (Retire);
 - stale: confirmed lines not reconfirmed or rewritten in STALE_DAYS (Still true or Retire),
   at most STALE_PER_MONTH a month, oldest first;
-- conflicts (plan 5b): pairs of live lines that likely clash (Keep both, Keep left, Keep
-  right): every `possible_update_of` or `supersedes` (RR-4) pair cortex_patch recorded and not
-  yet resolved, and any
-  two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`);
+- conflicts (plan 5b, D2): pairs of live lines that clash (Keep both, Keep left, Keep right):
+  two lines at least as similar as `scorer`'s cut where exactly one says no (`negated`), both
+  the owner's or both inferred. Everything else `settle` resolves itself: near-duplicates
+  (D1), recorded `possible_update_of` / `supersedes` pairs and an owner's line against an
+  inferred one (D2); mcp_server.Cortex._tidy retires the loser through the retire path;
 - rules (plan 5b, N2): a correction the user typed in two or more imported chats, offered as a
   me/core line (cortex.corrections; Approve or Dismiss);
 - decisions (RR-9): decision-like commit subjects of imported git repos
@@ -19,8 +20,6 @@
   a newer page beside it (cortex.sources.edited_pages; Dismiss);
 - unsafe (G6): a live claim line that reads as an instruction to an AI or holds invisible
   characters (`unsafe_lines`); it is not served until Keep it (Keep it out retires it);
-- duplicates (G7): two live lines on one page that say nearly the same (`duplicates`; the
-  conflict card's Keep both / left / right), at most DUP_SHOWN at a time;
 - crowded (G7): lines the X-ray shows cut for space in most of the latest primes that offered
   them (`crowded`; Keep pins it, Retire, Skip), and unused playbooks (G7): no X-ray call served
   them and their file is UNUSED_DAYS old (`unused`; Keep asks again in UNUSED_DAYS, Open);
@@ -54,7 +53,9 @@ SHOWN = 300  # characters of a line shown
 _CONFIRMED = re.compile(r"\(confirmed (\d{4}-\d\d-\d\d)\)")
 COS = 0.72  # cosine (warm embedder) from which two lines say about the same thing
 JACCARD = 0.6  # the same for word overlap, when the embedder is not loaded
-SHOWN_PAIRS = 5  # conflict pairs shown at a time
+SHOWN_PAIRS = 3  # conflict pairs shown at a time (D2)
+INFERRED = ("agent", "exposed")  # D1/D2: the tiers of a line a chat inferred (claims.tiers)
+TIDY_MAX = 200  # D1/D2: automatic retires in one sweep
 TODAY_MAX = 5  # R3-4: Today's 5, cards a day
 TODAY_CARDS = ("pending", "conflict", "rule")  # the kinds of card Today's 5 offers
 SIGHTINGS = 2  # chats that must propose the same line before it is offered in Today's 5
@@ -65,7 +66,6 @@ PRODUCERS = {"chats": "Lines chats suggest", "imports": "Lines from imported cha
              "forget": "//forget cards"}
 PAUSE_AFTER = 20  # decided cards before a producer whose rejects exceed its accepts pauses
 LEGACY_DISMISS = ("corrections", "decisions", "forget")  # a dismiss change's id: its producer
-DUP_SHOWN = 3  # G7: near-duplicate pairs shown at a time
 PRIMES = ("cortex_prime", "prime-hook")  # the X-ray rows that offer the Preferences lines
 WINDOW = 40  # G7: the latest primes a crowded line is judged over
 CROWD_MIN = 5  # primes that must have offered a line before it counts as crowded out
@@ -152,47 +152,161 @@ def pair_key(a: dict, b: dict) -> str:
     return claims.pair_key((a["page"], a["id"]), (b["page"], b["id"]))
 
 
-def conflicts(rows: list[dict], events: list[dict]) -> list[dict]:
-    """Up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that likely clash, as
-    {key, why, left, right} with raw rows: recorded pairs first (claims.recorded_pairs: why
-    `update` for a `possible_update_of`, `supersedes` for RR-4's explicit one; left the old
-    line), then pairs at least as similar as the cut with exactly one `negated` line (why
-    `opposite`). A pair the user kept both of (a `keep_both` change) is left out; Keep left or
-    right retires the other line, so the pair is gone."""
-    recorded, kept = claims.recorded_pairs(events)
-    by, out = {(r["page"], r["id"]): r for r in rows}, {}
-    for key, (old, new, why) in recorded.items():
-        if (o := by.get(old)) and (n := by.get(new)):
-            out[key] = {"why": why, "left": o, "right": n}
-    score, cut = scorer([r["text"] for r in rows])
-    no = [negated(r["text"]) for r in rows]
-    for i in range(len(rows)):
-        if len(out) >= SHOWN_PAIRS + len(kept):  # enough to fill the list after `kept`
-            break
-        for j in range(i + 1, len(rows)):
-            if no[i] != no[j] and score(i, j) >= cut:
-                out.setdefault(pair_key(rows[i], rows[j]),
-                               {"why": "opposite", "left": rows[i], "right": rows[j]})
-    return [{"key": k, **v} for k, v in out.items() if k not in kept][:SHOWN_PAIRS]
+def owned(r: dict) -> bool:
+    """D1/D2: the owner's own line (typed, legacy, or confirmed/approved), not a chat's
+    inference (`INFERRED`)."""
+    return r.get("tier") not in INFERRED
 
 
-def duplicates(rows: list[dict], events: list[dict]) -> list[dict]:
-    """G7: up to DUP_SHOWN pairs of `rows` (live, shown claim rows) on one page that say nearly
-    the same: as similar as `scorer`'s cut with both or neither `negated` (else a conflict), as
-    {key, why: "same", left, right}. A recorded pair (a conflict card's) or one the user kept
-    both of is left out; Keep left or right retires the other line."""
-    recorded, kept = claims.recorded_pairs(events)
-    score, cut = scorer([r["text"] for r in rows])
-    no = [negated(r["text"]) for r in rows]
-    out = []
-    for i in range(len(rows)):
-        for j in range(i + 1, len(rows)):
-            if (rows[i]["page"] == rows[j]["page"] and no[i] == no[j] and score(i, j) >= cut
-                    and (k := pair_key(rows[i], rows[j])) not in kept and k not in recorded):
-                out.append({"key": k, "why": "same", "left": rows[i], "right": rows[j]})
-                if len(out) >= DUP_SHOWN:
-                    return out
-    return out
+def rank(r: dict) -> tuple:
+    """D1: of near-duplicate lines the highest stays: the owner's over an inferred one, then
+    the newer (its tier's day), then the longer, then the later line on its page."""
+    return (owned(r), str(r.get("day") or ""), len(claims.norm(r["text"])), r.get("line_no", 0))
+
+
+def known_texts(vault) -> dict:
+    """(page, id) -> text of every claim line, any status: what `kept_cover` compares with."""
+    return {(r["page"], r["id"]): r["text"] for r in claims.rows(vault)}
+
+
+def kept_cover(rows: list[dict], events, known: dict | None = None):
+    """D5: (covered(i, j), score, cut, no) over `rows`: covered when the user kept both of
+    that pair (a `keep_both` change) or of a pair whose two lines are each near-duplicates of
+    the two kept ones (`known`: `known_texts`)."""
+    _, kept = claims.recorded_pairs(events)
+    known = known or {}
+    sides = [[tuple(s.split("/", 1)) for s in k.split("|")] for k in kept]
+    sides = [s for s in sides if len(s) == 2 and all(x in known for x in s)]
+    texts = [r["text"] for r in rows] + [known[x] for s in sides for x in s]
+    score, cut = scorer(texts)
+    no = [negated(t) for t in texts]
+    n = len(rows)
+
+    def near(i: int, k: int) -> bool:
+        return no[i] == no[k] and score(i, k) >= cut
+
+    def covered(i: int, j: int) -> bool:
+        if pair_key(rows[i], rows[j]) in kept:
+            return True
+        return any((near(i, a) and near(j, a + 1)) or (near(i, a + 1) and near(j, a))
+                   for a in range(n, len(texts), 2))
+
+    return covered, score, cut, no
+
+
+def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()) -> dict:
+    """D1, D2, D5 over `rows` (tiered live claim rows, none private): {retire: [{retire, keep,
+    why}] with raw rows, cards: [{key, why: "opposite", left, right}]}.
+    - a recorded pair (claims.recorded_pairs) whose lines agree: the newer stays, unless the
+      older is the owner's and the newer inferred (why `update` or `supersedes`);
+    - lines on one page that say nearly the same (`scorer` cut, same `negated`): the one
+      `rank` puts first stays (why `duplicate`), so n near-copies are one line;
+    - two of the lines left, as similar but exactly one negated (or a recorded pair that
+      is): the owner's stays over an inferred one (why `opposite`); two of the owner's or two
+      inferred are a card, one per pair of near-copy groups.
+    A pair the user kept both of (`kept_cover`) or whose key is in `skip` is left alone, and
+    so is a line whose `page/id` is in `skip` (an automatic retire the user undid)."""
+    events = list(events)
+    covered, score, cut, no = kept_cover(rows, events, known)
+    recorded, _ = claims.recorded_pairs(events)
+    at = {(r["page"], r["id"]): i for i, r in enumerate(rows)}
+    out, gone, forced = [], set(), []
+
+    def free(i: int, j: int) -> bool:
+        return pair_key(rows[i], rows[j]) not in skip and not covered(i, j)
+
+    def kept(i: int) -> bool:  # the user undid Cortex retiring this line: never again
+        return f"{rows[i]['page']}/{rows[i]['id']}" in skip
+
+    def drop(i: int, k: int, why: str) -> None:
+        out.append({"retire": rows[i], "keep": rows[k], "why": why})
+        gone.add(i)
+
+    for old, new, why in recorded.values():
+        o, n = at.get(old), at.get(new)
+        if o is None or n is None or o in gone or n in gone or not free(o, n):
+            continue
+        if no[o] != no[n]:
+            forced.append((o, n))
+        elif owned(rows[o]) and not owned(rows[n]):
+            if not kept(n):
+                drop(n, o, why)
+        elif not kept(o):
+            drop(o, n, why)
+    rep: dict[int, int] = {}  # a line -> the kept line it near-duplicates
+    keep: list[int] = []
+    for i in sorted((i for i in range(len(rows)) if i not in gone),
+                    key=lambda i: rank(rows[i]), reverse=True):
+        k = next((k for k in keep if rows[k]["page"] == rows[i]["page"] and no[k] == no[i]
+                  and score(i, k) >= cut and free(i, k)), None)
+        if k is None or kept(i):
+            keep.append(i)
+        else:
+            rep[i] = k
+            drop(i, k, "duplicate")
+    keep.sort()
+    pairs = [(rep.get(a, a), rep.get(b, b)) for a, b in forced]
+    pairs += [(a, b) for x, a in enumerate(keep) for b in keep[x + 1:]
+              if no[a] != no[b] and score(a, b) >= cut]
+    cards, seen = [], set()
+    for a, b in pairs:
+        if a == b or a in gone or b in gone or frozenset((a, b)) in seen or not free(a, b):
+            continue
+        seen.add(frozenset((a, b)))
+        if owned(rows[a]) != owned(rows[b]):
+            lose, win = (b, a) if owned(rows[a]) else (a, b)
+            if not kept(lose):
+                drop(lose, win, "opposite")
+        else:
+            cards.append((a, b))
+    return {"retire": out, "cards": [
+        {"key": pair_key(rows[a], rows[b]), "why": "opposite", "left": rows[a], "right": rows[b]}
+        for a, b in cards if a not in gone and b not in gone]}
+
+
+def conflicts(rows: list[dict], events: list[dict], known: dict | None = None) -> list[dict]:
+    """D2: up to SHOWN_PAIRS pairs of `rows` (live, shown claim rows) that clash and Cortex
+    does not settle itself (`settle`'s cards: an opposite pair of two of the owner's lines or
+    two inferred ones), as {key, why, left, right} with raw rows; Keep left or right retires
+    the other line, Keep both covers near-copies of the pair too (`kept_cover`)."""
+    return settle(rows, events, known)["cards"][:SHOWN_PAIRS]
+
+
+def copies(rows: list[dict], r: dict) -> list[dict]:
+    """D5: `r` and the `rows` on its page that say nearly the same (the `scorer` cut, same
+    `negated`), `r` first: what Keep left or right on a conflict card retires."""
+    same = [x for x in rows if x["page"] == r["page"] and x["id"] != r["id"]
+            and negated(x["text"]) == negated(r["text"])]
+    score, cut = scorer([r["text"], *(x["text"] for x in same)])
+    return [r, *(x for i, x in enumerate(same, 1) if score(0, i) >= cut)]
+
+
+def collapse(items: list[dict], text=lambda x: x["text"]) -> list[dict]:
+    """D5: near-identical `items` (the `scorer` cut, same `negated`) as one: the first of each
+    group, with `members` (the group, itself first). A click on it covers every member."""
+    if not items:
+        return []
+    texts = [text(x) for x in items]
+    score, cut = scorer(texts)
+    no = [negated(t) for t in texts]
+    groups: list[list[int]] = []
+    for i in range(len(items)):
+        g = next((g for g in groups if no[g[0]] == no[i] and score(g[0], i) >= cut), None)
+        if g is None:
+            groups.append([i])
+        else:
+            g.append(i)
+    return [{**items[g[0]], "members": [items[i] for i in g]} for g in groups]
+
+
+def group(items: list[dict], want, field: str = "key", text=lambda x: x["text"]) -> list:
+    """D5: the `field` values of the `collapse` group of `items` holding the item whose `field`
+    is `want`, that one first; [want] when none holds it."""
+    for g in collapse(items, text):
+        got = [m[field] for m in g["members"]]
+        if want in got:
+            return [want, *(x for x in got if x != want)]
+    return [want]
 
 
 def _spare_left(events, today: str) -> int:
@@ -379,7 +493,9 @@ def stale(rows: list[dict], events: list[dict], today: str) -> list[dict]:
     """Live confirmed lines on the STALE_DAYS pages whose last confirm (a `(confirmed DAY)`
     marker, the confirming change event or a yes reconfirm) is older than the page's days,
     oldest first; at most STALE_PER_MONTH minus this month's Review answers (clicked
-    reconfirms and retires; shortcut: an expired line retired in the Review counts too)."""
+    reconfirms and retires; shortcut: an expired line retired in the Review counts too). D5:
+    near-identical lines are one card, its `ids` every member's (Still true or Retire covers
+    them all)."""
     voided, said, answered = _voided(events), {}, 0
     for e in events:
         if e.get("id") in voided:
@@ -405,6 +521,8 @@ def stale(rows: list[dict], events: list[dict], today: str) -> list[dict]:
             out.append({"page": r["page"], "id": r["id"], "text": _shown(r["text"]),
                         "since": last})
     out.sort(key=lambda x: (x["since"], x["page"], x["id"]))
+    out = [{**{k: v for k, v in g.items() if k != "members"},
+            "ids": [m["id"] for m in g["members"]]} for g in collapse(out)]
     return out[:max(0, STALE_PER_MONTH - answered)]
 
 
@@ -479,13 +597,14 @@ def answered_today(events, today: str) -> int:
     for e in events:
         c = _payload(e).get("change") if e.get("kind") == "change" else None
         if (isinstance(c, dict) and c.get("card") in TODAY_CARDS and e.get("day") == today
-                and e.get("id") not in voided):
+                and e.get("id") not in voided and not c.get("auto")):  # D1/D2: not a click
             said.add(e.get("session"))
     return len(said)
 
 
 def view(vault, events, today: str) -> dict:
-    """The Review view and its badge `count`: every text is shown text (`_shown`). R3-4: a
+    """The Review view: every text is shown text (`_shown`). D4: the badge `count` is the
+    Today's 5 cards still unanswered; `more` counts every board's cards. R3-4: a
     single inference (a waiting line other than a teaching rule that fewer than SIGHTINGS
     chats proposed) leaves the view SINGLE_DAYS after its stamp (inbox.md keeps it), and
     `today` orders at most TODAY_MAX cards a day (`_today`). RR-10: a `paused` producer's
@@ -508,6 +627,10 @@ def view(vault, events, today: str) -> dict:
                 "single": single(p)}
                for p in pending(vault, today) if not (single(p) and (p["since"] or "~") < cut)
                and producer_of(seen, p["page"], p["text"]) not in off]
+    waiting = [{**{k: v for k, v in g.items() if k != "members"},
+                "keys": [m["key"] for m in g["members"]]}  # D5: one card per near-copy group
+               for page in dict.fromkeys(p["page"] for p in waiting)
+               for g in collapse([p for p in waiting if p["page"] == page])]
     old = stale(rows, events, today)
 
     def side(r: dict) -> dict:
@@ -515,7 +638,7 @@ def view(vault, events, today: str) -> dict:
 
     current = [r for r in rows if not claims.expired(r["text"], today)]  # = live_rows
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
-              "right": side(c["right"])} for c in conflicts(current, events)]
+              "right": side(c["right"])} for c in conflicts(current, events, known_texts(vault))]
     from cortex import corrections, more_sources  # read imported pages: only the Review asks
     rules = [{"key": x["key"], "text": _shown(x["text"]), "chats": x["chats"],
               "page": x["page"]}
@@ -525,18 +648,21 @@ def view(vault, events, today: str) -> dict:
                  for x in ([] if "decisions" in off
                            else more_sources.decision_proposals(vault, events))]
     from cortex import tags  # it imports this module
-    forget = [{"key": x["key"], "text": plain(x["text"], SHOWN),
-               "candidates": [side(c) for c in x["candidates"]]}
-              for x in ([] if "forget" in off else tags.forget_cards(vault, events, today))]
+    forget = [{"key": g["key"], "keys": [m["key"] for m in g["members"]],
+               "text": plain(g["text"], SHOWN),
+               "candidates": list({c["id"]: side(c) for m in g["members"]
+                                   for c in m["candidates"]}.values())}
+              for g in collapse([] if "forget" in off else tags.forget_cards(vault, events,
+                                                                             today))]
     from cortex import sources
     imports = [{**x, "title": plain(x["title"], SHOWN)}
                for x in sources.edited_pages(vault, events)]
-    unsafe = [{"key": x["key"], "page": x["page"], "id": x["id"], "what": x["what"],
-               "invisible": claims.invisible(x["what"]),
-               "text": _shown("".join(c for c in x["text"] if c.isprintable()))}
-              for x in unsafe_lines(vault, events) if x["page"] not in hidden]
-    dups = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),
-             "right": side(c["right"])} for c in duplicates(current, events)]
+    unsafe = [{"key": g["key"], "page": g["page"], "id": g["id"], "what": g["what"],
+               "keys": [m["key"] for m in g["members"]], "ids": [m["id"] for m in g["members"]],
+               "invisible": claims.invisible(g["what"]),
+               "text": _shown("".join(c for c in g["text"] if c.isprintable()))}
+              for g in collapse([x for x in unsafe_lines(vault, events)
+                                 if x["page"] not in hidden])]
     spare = _spare_left(events, today)  # G7: crowded first, then unused, within the month's cap
     lines, window = crowded(vault, current) if spare else ([], 0)
     crowd = [{**side(x), "cut": x["cut"], "seen": x["seen"], "window": window}
@@ -544,20 +670,24 @@ def view(vault, events, today: str) -> dict:
     books, calls, since = unused(vault, events, today) if spare > len(crowd) else ([], 0, None)
     books = [{**x, "calls": calls, "since": since} for x in books[:spare - len(crowd)]]
     left = max(0, TODAY_MAX - answered_today(events, today))
+    first = [{"type": "unsafe", "key": x["key"]} for x in unsafe]  # G6: always asked, first
+    today_ = first + _today(waiting, pairs, rules)[:max(0, left - len(first))]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
-            "unsafe": unsafe, "duplicates": dups, "crowded": crowd, "unused": books,
-            "today": _today(waiting, pairs, rules)[:left], "today_left": left,
+            "unsafe": unsafe, "crowded": crowd, "unused": books,
+            "today": today_, "today_left": left,
             "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
-            "count": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(dups)
-            + len(crowd) + len(books)}
+            "count": len(today_),  # D4: the badge counts only Today's 5 still unanswered
+            "more": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
+            + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(crowd)
+            + len(books)}
 
 
 def _today(waiting: list[dict], pairs: list[dict], rules: list[dict]) -> list[dict]:
-    """R3-4's order, as {type, key} of cards in the boards: teaching-rule proposals, then
-    contradiction pairs, repeated corrections, and last the other waiting lines that 2+ chats
-    proposed (a single inference never)."""
+    """R3-4's order, as {type, key} of cards in the boards (after G6's unsafe lines, which
+    `view` puts first): teaching-rule proposals, then contradiction pairs, repeated
+    corrections, and last the other waiting lines that 2+ chats proposed (a single inference
+    never)."""
     rule = [p for p in waiting if p["page"] == "teaching-contract"]
     return ([{"type": "pending", "key": p["key"]} for p in rule]
             + [{"type": "conflict", "key": c["key"]} for c in pairs]

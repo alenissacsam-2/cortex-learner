@@ -18,10 +18,15 @@ pytestmark = pytest.mark.usefixtures("home")
 
 
 def propose(root, text, times=1):
-    """`text` proposed for me/preferences ## Coding by `times` chats (one server each)."""
+    """`text` proposed for me/core ## Core by `times` chats (one server each): a guess about
+    the user is saved at once since 22 Nov, but me/core still waits for Approve."""
+    core = root / "me" / "core.md"
+    if not core.is_file():
+        core.write_bytes(b"# Core\n\n## Core\n")
+
     async def body(call):
-        await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
-                                    "target": "Coding", "text": f"- {text}"})
+        await call("cortex_patch", {"id": "me/core", "op": "append_to_section",
+                                    "target": "Core", "text": f"- {text}"})
 
     for _ in range(times):
         run(root, body)
@@ -44,7 +49,7 @@ def test_todays_five_order_sightings_and_the_daily_cap(root, app):  # noqa: F811
         ("pending", by["Quiz me before you explain"]["key"]),
         ("conflict", view["conflicts"][0]["key"]), ("rule", view["rules"][0]["key"]),
         ("pending", by["Likes short answers"]["key"])]  # never the single inference
-    assert view["today_left"] == 5 and view["count"] == 5  # every board still lists it
+    assert view["today_left"] == 5 and view["count"] == 4  # D4: the badge is Today's 5
     view = app.review_approve({"key": by["Quiz me before you explain"]["key"]})
     assert view["today_left"] == 4 and len(view["today"]) == 3
     view = app.review_conflict({"key": view["conflicts"][0]["key"], "keep": "both"})

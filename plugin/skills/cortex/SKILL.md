@@ -18,7 +18,7 @@ Read and update the learner's model **only through the `cortex_*` tools**.
   - You explained a concept: if new, `cortex_add(kind="concept", title=…, parent=…)` first; then `cortex_log(kind="taught", payload={concept, summary})`, once per chat.
   - You asked, they answered: `cortex_ask` before, `cortex_grade` after (`modes/grading.md`).
   - Source → `resource`; lasting idea → `note`; a choice they may revisit → `decision`; a life fact → `cortex_patch` me/…; a real talk ends → `journal` line.
-  - About them: their own words → `cortex_patch` with `user_confirmed=true`, quoting them; your inference → without it (waits for Approve in the app). Don't stop to ask.
+  - About them: their own words → `cortex_patch` with `user_confirmed=true`, quoting them; your inference → without it (a guess); ask only if it contradicts them.
   - Skip small talk; never save secrets; update a near-duplicate instead of adding.
 - No `cortex_*` tools? Say once Cortex needs the desktop app.
 

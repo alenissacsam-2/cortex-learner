@@ -114,10 +114,13 @@ def proposals(vault, events, rows: list[dict]) -> list[dict]:
         else:
             g.append(i)
     out = []
+    said_no = [i for i, (_, line) in enumerate(items) if review.text_hash(line) in gone]
     for g in groups:
         chats = {items[i][0] for i in g}
         texts = [items[i][1] for i in g]
-        if len(chats) < MIN_CHATS or any(review.text_hash(t) in gone for t in texts):
+        # D5: a Dismiss covers the group it was on and any later one saying it in other words
+        if len(chats) < MIN_CHATS or any(review.text_hash(t) in gone for t in texts) or any(
+                score(g[0], k) >= cut for k in said_no):
             continue
         if any(score(g[0], len(items) + k) >= cut for k in range(len(live))):
             continue  # already a live line about the user

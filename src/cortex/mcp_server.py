@@ -347,13 +347,15 @@ SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learnin
 # SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
 CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core",
                  "setup")
+STEER_PAGES = ("core", "setup")  # D3: claim pages whose guesses still wait for Approve
 SAID = 0.6  # R3-2: the share of a line's content words one logged user turn must hold
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
                 "check_item": "the section heading"}
 SUPERSEDES_MAX = 3  # RR-4: claim ids one new line may replace
-SUPERSEDES_NEXT = ("Until the user picks in the Cortex app's Review, prime serves the new line, "
-                   "not the old one; say so in one line. ")
+SUPERSEDES_NEXT = ("Cortex keeps the newer line of such a pair and retires the older (the user's "
+                   "own line is never retired for a guess); say so in one line. ")
+TIDY_FILE = ".cortex/tidy.json"  # D1/D2: the pair keys Cortex settled itself, so an undo sticks
 # PHASE4 V3 cortex_as_me
 AS_ME_TASK, AS_ME_ASKS = 300, 5
 AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach this "
@@ -374,8 +376,8 @@ INSTRUCTIONS = (
     "they answered: cortex_ask, then cortex_grade; source -> resource; insight -> note; a "
     "decision they may revisit -> decision; life fact -> cortex_patch me/*; a talk ends: "
     "journal line. Then one line saying what you saved.\n"
-    "- About them: their own words -> cortex_patch with user_confirmed=true; your inference "
-    "-> without it (waits for Approve in the app). Don't stop to ask.\n"
+    "- About them: their words -> cortex_patch with user_confirmed=true; your inference "
+    "-> without it (a guess); ask only on a clash with a line they gave.\n"
     "- Writing as the user (CV, email): vet it with cortex_recall(query=text, "
     "check=true). A message they send: cortex_as_me first.\n"
     "- The user's //pref: //fact: //forget: lines are saved by Cortex itself; don't save "
@@ -430,10 +432,9 @@ def _update_of(u: dict | None, out: dict) -> dict:
     if u:
         ref = f"me/{u['page']}"
         out["possible_update_of"] = {"id": u["id"], "page": ref, "text": _wrap(ref, u["text"])}
-        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). If the "
-                       "user's own words clearly replace it, retire it (or revise it to the new "
-                       "wording) with cortex_patch; otherwise leave both: the pair waits in the "
-                       "Cortex app's Review. Don't stop to ask. " + out["next"])
+        out["next"] = (f"This line may update ^{u['id']} on {ref} (possible_update_of). Cortex "
+                       "settles such a pair itself (the user's own line over a guess, else the "
+                       "newer); don't stop to ask. " + out["next"])
     return out
 
 
@@ -1559,8 +1560,8 @@ class Cortex:
             + (f"If the message is substantive, record cortex_log(kind='touch', "
                f"payload={{'ids': {touch}}}) once. " if touch else "Nothing to touch. ")
             + "Record everything durable at once, unasked; about them: their own words -> "
-              "cortex_patch with user_confirmed=true, your inference without it (waits for "
-              "Approve in the app)." + offer)
+              "cortex_patch with user_confirmed=true, your inference without it (saved as a "
+              "guess); ask only when it clashes with a line they gave." + offer)
             + (TAGS_NEXT if tagged else "") + (CHAT_NEXT.format(chat=chat) if chat else "")}
 
     def _prime_select(self, prompt: str, related_only: bool = False, save: bool = True
@@ -2785,7 +2786,7 @@ class Cortex:
             if out.get("queued"):
                 out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "
                                "in the Cortex app; say so in one line and go on.")
-            elif out.get("changed"):  # a goals or profile line: written now, served (ask)
+            elif out.get("changed"):  # D3: a claim line, written now, served (ask)
                 out["next"] = (f"Saved now but unconfirmed ({why}): AI apps see it marked (ask) "
                                "until the user confirms it; say so in one line and go on.")
             return out
@@ -2821,9 +2822,13 @@ class Cortex:
         shown = update if scopes is None or (update and update["page"] not in access.SECTIONED
                                              and access.scope_page(scopes, update["page"])) \
             else None
-        # while harvesting, old chats are stale evidence: every claim page waits for a yes
+        # D3: a claim page takes an inferred line at once (tier agent, served (ask)); the
+        # portrait, a teaching rule and me/core and me/setup (copied into every agent's rules
+        # file) wait for Approve, and while harvesting, old chats are stale evidence: every
+        # claim page waits for a yes
         if (op == "append_to_section" and kind == "me" and not user_confirmed
-                and (nid in CONFIRM_PAGES or (harvesting and claim_page))):
+                and ((nid in CONFIRM_PAGES and (not claim_page or nid in STEER_PAGES))
+                     or (harvesting and claim_page))):
             text = " ".join(text.split()).removeprefix("- ")
             if (not target.strip() or "\n" in target or "\r" in target
                     or target.lstrip().startswith("#") or len(target) > 200):
@@ -2862,8 +2867,24 @@ class Cortex:
                 "summary": f"proposed for {kind} {nid}; awaits the user's OK",
                 "next": "Saved as unconfirmed; it waits for the user's Approve in the Cortex app "
                         "(Review). Say so in one line; don't stop to ask." + hint})
+        replaced: list[dict] = []
+        if op == "append_to_section" and claim_page and not user_confirmed:
+            if (not target.strip() or "\n" in target or "\r" in target
+                    or target.lstrip().startswith("#") or len(target) > 200):
+                raise invalid("target must be a one-line section name.")  # as _ensure_section
+            if claims.is_not_me(nid, self._raw(f"me/{nid}.md"), text):
+                return {"changed": False, "queued": False,
+                        "summary": f"not saved: me/{nid} lists it under ## Not me",
+                        "next": "The user said this is not them; do not save it again."}
+        if op == "append_to_section" and claim_page and "\n" not in text.strip():
+            settled = self._settle_new(nid, target, text, day, user_confirmed, said == "yes",
+                                       update, sup)
+            if settled.get("lost"):
+                return settled["lost"]
+            replaced = settled["retire"]
         if op == "append_to_section" and kind == "me" and nid in CONFIRM_PAGES:
-            text = f"{text.rstrip()} (confirmed {day})"
+            if user_confirmed or not claim_page:  # D3: an inferred claim line has no marker
+                text = f"{text.rstrip()} (confirmed {day})"
             if nid == "portrait":
                 self._portrait_section(target)
             elif nid == "voice":
@@ -2911,11 +2932,147 @@ class Cortex:
         if self.app_clicks:
             change["confirm"] = "clicked"
         hint = self.sessions.note("patched", change=change if changed else None)
-        return _update_of(shown, {"changed": changed, **({"claim": claim} if claim else {}),
-                                   **({"supersedes": [s["claim"] for s in sup]} if sup else {}),
-                                   "summary": f"{op} {target!r} on {kind} {nid}",
-                                   "next": (SUPERSEDES_NEXT if sup else "")
-                                   + self._next(MORE_NEXT) + hint})
+        gone = [x for x in replaced if isinstance(claim, str)
+                and self._auto_retire(x["retire"], {"page": nid, "id": claim}, x["why"])]
+        out = {"changed": changed, **({"claim": claim} if claim else {}),
+               **({"supersedes": [s["claim"] for s in sup]} if sup else {}),
+               **({"replaced": [self._line_ref(x["retire"]) for x in gone]} if gone else {}),
+               "summary": f"{op} {target!r} on {kind} {nid}",
+               "next": (SUPERSEDES_NEXT if sup else "")
+               + ("Cortex retired the line(s) in `replaced` (they said nearly the same or this "
+                  "one replaces them; `cortex undo` brings them back); say so in one line. "
+                  if gone else "") + self._next(MORE_NEXT) + hint}
+        return _update_of(None if gone else shown, out)
+
+    def _line_ref(self, r: dict) -> dict:
+        """A claim row as a result names it: {id, page, text} with the text wrapped, or no text
+        for a page outside this client's scopes (plan v9 item 8)."""
+        ref, scopes = f"me/{r['page']}", self._scopes()
+        ok = scopes is None or (r["page"] not in access.SECTIONED
+                                and access.scope_page(scopes, r["page"]))
+        return {"id": r["id"], "page": ref, **({"text": _wrap(ref, r["text"])} if ok else {})}
+
+    def _tidy_done(self) -> set[str]:
+        """D1/D2: the pair keys and `page/id` lines Cortex settled itself (TIDY_FILE), so a
+        retire the user undid is never redone."""
+        try:
+            got = json.loads((self.vault.root / TIDY_FILE).read_text("utf-8")).get("done")
+        except (OSError, ValueError, AttributeError):
+            return set()
+        return {k for k in got if isinstance(k, str)} if isinstance(got, list) else set()
+
+    def _settle_new(self, page: str, target: str, text: str, day: str, confirmed: bool,
+                    clicked: bool, update: dict | None, sup: list | None) -> dict:
+        """D1/D2/D3 at write time: `review.settle` over the live lines plus the line about to be
+        written to me/<page> (with its `update_of` guess or `supersedes` as a recorded pair).
+        {lost: the result to return, nothing written} when the new line is the one to retire
+        (a near-copy of a line that stays, or a guess that clashes with the user's own line);
+        else {retire: [{retire, why}] the live lines it replaces}. A private page: nothing."""
+        if page in review._private(self.vault):
+            return {"retire": []}
+        events = list(self.log.iter_events())
+        rows = review.live_rows(self.vault, events, day)
+        new = {"page": page, "id": "c-new00", "section": target, "line_no": 1 << 30,
+               "text": " ".join(text.split()).removeprefix("- "), "day": day,
+               "tier": self._tier(confirmed, clicked)["tier"]}
+        pairs = {**({"update_of": {"page": update["page"], "claim": update["id"]}}
+                    if update else {}), **({"supersedes": sup} if sup else {})}
+        if pairs:
+            events.append({"kind": "change", "id": "new", "payload": {"change": {
+                "id": page, "claim": new["id"], **pairs}}})
+        plan = review.settle([*rows, new], events, review.known_texts(self.vault),
+                             self._tidy_done())["retire"]
+        lost = next((x for x in plan if x["retire"] is new), None)
+        if lost is None:
+            return {"retire": [x for x in plan if x["keep"] is new]}
+        keep = self._line_ref(lost["keep"])
+        # a guessed `update` pair agrees (an opposite one is settled as `opposite`): a near-copy
+        if lost["why"] in ("opposite", "supersedes"):
+            return {"lost": {
+                "changed": False, "clashes_with": keep,
+                "summary": f"not saved: it clashes with the user's own line ^{keep['id']} on "
+                           f"{keep['page']}",
+                "next": "Not saved: it clashes with a line the user gave. Ask them in one "
+                        "question whether that changed; on yes, cortex_patch it again with "
+                        f"user_confirmed=true and supersedes=['{keep['id']}']."}}
+        return {"lost": {"changed": False, "duplicate_of": keep,
+                         "summary": f"not saved: {keep['page']} already says this "
+                                    f"(^{keep['id']})",
+                         "next": "Already saved; go on." + self._next(MORE_NEXT)}}
+
+    def _auto_retire(self, r: dict, keep: dict, why: str) -> bool:
+        """D1/D2: retire live claim row `r` to `## Past` as cortex_patch's retire does, for
+        `keep` ({page, id}), recorded as a change (card `duplicate` or `conflict`, `auto`,
+        `why`, `kept`) in the open session, so `cortex undo` takes it back; its pair key goes to
+        TIDY_FILE so the sweep never redoes an undone retire. False when the line is no longer
+        live."""
+        day = local_day(self._now())
+        try:
+            self.vault._mutate(self.vault.path_for("me", r["page"]),
+                               lambda t: claims.move_to_past(t, r["page"], r["id"], day)[0])
+        except VaultError:
+            return False
+        self.sessions.note("patched", change={
+            "tool": "patch", "id": r["page"], "kind": "me", "op": "retire", "target": r["id"],
+            "claim": r["id"], "auto": True, "why": why,
+            "card": "duplicate" if why == "duplicate" else "conflict",
+            "kept": {"page": keep["page"], "claim": keep["id"]}})
+        done = self._tidy_done() | {claims.pair_key((r["page"], r["id"]),
+                                                    (keep["page"], keep["id"])),
+                                    f"{r['page']}/{r['id']}"}
+        self.vault.write_text(self.vault.root / TIDY_FILE,
+                              json.dumps({"done": sorted(done)[-5000:]}))
+        return True
+
+    def tidy(self) -> dict:
+        """D1-D3, the app's sweep (at start and with each chat-import pass): the about-me lines
+        waiting in inbox.md move to their claim pages as inferred lines (`_migrate_inbox`),
+        then `review.settle` retires up to review.TIDY_MAX lines (near-copies, settled pairs)
+        under the vault lock, in one session closed at once (one `cortex undo`). Opens no
+        session when there is nothing to do. {moved, retired}."""
+        with self.vault.lock():
+            day = local_day(self._now())
+            waiting = [p for p in review.pending(self.vault, day)
+                       if p["page"] in claims.PAGES and p["page"] not in STEER_PAGES]
+            events = list(self.log.iter_events())
+            plan = review.settle(review.live_rows(self.vault, events, day), events,
+                                 review.known_texts(self.vault),
+                                 self._tidy_done())["retire"][:review.TIDY_MAX]
+            if not waiting and not plan:
+                return {"moved": 0, "retired": 0}
+            self.session = self.sessions.start("ambient")
+            self._reset()
+            try:
+                moved = self._migrate_inbox(waiting)
+                events = list(self.log.iter_events())
+                plan = review.settle(review.live_rows(self.vault, events, day), events,
+                                     review.known_texts(self.vault),
+                                     self._tidy_done())["retire"][:review.TIDY_MAX]
+                retired = sum(self._auto_retire(x["retire"], x["keep"], x["why"])
+                              for x in plan)
+            finally:
+                if self.sessions.current is not None:
+                    self.sessions.close(summary="Cortex tidied the about-me lines")
+        return {"moved": moved, "retired": retired}
+
+    def _migrate_inbox(self, waiting: list[dict]) -> int:
+        """D3, once per waiting line: an about-me line under `## About me (unconfirmed)` (claim
+        pages but me/core and me/setup; teaching rules and portrait lines still wait) is
+        written to its page as cortex_patch writes an inferred line, then leaves inbox.md. A
+        line claims.check refuses stays where it is; one under the page's `## Not me`, or a
+        near-copy of or a clash with a line that stays, just leaves the inbox."""
+        moved = 0
+        for p in waiting:
+            if claims.unsafe(f"{p['section']}\n{p['text']}"):
+                continue
+            try:
+                out = self.cortex_patch(f"me/{p['page']}", "append_to_section", p["section"],
+                                        p["text"])
+            except VaultError:
+                continue
+            moved += bool(out.get("changed"))
+            self._unpropose(f"{p['section']}: {p['text']}")
+        return moved
 
     def _supersedes(self, ids, kind: str, nid: str, op: str, text: str) -> list[dict]:
         """RR-4: cortex_patch's `supersedes` -> [{page, claim}], each id one live line of a
@@ -3509,12 +3666,15 @@ DESCRIPTIONS = {
                   "/cortex mode files.",
     "cortex_patch": "Edit a note (any, including me/*): append under a heading, set a "
                     "whitelisted field, or tick a checklist item in a section. me/personality, "
-                    "me/preferences, me/setup, me/portrait, me/voice (one ## <audience> section "
-                    "each, plus ## Everyone): user_confirmed=true only after the user agrees; "
-                    "otherwise the line waits in inbox.md. me/teaching-contract: a rule always "
+                    "me/preferences, me/profile, me/goals, me/setup, me/voice (one ## <audience> "
+                    "section each, plus ## Everyone): user_confirmed=true for the user's own "
+                    "words; without it your inference is saved now as a guess, served (ask); a "
+                    "near-copy of a live line is not added twice, and one that clashes with a "
+                    "line the user gave is not saved (ask them). me/portrait, me/core and "
+                    "me/setup without it wait in inbox.md. me/teaching-contract: a rule always "
                     "waits for the user's Approve in the Cortex app, even with "
-                    "user_confirmed=true. supersedes: up to 3 ^c-… ids of me/* lines the new "
-                    "line contradicts; the pair waits in Review. "
+                    "user_confirmed=true. supersedes: up "
+                    "to 3 ^c-… ids of me/* lines the new line replaces; Cortex retires them. "
                     "op=set_topics (resource or note): text = 0-4 "
                     "topic hub ids, comma-separated, replacing the page's topics; target is "
                     "ignored.",

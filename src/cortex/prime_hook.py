@@ -39,7 +39,7 @@ NEXT = ("Answer with this in mind. If the message is substantive, call cortex_pr
         "log the touch as its result says. Record everything durable at once, unasked "
         "(topics, concepts taught, answers, facts, sources, decisions, insights); about them: "
         "their own words -> cortex_patch with user_confirmed=true, your inference without it "
-        "(waits for Approve in the app).")
+        "(saved as a guess); ask only when it clashes with a line they gave.")
 TAGGED = ("Cortex saved the user's //pref, //fact and //forget lines itself ({lines}); do "
           "not save them again.")
 REFUSED = "Cortex refused the user's {lines} Tell the user."

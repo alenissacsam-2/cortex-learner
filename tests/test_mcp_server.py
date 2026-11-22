@@ -471,8 +471,9 @@ def test_proposals_and_new_sections_keep_an_obsidian_edit_made_meanwhile(root, m
 
     async def body(call):
         racer(monkeypatch, "inbox.md", b"- typed in Obsidian\n")
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
-                                          "target": "Coding", "text": "- Short answers"})
+        out = await call("cortex_patch", {"id": "me/teaching-contract",
+                                          "op": "append_to_section", "target": "Rules",
+                                          "text": "- Short answers"})  # a rule still waits
         assert out["queued"] is True
         racer(monkeypatch, "preferences.md", b"- Spaces now\n")
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
@@ -607,7 +608,7 @@ def test_end_card_lists_changes_and_budget_hint(root, monkeypatch):
                 "text": "- Short drills."}
         first = await call("cortex_patch", args)
         assert "consider wrapping up" not in first["next"]
-        await call("cortex_patch", args)
+        await call("cortex_patch", {**args, "text": "- Long walks."})  # D1: not a near-copy
         added = await call("cortex_add", {"kind": "problem", "title": "Three Sum"})
         assert added["next"].endswith(" This session has made 3 changes; consider wrapping "
                                       "up with cortex_end.")
@@ -881,28 +882,27 @@ def test_patch_personality_confirm_rule(root):
     async def body(call):
         args = {"id": "me/personality", "op": "append_to_section", "target": "Values",
                 "text": "- Curious"}
-        out = await call("cortex_patch", args)
-        assert out["changed"] is False and "awaits" in out["summary"]
-        assert "Curious" not in (root / "me/personality.md").read_text(encoding="utf-8")
+        out = await call("cortex_patch", args)  # D3: an inference is saved now, as a guess
+        assert out["changed"] is True and "queued" not in out
+        assert "- Curious ^c-" in (root / "me/personality.md").read_text(encoding="utf-8")
         await call("cortex_patch", {**args, "id": "me/preferences", "target": "Coding",
                                     "text": "- Vim"})
         ok = await call("cortex_patch", {**args, "user_confirmed": True})
-        assert ok["changed"] is True
+        assert ok["changed"] is True and [r["id"] for r in ok["replaced"]] == [out["claim"]]
         goal = await call("cortex_patch", {**args, "id": "me/goals", "target": "Now",
                                            "text": "- Ship"})
         assert goal["changed"] is True
-        end = await call("cortex_end")
-        assert "propose me/personality" in end["display"]
+        await call("cortex_end")
 
     run(root, body)
     day = local_day(datetime.now(UTC))
     pers = (root / "me/personality.md").read_text(encoding="utf-8")
     assert f"- Curious (confirmed {day})" in pers
+    assert pers.split("## Past")[1].count("Curious") == 1  # the guess it replaced
     assert "(confirmed" not in (root / "me/goals.md").read_text(encoding="utf-8")
+    assert "- Vim ^c-" in (root / "me/preferences.md").read_text(encoding="utf-8")
     inbox = (root / "inbox.md").read_text(encoding="utf-8")
-    assert inbox.count("## About me (unconfirmed)") == 1
-    assert "Curious" not in inbox  # confirmed, so it no longer waits there
-    assert f"- Coding: Vim (proposed {day}, me/preferences)\n" in inbox
+    assert "About me" not in inbox and "Curious" not in inbox and "Vim" not in inbox
     assert "- [ ] Foo (2026-01-01)" in inbox
 
 

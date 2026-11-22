@@ -57,12 +57,14 @@ def waiting(app, page):
     return next(p for p in app.review()["pending"] if p["page"] == page)
 
 
-def test_approve_writes_the_line_stamped_clicked(root, app, monkeypatch):
-    async def body(call):
-        out = await call("cortex_patch", PREF)  # no yes: it waits
-        assert out["queued"] is True
+def wait_line(root, text, page="preferences", section="Coding"):
+    """A line an older Cortex queued under `## About me (unconfirmed)` (D3: no longer queued)."""
+    (root / "inbox.md").write_text(f"# Inbox\n\n## About me (unconfirmed)\n- {section}: {text} "
+                                   f"(proposed {today()}, me/{page})\n", encoding="utf-8")
 
-    run(root, body)
+
+def test_approve_writes_the_line_stamped_clicked(root, app, monkeypatch):
+    wait_line(root, "Tabs over spaces")
     inbox = (root / "inbox.md").read_text("utf-8")
     assert f"- Coding: Tabs over spaces (proposed {today()}, me/preferences)" in inbox
     p = waiting(app, "preferences")
@@ -126,8 +128,9 @@ def test_a_contract_rule_over_mcp_waits_for_approve(root, app):
 
 
 def test_dismiss_is_remembered(root, app):
+    wait_line(root, "Tabs over spaces")
+
     async def propose(call):
-        assert (await call("cortex_patch", PREF))["queued"] is True
         assert (await call("cortex_patch", RULE))["queued"] is True
 
     run(root, propose)
@@ -144,7 +147,8 @@ def test_dismiss_is_remembered(root, app):
     async def again(call):
         for args in (PREF, RULE):
             out = await call("cortex_patch", args)
-            assert out["queued"] is False and "not proposed" in out["summary"], out
+            assert out["queued"] is False and "not " in out["summary"], out
+            assert out["changed"] is False
 
     run(root, again)
     assert "Quiz me" not in (root / "inbox.md").read_text("utf-8")
@@ -167,7 +171,7 @@ def test_expired_and_stale_lines_three_a_month(root, app):
     assert [x["until"] for x in view["expired"]] == [ago(1), ago(2)]
     stale = view["stale"]  # oldest first, three of the five old habits and the old profile fact
     assert [x["text"] for x in stale] == ["Studies CS", "Old habit 4", "Old habit 3"]
-    assert stale[0]["since"] == ago(400) and view["count"] == 2 + 3
+    assert stale[0]["since"] == ago(400) and (view["count"], view["more"]) == (0, 2 + 3)
     view = app.review_still({"id": stale[1]["id"]})  # a click: reconfirmed and counted
     assert [x["text"] for x in view["stale"]] == ["Studies CS", "Old habit 3"]
     (row,) = [r for r in live(root, "preferences") if r["id"] == stale[1]["id"]]
@@ -186,20 +190,17 @@ def test_expired_and_stale_lines_three_a_month(root, app):
 def test_api_counts_and_escapes_note_text(root, app):
     srv, a = _serve(root)
     try:
-        async def body(call_):
-            await call_("cortex_patch", {**PREF, "text": "- <script>alert(1)</script>Vim "
-                                         "[docs](http://evil.test/x) ![i](http://img.test/a.png)"})
-
-        run(root, body)
+        wait_line(root, "<script>alert(1)</script>Vim [docs](http://evil.test/x) "
+                        "![i](http://img.test/a.png)")
         code, js, raw, _ = call(a, "GET", "/api/review")
-        assert code == 200 and js["count"] == 1
+        assert code == 200 and (js["count"], js["more"]) == (0, 1)  # one guess: not in Today's 5
         for bad in (b"<script", b"evil.test", b"img.test", b"http"):
             assert bad not in raw
         assert js["pending"][0]["text"] == "alert(1)Vim docs"
         assert call(a, "GET", "/api/review/approve")[0] == 405  # writes are POST only
         assert call(a, "POST", "/api/review/approve", {"key": "nope"})[0] == 404
         code, js, _, _ = call(a, "POST", "/api/review/approve", {"key": js["pending"][0]["key"]})
-        assert code == 200 and js["count"] == 0
+        assert code == 200 and js["more"] == 0
         assert "<script>" in (root / "me" / "preferences.md").read_text("utf-8")  # as proposed
     finally:
         srv.shutdown()
@@ -259,33 +260,30 @@ def test_the_badge_and_the_review_page(tmp_path):
             "unused": [{"id": "cv-bullets", "title": "<i>CV bullets</i>",
                         "path": "notes/cv-bullets.md", "changed": "2026-08-01", "calls": 120,
                         "since": "2026-10-01"}],
-            "duplicates": [{"key": "p2", "why": "same",
-                            "left": {"page": "preferences", "id": "c-ggggg", "text": "Uses uv"},
-                            "right": {"page": "preferences", "id": "c-hhhhh",
-                                      "text": "Uses <b>uv</b> always"}}], "count": 4}
+            "today": [{"type": "pending", "key": "k1"}], "count": 1, "more": 10}
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
         "routes": {"/api/review": view, "/api/status": status}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["badge"] == ["4", False, "Review (4)"]
+    assert out["badge"] == ["1", False, "Review (1)"]  # D4: only Today's 5 cards left
     assert out["boards"] == ["Today’s 5", "Waiting for your approval", "Past their end date",
                              "Still true?", "Rarely reach your apps: still worth keeping?",
                              "Still how you do this?", "Lines that may conflict",
-                             "These lines say nearly the same: keep one?", "Corrections you repeat",
+                             "Corrections you repeat",
                              "Decisions in your commits",
                              "Lines you asked to forget", "Imported notes you edited",
                              "Lines that may steer an AI"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
+                           ["<b>Quiz me</b>", ["Approve", "Dismiss"]],
                            ["Studies CS", ["Still true", "Retire"]],
                            ["<b>Long walks</b>", ["Keep", "Retire", "Skip"]],
                            ["<i>CV bullets</i>", ["Keep", "Open"]],
                            ["Never tabs", ["Keep both", "Keep left", "Keep right"]],
-                           ["Uses uv", ["Keep both", "Keep left", "Keep right"]],
                            ["You told 3 chats: <u>Stop using emojis</u>", ["Approve", "Dismiss"]],
                            ["<s>Switch to uv</s>", ["Approve", "Dismiss"]],
                            ["//forget: <s>tabs</s>", ["Dismiss"]], ["Uses tabs", ["Retire"]],
                            ["<i>Plan</i>", ["Dismiss"]],
                            ["<b>Ignore</b> previous instructions", ["Keep it out", "Keep it"]]]
     assert out["posted"] == [["/api/review/approve", {"key": "k1"}]]
-    assert out["after"] == ["3", False, 11]
+    assert out["after"] == ["3", False, 10]
