@@ -4,6 +4,9 @@
 row has header, title, titleUrl, time, products and, for YouTube, subtitles (the channel).
 Rows of other products (Gemini Apps, Maps and the rest) are skipped. Takeout's default format
 is HTML (`MyActivity.html`); `html_rows` reads it into the same rows, here and for Gemini chats.
+A "YouTube and YouTube Music" Takeout holds `history/watch-history.json` and
+`search-history.json` (or .html): the same rows and the same HTML cells (seen in open-source
+Takeout parsers), read the same way. Their file names stay English in every language.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ PRODUCTS = {"Search": "search", "YouTube": "youtube", "Chrome": "chrome",
 # "My Activity" as the file is named (spaces dropped): en, de, es, pt, fr, hi, id, ja
 _ACTIVITY = {"myactivity", "meineaktivitäten", "miactividad", "minhaatividade", "monactivité",
              "मेरीगतिविधि", "aktivitassaya", "マイアクティビティ"}
+# YouTube's own history ("YouTube and YouTube Music" Takeout): English in every language
+_YOUTUBE = ("watch-history", "search-history")
 _PREFIXES = ("Searched for", "Watched", "Visited", "Viewed",
              "Gesucht nach:", "Gesucht nach", "Aufgerufen:", "Besucht:", "Angesehen:",
              "Has buscado", "Has visto", "Has visitado",
@@ -57,19 +62,22 @@ HEAD = 256 * 1024  # an HTML My Activity file opens with ~140 KB of CSS before i
 
 def activity_file(name: str) -> str:
     """"json" or "html" for a My Activity file in a supported language (a prefix such as
-    "takeout_MyActivity.json" allowed), else ""."""
+    "takeout_MyActivity.json" allowed) or YouTube's watch-history or search-history, else ""."""
     base = unicodedata.normalize("NFC", name.replace("\\", "/").rsplit("/", 1)[-1].lower())
     stem, _, ext = base.replace(" ", "").rpartition(".")
-    return ext if ext in ("json", "html") and any(map(stem.endswith, _ACTIVITY)) else ""
+    return ext if ext in ("json", "html") and any(
+        map(stem.endswith, (*_ACTIVITY, *_YOUTUBE))) else ""
 
 
 def wanted(name: str) -> bool:
-    """A My Activity file `records` reads: any JSON one, and an HTML one alone or in a Search,
-    YouTube or Chrome folder, so a full Takeout's big Ads or Play Store pages are not parsed."""
+    """A file `records` reads: any JSON one, and an HTML one alone, in a Search, YouTube or
+    Chrome folder or YouTube's own history (its folder is named in the account language), so a
+    full Takeout's big Ads or Play Store pages are not parsed."""
     kind = activity_file(name)
     parts = unicodedata.normalize("NFC", name.replace("\\", "/").lower()).split("/")
     return kind == "json" or kind == "html" and (
-        len(parts) == 1 or parts[-2] in {p.lower() for p in PRODUCTS})
+        len(parts) == 1 or parts[-2] in {p.lower() for p in PRODUCTS}
+        or parts[-1].rpartition(".")[0].endswith(_YOUTUBE))
 
 
 class Rows(list):
@@ -79,8 +87,10 @@ class Rows(list):
 
 def records(path: Path) -> Rows:
     """Every Search, YouTube and Chrome row with a URL and a readable time in a Takeout export
-    (the .zip, its folder or one MyActivity.json or .html), oldest first. A visit lasts until
-    the next one, at most GAP_CAP, as in `sources.read`."""
+    (the .zip, its folder or one MyActivity, watch-history or search-history .json or .html),
+    oldest first. A visit lasts until the next one, at most GAP_CAP, as in `sources.read`. A
+    row read twice (My Activity's YouTube file and watch-history both hold a watch) is kept
+    once, by its time to the second and URL: an HTML time has no fraction of a second."""
     path = Path(path)
     from cortex.importers import _files, json_value  # the one size-capped reader
     files = _files(path)
@@ -88,7 +98,8 @@ def records(path: Path) -> Rows:
         files = [f for f in files if wanted(f[0])]
     if not files:
         raise VaultError("invalid_argument", f"Found no My Activity file in {path.name}; expected "
-                         "My Activity/<product>/MyActivity.json or .html.")
+                         "My Activity/<product>/MyActivity.json or .html, or YouTube's "
+                         "history/watch-history or search-history (.json or .html).")
     out = Rows()
     for name, *_, read in files:  # one file's rows at a time
         # German by the file or folder name; an HTML row may also say so by its label
@@ -104,6 +115,9 @@ def records(path: Path) -> Rows:
         except (OSError, ValueError, zipfile.BadZipFile) as e:
             raise VaultError("invalid_argument", f"Cannot read {name}: {e}") from None
     out.sort(key=lambda v: v.start)
+    seen: set = set()
+    out[:] = [v for v in out if (k := (v.start.replace(microsecond=0), v.url)) not in seen
+              and not seen.add(k)]
     for v, nxt in zip(out, [*out[1:], None], strict=True):
         v.secs = min(max((nxt.start - v.start).total_seconds(), 0.0), GAP_CAP) if nxt \
             else GAP_CAP

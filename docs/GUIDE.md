@@ -182,7 +182,7 @@ Gemini's export has no conversation ids, so prompts become one chat until 30 min
 3. Download the .zip from Perplexity's email soon: the link expires.
 4. For a few threads only: open each one, choose Export > Markdown from its menu, and save the .md files in one folder.
 
-**Google activity (Search, YouTube and Chrome).** Wait: usually the same day, up to a few days. Keep the Takeout .zip as it is. Its rows go through the browse privacy filter and land private by default, under the browse rules in section 6. `cortex import <the .zip>` imports them (so does `cortex browse import --takeout`). Takeouts in English, Spanish, Portuguese, French, German, Hindi, Indonesian and Japanese are read; in other languages, rows whose date or product Cortex cannot read are skipped (HTML ones are counted).
+**Google activity (Search, YouTube and Chrome).** Wait: usually the same day, up to a few days. Keep the Takeout .zip as it is. Its rows go through the browse privacy filter and land private by default, under the browse rules in section 6. `cortex import <the .zip>` imports them (so does `cortex browse import --takeout`). A Takeout of just "YouTube and YouTube Music" works too: its watch and search history are read the same way, and a watch that is also in My Activity counts once. Takeouts in English, Spanish, Portuguese, French, German, Hindi, Indonesian and Japanese are read; in other languages, rows whose date or product Cortex cannot read are skipped (HTML ones are counted).
 1. Open takeout.google.com and click Deselect all.
 2. Tick My Activity, click All activity data included, click Deselect all, tick Search, YouTube and Chrome, then OK.
 3. Leave Activity records as HTML (the default) or set them to JSON under Multiple formats; Cortex reads both.
