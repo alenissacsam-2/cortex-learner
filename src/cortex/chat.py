@@ -265,6 +265,51 @@ def follow_up(text: str, got=None) -> bool:
     return not got and not topic(text, (0, 0))  # nothing of its own to search for
 
 
+_ITEM = re.compile(r"(?:\d{1,2}[.)]|[-*•])\s+(\S.*)")
+_CITES = re.compile(r"\s*\[\d{1,3}(?:\s*,\s*\d{1,3})*\]")
+_ORDS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4,
+         "4th": 4, "fifth": 5, "5th": 5, "sixth": 6, "6th": 6, "seventh": 7, "7th": 7,
+         "eighth": 8, "8th": 8, "ninth": 9, "9th": 9, "tenth": 10, "10th": 10, "last": -1}
+_ORD = "|".join(_ORDS)
+# "the second one", "the 2nd", "number 2", "#2", "the last one", "the first", "the other one";
+# never "the first time I ..." or "the last week"
+_PICK = re.compile(
+    rf"\bthe\s+({_ORD})\b(?!\s+(?:times?|days?|weeks?|months?|years?|steps?|part|half|place"
+    rf"|things?)\b)|\b({_ORD})\s+one\b|\bnumber\s+(\d{{1,2}})\b|#(\d{{1,2}})\b"
+    r"|\bthe\s+other\s+one\b", re.I)
+
+
+def list_items(answer: str) -> list[str]:
+    """The items of the list in an assistant's `answer`: top-level lines starting 1. 1) - * or
+    •, as plain text (citations, links and markup out; a trailing "(...)" kept)."""
+    out = []
+    for ln in answer.splitlines():
+        if len(ln) - len(ln.lstrip()) < 2 and (m := _ITEM.fullmatch(ln.strip())) \
+                and (item := chat_study._title(_CITES.sub("", m[1]))):
+            out.append(item)
+    return out
+
+
+def picked(text: str, got, items: list[str], prev: str) -> str | None:
+    """The item of the assistant's last list (`items`) that `text` picks ("the second one",
+    "#2", "the last one", "the other one" of two: the one `prev` did not name), or with a pronoun
+    and no pick the only item of a one-item list; None otherwise. `got`: `text`'s date phrase."""
+    m = _PICK.search(text)
+    if m and m[0].lower().startswith("the other"):
+        named = [i for i in items if i.split(" (")[0].casefold() in prev.casefold()]
+        return next(i for i in items if i not in named) if len(items) == 2 and len(named) == 1 \
+            else None
+    if m:
+        w = (m[1] or m[2] or "").lower()
+        n = _ORDS[w] if w else int(m[3] or m[4])
+        return items[n - 1 if n > 0 else n] if items and -1 <= n <= len(items) and n else None
+    own = text[:got[2][0]] + " " + text[got[2][1]:] if got else text
+    own = _THIS_YEAR.sub(" ", _RELATIVE_THAT.sub(" ", own))
+    if len(items) == 1 and _POINTS_BACK & set(re.findall(r"[\w']+", own.lower())):
+        return items[0]
+    return None
+
+
 # ---- storage ---------------------------------------------------------------------------------
 
 def _path(vault: Vault, id: str):
@@ -938,11 +983,16 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     msgs = load(vault, convo_id)  # validates the id
     t0, today = time.monotonic(), today or _today()
     prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
+    # the last answer as the model would still see it (`history`): its list, if any, is what
+    # "the second one" points at
+    last = next((m["text"] for m in reversed(msgs) if m["role"] == "assistant"
+                 and not m.get("unanswered") and not _made_with_off(m, s["sources"])), "")
     got, said = _when(text, today), text
-    leans = follow_up(text, got)
+    item = picked(text, got, list_items(last), prev)
+    leans = item is not None or follow_up(text, got)
     if leans and not got and prev and (got_prev := _when(prev, today)):
         got, said = got_prev, prev  # "which of those was hardest?": the last dates still hold
-    query = f"{text.strip()}\n{prev}".strip() if leans else text.strip()
+    query = f"{text.strip()}\n{item or prev}".strip() if leans else text.strip()
     # a site list or a study answer is read from Cortex's own data with no model, so it needs
     # neither the search model nor a local runner; it keeps to its own dates (a follow-up's
     # borrowed ones are for passages only), and so does its step line

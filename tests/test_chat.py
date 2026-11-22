@@ -1514,3 +1514,93 @@ def test_the_router_picks_one_data_answer(vault, text, leans, want):
                     leans)
     assert (r.step if r else None) == want
     assert r is None or (r.data is None) is (r.fq is not None)
+
+
+ASSESSMENTS = "1. Apex Systems OA (2026-11-24)\n2. Nimbus Tech Interview (2026-12-03)"
+
+
+def test_list_items_are_plain_text_with_their_trailing_parentheses():
+    assert chat.list_items("Here:\n" + ASSESSMENTS + "\n\nThat is all.") == [
+        "Apex Systems OA (2026-11-24)", "Nimbus Tech Interview (2026-12-03)"]
+    assert chat.list_items("- **VeloxKV** [1]\n  - a nested line\n* `TinySQL` (14 commits)\n"
+                           "• [notes-cli](https://x.example)\n2) Last") == [
+        "VeloxKV", "TinySQL (14 commits)", "notes-cli", "Last"]
+
+
+@pytest.mark.parametrize("text, items, want", [
+    ("And what does the second one test?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("what does the 2nd cover?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("tell me about number 1", 2, "Apex Systems OA (2026-11-24)"),
+    ("and #2?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("what about the last one?", 2, "Nimbus Tech Interview (2026-12-03)"),
+    ("and the first?", 2, "Apex Systems OA (2026-11-24)"),
+    ("and the third one?", 2, None),  # the list has no third
+    ("what does it test?", 1, "Apex Systems OA (2026-11-24)"),  # a pronoun, one item
+    ("what does it test?", 2, None),  # a pronoun, two items: no guess
+    ("when was the last time I studied heaps?", 2, None),
+    ("what is Dijkstra's algorithm?", 2, None),
+])
+def test_a_follow_up_picks_an_item_of_the_last_list(text, items, want):
+    lst = chat.list_items(ASSESSMENTS)[:items]
+    assert chat.picked(text, chat._when(text, TODAY), lst, "List my assessments") == want
+
+
+def test_the_other_one_is_the_item_the_last_question_did_not_name():
+    lst = chat.list_items(ASSESSMENTS)
+    assert chat.picked("and the other one?", None, lst, "what does Apex Systems OA test?") == \
+        lst[1]
+    assert chat.picked("and the other one?", None, lst, "list them") is None
+
+
+def _prior(vault, turns):
+    cid = chat.new()
+    chat._save(vault, cid, [{"role": r, "text": t, "ts": chat._now(),
+                             **({"sources": [], "switches": dict(ask.SOURCES)}
+                                if r == "assistant" else {})} for r, t in turns], True)
+    return cid
+
+
+def _asked(monkeypatch):
+    asked = []
+    real = ask._passages
+    monkeypatch.setattr(ask, "_passages", lambda v, q, k, **kw: asked.append(q) or real(v, q, k,
+                                                                                      **kw))
+    return asked
+
+
+@pytest.mark.parametrize("prior, text, want", [
+    ([("user", "List my two upcoming assessments in date order."), ("assistant", ASSESSMENTS)],
+     "And what does the second one test?", "Nimbus Tech Interview"),  # Q38
+    ([("user", "List my active Rust projects."),
+      ("assistant", "1. VeloxKV (42 commits)\n2. TinySQL (14 commits)")],
+     "What does my git repo summary say about the second one?", "TinySQL"),  # Q39
+    ([("user", "my projects"), ("assistant", "- VeloxKV\n- TinySQL\n- notes-cli")],
+     "and #2?", "TinySQL"),
+    ([("user", "my projects"), ("assistant", "- VeloxKV\n- TinySQL\n- notes-cli")],
+     "what about the last one?", "notes-cli"),
+    ([("user", "my rust project"), ("assistant", "- VeloxKV (42 commits)")],
+     "what does it store?", "VeloxKV"),
+])
+def test_the_search_holds_the_picked_item(vault, stream, monkeypatch, prior, text, want):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    _turn(vault, _prior(vault, prior), text, s.runner())
+    assert len(asked) == 1 and want in asked[0] and prior[0][1] not in asked[0]
+    assert asked[0].startswith(text)
+
+
+def test_a_new_subject_is_not_mixed_with_the_list(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    cid = _prior(vault, [("user", "List my assessments."), ("assistant", ASSESSMENTS)])
+    _turn(vault, cid, "what is Dijkstra's algorithm?", s.runner())
+    assert asked == ["what is Dijkstra's algorithm?"]
+
+
+def test_a_list_made_with_a_switch_now_off_is_not_picked_from(vault, stream, monkeypatch):
+    s = stream("ollama", ["Answer [1]."])
+    asked = _asked(monkeypatch)
+    cid = _prior(vault, [("user", "List my assessments."), ("assistant", ASSESSMENTS)])
+    off = {**chat.get_settings(), "sources": {**ask.SOURCES, "private": False}}
+    _turn(vault, cid, "And what does the second one test?", s.runner(), settings=off)
+    assert "Nimbus" not in asked[0]
