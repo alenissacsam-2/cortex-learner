@@ -228,7 +228,8 @@ def test_an_ocrd_document_page_says_so(root_plain, ocr):
                                   lambda kind, d: more_sources._pdf(d))
     assert sources.run(v, src, C)["imported"] == 1
     page = _page(v, "docs-lecture-scan")
-    assert f"{more_sources.OCR_LINE}\n\nread page 1 read page 2" in page
+    assert f"read page 1 read page 2\n\n{more_sources.OCR_LINE}" in page
+    assert 'summary: "read page 1' in page  # the mark is last, so it is not the summary
     text = sources.run(v, more_sources.doc_source(
         "typed.pdf", 9, 0.0, lambda *a, **k: _pdf("Typed"), lambda kind, d: more_sources._pdf(d)),
         C)
@@ -246,7 +247,7 @@ def test_windows_ocr_reads_a_scan_in_the_child(tmp_path):
                                           size=(1700, 2200)))
     it = next(iter(more_sources.docs_source(d).items()))
     assert not isinstance(it, str), it
-    assert it.text.startswith(more_sources.OCR_LINE)
+    assert it.text.endswith(more_sources.OCR_LINE)
     assert "Photosynthesis makes glucose" in it.text and "Mitochondria 1234" in it.text
 
 

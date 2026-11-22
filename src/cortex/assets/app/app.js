@@ -704,7 +704,8 @@
   function fileLine(f) {
     const n = f.count.toLocaleString();
     const what = `${f.name}, ${n} ${f.unit}${f.count === 1 ? '' : 's'}` + (!f.cut ? ''
-      : f.unit === 'page' ? ` (searched up to page ${f.cut})` : ` (the first ${f.cut.toLocaleString()} are searched)`);
+      : f.unit === 'page' ? ` (searched up to page ${f.cut})` : ` (the first ${f.cut.toLocaleString()} are searched)`)
+      + (f.scan ? ' (read from a scan)' : '');
     const done = (r) => { chatS.files = r.files; drawFiles(); };
     return h('p', { class: 'help chat-file' }, h('span', { text: what }), ' ',
       ...(f.saved ? [h('span', { text: `Saved as ${f.saved.title} ` }),

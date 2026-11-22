@@ -7,7 +7,7 @@ so the local Chat (a small model reading a few ~700-character passages) can answ
   first DOC_CHARS characters. .md/.txt go through importers.note_item, keyed as notes are, so a
   note imported before is a duplicate here. Encrypted, scanned (no text) and oversized files are
   skipped with the reason. C2: on Windows a scanned PDF's pages are read with Windows' own
-  offline OCR in the parse child (`_pdf_pages`), and the page starts with OCR_LINE.
+  offline OCR in the parse child (`_pdf_pages`), and the page ends with OCR_LINE.
 - repos: one page per git repo one or two folders down (or the folder itself): the README's
   start, the stack from manifest file names, and from `git log --author=<that repo's
   user.email>` the commit count, first and last dates and the last SUBJECTS subjects. Code,
@@ -368,7 +368,8 @@ def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
             yield "scanned or no text"
             continue
         yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime),
-                           (OCR_LINE + "\n\n") * bool(ocr and ocr[0]) + _clip(text, DOC_CHARS),
+                           # the mark last: the first body line is the page's summary
+                           _clip(text, DOC_CHARS) + ("\n\n" + OCR_LINE) * bool(ocr and ocr[0]),
                            _origin(path, name))
 
 
