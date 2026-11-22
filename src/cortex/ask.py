@@ -219,10 +219,31 @@ def origin(kind: str, n: dict | None = None) -> str:
 
 
 def _note(vault: Vault, id: str, n: dict, path: str, text: str, kind: str, **extra) -> dict:
-    """A passage of a page the index reads; `_body` is for its span (`_span`) once cut."""
+    """A passage of a page the index reads; `_body` is for its span (`_span`) once cut.
+    `stale`: the page's status says it no longer holds (a superseded decision)."""
+    stale = (n["kind"], str(n["fields"].get("status") or "")) in semantic.STALE
     return {"path": path, "title": n["title"], "text": text, "kind": kind,
             "day": _note_day(vault, id, n, path), "origin": origin(kind, n), "_body": n["body"],
-            **extra}
+            **({"stale": True} if stale else {}), **extra}
+
+
+# a me/ page's `## Past` holds preferences and facts the owner replaced: out of a passage
+# unless the question asks about the past
+_PAST = re.compile(r"^##[ \t]+Past[ \t]*\n.*?(?=^#{1,6}[ \t]|\Z)", re.M | re.S)
+_ASKS_PAST = re.compile(r"\b(?:used? to|before|previously|in the past|what did i prefer)\b",
+                        re.I)
+
+
+def _past(p: dict, question: str) -> None:
+    """Drop `## Past` from a me/ page's passage, or mark the passage `past` when the question
+    asks about the past and it keeps one."""
+    if not p["path"].startswith("me/"):
+        return
+    if _ASKS_PAST.search(question):
+        if _PAST.search(p["text"]):
+            p["past"] = True
+    else:
+        p["text"] = _PAST.sub("", p["text"]).rstrip()
 
 
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
@@ -273,6 +294,7 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         if len(out) >= k or left < 200:
             break
         seen.add(p["path"])
+        _past(p, question)
         p["text"] = p["text"][:min(PASSAGE, left)]
         if "_body" in p:  # a browse page's text is its body's own slice: at holds, len is it
             p["at"], p["len"] = _span(p.pop("_body"), p["text"], p["title"], p.pop("_at", 0))
@@ -287,10 +309,20 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
     return out
 
 
+def header(p: dict) -> str:
+    """A passage's first line, `[<day or undated> | <status>]`: "replaced" for a page whose
+    status says it no longer holds, "past" for a me/ page's kept `## Past`, "current" for any
+    other me/ page (its live lines); other pages have no status."""
+    status = "replaced" if p.get("stale") else "past" if p.get("past") else \
+        "current" if p["path"].startswith("me/") else ""
+    return f"[{p.get('day') or 'undated'}" + (f" | {status}" if status else "") + "]"
+
+
 def prompt(found: list[dict], question: str, dated: str = "Date:") -> str:
-    """The user message: each passage wrapped as untrusted data with its From line (`origin`)
-    and its day when it has one (after `dated`), then the question."""
-    return "\n\n".join(_wrap(str(n), f"{p['title']}\nFrom: {p.get('origin') or origin(p['kind'])}"
+    """The user message: each passage wrapped as untrusted data with its `header`, its From
+    line (`origin`) and its day when it has one (after `dated`), then the question."""
+    return "\n\n".join(_wrap(str(n), f"{header(p)}\n{p['title']}\n"
+                             f"From: {p.get('origin') or origin(p['kind'])}"
                              + (f"\n{dated} {p['day']}" if p.get("day") else "") + f"\n{p['text']}")
                        for n, p in enumerate(found, 1)) + f"\n\nQuestion: {question.strip()}"
 
