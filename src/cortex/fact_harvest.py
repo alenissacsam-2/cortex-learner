@@ -214,16 +214,29 @@ _DEICTIC = frozenset("this that these those it its it's your you yours them they
                      "what when where why which who so very really too not bit little lot tad "
                      "while few couple total complete huge mess wreck idiot fool".split())
 MAX_WORDS = 8  # an object's words
+# a reaction to the assistant's own output, not a fact ("I like the second option better"):
+# a word pointing at the chat anywhere, "the [word] <chat noun>" (lower case, so "the Design
+# Museum" stays), a labelled option ("option B") or a closing comparative
+_POINT = frozenset("this that these those it you your yours here above below same".split())
+_CHAT_NOUN = (r"options?|approach(?:es)?|ideas?|designs?|versions?|ones?|way|answers?|code|"
+              r"solutions?|suggestions?|examples?|responses?|explanations?|plans?|layouts?|"
+              r"outputs?|results?|fix(?:es)?|changes?|drafts?|wording|structure|format|style|tone|"
+              r"first|second|third|last|former|latter|rest|lists?|tables?|diagrams?|charts?|"
+              r"fonts?|colou?rs?|ui|UI")
+_REACTION = re.compile(rf"\b(?i:the|both|either|neither)\s+(?:[\w-]+\s+)?(?:{_CHAT_NOUN})\b|"
+                       r"\b(?i:option|version|draft|choice)\s+(?:[A-Za-z]|\d+)$|"
+                       r"\b(?i:better|more|most|best|less|instead)$")
 
 
 def _object(raw: str) -> str | None:
     """A template's object, cut and trimmed, or None when it is not one (`_DEICTIC`, too long,
-    an "or")."""
+    an "or", a reaction to the chat: `_POINT`, `_REACTION`)."""
     end = " .!,;:-…'\""
     x = _TRAIL.sub("", _CUT.sub("", raw).rstrip(end)).rstrip(end)
     words = x.split()
     if (not words or len(words) > MAX_WORDS or words[0].casefold() in _DEICTIC
-            or " or " in f" {x.casefold()} " or not any(c.isalnum() for c in x)):
+            or " or " in f" {x.casefold()} " or not any(c.isalnum() for c in x)
+            or _POINT & set(re.findall(r"[\w']+", x.casefold())) or _REACTION.search(x)):
         return None
     return x
 
@@ -287,7 +300,7 @@ def tier0(turns: list[str]) -> list[tuple[str, str, bool]]:
     return out
 
 
-TARGETS = {"precision": 0.9, "hypothetical_fp": 0.02, "flips": 0}  # R6d
+TARGETS = {"precision": 0.9, "hypothetical_fp": 0.02, "reaction_fp": 0.02, "flips": 0}  # R6d
 UNREAL = ("hypothetical", "roleplay")  # the eval kinds whose turns state nothing true
 
 
@@ -295,13 +308,15 @@ def evaluate(items: list[dict]) -> dict:
     """R6d: Tier 0 over labelled turns ({kind, turn, expect: [fact], held?}, the eval file's
     `items`). An extracted fact is right when its content words (review._bag) and polarity
     equal an expected one's, a flip when only its polarity differs. Returns counts and
-    precision, recall, hypothetical_fp (the share of UNREAL turns with any fact), flips and
+    precision, recall, hypothetical_fp (the share of UNREAL turns with any fact), reaction_fp
+    (the same for "reaction" turns: a reaction to the chat's own output), flips and
     held_missed (a promotion's fact not held for the Review)."""
     def key(f: str) -> tuple:
         return review._bag(f), review.negated(f)
 
     n = {"turns": len(items), "extracted": 0, "right": 0, "expected": 0, "found": 0,
-         "unreal": 0, "unreal_hit": 0, "flips": 0, "held_missed": 0}
+         "unreal": 0, "unreal_hit": 0, "reaction": 0, "reaction_hit": 0, "flips": 0,
+         "held_missed": 0}
     for it in items:
         want = {key(f) for f in it.get("expect") or ()}
         got = tier0([it["turn"]])
@@ -314,17 +329,22 @@ def evaluate(items: list[dict]) -> dict:
         if it.get("kind") in UNREAL:
             n["unreal"] += 1
             n["unreal_hit"] += bool(got)
+        if it.get("kind") == "reaction":
+            n["reaction"] += 1
+            n["reaction_hit"] += bool(got)
         if it.get("held"):
             n["held_missed"] += sum(not held for *_, held in got)
     return {**n, "precision": n["right"] / n["extracted"] if n["extracted"] else 1.0,
             "recall": n["found"] / n["expected"] if n["expected"] else 1.0,
-            "hypothetical_fp": n["unreal_hit"] / n["unreal"] if n["unreal"] else 0.0}
+            "hypothetical_fp": n["unreal_hit"] / n["unreal"] if n["unreal"] else 0.0,
+            "reaction_fp": n["reaction_hit"] / n["reaction"] if n["reaction"] else 0.0}
 
 
 def meets(r: dict) -> bool:
     """Does an `evaluate` report reach TARGETS?"""
     return (r["precision"] >= TARGETS["precision"] and r["flips"] <= TARGETS["flips"]
-            and r["hypothetical_fp"] <= TARGETS["hypothetical_fp"])
+            and r["hypothetical_fp"] <= TARGETS["hypothetical_fp"]
+            and r["reaction_fp"] <= TARGETS["reaction_fp"])
 
 
 def ask_model(runner, turns: list[str]) -> list[tuple[str, str, bool]] | None:

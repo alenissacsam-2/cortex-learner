@@ -31,6 +31,11 @@ def facts(*turns):
     ("I use Obsidian for notes", [("preferences", "Uses Obsidian for notes")]),
     ("I live in Pune now.", [("profile", "Lives in Pune")]),
     ("<think>I'm a robot</think>I'm from Kerala", [("profile", "From Kerala")]),
+    ("I play the guitar", [("preferences", "Plays the guitar")]),  # "the", no chat noun
+    ("I love the Beatles", [("preferences", "Loves the Beatles")]),
+    ("I use the terminal for everything", [("preferences", "Uses the terminal for everything")]),
+    ("I prefer tea over coffee", [("preferences", "Prefers tea over coffee")]),
+    ("I work at the Design Museum", [("profile", "Works at the Design Museum")]),  # a name
 ])
 def test_tier0_reads_first_person_templates(turn, want):
     assert facts(turn) == want
@@ -48,6 +53,18 @@ def test_tier0_reads_first_person_templates(turn, want):
     "My brother is a doctor.", "I moved to Pune last month.",  # someone else; no template
 ])
 def test_tier0_finds_nothing(turn):
+    assert facts(turn) == []
+
+
+@pytest.mark.parametrize("turn", [  # reactions to the assistant's own output
+    "I like the second option better.", "I prefer the first approach.",
+    "I love the design, thanks!", "I like the idea of using Redis here.",
+    "I prefer the shorter version.", "I don't like the second one.",
+    "I like the way you explained it.", "I'm a big fan of this.",
+    "Yeah I eat the same thing every day.", "I'm a fan of the shorter answer.",
+    "I prefer option B, it reads cleaner.", "I like both options.", "I like the UI",
+])
+def test_tier0_skips_a_reaction_to_the_chat(turn):
     assert facts(turn) == []
 
 
@@ -76,13 +93,16 @@ def test_the_eval_meets_its_targets():
     assert r["hypothetical_fp"] <= fh.TARGETS["hypothetical_fp"], r
     assert r["flips"] == 0 and r["held_missed"] == 0, r
     assert fh.meets(r)
-    assert r["unreal"] >= 20 and r["expected"] >= 50  # enough turns of each kind to judge
+    assert r["reaction_fp"] <= fh.TARGETS["reaction_fp"], r
+    assert r["unreal"] >= 20 and r["reaction"] >= 20 and r["expected"] >= 50  # enough to judge
 
 
 def test_eval_flags_a_flip_and_a_hypothetical_fp():
     r = fh.evaluate([{"kind": "negation", "turn": "I eat meat.", "expect": ["Doesn't eat meat"]},
                      {"kind": "hypothetical", "turn": "I live in Paris.", "expect": []}])
     assert r["flips"] == 1 and r["hypothetical_fp"] == 1.0 and not fh.meets(r)
+    r = fh.evaluate([{"kind": "reaction", "turn": "I live in Paris.", "expect": []}])
+    assert r["reaction_fp"] == 1.0 and not fh.meets(r)
 
 
 def test_eval_cli(tmp_path):
