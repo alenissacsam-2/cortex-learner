@@ -86,6 +86,7 @@ def page(i: int) -> str:
 
 
 @pytest.mark.slow  # about 10 s here
+@pytest.mark.perf  # a 5 s timing bound: it fails when other work loads every core
 def test_close_budget(root, monkeypatch):
     (root / "resources").mkdir()
     for i in range(PAGES):

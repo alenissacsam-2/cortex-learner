@@ -138,6 +138,8 @@ def test_a_parse_that_hangs_or_crashes_is_a_skip(tmp_path, monkeypatch):
                                                   "import time; time.sleep(60)"])
     assert list(more_sources.docs_source(d).items()) == ["parse timed out"] * 2
     monkeypatch.setattr(more_sources, "_CHILD", [sys.executable, "-c", "pass"])
+    # a child that exits at once; the default timeout, so a slow start on a busy PC is no hang
+    monkeypatch.setattr(more_sources, "PARSE_TIMEOUT", 30.0)
     assert list(more_sources.docs_source(d).items()) == ["unreadable"] * 2
 
 
