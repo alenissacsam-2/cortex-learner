@@ -118,9 +118,10 @@ def test_no_capability_as_before_and_stamp_is_server_side(root, mode):
     forged = {**PREF, "text": "- Forged", "confirm": "clicked", "click": {"yes": True}}
     unasked = {**PREF, "text": "- Unasked", "user_confirmed": False}
     out, asked = drive(root, NO_CAPABILITY, PREF, forged, unasked, mode=mode)
-    assert asked == [] and out[0]["changed"] is True and out[2]["queued"] is True
-    assert [c.get("confirm") for c in stamps(root) if c["tool"] == "patch"] == ["relayed"] * 2
-    assert live(root) == [("confirmed", "relayed")] * 2
+    assert asked == [] and out[0]["changed"] is True and out[2]["changed"] is True
+    confirms = [c.get("confirm") for c in stamps(root) if c["tool"] == "patch"]
+    assert confirms == ["relayed", "relayed", None]  # the guess: no confirm
+    assert live(root)[:2] == [("confirmed", "relayed")] * 2 and live(root)[2][0] == "agent"
     assert know.report(Vault(root), events(root), "2026-11-16")["total"]["clicked"] == 0
 
 
@@ -133,7 +134,7 @@ def test_click_is_not_tool_input(root):
 
 def test_unconfirmed_patch_never_asks(root):
     (out,), asked = drive(root, YES, {**PREF, "user_confirmed": False})
-    assert asked == [] and out["queued"] is True
+    assert asked == [] and out["changed"] is True and "queued" not in out
 
 
 def test_confirm_missing_on_old_events_reads_relayed(root):

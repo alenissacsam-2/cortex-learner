@@ -113,16 +113,11 @@ def test_an_approve_into_the_core_refreshes_the_block_at_once(home, vroot, monke
     md = home / ".codex" / "AGENTS.md"
     targets.by_id()["codex"].apply(entry(vroot))
     assert "Call me Sam." in md.read_text(encoding="utf-8")
-    import datetime as dt
-
-    from cortex.events import local_day
-    day = local_day(dt.datetime.now(dt.UTC))
-
-    def waiting(text):  # a line an older Cortex queued (D3: a guess is now saved at once)
-        (vroot / "inbox.md").write_text(f"# Inbox\n\n## About me (unconfirmed)\n- Core: {text} "
-                                        f"(proposed {day}, me/core)\n", encoding="utf-8")
-
-    waiting("Use metric units.")
+    core = mcp_server.Cortex(Vault(vroot))
+    out = core._call("cortex_patch", core.cortex_patch, {
+        "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use metric units."})
+    assert out["queued"] is True  # no yes: it waits for the app's Approve
+    core.sessions.close(summary="test")
     a = server.App(vroot)
     monkeypatch.setattr(a, "entry", lambda: entry(vroot))
     p = next(x for x in a.review()["pending"] if x["page"] == "core")
@@ -133,7 +128,9 @@ def test_an_approve_into_the_core_refreshes_the_block_at_once(home, vroot, monke
         raise RuntimeError("rules file locked")
 
     monkeypatch.setattr(targets, "refresh_rules", boom)  # logged, never raised
-    waiting("Use 24 h time.")
+    core._call("cortex_patch", core.cortex_patch, {
+        "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use 24 h time."})
+    core.sessions.close(summary="test")
     p = next(x for x in a.review()["pending"] if x["page"] == "core")
     assert a.review_approve({"key": p["key"]})["count"] == 0
 

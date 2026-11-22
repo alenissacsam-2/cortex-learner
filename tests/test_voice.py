@@ -92,7 +92,7 @@ def test_voice_page_is_a_claim_and_confirm_page(root):
     async def body(call):
         p = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
                                         "target": "professor", "text": rule})
-        assert p["queued"] is True  # observe-then-confirm
+        assert p["changed"] is True and "queued" not in p  # 22 Nov: saved now as a guess
         bad = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
                                           "target": "Prof Lee", "text": rule,
                                           "user_confirmed": True})
@@ -100,7 +100,7 @@ def test_voice_page_is_a_claim_and_confirm_page(root):
         ok = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
                                          "target": "professor", "text": "- " + rule,
                                          "user_confirmed": True})
-        assert ok["claim"].startswith("c-")
+        assert ok["claim"].startswith("c-") and [r["id"] for r in ok["replaced"]] == [p["claim"]]
         ctx = await call("cortex_context", {})
         assert "Regards" not in ctx["context"]  # served only by cortex_as_me
 

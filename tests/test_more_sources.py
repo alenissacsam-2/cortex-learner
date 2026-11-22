@@ -323,7 +323,7 @@ def test_review_approves_and_dismisses_commit_decisions(root, tmp_path):
     app = server.App(root)
     view = app.review()
     first, second = view["decisions"]
-    assert view["count"] >= 2 and first["subject"] == "Replace pickle with JSON in the cache"
+    assert view["more"] >= 2 and first["subject"] == "Replace pickle with JSON in the cache"
     view = app.review_decision_approve({"key": first["key"]})
     assert [x["key"] for x in view["decisions"]] == [second["key"]]
     (c,) = changes(root, "decisions")

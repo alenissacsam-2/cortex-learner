@@ -1,7 +1,7 @@
-"""RR-4 and R3-3: cortex_patch's explicit `supersedes` pair (validated ids, shown in Review like
-an `update_of` pair, never retiring the old line itself, carried from a proposal to its
-Approve) and, while a recorded pair waits, prime, cortex_context and the hook serving only
-the newer line until the user resolves it."""
+"""RR-4 and R3-3: cortex_patch's explicit `supersedes` pair (validated ids) and, 22 Nov (D2),
+settled at once: the newer line stays and the older is retired, unless the older is the user's
+own and the newer a guess (then the guess is not saved). Prime, cortex_context and the hook
+serve only the line that stays."""
 
 import datetime as dt
 
@@ -20,23 +20,23 @@ NEW = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
        "user_confirmed": True, "text": "- Writes code in Helix"}
 
 
-def test_supersedes_records_a_pair_and_keeps_the_old_line(root, app):  # noqa: F811
+def test_supersedes_retires_the_old_line_at_once(root, app):  # noqa: F811
     prefs(root, "Uses Vim for editing code", "Drinks green tea")
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
         out = await call("cortex_patch", {**NEW, "supersedes": [f"^{old}"]})
         assert out["supersedes"] == [old] and "possible_update_of" not in out
-        assert "Review" in out["next"]
+        assert [r["id"] for r in out["replaced"]] == [old] and "cortex undo" in out["next"]
 
     run(root, body)
     new = cid(root, "preferences", "Writes code in Helix")
     (c,) = [c for c in changes(root, "preferences") if c.get("supersedes")]
     assert (c["claim"], c["supersedes"]) == (new, [{"page": "preferences", "claim": old}])
-    assert "Uses Vim for editing code" in [r["text"] for r in live(root, "preferences")]
-    (p,) = app.review()["conflicts"]  # no word overlap: shown only because it was named
-    assert (p["why"], p["left"]["id"], p["right"]["id"]) == ("supersedes", old, new)
-    assert app.review_conflict({"key": p["key"], "keep": "right"})["conflicts"] == []
+    (r,) = [c for c in changes(root, "preferences") if c.get("auto")]
+    assert (r["op"], r["target"], r["why"]) == ("retire", old, "supersedes")
+    assert "Uses Vim for editing code" not in [r["text"] for r in live(root, "preferences")]
+    assert app.review()["conflicts"] == []  # settled: never asked
     assert "Uses Vim" in (root / "me" / "preferences.md").read_text("utf-8").split("## Past")[1]
 
 
@@ -61,20 +61,18 @@ def test_supersedes_ids_are_checked(root):
     assert "Helix" not in text and "one" not in text  # nothing written on a refusal
 
 
-def test_a_proposal_carries_its_pair_to_approve(root, app):  # noqa: F811
+def test_a_guess_never_supersedes_the_users_own_line(root, app):  # noqa: F811
     prefs(root, "Uses Vim for editing code")
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
         out = await call("cortex_patch", {**NEW, "user_confirmed": False, "supersedes": [old]})
-        assert out["queued"] is True and out["supersedes"] == [old]
+        assert out["changed"] is False and out["clashes_with"]["id"] == old
+        assert "Ask them" in out["next"]
 
     run(root, body)
-    assert app.review()["conflicts"] == []  # nothing to pair until the line is written
-    (p,) = app.review()["pending"]
-    (pair,) = app.review_approve({"key": p["key"]})["conflicts"]
-    assert (pair["why"], pair["left"]["id"]) == ("supersedes", old)
-    assert pair["right"]["text"] == "Writes code in Helix"
+    assert "Helix" not in (root / "me" / "preferences.md").read_text("utf-8")
+    assert app.review()["conflicts"] == [] and app.review()["pending"] == []
 
 
 # ---- R3-3: while a pair waits, only the newer line is served ----
@@ -96,8 +94,7 @@ def context(root):
     return got["context"]
 
 
-@pytest.mark.parametrize("keep", ["both", "left", "right"])
-def test_a_waiting_pair_serves_the_newer_line_until_resolved(root, app, keep):  # noqa: F811
+def test_a_settled_pair_serves_only_the_newer_line(root):
     prefs(root, "Uses Vim for editing code", "Drinks green tea")
     old = cid(root, "preferences", "Uses Vim")
 
@@ -107,25 +104,20 @@ def test_a_waiting_pair_serves_the_newer_line_until_resolved(root, app, keep):  
     run(root, body)
     for text in (light(root), context(root)):
         assert "Writes code in Helix" in text and "Uses Vim" not in text
-        assert "Drinks green tea" in text  # only the old line of the pair is held back
-    assert "Uses Vim" in (root / "me" / "preferences.md").read_text("utf-8")  # nothing deleted
-    (p,) = app.review()["conflicts"]
-    app.review_conflict({"key": p["key"], "keep": keep})
-    for text in (light(root), context(root)):
-        assert ("Uses Vim" in text) == (keep in ("both", "left"))
-        assert ("Writes code in Helix" in text) == (keep in ("both", "right"))
+        assert "Drinks green tea" in text  # only the old line of the pair is retired
 
 
-def test_a_guessed_update_pair_and_a_profile_line_are_held_too(root):
+def test_a_guessed_update_pair_and_a_profile_line_are_settled_too(root):
     prefs(root, "Uses Vim for editing code")
     (root / "me" / "profile.md").write_text(
         '---\nid: "profile"\nsummary: "Who I am"\n---\n# Profile\n\n## Background\n'
         "- Lives in Pune\n- Studies computer science\n", encoding="utf-8")
     home = cid(root, "profile", "Lives in Pune")
+    vim = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
         out = await call("cortex_patch", {**NEW, "text": "- Uses Neovim for editing code"})
-        assert out["possible_update_of"]["id"] == cid(root, "preferences", "Uses Vim")
+        assert [r["id"] for r in out["replaced"]] == [vim]  # the guessed pair, settled
         await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
                                     "target": "Background", "text": "- Lives in Mumbai",
                                     "user_confirmed": True, "supersedes": [home]})

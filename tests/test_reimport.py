@@ -56,7 +56,7 @@ def test_a_hand_edited_page_keeps_its_text_and_gets_a_review_card(root_plain, tm
     cards = app.review()["imports"]
     assert [(c["page"], c["new"], c["title"], c["private"]) for c in cards] == [
         ("notes-plan", "notes-plan-2", "Plan", False)]
-    assert app.review()["count"] >= 1
+    assert app.review()["more"] >= 1
     (d / "Plan.md").write_text("Third plan.\n", encoding="utf-8")  # the -2 page is untouched
     assert importers.import_notes(v, d)["updated"] == 1
     assert "Third plan." in _page(root_plain, "notes-plan-2")

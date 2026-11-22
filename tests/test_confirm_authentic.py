@@ -1,7 +1,8 @@
-"""R3-2: a relayed `user_confirmed=true` on a me/ claim page is downgraded to unconfirmed (the
-line waits in Review) when the chat read outside text, or when the server logged this chat's
-user turns and none of them says the line. No logged turns: the yes stands; the owner's app
-click is never downgraded."""
+"""R3-2: a relayed `user_confirmed=true` on a me/ claim page is downgraded to unconfirmed
+(22 Nov: saved now as a guess, served (ask); a downgraded revise of the user's own line clashes
+with it, so it is not saved and the model asks) when the chat read outside text, or when the
+server logged this chat's user turns and none of them says the line. No logged turns: the yes
+stands; the owner's app click is never downgraded."""
 
 import json
 import time
@@ -63,10 +64,11 @@ def test_an_exposed_chat_saves_the_line_unconfirmed(vault):
         return await call("cortex_patch", {**PATCH, "text": "Prefers short answers"})
 
     out = serve(vault, body)
-    assert out["queued"] is True and out["changed"] is False, out
-    assert out["next"].startswith("Saved as unconfirmed (this chat read outside text)")
-    assert "Approve" in out["next"] and "stop" not in out["next"].lower()
-    assert "short answers" not in page(vault) and "Prefers short answers" in inbox(vault)
+    assert out["changed"] is True and "queued" not in out, out
+    assert out["next"].startswith("Saved now but unconfirmed (this chat read outside text)")
+    assert "(ask)" in out["next"] and "stop" not in out["next"].lower()
+    assert "- Prefers short answers ^c-" in page(vault)  # a guess: no (confirmed …) marker
+    assert "short answers" not in inbox(vault)
 
 
 def test_a_line_the_users_turn_says_stays_confirmed(vault):
@@ -82,8 +84,8 @@ def test_a_line_the_users_turn_says_stays_confirmed(vault):
 
 
 def test_a_downgraded_revise_keeps_the_line_it_replaces(vault):
-    """Audit 21 Nov M4: a relayed revise that waits in Review lost its pair to the old line,
-    so Approve added the new line beside the old one instead of offering to replace it."""
+    """Audit 21 Nov M4: a relayed revise lost its pair to the old line. 22 Nov: the pair is
+    settled at once, and a guess never replaces the user's own line: it is not saved."""
     async def body(call):
         await call("cortex_prime", {"prompt": PROMPT})
         return await call("cortex_patch", {"id": "me/preferences", "op": "revise",
@@ -91,7 +93,9 @@ def test_a_downgraded_revise_keeps_the_line_it_replaces(vault):
                                            "user_confirmed": True})
 
     out = serve(vault, body)
-    assert out["queued"] is True and out.get("supersedes") == ["c-plain"], out
+    assert out["changed"] is False and out["clashes_with"]["id"] == "c-plain", out
+    assert "Ask them" in out["next"]
+    assert "- Plain words please ^c-plain" in page(vault) and "jargon" not in page(vault)
 
 
 def test_a_downgraded_goals_revise_says_it_is_saved_not_waiting(vault):
@@ -120,14 +124,12 @@ def test_a_line_no_turn_says_is_downgraded(vault):
         return a, b
 
     a, b = serve(vault, body)
-    for out in (a, b):
-        assert out["queued"] is True and out["changed"] is False, out
-        assert "do not say it" in out["next"] and "Approve" in out["next"]
+    assert a["changed"] is True and "do not say it" in a["next"] and "(ask)" in a["next"]
+    assert b["changed"] is False and b["clashes_with"]["id"] == "c-plain"
     text = page(vault)
-    assert "tarot" not in text and "jargon" not in text
-    assert "- Plain words please ^c-plain" in text  # the revised line stays live meanwhile
-    assert "Communication: Loves long essays about tarot" in inbox(vault)
-    assert "Communication: Wants jargon everywhere" in inbox(vault)
+    assert "- Loves long essays about tarot ^c-" in text and "jargon" not in text
+    assert "- Plain words please ^c-plain" in text  # the user's own line stays
+    assert "tarot" not in inbox(vault) and "jargon" not in inbox(vault)
 
 
 def test_no_logged_turns_leaves_the_yes_as_is(vault):

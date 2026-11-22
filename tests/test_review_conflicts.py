@@ -72,25 +72,37 @@ def test_possible_update_of_by_word_overlap(root):
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Uses Neovim for editing code"})
-        u = out["possible_update_of"]
+        (u,) = out["replaced"]  # 22 Nov (D2): the recorded pair is settled at once
         assert (u["id"], u["page"]) == (old, "me/preferences")
         assert "<untrusted_note" in u["text"] and "Uses Vim for editing code" in u["text"]
-        assert out["next"].startswith(f"This line may update ^{old} on me/preferences")
+        assert "possible_update_of" not in out and "cortex undo" in out["next"]
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Sleeps early on Sundays"})
         assert "possible_update_of" not in out
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding",
-                                          "text": "- Uses Vim for writing code"})
-        assert out["queued"] is True and out["possible_update_of"]["id"] == old  # a proposal too
+                                          "text": "- Uses Neovim for writing code"})
+        # a guess that near-copies the user's own line is not saved twice
+        assert out["changed"] is False and out["duplicate_of"]["id"] == new_id(root)
+        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+                                          "target": "Coding", "user_confirmed": True,
+                                          "text": "- Never sleeps early on Sundays"})
+        assert out["possible_update_of"]["id"] == cid(root, "preferences", "Sleeps early")
+        assert out["next"].startswith("This line may update ^")
+        assert "Cortex settles such a pair itself" in out["next"]  # two of theirs: a card
 
     run(root, body)
     text = (root / "me" / "preferences.md").read_text("utf-8")
-    assert "Uses Neovim for editing code" in text and "Uses Vim for editing code" in text  # kept
-    new = cid(root, "preferences", "Uses Neovim")
-    (c,) = [c for c in changes(root, "preferences") if c.get("update_of")]
+    assert "Uses Vim for editing code" in text.split("## Past")[1]  # retired, undoable
+    assert "Uses Neovim for writing code" not in text
+    new = new_id(root)
+    (c,) = [c for c in changes(root, "preferences") if c.get("update_of") and c["claim"] == new]
     assert (c["claim"], c["update_of"]) == (new, {"page": "preferences", "claim": old})
+
+
+def new_id(root):
+    return cid(root, "preferences", "Uses Neovim")
 
 
 def test_possible_update_of_with_a_warm_embedder(root, monkeypatch):
@@ -124,7 +136,7 @@ def test_the_patch_never_loads_a_model(root, monkeypatch, warm):
         out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Prefers dark mode at night"})
-        assert ("possible_update_of" in out) is True
+        assert out.get("replaced") or "possible_update_of" in out  # the pair was seen
 
     run(root, body)
 
@@ -161,8 +173,11 @@ def test_conflict_pairs_and_the_three_buttons(root, app):  # noqa: F811
     assert [c["confirm"] for c in retires] == ["clicked", "clicked"]
 
 
-def test_a_recorded_update_pair_shows_until_resolved(root, app):  # noqa: F811
+def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
+    """22 Nov (D2): the newer line of a recorded pair stays and the older is retired at once,
+    recorded as an automatic change the user can undo; Review never asks."""
     prefs(root, "Uses Vim for editing code")
+    old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
         await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
@@ -170,11 +185,10 @@ def test_a_recorded_update_pair_shows_until_resolved(root, app):  # noqa: F811
                                     "text": "- Uses Neovim for editing code"})
 
     run(root, body)
-    (p,) = app.review()["conflicts"]  # no negation: shown only because it was recorded
-    assert (p["why"], p["left"]["text"], p["right"]["text"]) == (
-        "update", "Uses Vim for editing code", "Uses Neovim for editing code")
-    assert app.review_conflict({"key": p["key"], "keep": "right"})["conflicts"] == []
+    assert app.review()["conflicts"] == []
     assert "Uses Vim" in (root / "me" / "preferences.md").read_text("utf-8").split("## Past")[1]
+    (c,) = [c for c in changes(root, "preferences") if c.get("auto")]
+    assert (c["op"], c["target"], c["why"], c["card"]) == ("retire", old, "update", "conflict")
 
 
 # ---- repeated corrections ----

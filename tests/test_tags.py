@@ -106,7 +106,7 @@ def test_forget_with_one_two_and_no_matches(root):
     v = Vault(root)
     cards = review.view(v, EventLog(v).iter_events(), local_day_now())
     by = {c["text"]: c for c in cards["forget"]}
-    assert set(by) == {"writes python rust", "my bicycle"} and cards["count"] >= 2
+    assert set(by) == {"writes python rust", "my bicycle"} and cards["more"] >= 2
     assert {c["text"] for c in by["writes python rust"]["candidates"]} == {
         "Writes Python with type hints", "Writes Rust for small CLI tools"}
     assert by["my bicycle"]["candidates"] == []

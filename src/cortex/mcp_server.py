@@ -348,6 +348,7 @@ SCOPE_HEADINGS = {"coding": "Coding", "communication": "Communication", "learnin
 # SPEC §0 U6, U7; V2; B6: the contract is served as rules over the model's defaults
 CONFIRM_PAGES = ("personality", "preferences", "portrait", "voice", "teaching-contract", "core",
                  "setup")
+STEER_PAGES = ("core", "setup")  # D3: claim pages whose guesses still wait for Approve
 SAID = 0.6  # R3-2: the share of a line's content words one logged user turn must hold
 # cortex_patch ops that need `target` (revise, retire and reject: _claim_op; set_topics: none)
 PATCH_TARGET = {"append_to_section": "the section heading", "set_field": "the field name",
@@ -2876,10 +2877,12 @@ class Cortex:
                                              and access.scope_page(scopes, update["page"])) \
             else None
         # D3: a claim page takes an inferred line at once (tier agent, served (ask)); the
-        # portrait and a teaching rule wait for Approve, and while harvesting, old chats are
-        # stale evidence: every claim page waits for a yes
+        # portrait, a teaching rule and me/core and me/setup (copied into every agent's rules
+        # file) wait for Approve, and while harvesting, old chats are stale evidence: every
+        # claim page waits for a yes
         if (op == "append_to_section" and kind == "me" and not user_confirmed
-                and ((nid in CONFIRM_PAGES and not claim_page) or (harvesting and claim_page))):
+                and ((nid in CONFIRM_PAGES and (not claim_page or nid in STEER_PAGES))
+                     or (harvesting and claim_page))):
             text = " ".join(text.split()).removeprefix("- ")
             if (not target.strip() or "\n" in target or "\r" in target
                     or target.lstrip().startswith("#") or len(target) > 200):
@@ -3037,6 +3040,7 @@ class Cortex:
         if lost is None:
             return {"retire": [x for x in plan if x["keep"] is new]}
         keep = self._line_ref(lost["keep"])
+        # a guessed `update` pair agrees (an opposite one is settled as `opposite`): a near-copy
         if lost["why"] in ("opposite", "supersedes"):
             return {"lost": {
                 "changed": False, "clashes_with": keep,
@@ -3082,7 +3086,8 @@ class Cortex:
         session when there is nothing to do. {moved, retired}."""
         with self.vault.lock():
             day = local_day(self._now())
-            waiting = [p for p in review.pending(self.vault, day) if p["page"] in claims.PAGES]
+            waiting = [p for p in review.pending(self.vault, day)
+                       if p["page"] in claims.PAGES and p["page"] not in STEER_PAGES]
             events = list(self.log.iter_events())
             plan = review.settle(review.live_rows(self.vault, events, day), events,
                                  review.known_texts(self.vault),
@@ -3106,10 +3111,10 @@ class Cortex:
 
     def _migrate_inbox(self, waiting: list[dict]) -> int:
         """D3, once per waiting line: an about-me line under `## About me (unconfirmed)` (claim
-        pages only; teaching rules and portrait lines still wait) is written to its page as
-        cortex_patch writes an inferred line, then leaves inbox.md. A line claims.check
-        refuses stays where it is; one under the page's `## Not me`, or a near-copy of or a
-        clash with a line that stays, just leaves the inbox."""
+        pages but me/core and me/setup; teaching rules and portrait lines still wait) is
+        written to its page as cortex_patch writes an inferred line, then leaves inbox.md. A
+        line claims.check refuses stays where it is; one under the page's `## Not me`, or a
+        near-copy of or a clash with a line that stays, just leaves the inbox."""
         moved = 0
         for p in waiting:
             if claims.unsafe(f"{p['section']}\n{p['text']}"):
@@ -3719,9 +3724,10 @@ DESCRIPTIONS = {
                     "section each, plus ## Everyone): user_confirmed=true for the user's own "
                     "words; without it your inference is saved now as a guess, served (ask); a "
                     "near-copy of a live line is not added twice, and one that clashes with a "
-                    "line the user gave is not saved (ask them). me/portrait without it waits "
-                    "in inbox.md. me/teaching-contract: a rule always waits for the user's "
-                    "Approve in the Cortex app, even with user_confirmed=true. supersedes: up "
+                    "line the user gave is not saved (ask them). me/portrait, me/core and "
+                    "me/setup without it wait in inbox.md. me/teaching-contract: a rule always "
+                    "waits for the user's Approve in the Cortex app, even with "
+                    "user_confirmed=true. supersedes: up "
                     "to 3 ^c-… ids of me/* lines the new line replaces; Cortex retires them. "
                     "op=set_topics (resource or note): text = 0-4 "
                     "topic hub ids, comma-separated, replacing the page's topics; target is "
