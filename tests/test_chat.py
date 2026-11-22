@@ -1703,3 +1703,53 @@ def test_unrouted_halves_take_half_the_passages_each(vault, stream, monkeypatch)
     asked.clear()
     _turn(vault, cid, "who wrote the kitchen note and what did he say about it?", s.runner())
     assert len(asked) == 1  # mid-chat they may point at the last turn: no split
+
+
+# ---- passages: a me/ page's ## Past, and each passage's header (Q17-Q19) -----------------------
+
+def _prefs(vault):
+    note(vault.root, "me/preferences.md", "title: My preferences\nprivate: false\n",
+         "# My preferences\n\n## Coding\n- Always use uv for car motor scripts ^c-new\n\n"
+         "## Past\n- Use Pipenv for car motor scripts (until 2026-09-12 → ^c-new) ^c-old\n\n"
+         "## Not me\n- Car motor racing\n")
+
+
+@pytest.mark.parametrize("q", ["Which car motor tool do I prefer to use right now?",  # Q18
+                               "How do I like car motor scripts?",  # Q17
+                               "What are my coding rules for car motor scripts?"])  # Q19
+def test_the_past_of_a_me_page_never_reaches_the_model(vault, stream, q):
+    _prefs(vault)
+    s = stream("ollama", ["uv [1]."])
+    _turn(vault, None, q, s.runner())
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert "Always use uv" in user and "Pipenv" not in user and "## Past" not in user
+    assert "[undated | current]\nMy preferences\nFrom: your note" in user
+    assert "Car motor racing" in user  # the next section stays
+
+
+@pytest.mark.parametrize("q", ["Which car motor tool did I use before?",
+                               "what did I prefer for car motor scripts?",
+                               "what did I use to run car motor scripts with?"])
+def test_a_question_about_the_past_keeps_it(vault, stream, q):
+    _prefs(vault)
+    s = stream("ollama", ["Pipenv [1]."])
+    _turn(vault, None, q, s.runner())
+    user = s.bodies[0]["messages"][-1]["content"]
+    assert "Use Pipenv for car motor scripts" in user
+    assert "[undated | past]\nMy preferences" in user
+
+
+def test_every_passage_starts_with_its_day_and_status():
+    p = {"path": "decisions/dec-a.md", "title": "A", "kind": "note", "day": "2026-07-05",
+         "text": "x", "stale": True}
+    assert ask.prompt([p], "q").startswith('<untrusted_note id="1">\n[2026-07-05 | replaced]\nA\n')
+    assert ask.header({"path": "notes/b.md", "day": ""}) == "[undated]"
+    assert ask.header({"path": "notes/b.md", "day": "2026-11-01"}) == "[2026-11-01]"
+
+
+def test_a_superseded_decision_is_marked_stale(vault):
+    note(vault.root, "decisions/dec-old.md", "title: Old car motor choice\nkind: decision\n"
+         "status: superseded\ndate: 2026-07-05\n", "# Old car motor choice\n\nCar motor A.")
+    found = ask._passages(vault, "car motor choice", 8, sources=ask.SOURCES)
+    old = next(p for p in found if p["path"] == "decisions/dec-old.md")
+    assert old["stale"] and ask.header(old) == "[2026-07-05 | replaced]"
