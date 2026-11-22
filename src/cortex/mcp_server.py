@@ -16,11 +16,14 @@ import time
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version as _version
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import anyio
-from mcp.server.mcpserver import Context, Elicit, ElicitationResult, MCPServer, Resolve
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:  # the SDK takes ~1.6 s to import, so build_server imports it: the
+    # prime hook's //tags use Cortex without it
+    from mcp.server.mcpserver import Context, Elicit, ElicitationResult, MCPServer, Resolve
 
 from cortex import (
     access,
@@ -61,7 +64,6 @@ from cortex.events import (
 from cortex.index import (
     GLYPHS,
     READ_CAP_CHARS,
-    STOPWORDS,
     TRUNCATED,
     Index,
     _edge_targets,
@@ -75,8 +77,11 @@ from cortex.prime import (
     LEGEND,
     NOT_RECORDED,
     PERSONALITY_HEADINGS,
+    PLAYBOOK_SAYS,
+    PLAYBOOK_TAG,
     PRIME_CAPS,
     PRIME_MAX,
+    PRIME_PLAYBOOKS,
     PRIME_PROMPT,
     WITHHELD,
 )
@@ -299,12 +304,6 @@ READ_SIMILAR = 3  # RR-23: meaning-neighbours cortex_read lists, from head vecto
 # RR-21: pages changed or touched in the last LATELY_DAYS, a hint at what the user is up to
 PRIME_LATELY, LATELY_DAYS = 3, 7
 LATELY_HEAD = "Lately (recent, use only if relevant)"
-# G4: playbooks (notes tagged `playbook`) the prompt matches, out of the Related budget
-PRIME_PLAYBOOKS, PLAYBOOK_TAG, PLAYBOOK_SUMMARY = 2, "playbook", 60
-PLAYBOOK_SAYS = ("Follow it for this task (cortex_read it first); if the user corrects how, "
-                 "cortex_patch that playbook.")
-# a playbook file changed this long after the last write Cortex logged on it: the owner edited it
-OWNER_EDIT_SLACK = 2
 # the live chat log (Cortex._chat_log): a call this long after the last one starts a new chat;
 # a gist's length; SEEN holds each client's last call, rewritten at most every SEEN_EVERY s
 CHAT_IDLE, GIST_CHARS = 2 * 3600, 300
@@ -1650,61 +1649,8 @@ class Cortex:
 
     def _playbooks(self, prompt: str, hits: list[dict], notes: dict, mute: set[str],
                    evs: list[dict]) -> list[tuple[str, str]]:
-        """G4: [(id, "- [[id]] title: summary")] of the playbooks (`note` pages tagged
-        `playbook`) the prompt matches, best first: recall hits, then by the content words
-        (prime.pref_rows' terms) their title and summary share. `notes` (the index) holds no
-        private page; a muted one, or one whose `scope` this client's profile lacks, is out.
-        An agent-written one the owner has not confirmed (`_unconfirmed`) ends in ` (ask)`."""
-        words = re.findall(r"\w+", prompt.lower())
-        terms = {t for t in words if len(t) > 2 and t not in STOPWORDS
-                 and t not in prime.TASK_WORDS}
-        terms |= {x for w in words for x in prime.ABBREVIATIONS.get(w, ())}
-        rank = {h["id"]: n for n, h in enumerate(hits) if h.get("match") != "linked"}
-        scopes, found = self._scopes(), []
-        for i, n in notes.items():
-            f, tags = n["fields"], n["fields"].get("tags")
-            if (n["kind"] != "note" or i in mute or PLAYBOOK_TAG not in (
-                    tags if isinstance(tags, list) else [tags])):
-                continue
-            if scopes is not None and str(f.get("scope") or "all") not in ("all", *scopes):
-                continue
-            summary = render.plain(str(f.get("summary") or ""), PLAYBOOK_SUMMARY)
-            shared = sum(t in f"{n['title']} {summary}".lower() for t in terms)
-            if i in rank or shared:
-                found.append((rank.get(i, len(rank)), -shared, i, n["title"], summary))
-        found.sort()
-        ask = self._unconfirmed({x[2] for x in found[:PRIME_PLAYBOOKS]}, evs)
-        return [(i, f"- [[{i}]] {title}" + (f": {summary}" if summary else "")
-                 + (" (ask)" if i in ask else "")) for _, _, i, title, summary in found]
-
-    def _unconfirmed(self, ids: set[str], evs: list[dict]) -> set[str]:
-        """G4: which of the note `ids` an agent wrote and the owner has not confirmed: the last
-        write Cortex logged on the page (its `cortex_add`, or a `cortex_patch` with its `tier`
-        as for claims) is not the owner's (`confirmed`, or `clicked` in the app), and the file
-        has not changed since. A page with no logged write is the owner's own; filing it under
-        a topic (`set_topics`) is no write about its content."""
-        last, at = {}, {}
-        for e in evs:
-            pl = e.get("payload") if e.get("kind") == "change" else None
-            c = pl.get("change") if isinstance(pl, dict) else None
-            if isinstance(c, dict) and c.get("kind") == "note" and c.get("id") in ids:
-                at[c["id"]] = e.get("ts")
-                if c.get("op") != "set_topics":
-                    last[c["id"]] = c
-        out = set()
-        for i, c in last.items():
-            if c.get("tier") == "confirmed" or c.get("confirm") == "clicked":
-                continue
-            ts = at[i]
-            try:  # shortcut: any later write Cortex did not log (a relink) reads as the owner's
-                # edit; record a hash with each write if that ever matters
-                edited = self.vault.path_for("note", i).stat().st_mtime > datetime.strptime(
-                    ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp() + OWNER_EDIT_SLACK
-            except (OSError, TypeError, ValueError):
-                edited = False
-            if not edited:
-                out.add(i)
-        return out
+        """G4: prime.playbooks under this client's profile."""
+        return prime.playbooks(self.vault, prompt, hits, notes, mute, self._scopes(), evs)
 
     def _personality_prefs(self, scope: str, put, nag: bool = False, served=None,
                            asks: bool = False, lines: list | None = None) -> None:
@@ -3824,10 +3770,15 @@ def build_server(vault: Vault, role: str = "owner", excluded: str | None = None,
             catalog_sync(vault, if_changed=True)
         except VaultError as e:
             logging.getLogger(__name__).warning("catalog sync skipped: %s", e)
+    from mcp.server import mcpserver as sdk
+
+    # the tools' string annotations (Context, the click's Resolve) resolve in these globals
+    globals().update({n: getattr(sdk, n) for n in (
+        "Context", "Elicit", "ElicitationResult", "MCPServer", "Resolve")})
     core = Cortex(vault, role)
     core.excluded = excluded
-    server = MCPServer("cortex", version=_version("cortex-learner"),
-                       instructions=EXCLUDED_INSTRUCTIONS if excluded else INSTRUCTIONS)
+    server = sdk.MCPServer("cortex", version=_version("cortex-learner"),
+                           instructions=EXCLUDED_INSTRUCTIONS if excluded else INSTRUCTIONS)
     server.cortex = core  # serve() closes its open session when the client goes
     for name, desc in DESCRIPTIONS.items():
         fn = getattr(core, name)

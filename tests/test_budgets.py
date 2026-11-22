@@ -58,6 +58,21 @@ def test_hook_import_budget(root, cmd, payload):
     assert not HEAVY_CORTEX & set(got["cortex"]), got["cortex"]
 
 
+def test_a_tagged_prompt_saves_without_the_sdk(root):
+    """QA 22 Nov: a //tag took the hook from ~0.9 s to ~4 s; the mcp SDK import (~1.6 s) and
+    an unused index build were most of it. mcp_server comes in, the SDK does not."""
+    payload = {"session_id": "c1", "hook_event_name": "UserPromptSubmit",
+               "prompt": "Explain heaps\n//pref: Replies in British English"}
+    r = subprocess.run([sys.executable, "-c", PROBE, "prime-hook"], input=json.dumps(payload),
+                       capture_output=True, text=True, encoding="utf-8", timeout=120,
+                       env={**os.environ, "CORTEX_VAULT": str(root)})
+    line = next(x for x in r.stderr.splitlines() if x.startswith("IMPORTS "))
+    got = json.loads(line.removeprefix("IMPORTS "))
+    assert "cortex.mcp_server" in got["cortex"] and "Cortex saved" in r.stdout
+    assert not HEAVY & set(got["third"]), got["third"]
+    assert "cortex.semantic" not in got["cortex"]
+
+
 # No slow marker in this repo, so the vault stays small enough for a ~10 s test. Since close
 # stopped rebuilding the dashboard and index.md (v6 item 5) it takes ~1.4 s here and at 5,000
 # pages alike (mostly git), down from ~4 s here and 25-29 s at 5,000.

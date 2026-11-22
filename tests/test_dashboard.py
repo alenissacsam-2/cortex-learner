@@ -628,6 +628,31 @@ def test_today_ids_are_pages_the_owner_saved_today(root):
     assert "if (!todayStep(-1)) turn(" in BRAIN_JS and "if (!todayStep(1)) turn(" in BRAIN_JS
 
 
+def test_session_receipts_get_readable_titles_and_ambient_ones_stay_out_of_today(root):
+    """An AI chat's receipt (`<day>-ambient-<8>`) reads "Chat with an AI app, HH:MM" and is
+    left out of Today (the pages it changed are there); a study session reads "Study session
+    (mode), HH:MM" and stays. No Started line: the date from the id. The files are unchanged."""
+    v = Vault(root)
+    now = datetime.now().astimezone()
+    day = dashboard.build_data(v, now=now)["day"]
+    body = "# Session X\n\n- Mode: {m}\n- Started: {d} 14:05\n- Duration: 3 min\n\n## Changed\n"
+    files = {f"{day}-ambient-0bkh1234": body.format(m="ambient", d=day),
+             f"{day}-mock-ab12cd34": body.format(m="mock", d=day),
+             "2026-01-02-ambient-zz99zz99": "# Session Y\n"}
+    (root / "sessions").mkdir(exist_ok=True)
+    for name, text in files.items():
+        (root / "sessions" / f"{name}.md").write_text(text, encoding="utf-8")
+    d = dashboard.build_data(v, now=now)
+    titles = {p["id"]: p["title"] for p in d["pages"]}
+    assert titles[f"{day}-ambient-0bkh1234"] == "Chat with an AI app, 14:05"
+    assert titles[f"{day}-mock-ab12cd34"] == "Study session (mock), 14:05"
+    assert titles["2026-01-02-ambient-zz99zz99"] == "Chat with an AI app, 2026-01-02"
+    assert f"{day}-mock-ab12cd34" in d["today_ids"]
+    assert f"{day}-ambient-0bkh1234" not in d["today_ids"]
+    assert all((root / "sessions" / f"{n}.md").read_text(encoding="utf-8") == t
+               for n, t in files.items())
+
+
 def test_me_pages_get_friendly_titles(root):
     (root / "me" / "teaching-contract.md").write_text("---\nkind: me\n---\n# x\n",
                                                        encoding="utf-8")

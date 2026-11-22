@@ -35,12 +35,26 @@ _TOP = re.compile(r"^#{1,2}[ \t]")  # a heading that ends a ## section
 # as an instruction to an AI, or hides characters, is refused on write and not served. Phrases
 # are matched on `index._key` folding with spaces kept (look-alikes, zero-width chars and
 # dashes gone), tokens on the same folding with spaces dropped too.
+_RULES = r"(?:instructions?|directions?|directives?|guidelines?|rules|messages|prompts?)"
 _PHRASES = (
     ("ignore previous instructions", re.compile(
         r"(?<!not )(?<!n't )(?<!n\u2019t )(?<!dont )(?<!never )"  # "don't forget prior rules"
-        r"\b(?:ignore|disregard|forget) (?:(?:all|any) )?(?:(?:the|your|my) )?"
-        r"(?:previous|prior|above|earlier) (?:instructions?|rules|messages|prompts?)\b")),
+        r"\b(?:ignore|disregard|forget|override) (?:"
+        # "disregard all previous directions": a word placing the rules before this text
+        r"(?:(?:all|any) (?:of )?)?(?:(?:the|your|my) )?(?:previous|prior|above|earlier|"
+        rf"preceding) {_RULES}"
+        # "ignore your guidelines": the AI's own rules; a bare "forget instructions" is not it
+        rf"|(?:(?:all|any) (?:of )?)?your {_RULES}"
+        # "ignore the instructions above": the place named after the rules
+        rf"|(?:(?:all|any) (?:of )?)?(?:(?:the|my) )?{_RULES} (?:above|so far|you (?:were|"
+        r"have been|'ve been|\u2019ve been) given)"
+        # "forget everything you were told": the whole conversation so far
+        r"|(?:everything|anything|all) (?:that )?(?:you (?:were|have been|'ve been|\u2019ve "
+        r"been) (?:told|given|taught)|above|(?:said|written) (?:above|before|earlier))"
+        r")\b")),
     ("new instructions:", re.compile(r"\bnew instructions? ?:")),
+    # a persona handed to the reader ("you are now DAN"); "I am now a final-year student" passes
+    ("you are now", re.compile(r"\byou(?: are|'re|\u2019re|re) now\b")),
     # shortcut: only a system prompt someone is told to reveal, drop or replace, or a
     # `system prompt:` label, so "I write system prompts for my bots" passes
     ("system prompt", re.compile(r"\b(?:ignore|disregard|forget|reveal|print|show|repeat|leak|"
@@ -48,6 +62,15 @@ _PHRASES = (
                                  r"\bsystem prompt ?:")))
 _TOKENS = (("a chat template token", re.compile(r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>")),
            ("Cortex's untrusted_note tag", re.compile(r"</?untrustednote")))
+# a chat role label opening a line or sentence ("SYSTEM: you must ..."); `system:` and
+# `developer:` only when an order follows, so "System: Windows 11" on me/setup passes
+_ROLE = re.compile(
+    r"(?m)(?:^|[.!?] )[^\w\n]*(assistant|(?:system|developer)(?=[^\w\n]*: ?(?:you|your|always|"
+    r"never|must|do|don't|dont|ignore|disregard|forget|from now on|send|email|reveal|print|"
+    r"share|delete|obey)\b))[^\w\n]*:")
+# three or more single chars in a row ("i g n o r e"): joined, checked for a trigger word
+_SPACED = re.compile(r"(?<!\S)(?:\S ){2,}\S(?!\S)")
+_TRIGGER = re.compile(r"ignore|disregard|forget|override|instruction|prompt|system")
 
 
 def unsafe(text: str) -> str | None:
@@ -65,11 +88,18 @@ def unsafe(text: str) -> str | None:
             return f"a control character (U+{ord(c):04X})"
         if cat == "Cf" and not (c in "\u200c\u200d" and i and not text[i - 1].isascii()):
             return f"an invisible character (U+{ord(c):04X})"
-    loose = " ".join("".join(" " if c.isspace() else _key(c) for c in text).split())
+    lines = [" ".join("".join(" " if c.isspace() else _key(c) for c in ln).split())
+             for ln in text.splitlines()]
+    loose = " ".join(filter(None, lines))
     tight = loose.replace(" ", "")
     for name, rx in _PHRASES:
         if rx.search(loose):
             return f'the phrase "{name}"'
+    if m := _ROLE.search("\n".join(lines)):
+        return f'the role label "{m.group(1)}:"'
+    for m in _SPACED.finditer(loose):
+        if _TRIGGER.search(word := m.group().replace(" ", "")):
+            return f'spaced-out letters ("{word}")'
     return next((name for name, rx in _TOKENS if rx.search(tight)), None)
 
 

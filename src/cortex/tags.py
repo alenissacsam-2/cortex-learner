@@ -23,7 +23,7 @@ import re
 from cortex import claims, review
 from cortex.events import EventLog, local_day
 from cortex.render import plain
-from cortex.vault import scan_secrets
+from cortex.vault import VaultError, scan_secrets
 
 TAG = re.compile(r"(?<![\w:/])//(pref|fact|forget):[ \t]*([^\r\n]*)", re.I)
 MAX_CHARS = 300  # a tag's text
@@ -47,13 +47,14 @@ def key(tag: str, text: str, day: str) -> str:
     return "tag:" + hashlib.sha1(f"{tag}\n{claims.norm(text)}\n{day}".encode()).hexdigest()[:16]
 
 
-def apply(core, items, said: bool = True, forget_said: bool = True) -> list[str]:
+def apply(core, items, said: bool = True, forget_said: bool = True,
+          refused: list[str] | None = None) -> list[str]:
     """Act on (tag, text, day) items through `core` (an mcp_server.Cortex): each one through
     its `_call`, so roles, the excluded folder, an ambient session and the key dedupe all
     apply. `said`: the caller knows these are the owner's typed words (the hook, an import);
     a session that read outside text still only proposes. `forget_said=False` (an import: an
     old chat's forget may predate the line it matches) sends every forget to the Review.
-    Returns a line per tag acted on."""
+    Returns a line per tag acted on; `refused` gets a `refusal` line per tag Cortex refused."""
     lines = []
     for tag, text, day in items:
         k = key(tag, text, day)
@@ -62,25 +63,51 @@ def apply(core, items, said: bool = True, forget_said: bool = True) -> list[str]
         ok = said and (forget_said or tag != "forget")
         out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": ok,
                                                      "key": k})
-        if "error" not in out and not out.get("duplicate"):
+        if "error" in out:
+            if refused is not None:
+                refused.append(refusal(tag, str(out.get("message") or out["error"])))
+        elif not out.get("duplicate"):
             lines.append(out["summary"])
     return lines
 
 
-def apply_in(vault, items, log: EventLog | None = None, forget_said: bool = True
-             ) -> list[str]:
+def refusal(tag: str, why: str) -> str:
+    """`//<tag> line: <why>`, with no invisible or control character from `why`."""
+    return f"//{tag} line: " + "".join(c for c in why if c.isprintable())
+
+
+def _refused(tag: str, text: str) -> str | None:
+    """What `act` would refuse the text for before it writes anything, else None."""
+    try:
+        scan_secrets(text)
+        if tag != "forget":
+            claims.check(text)
+    except VaultError as e:
+        return str(e)
+    return None
+
+
+def apply_in(vault, items, log: EventLog | None = None, forget_said: bool = True,
+             refused: list[str] | None = None) -> list[str]:
     """`apply` outside the MCP server (the prime hook, chat_import): a Cortex of its own, built
-    only when an item is new (`log`: an EventLog to check keys with), whose session is closed
-    (and committed) at once."""
+    only when an item is new (`log`: an EventLog to check keys with) and passes act's checks
+    (a refused one goes to `refused` with no session), whose session is closed (and
+    committed) at once."""
     log = log or EventLog(vault)
     items = [i for i in items if not log.has_key(key(*i))]
+    bad = {i: why for i in items if (why := _refused(i[0], i[1]))}
+    if refused is not None:
+        refused += [refusal(i[0], why) for i, why in bad.items()]
+    items = [i for i in items if i not in bad]
     if not items:
         return []
     from cortex.mcp_server import Cortex  # the SDK: only when there is something to write
 
-    core = Cortex(vault)
+    # no index build: a tag writes me/ pages only, and the build thread slowed the hook ~1 s
+    core = Cortex(vault, build=False)
+    core._ready.set()  # so a use of the index raises at once instead of waiting forever
     try:
-        return apply(core, items, forget_said=forget_said)
+        return apply(core, items, forget_said=forget_said, refused=refused)
     finally:
         if core.sessions.current is not None:
             core.sessions.close(summary="Saved //tags the user typed")

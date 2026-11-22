@@ -1935,7 +1935,8 @@
   $('wordmark').append(dm('CORTEX', 3, 'Cortex'));
   const root = document.documentElement;
   const dayMq = window.matchMedia('(prefers-color-scheme: light)');
-  try { const t = localStorage.getItem('cortex-app-theme'); if (t === 'day' || t === 'night') root.dataset.theme = t; } catch (e) { /* storage off */ }
+  // one key with Home (dashboard.js); 'cortex-app-theme' was this page's own key before
+  try { const t = localStorage.getItem('cortex-theme') || localStorage.getItem('cortex-app-theme'); if (t === 'day' || t === 'night') root.dataset.theme = t; } catch (e) { /* storage off */ }
   function themeBtn() {
     const day = root.dataset.theme ? root.dataset.theme === 'day' : dayMq.matches;
     const b = $('theme');
@@ -1946,7 +1947,7 @@
   $('theme').addEventListener('click', () => {
     const day = root.dataset.theme ? root.dataset.theme === 'day' : dayMq.matches;
     root.dataset.theme = day ? 'night' : 'day';
-    try { localStorage.setItem('cortex-app-theme', root.dataset.theme); } catch (e) { /* storage off */ }
+    try { localStorage.setItem('cortex-theme', root.dataset.theme); } catch (e) { /* storage off */ }
     themeBtn();
   });
   dayMq.addEventListener('change', themeBtn);

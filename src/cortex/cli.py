@@ -426,6 +426,9 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
                   warned: list[str]) -> tuple[list[str], list[str], list[str]]:
     """The last step of `_init`: point ~/.cortex at the vault when it names none (or `default`)."""
     current = taint.config().get("vault")
+    if not current:  # a first setup: What's new starts at this version, not at BEFORE_NEWS
+        from cortex.app import news
+        news.start()
     if default or not current:
         did.append(f"pointer {_write_config(vault=str(root))}")
     elif Path(current).resolve() == root:

@@ -1837,8 +1837,11 @@ def _handler(app: App):
                 except (ValueError, OSError):
                     pass
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
-            self._head(code, ctype, len(data), extra)
-            self.wfile.write(data)
+            try:
+                self._head(code, ctype, len(data), extra)
+                self.wfile.write(data)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+                self.close_connection = True  # the browser left mid-answer: nothing to tell it
 
         def _head(self, code: int, ctype: str, length: int | None, extra=None):
             self.send_response(code)
