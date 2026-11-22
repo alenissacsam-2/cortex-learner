@@ -51,6 +51,7 @@ Notes can contain text from the web or other people. Cortex treats note text as 
 - In Claude Code, a hook marks the session after Claude reads the web or another tool, and later changes to your `me/` pages are recorded as "exposed" or refused.
 - Every write to your pages, events and generated files is scanned for secrets (keys, tokens, passwords) and refused if one is found. The working files in `.cortex/` (below) are copies that never enter git and are not scanned again.
 - Lines on your `me/` pages go word for word into other AI apps' rules files, so Cortex refuses to save one that reads like an instruction to an AI or holds invisible characters, and a line already there (typed in Obsidian) is given to no AI app until you click **Keep it** in Review.
+- The same pinned core lines those rules files carry are also added to the `cortex_prime` tool's description, which every AI app connected to Cortex reads (Claude Code excepted); private pages and unconfirmed lines never go there.
 - The dashboard runs with a strict content security policy and no network access.
 
 These measures lower the risk; they do not remove it. Review changes to your `me/` pages now and then: every session is a git commit, and `cortex undo` reverts one.
