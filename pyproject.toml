@@ -31,7 +31,7 @@ cortex-app = "cortex.app.launch:main"
 cortex-receiver = "cortex.app.launch:receiver"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-xdist>=3.8.0", "ruff"]
 
 [build-system]
 requires = ["hatchling"]
@@ -53,4 +53,5 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-markers = ["slow: takes over ~10 s (deselect with -m 'not slow')"]
+markers = ["slow: takes over ~10 s (deselect with -m 'not slow')",
+           "perf: a timing benchmark; skipped under -n, run alone with -m perf"]

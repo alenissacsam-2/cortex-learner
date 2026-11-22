@@ -3,6 +3,7 @@
 isolated `home` sets `pytestmark = pytest.mark.usefixtures("home")`."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,6 +15,16 @@ import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONTRACT = "# Teaching contract\n\n- Ask before you teach.\n- Keep **answers** short — ✓\n"
+
+
+def pytest_collection_modifyitems(config, items):
+    """Timing benchmarks need the machine to themselves: under `-n` the other workers load every
+    core and the bounds fail, so they skip there and run serially with `-m perf`."""
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        skip = pytest.mark.skip(reason="timing benchmark: run alone with uv run pytest -m perf")
+        for item in items:
+            if "perf" in item.keywords:
+                item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

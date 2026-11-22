@@ -227,6 +227,7 @@ def test_init_writes_the_wiki_bases(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow  # about 19 s here
+@pytest.mark.perf
 def test_1000_note_vault_is_fast_and_small(tmp_path):
     r = tmp_path / "big"
     r.mkdir()

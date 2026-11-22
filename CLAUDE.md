@@ -5,7 +5,7 @@
 - **Commands:**
   - `uv sync`
   - `uv run cortex --help`
-  - `uv run pytest`
+  - `uv run pytest -n auto`, then `uv run pytest -m perf` (the timing benchmarks, which skip under `-n`)
   - `uv run pytest -m "not slow"` (quick loop; run the full suite before a commit)
   - `uv run ruff check`
   - `uv run cortex mcp --vault <path>`

@@ -548,6 +548,7 @@ def _big(root: Path, n: int = 5000) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.perf
 def test_the_home_stays_quick_on_5k_notes(tmp_path, capsys):
     root = tmp_path / "big"
     _big(root)
@@ -727,6 +728,7 @@ def test_a_new_site_arrives_in_a_delta_and_nothing_moves(brain_vault):
 
 
 @pytest.mark.slow
+@pytest.mark.perf
 def test_the_home_stays_quick_with_5k_sites_in_the_stem(tmp_path, capsys):
     root = tmp_path / "big"
     _big(root)
