@@ -81,7 +81,7 @@ def _refused(tag: str, text: str) -> str | None:
     try:
         scan_secrets(text)
         if tag != "forget":
-            claims.check(text)
+            claims.check(text, PAGES[tag][0])
     except VaultError as e:
         return str(e)
     return None
@@ -119,10 +119,10 @@ def act(core, tag: str, text: str, said: bool) -> dict:
     day = local_day(core._now())
     if tag == "forget":
         return _forget(core, text, day, said)
-    claims.check(text)  # G6: before _ensure_section writes the heading
     page, section = PAGES[tag]
+    claims.check(text, page)  # G6: before _ensure_section writes the heading
     if not said:
-        core._propose(f"- {section}: {text} (proposed {day}, me/{page})")
+        core._propose(f"- {section}: {text} (proposed {day}, me/{page})", page=page)
         core.proposed.append(plain(f"{section}: {text}", 200))
         core.sessions.note("patched", change={"tool": "propose", "id": page, "kind": "me",
                                               "op": "append_to_section", "target": section,

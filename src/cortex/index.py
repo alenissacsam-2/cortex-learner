@@ -156,7 +156,8 @@ _FOLD = str.maketrans({c: k for k, cs in {  # Cyrillic, Greek, Armenian, small c
     "n": (0x43F, 0x3B7, 0x3BD, 0x578, 0x274), "o": (0x43E, 0x3BF, 0x585, 0x1D0F, 0x30),
     "p": (0x440, 0x3C1), "r": (0x433, 0x280), "s": (0x455, 0xA731, 0x35),
     "t": (0x442, 0x3C4, 0x1D1B, 0x37), "u": (0x3C5, 0x3BC, 0x57D, 0x1D1C),
-    "x": (0x445, 0x3C7), "y": (0x443,)}.items() for c in cs})
+    "x": (0x445, 0x3C7), "y": (0x443,),
+    "_": (0x2581,)}.items() for c in cs})  # DeepSeek's tokens (U+FF5C is "|" by NFKD)
 _SKIP_CATS = {"Cc", "Cf", "Mn", "Me", "Pc", "Pd", "Zl", "Zp", "Zs"}
 _BLANKS = set(map(chr, (0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0)))  # letters that render blank
 _TAGS = ("untrustednote", "/untrustednote")

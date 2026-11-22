@@ -93,3 +93,37 @@ def test_desktop_writer_accepts_a_bom(tmp_path):  # Notepad / PowerShell 5.1 "UT
     assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
     assert json.loads(path.read_text(encoding="utf-8"))["mcpServers"].keys() == {"other", "cortex"}
     assert doctor._read_json(path)["mcpServers"]["cortex"] == entry
+
+
+def _busy_replace(monkeypatch, fails: int | None):
+    """os.replace in targets raising PermissionError `fails` times (None: always); no sleeps."""
+    real, calls = targets.os.replace, []
+
+    def replace(src, dst):
+        calls.append(dst)
+        if fails is None or len(calls) <= fails:
+            raise PermissionError(13, "in use by another program")
+        real(src, dst)
+
+    monkeypatch.setattr(targets.os, "replace", replace)
+    monkeypatch.setattr(targets.time, "sleep", lambda s: None)
+    return calls
+
+
+def test_write_retries_a_busy_file(tmp_path, monkeypatch):  # S1: an editor or Defender holds it
+    path = tmp_path / "rules.md"
+    path.write_text("old", encoding="utf-8")
+    calls = _busy_replace(monkeypatch, 2)
+    targets.write(path, "new")
+    assert len(calls) == 3 and path.read_text(encoding="utf-8") == "new"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_write_gives_up_on_a_file_that_stays_busy(tmp_path, monkeypatch):
+    path = tmp_path / "rules.md"
+    path.write_text("old", encoding="utf-8")
+    calls = _busy_replace(monkeypatch, None)
+    with pytest.raises(PermissionError):
+        targets.write(path, "new")
+    assert len(calls) == targets.REPLACE_TRIES and path.read_text(encoding="utf-8") == "old"
+    assert not list(tmp_path.glob("*.tmp"))

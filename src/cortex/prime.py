@@ -122,7 +122,7 @@ def profile_summary(vault: Vault, today: str, served: dict | None = None,
     # G6: template claim lines are held (`held_ids`) until Keep; free text has no Keep
     return "\n".join(label(ln) for ln in text.splitlines()
                      if not claims.expired(ln, today) and (
-                         summary == PROFILE_TEMPLATE or not claims.unsafe(ln))).strip()
+                         summary == PROFILE_TEMPLATE or not claims.unsafe(ln, "profile"))).strip()
 
 
 def contract(vault: Vault, domains: set) -> str:

@@ -64,7 +64,42 @@ _PHRASES = (
     ("system prompt", re.compile(r"\b(?:ignore|disregard|forget|reveal|print|show|repeat|leak|"
                                  r"override)\b(?: \w+){0,3} system prompts?\b|"
                                  r"\bsystem prompt ?:")))
-_TOKENS = (("a chat template token", re.compile(r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>")),
+# S1 (FARMA, MemoryGraft): an order a reader may take as its own, at a line or sentence
+# start or after "always", "please" or "you should": "I sometimes skip tests" is a fact
+_LEAD = (r"(?:(?m:^)|[.!?;:,] |\b(?:always|please|you should|you must|you need to|make sure "
+         r"to|remember to|be sure to) )[^\w\n]*(?:(?:always|please|just|also|then) )*")
+# a path that holds keys (`_` and `-` dropped by _key); .env.example and the like are no secret
+_CRED = (r"(?:~?/?\.ssh\b|\bidrsa\b|\.env\b(?!\.(?:example|sample|template|dist)\b)"
+         r"|\.aws/credentials\b|\.gitcredentials\b)")
+_KEYS = (r"(?:(?:api|secret|private|ssh|access) ?keys?|secrets?|tokens?|passwords?|"
+         r"credentials?)")
+_CODE = r"(?:the |your )?(?:code|source|repo|repository|git|github|commit)\b"
+# matched on the folded lines kept apart (line starts) and joined (an order split over lines)
+_ORDERS = (
+    ("an order to skip checks", re.compile(
+        _LEAD + r"(?:skip|bypass|disable|turn off|ignore) (?:(?:the|all|any|your|every) )?"
+        r"(?:failing |unit |integration |pre ?commit |ci )?(?:tests?|checks?|verification|ci|"
+        r"hooks?|lint(?:ing|ers?)?|type ?checks?)\b"
+        # --no-verify ("-" dropped by _key) in a sentence with no "never", "don't", ...
+        r"|(?:(?m:^)|[.!?] )(?:(?!\b(?:never|not|don't|don\u2019t|dont|avoid|without)\b)"
+        r"[^.!?\n])*\bnoverify\b")),
+    ("a credential path", re.compile(
+        _LEAD + r"(?:(?:read|cat|open|print|show|send|upload|post|share|copy|paste|include|"
+        r"attach|commit|push|email|leak|output|dump|reveal|forward|display)\b(?: \S+){0,4}? "
+        rf"(?:\S*{_CRED}|{_KEYS} (?:to|into|in) {_CODE})"
+        rf"|hard ?coded?(?: \S+){{0,3}}? {_KEYS}\b"
+        rf"|(?:put|embed|write|store)(?: \S+){{0,3}}? {_KEYS} (?:directly )?in(?:to)? {_CODE})")),
+)
+# images: a chat client that renders Markdown fetches the URL, carrying what a model put in it
+_IMAGE = re.compile(r"!\[[^\]\n]*\] ?[(\[]|<img\b")
+_REFDEF = re.compile(r"(?m)^\[[^\]\n]+\]: ?\S")  # `[x]: url`: then a bare `![x]` is an image
+# the pages AI apps take as orders; profile, goals, voice and setup keep their links
+ORDER_PAGES = ("core", "preferences", "personality", "teaching-contract")
+_LINK = re.compile(r"\bhttps?://|\bwww\.")
+_TOKENS = (("a chat template token", re.compile(
+               # Gemma's <start_of_turn> ("_" dropped), Anthropic-style XML role tags
+               r"<\|[a-z]{0,24}\|>|\[/?inst\]|<</?sys>>|<(?:start|end)ofturn>"
+               r"|</?(?:system|human|assistant)>|</instructions>")),
            ("Cortex's untrusted_note tag", re.compile(r"</?untrustednote")))
 # a chat role label opening a line, a sentence or a typed "\n" ("SYSTEM: you must ...",
 # "Human: hi\nAI: sure"); `user:`, `ai:`, `system:` and `developer:` only when an order
@@ -79,11 +114,13 @@ _SPACED = re.compile(r"(?<!\S)(?:\S ){2,}\S(?!\S)")
 _TRIGGER = re.compile(r"ignore|disregard|forget|override|instruction|prompt|system")
 
 
-def unsafe(text: str) -> str | None:
+def unsafe(text: str, page: str | None = None) -> str | None:
     """What makes `text` unfit for a me/ page (G6): an invisible or control character (a
     format or bidi control, a tag character, a C0/C1 control other than tab and line breaks;
     a zero-width joiner or non-joiner after a non-ASCII char is a script's or an emoji's own),
-    an injection phrase or a chat template token; None when it is fine."""
+    an injection phrase, an order to skip checks or to read, send or commit a credential, an
+    image, a chat template token, or (S1) a web link when `page` is one of ORDER_PAGES; None
+    when it is fine. `page` None (not known) lets links pass."""
     import unicodedata
 
     from cortex.index import _key  # its folding: look-alikes, marks and zero-width chars out
@@ -98,10 +135,18 @@ def unsafe(text: str) -> str | None:
              for ln in text.splitlines()]
     loose = " ".join(filter(None, lines))
     tight = loose.replace(" ", "")
+    split = "\n".join(lines)
     for name, rx in _PHRASES:
         if rx.search(loose):
             return f'the phrase "{name}"'
-    if m := _ROLE.search("\n".join(lines)):
+    for name, rx in _ORDERS:
+        if rx.search(split) or rx.search(loose):
+            return name
+    if _IMAGE.search(loose) or ("![" in loose and _REFDEF.search(split)):
+        return "an image"
+    if page in ORDER_PAGES and _LINK.search(loose):
+        return "a web link (links belong on a resource page, not in rules AI apps follow)"
+    if m := _ROLE.search(split):
         return f'the role label "{m.group("role")}:"'
     for m in _SPACED.finditer(loose):
         if _TRIGGER.search(word := m.group().replace(" ", "")):
@@ -114,9 +159,9 @@ def invisible(what: str) -> bool:
     return what.startswith(("an invisible", "a control"))
 
 
-def check(text: str) -> None:
-    """Refuse `text` for a me/ page when `unsafe` finds something; nothing is written."""
-    if what := unsafe(text):
+def check(text: str, page: str | None = None) -> None:
+    """Refuse `text` for me/`page` when `unsafe` finds something; nothing is written."""
+    if what := unsafe(text, page):
         raise invalid(f"Nothing was written: the text holds {what}. Lines on me/ pages go word "
                       "for word to other AI apps, so Cortex refuses text that reads as an "
                       "instruction to an AI or hides characters; reword it.")
