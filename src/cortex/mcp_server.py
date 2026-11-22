@@ -2954,14 +2954,66 @@ class Cortex:
                                 and access.scope_page(scopes, r["page"]))
         return {"id": r["id"], "page": ref, **({"text": _wrap(ref, r["text"])} if ok else {})}
 
+    def _tidy_state(self) -> dict:
+        """TIDY_FILE as a dict ({} when missing or unreadable)."""
+        try:
+            got = json.loads((self.vault.root / TIDY_FILE).read_text("utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return got if isinstance(got, dict) else {}
+
     def _tidy_done(self) -> set[str]:
         """D1/D2: the pair keys and `page/id` lines Cortex settled itself (TIDY_FILE), so a
         retire the user undid is never redone."""
-        try:
-            got = json.loads((self.vault.root / TIDY_FILE).read_text("utf-8")).get("done")
-        except (OSError, ValueError, AttributeError):
-            return set()
+        got = self._tidy_state().get("done")
         return {k for k in got if isinstance(k, str)} if isinstance(got, list) else set()
+
+    def _wrong_merges(self, events: list[dict]) -> list[dict]:
+        """0.4.1: the lines the 0.4.0 sweep retired as a duplicate, update or opposite of a
+        different fact (`review.apart`), still in `## Past` of a non-private page:
+        [{page, id, section}], `section` the one cortex_patch appended the line to, if
+        recorded. [] once TIDY_FILE says `repaired`."""
+        if self._tidy_state().get("repaired"):
+            return []
+        voided, private = review._voided(events), review._private(self.vault)
+        known = {(r["page"], r["id"]): r for r in claims.rows(self.vault)}
+        where, out = {}, {}
+        for e in events:
+            c = review._payload(e).get("change") if e.get("kind") == "change" else None
+            if not isinstance(c, dict) or e.get("id") in voided:
+                continue
+            ids = c.get("claim") if isinstance(c.get("claim"), list) else [c.get("claim")]
+            if c.get("op") == "append_to_section":
+                where.update({(c.get("id"), i): c.get("target") for i in ids})
+            kept = c.get("kept") if isinstance(c.get("kept"), dict) else {}
+            r, k = known.get((c.get("id"), c.get("claim"))), \
+                known.get((kept.get("page"), kept.get("claim")))
+            if (c.get("auto") is True and c.get("op") == "retire" and r and k
+                    and c.get("why") in ("duplicate", "update", "opposite")
+                    and r["status"] == "past" and r["page"] not in private
+                    and review.apart(r["text"], k["text"])):  # norm drops the (until …) stamp
+                out[(r["page"], r["id"])] = None
+        return [{"page": p, "id": i, "section": where.get((p, i))} for p, i in out]
+
+    def _repair_merges(self, wrong: list[dict]) -> int:
+        """0.4.1, once: each `_wrong_merges` line goes back from `## Past` to its section,
+        recorded as an `auto` change (why `repair`) in the open session, so `cortex undo`
+        takes it back; then TIDY_FILE says `repaired`. Their pair keys stay in `done`."""
+        restored = 0
+        for w in wrong:
+            try:
+                self.vault._mutate(self.vault.path_for("me", w["page"]),
+                                   lambda t, w=w: claims.restore_from_past(
+                                       t, w["page"], w["id"], w["section"]))
+            except VaultError:
+                continue
+            self.sessions.note("patched", change={
+                "tool": "patch", "id": w["page"], "kind": "me", "op": "restore",
+                "target": w["id"], "claim": w["id"], "auto": True, "why": "repair"})
+            restored += 1
+        self.vault.write_text(self.vault.root / TIDY_FILE,
+                              json.dumps({**self._tidy_state(), "repaired": 1}))
+        return restored
 
     def _settle_new(self, page: str, target: str, text: str, day: str, confirmed: bool,
                     clicked: bool, update: dict | None, sup: list | None) -> dict:
@@ -3023,7 +3075,7 @@ class Cortex:
                                                     (keep["page"], keep["id"])),
                                     f"{r['page']}/{r['id']}"}
         self.vault.write_text(self.vault.root / TIDY_FILE,
-                              json.dumps({"done": sorted(done)[-5000:]}))
+                              json.dumps({**self._tidy_state(), "done": sorted(done)[-5000:]}))
         return True
 
     def tidy(self) -> dict:
@@ -3031,7 +3083,8 @@ class Cortex:
         waiting in inbox.md move to their claim pages as inferred lines (`_migrate_inbox`),
         then `review.settle` retires up to review.TIDY_MAX lines (near-copies, settled pairs)
         under the vault lock, in one session closed at once (one `cortex undo`). Opens no
-        session when there is nothing to do. {moved, retired}."""
+        session when there is nothing to do. First, once (0.4.1), `_repair_merges` puts back
+        the lines the 0.4.0 sweep retired for a different fact. {moved, retired[, restored]}."""
         with self.vault.lock():
             day = local_day(self._now())
             waiting = [p for p in review.pending(self.vault, day)
@@ -3040,11 +3093,13 @@ class Cortex:
             plan = review.settle(review.live_rows(self.vault, events, day), events,
                                  review.known_texts(self.vault),
                                  self._tidy_done())["retire"][:review.TIDY_MAX]
-            if not waiting and not plan:
+            wrong = self._wrong_merges(events)
+            if not waiting and not plan and not wrong:
                 return {"moved": 0, "retired": 0}
             self.session = self.sessions.start("ambient")
             self._reset()
             try:
+                restored = self._repair_merges(wrong) if wrong else 0
                 moved = self._migrate_inbox(waiting)
                 events = list(self.log.iter_events())
                 plan = review.settle(review.live_rows(self.vault, events, day), events,
@@ -3055,7 +3110,7 @@ class Cortex:
             finally:
                 if self.sessions.current is not None:
                     self.sessions.close(summary="Cortex tidied the about-me lines")
-        return {"moved": moved, "retired": retired}
+        return {"moved": moved, "retired": retired, **({"restored": restored} if restored else {})}
 
     def _migrate_inbox(self, waiting: list[dict]) -> int:
         """D3, once per waiting line: an about-me line under `## About me (unconfirmed)` (claim
