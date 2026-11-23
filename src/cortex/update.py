@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.request
+from datetime import datetime
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -114,7 +115,7 @@ def latest(opener=None, api: str = API) -> dict:
             data = json.loads(r.read(2**20))
     except HTTPError as e:
         if e.code in (403, 429):  # 60 API calls an hour per address: a campus network runs out
-            return _latest_from_page(opener)
+            return _latest_from_page(opener, (e.headers or {}).get("X-RateLimit-Reset"))
         if e.code == 404:
             raise UpdateError("GitHub has no Cortex release yet.") from None
         raise UpdateError(f"GitHub answered {e.code}. Try again later.") from None
@@ -147,13 +148,19 @@ def latest(opener=None, api: str = API) -> dict:
             "exe_size": int(exe.get("size") or 0)}
 
 
-def _latest_from_page(opener) -> dict:
+def _latest_from_page(opener, reset=None) -> dict:
     """The latest release without the API: github.com/<repo>/releases/latest redirects to its
     tag (never a draft or a pre-release), and the asset links follow from the tag. The size is
     unknown until the download; the .sha256 check is the same."""
     page = f"https://github.com/{REPO}/releases/latest"
-    limited = UpdateError("GitHub is limiting update checks from this network right now. Try "
-                          "again in an hour.")
+    try:  # X-RateLimit-Reset: when the API takes this network again (epoch seconds)
+        when = "after " + datetime.fromtimestamp(int(reset)).strftime("%H:%M")
+    except (TypeError, ValueError, OverflowError, OSError):
+        when = "in an hour"
+    limited = UpdateError("GitHub is refusing update checks from this network for now (it "
+                          "limits how often one network may ask, and a VPN or a campus network "
+                          f"is shared by many). Try again {when}, or download CortexSetup.exe "
+                          f"from the release page: {page}")
     try:
         with _get(page, opener, "text/html"):
             raise limited  # no redirect: no release to go to

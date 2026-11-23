@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -53,7 +54,8 @@ def fake(routes: dict):
         if isinstance(r, int):
             raise HTTPError(req.full_url, r, "x", {}, None)
         if isinstance(r, tuple):
-            raise HTTPError(req.full_url, r[0], "x", {"Location": r[1]}, None)
+            hdrs = r[1] if isinstance(r[1], dict) else {"Location": r[1]}
+            raise HTTPError(req.full_url, r[0], "x", hdrs, None)
         return Resp(r if isinstance(r, bytes) else json.dumps(r).encode())
     open_.seen = seen
     return open_
@@ -123,7 +125,7 @@ def test_latest_refuses_what_cannot_be_installed(data, match):
         update.latest(opener=fake({API: data}))
 
 
-@pytest.mark.parametrize("route,match", [(403, "limiting"), (429, "limiting"),
+@pytest.mark.parametrize("route,match", [(403, "refusing"), (429, "refusing"),
                                          (404, "no Cortex release"), (500, "answered 500"),
                                          (None, "internet connection"), (b"{not json", "read")])
 def test_latest_errors_say_what_happened(route, match):
@@ -146,10 +148,10 @@ def test_a_rate_limited_api_falls_back_to_the_latest_page(tmp_path):
 
 
 @pytest.mark.parametrize("page,match", [
-    (None, "limiting"),  # the page is unreachable too
-    (b"<html>", "limiting"),  # no redirect: no release
-    ((302, "https://github.com/someone/else/releases/tag/v9.9.9"), "limiting"),
-    ((302, f"https://evil.example/{REPO}/releases/tag/v9.9.9"), "limiting"),
+    (None, "refusing"),  # the page is unreachable too
+    (b"<html>", "refusing"),  # no redirect: no release
+    ((302, "https://github.com/someone/else/releases/tag/v9.9.9"), "refusing"),
+    ((302, f"https://evil.example/{REPO}/releases/tag/v9.9.9"), "refusing"),
     ((302, f"https://github.com/{REPO}/releases/tag/v0.3.0-rc1"), "not a release version"),
     ((302, f"https://github.com/{REPO}/releases/tag/..%2F..%2Fx"), "not a release version"),
 ])
@@ -157,6 +159,19 @@ def test_the_latest_page_takes_only_this_repos_release_tags(page, match):
     routes = {API: 403, **({} if page is None else {PAGE: page})}
     with pytest.raises(update.UpdateError, match=match):
         update.latest(opener=fake(routes))
+
+
+def test_both_refused_says_when_to_try_again_and_where_to_download():
+    reset = 1_900_000_000  # X-RateLimit-Reset, shown as a local time
+    with pytest.raises(update.UpdateError) as e:
+        update.latest(opener=fake({API: (403, {"X-RateLimit-Remaining": "0",
+                                               "X-RateLimit-Reset": str(reset)})}))
+    msg = str(e.value)
+    assert "refusing update checks from this network" in msg
+    assert "after " + datetime.fromtimestamp(reset).strftime("%H:%M") in msg
+    assert PAGE in msg
+    with pytest.raises(update.UpdateError, match="in an hour"):  # no or odd header
+        update.latest(opener=fake({API: (429, {"X-RateLimit-Reset": "soon"})}))
 
 
 def test_update_error_is_a_value_error():  # the app shows its text, not a traceback
