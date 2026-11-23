@@ -26,6 +26,8 @@ DEFAULT = {
         {"match": "visualstudiocode", "scopes": CODING},  # VS Code (Copilot)'s client name
         {"match": "copilot", "scopes": CODING},
         {"match": "codex", "scopes": CODING},
+        # Gemini CLI names itself gemini-cli-mcp-client (prime_hook.CLIENTS); R12
+        {"match": "gemini-cli", "scopes": CODING},
     ],
     "unknown": ["core"],  # fail closed: an app no profile names gets the pinned core only
 }

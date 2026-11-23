@@ -1084,7 +1084,7 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     # Agent profiles: one checkbox per profile and scope, each saving the whole set once
     prof = {k: sent["connect"].pop(k) for k in list(sent["connect"])
             if k.startswith("pf-")}
-    assert len(prof) == 7 * 9 and all(
+    assert len(prof) == 8 * 9 and all(  # profiles.DEFAULT's 7 plus `unknown`, 9 scopes each
         len(v) == 1 and v[0][0] == "/api/profiles" and set(v[0][1]) == {"profiles", "unknown"}
         for v in prof.values()), prof
     assert sent == SENDS

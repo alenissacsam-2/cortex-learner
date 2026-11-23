@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import UTC, datetime
 
-from cortex import claims, render, review, xray
+from cortex import access, claims, render, review, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
 from cortex.events import EventLog, local_day
@@ -350,7 +350,7 @@ def playbooks(vault: Vault, prompt: str, hits: list[dict], notes: dict, mute: se
         if (n["kind"] != "note" or i in mute or PLAYBOOK_TAG not in (
                 tags if isinstance(tags, list) else [tags])):
             continue
-        if scopes is not None and str(f.get("scope") or "all") not in ("all", *scopes):
+        if not access.scope_own(scopes, f.get("scope")):
             continue
         summary = render.plain(str(f.get("summary") or ""), PLAYBOOK_SUMMARY)
         shared = sum(t in f"{n['title']} {summary}".lower() for t in terms)
