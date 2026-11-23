@@ -1839,16 +1839,19 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
 
         try:
             kept = []
+            # R10: only a forget's redaction changes a session's own event file later, so the
+            # session's undo still deletes it
+            own = lambda p: "events" in Path(p).parts and Path(p).stem == session_id  # noqa: E731
             if _git(v.root, "revert", "--no-commit", commit).returncode:
                 kept = [p for p in session_mod.unmerged_paths(v.root)  # a later commit overlapped
-                        if not any(p.endswith(q) for q in private)]
+                        if not any(p.endswith(q) for q in private) and not own(p)]
                 restore()
                 r = _git(v.root, "revert", "--no-commit", "-X", "ours", commit)
                 if r.returncode and not session_mod.unmerged_paths(v.root):
                     raise VaultError("invalid_argument", f"git revert failed: {r.stderr.strip()}")
             keep_private()
             for p in session_mod.unmerged_paths(v.root):  # modify/delete: keep HEAD's side
-                in_head = not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
+                in_head = not own(p) and not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
                 _git(v.root, *(("checkout", "HEAD", "--") if in_head else ("rm", "-qf", "--")),
                      p)
             if left := session_mod.unmerged_paths(v.root):
@@ -1922,16 +1925,17 @@ def mcp(vault: VaultOpt = None,
 @app.command()
 @_errors
 def forget(id: str, vault: VaultOpt = None) -> None:
-    """Delete a people page (people/<slug>) and the voice samples and drafts addressed to it."""
-    from cortex import people
+    """Forget a page (people/<slug>, a page id, a chat page) or one line of a me/ page
+    (me/<page>^c-xxxxx) everywhere Cortex keeps it: the page or line, the event log (its text
+    redacted, ids and grades kept), Cortex's own pages and caches, the chats it keeps, the
+    search snapshot and vectors. Prints a receipt, with what Cortex cannot remove."""
+    from cortex import forget as forget_
 
     v = _vault(vault)
-    if people.get(v, id) is None:
-        raise VaultError("unknown_id", f"No people page '{id}'; use the exact id people/<slug>.")
-    typer.confirm(f"Delete {id} and its voice samples and drafts?", abort=True)
-    out = people.forget(v, id)
-    typer.echo(f"deleted {id}.md, {out['samples']} samples, {out['drafts']} drafts")
-    typer.echo("git history still has the old page; rewrite history to remove it for good.")
+    typer.confirm(f"Forget {forget_.check(v, id)} everywhere Cortex keeps it? This cannot be "
+                  "undone.", abort=True)
+    for line in forget_.lines(forget_.forget(v, id)):
+        typer.echo(line)
 
 
 @app.command()
@@ -2995,15 +2999,18 @@ def browse_forget(site: Annotated[str | None, typer.Option(
         if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", host):
             raise VaultError("invalid_argument", "--site must be a domain like example.com.")
         rule, what = forget.Rule(hosts=(host,)), host
+    from cortex import forget as forget_
+
     v = _vault(vault)
-    c = forget.purge(v, rule)
+    r = forget_.browse(v, rule, what)
+    c = Counter(r["removed"])
     typer.echo(f"forgot {what}: {c['day_lines']} lines on {c['day_pages']} private day pages, "
                f"{c['site_keys']} site counts and {c['site_rows']} titles or searches, "
                f"{c['sites_removed']} site pages, {c['inbox_records']} saved extension visits, "
                f"{c['cache_sites'] + c['cache_descriptions']} local-model notes, "
-               f"{c['vectors']} search vectors")
-    typer.echo("next: add it to browse.deny_domains (or set the category to skip) so the next "
-               "import does not bring back what your browsers still hold")
+               f"{c['vectors']} search vectors, {c['compacted']} databases compacted")
+    for line in forget_.lines(r)[1:]:
+        typer.echo(line)
 
 
 @browse_app.command("serve")

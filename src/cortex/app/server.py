@@ -914,16 +914,26 @@ class App:
         r = self._live(body)
         v = self._vault()
         events = list(EventLog(v).iter_events())
-        forget = "forget" if any(c["id"] == r["id"] for x in tags.forget_cards(
-            v, events, self._today()) for c in x["candidates"]) else None
+        cards = [x["text"] for x in tags.forget_cards(v, events, self._today())
+                 if any(c["id"] == r["id"] for c in x["candidates"])]
+        forget = "forget" if cards else None
         card = forget or ("crowded" if any(x["id"] == r["id"] for x in review.crowded(
             v, review.live_rows(v, events, self._today()))[0]) else None)
         live = {x["id"]: x for x in claims.rows(v) if x["status"] == "live"}
-        return self._clicks([("cortex_patch", "cortex_patch", {
+        view = self._clicks([("cortex_patch", "cortex_patch", {
             "id": f"me/{live[cid]['page']}", "op": "retire", "target": cid,
             "user_confirmed": True}, card if n == 0 else None, forget)
             for n, cid in enumerate(self._line_group(r["id"]) if card is None else [r["id"]])
             if cid in live])
+        if not forget or r["id"] not in live:
+            return view
+        # R10: a //forget card's line then goes from every store; the answer carries the receipt
+        from cortex import forget as forget_
+        from cortex import session
+        mark = v.writes
+        receipt = forget_.claim(v, live[r["id"]]["page"], r["id"], also=tuple(cards))
+        session._commit(v, "cortex: forget a line", v.wrote_since(mark))
+        return {**self.review(), "receipt": receipt}
 
     def review_crowded_keep(self, body: dict) -> dict:
         """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin
@@ -2012,6 +2022,21 @@ class App:
         finally:
             actions._commit(v, "watched folders")
 
+    def forget_due(self) -> list | None:
+        """R10: the //forget lines a prompt hook or cortex_prime retired and queued, swept from
+        every store (cortex.forget.run_due), in the periodic pass's thread when a vault is set
+        up and no job runs; committed. The receipts, or None when it did not run."""
+        from cortex import forget, session
+        from cortex.vault import Vault
+        if not self.entry() or self.jobs.running():
+            return None
+        v = Vault(self.root)
+        try:
+            return forget.run_due(v)
+        finally:
+            if v.writes:
+                session._commit(v, "cortex: forget a line", v.wrote_since(0))
+
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:
             self.jobs.cur.cancel()
@@ -2559,9 +2584,16 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         app.stop.set()
         srv.shutdown()
 
+    def forget_due():  # R10: a //forget's sweep, queued by a hook or cortex_prime
+        try:
+            app.forget_due()
+        except Exception as e:  # noqa: BLE001  (the next pass tries again)
+            echo(f"cortex app: forgetting a //forget line failed ({type(e).__name__})")
+
     def auto():  # the live import: first after a minute, then every 10
         from cortex import browse_serve
         wait = browse_serve.AUTO_FIRST_S
+        forget_due()  # once at start, then with each pass
         while not app.stop.wait(wait):
             wait = browse_serve.AUTO_EVERY_S
             try:
@@ -2573,6 +2605,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
                 app.watch_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: watched folders failed ({type(e).__name__})")
+            forget_due()
             try:  # the rollup pages after the import; a stamp check when nothing changed
                 if app.root is not None and (app.root / ".cortex").is_dir() \
                         and not app.jobs.running():
