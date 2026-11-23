@@ -145,7 +145,7 @@ def _served(root) -> dict:
     evs = list(EventLog(v).iter_events())
     parts, _ = prime.core(v, "python coding style answers", evs, now)
     return {"prime": "\n".join(parts), "rules block": packs.rule_block(v, now),
-            "pack": packs.pack(v, "general", now),
+            "pack": packs.pack(v, "general", now=now),
             "chat about": chat.about(v, ask.SOURCES, dt.date.fromisoformat(local_day(now))),
             "export": export_context.build(v, evs, now)[0],
             "delta": delta.lines(v, "python coding style answers", parts, set())[0]}
