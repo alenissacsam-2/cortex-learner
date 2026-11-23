@@ -1,6 +1,7 @@
 """`cortex taint`: the plugin's PostToolUse hook records that Claude read outside text with a
 tool that is not Cortex (web, browser, mail, other MCP servers). The MCP server treats a fresh
-marker as exposure (session.SessionManager._check_taint), so claim tiers see it.
+marker as exposure (session.SessionManager._check_taint), so claim tiers see it. R7: Codex
+CLI's PostToolUse and Gemini CLI's AfterTool hooks (cortex.app.targets) run it the same way.
 
 This module is also the `cortex` console entry: `cortex taint` runs here without importing
 cortex.cli (typer and every core module), since the hook fires on each matched tool call.
@@ -27,6 +28,9 @@ MARKER = ".cortex/taint"
 EXCLUDED = re.compile(
     r"^mcp__(cortex|plugin_cortex_cortex|ccd_[^_]*|visualize|scheduled-tasks|"
     r"savvy-progress)__")
+# R7: Cortex's own tools as Gemini CLI names them (`mcp_<server>_<tool>`); its AfterTool hook's
+# matcher skips them too. Codex CLI names MCP tools as Claude Code does (EXCLUDED covers it).
+GEMINI_OWN = re.compile(r"^mcp_cortex_")
 
 
 def _config_path() -> Path:
@@ -179,7 +183,8 @@ def run(raw: str) -> bool:
     try:
         hook = json.loads(raw)
         tool = hook.get("tool_name")
-        if not isinstance(tool, str) or not tool or EXCLUDED.match(tool):
+        if not isinstance(tool, str) or not tool or EXCLUDED.match(tool) or GEMINI_OWN.match(
+                tool):
             return False
         root = _vault_root()
         if root is None or not root.is_dir():
@@ -203,12 +208,14 @@ def read_stdin() -> str:
 
 def main() -> None:
     """The `cortex` console script."""
+    # R7: `--client codex|gemini` (cortex.app.targets writes it into those apps' hooks)
+    client = sys.argv[3] if sys.argv[2:3] == ["--client"] and len(sys.argv) > 3 else None
     if sys.argv[1:2] == ["taint"]:
         run(read_stdin())
         return  # exit 0, nothing on stdout
     if sys.argv[1:2] == ["prime-hook"]:  # fires on every prompt: skip the CLI import too
         from cortex import prime_hook
-        if out := prime_hook.run(read_stdin()):
+        if out := prime_hook.run(read_stdin(), *([client] if client else [])):
             sys.stdout.write(out)
         if prime_hook.pending is not None and prime_hook.pending.is_alive():
             sys.stdout.flush()  # a prime still running past its budget must not hold the exit

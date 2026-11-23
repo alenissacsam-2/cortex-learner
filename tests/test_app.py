@@ -449,11 +449,14 @@ def test_json_connector_add_remove_keep_backup(home, tid):
     assert data["theme"] == "dark" and data[key]["other"] == {"command": "x"}
     assert data[key]["cortex"] == ({"type": "stdio", **ENTRY} if tid == "vscode" else ENTRY)
     assert t.connected() and t.plan(True, ENTRY) == []
-    assert [b.read_bytes() for b in _baks(path)] == [original]
+    writes = 2 if tid == "gemini-cli" else 1  # R7: Gemini's settings.json also gets the hooks
+    baks = [b.read_bytes() for b in _baks(path)]
+    assert original in baks and len(baks) == writes
     t.remove()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert "cortex" not in data[key] and data[key]["other"] == {"command": "x"}
-    assert data["theme"] == "dark" and not t.connected() and len(_baks(path)) == 2
+    assert data["theme"] == "dark" and not t.connected() and len(_baks(path)) == 2 * writes
+    assert "hooks" not in data
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '{"mcpServers": []}',
