@@ -11,7 +11,7 @@ from test_browse_sites import OWNER
 from test_chat_log import serve
 from typer.testing import CliRunner
 
-from cortex import chat_import, claims, clients, forget, levels, semantic
+from cortex import chat_import, claims, clients, forget, levels, prime_hook, semantic, tags
 from cortex.app import server, targets
 from cortex.browse import build, sources
 from cortex.catalog import Catalog
@@ -261,14 +261,75 @@ def test_a_forget_tag_of_one_word_takes_only_its_line(root):
         await call("cortex_log", {"kind": "chat_turn", "payload": {
             "user": "I write Python every day", "gist": "x"}})
         out = await call("cortex_prime", {"prompt": "//forget: python"})
-        assert out["tags"] == ["//forget forgot a line on me/preferences everywhere Cortex "
-                               "keeps it"]
+        assert out["tags"] == ["//forget retired a line on me/preferences; the Cortex app "
+                               "removes it from everywhere Cortex keeps it within 10 minutes"]
 
     run(root, body)
+    assert forget.run_due(Vault(root))  # the app's periodic pass
     assert _texts_in(root, "python is it for me") == []
     said = _said(root)
     assert "I write Python every day" in said and "//forget: python" in said  # nothing else
     assert "Uses tabs for indentation" in (root / "me" / "preferences.md").read_text("utf-8")
+
+
+TABS = ("# Preferences\n\n## Coding\n- Uses tabs for indentation\n"
+        "- Writes Python with type hints\n")
+
+
+def _payloads(root, kind):
+    return [e for e in EventLog(Vault(root)).iter_events() if e.get("kind") == "log"
+            and isinstance(e.get("payload"), dict) and e["payload"].get("kind") == kind]
+
+
+def test_a_forget_tag_in_a_prompt_hook_only_retires_and_queues(root, monkeypatch):
+    """A hook times out at 30 s and a cold sweep can take a minute: the hook retires the line
+    and queues the sweep; the app's periodic pass (run_due) sweeps it, once."""
+    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    (root / "me" / "preferences.md").write_text(TABS, encoding="utf-8")
+    (root / "log.md").write_text("# Log\n\n- 2026-11-20 uses tabs for indentation\n",
+                                 encoding="utf-8")
+
+    def hook(prompt):
+        return prime_hook.run(json.dumps({"session_id": "chat-1", "prompt": prompt,
+                                          "hook_event_name": "UserPromptSubmit"}))
+
+    hook("hello there")  # primes the chat
+    t = time.monotonic()
+    out = hook("//forget: tabs for indentation")
+    assert time.monotonic() - t < 30  # Claude Code, Codex and Gemini kill a hook at 30 s
+    assert "//forget retired a line on me/preferences; the Cortex app removes it" in out
+    assert "tabs for indentation" in (root / "me/preferences.md").read_text(
+        "utf-8").split("## Past")[1]  # retired at once: prime no longer serves it
+    assert "tabs for indentation" in (root / "log.md").read_text("utf-8")  # swept nothing
+    v = Vault(root)
+    (due,) = forget.due(EventLog(v).iter_events())
+    assert due["payload"]["text"] == "tabs for indentation"
+
+    (root / ".cortex").mkdir(exist_ok=True)
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "the fixture", "--allow-empty")
+    (receipt,) = server.App(root).forget_due()  # the app's periodic pass
+    assert receipt["removed"]["lines"] == 1 and git(root, "status", "--porcelain") == ""
+    assert _texts_in(root, "tabs for indentation") == []
+    (swept,) = _payloads(root, "forget_due")
+    assert swept["payload"]["text"] == forget.MARK
+    (done,) = _payloads(root, "forget_done")
+    assert done["payload"] == {"kind": "forget_done", "ref": due["id"],
+                               "removed": receipt["removed"]}
+    n = len(list(EventLog(v).iter_events()))
+    assert forget.run_due(v) == [] and len(list(EventLog(v).iter_events())) == n  # once
+
+
+def test_a_due_forget_whose_line_went_meanwhile_is_marked_done(root):
+    (root / "me" / "preferences.md").write_text(TABS, encoding="utf-8")
+    v = Vault(root)
+    (line,) = tags.apply_in(v, [("forget", "tabs for indentation", "2026-11-23")])
+    assert line.startswith("//forget retired a line")
+    (due,) = forget.due(EventLog(v).iter_events())
+    forget.forget(v, f"me/preferences^{due['payload']['claim']}")  # the CLI, meanwhile
+    assert forget.run_due(v) == []
+    assert forget.due(EventLog(v).iter_events()) == []
+    assert _payloads(root, "forget_due")[0]["payload"]["text"] == forget.MARK
 
 
 def test_a_person_forget_redacts_every_mention_of_the_name(root):

@@ -183,11 +183,12 @@ def _forget(core, text: str, day: str, said: bool) -> dict:
             core.tagged = False
         if "error" in out:
             return out
-        from cortex import forget  # R10: the retired line then goes from every store
-
-        forget.claim(core.vault, r["page"], r["id"], also=(text,))
-        return {**out, "summary": f"//forget forgot a line on me/{r['page']} everywhere Cortex "
-                                  "keeps it"}
+        # R10: the sweep from every store can take a minute, longer than a prompt hook may run,
+        # so the app's periodic pass runs it (forget.run_due); `text` is swept with the line
+        core._append("log", {"payload": {"kind": "forget_due", "page": r["page"],
+                                         "claim": r["id"], "text": text}})
+        return {**out, "summary": f"//forget retired a line on me/{r['page']}; the Cortex app "
+                                  "removes it from everywhere Cortex keeps it within 10 minutes"}
     shown = (strong or rows)[:SHOWN]
     core._append("log", {"payload": {"kind": "tag_forget", "text": text, "candidates": [
         {"page": r["page"], "id": r["id"]} for r in shown]}})

@@ -9,7 +9,7 @@ import time
 import pytest
 from conftest import events, run, tiers
 
-from cortex import chat_import, prime_hook, review, tags
+from cortex import chat_import, forget, prime_hook, review, tags
 from cortex.events import EventLog, local_day
 from cortex.vault import Vault
 
@@ -89,8 +89,8 @@ def test_forget_with_one_two_and_no_matches(root):
 
     async def body(call):
         one = await call("cortex_prime", {"prompt": "//forget: tabs for indentation"})
-        assert one["tags"] == ["//forget forgot a line on me/preferences everywhere Cortex "
-                               "keeps it"]
+        assert one["tags"] == ["//forget retired a line on me/preferences; the Cortex app "
+                               "removes it from everywhere Cortex keeps it within 10 minutes"]
         two = await call("cortex_log", {"kind": "chat_turn", "payload": {
             "user": "//forget: writes python rust", "gist": "x"}})  # both Writes lines
         assert "nothing changed" in two["tags"][0]
@@ -100,7 +100,10 @@ def test_forget_with_one_two_and_no_matches(root):
 
     run(root, body)
     prefs = _me(root, "preferences")
-    # R10: a //forget that matched one line takes it out of every store, not only to ## Past
+    # R10: a //forget that matched one line is retired at once, and the app's periodic pass
+    # (forget.run_due) then takes it out of every store, not only to ## Past
+    assert "tabs for indentation" in prefs.split("## Past")[1]
+    forget.run_due(Vault(root))
     assert not [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts
                 and b"tabs for indentation" in p.read_bytes().lower()]
     assert "Writes Python" in prefs.split("## Past")[0] and "Writes Rust" in prefs.split(

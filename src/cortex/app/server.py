@@ -1964,6 +1964,21 @@ class App:
         finally:
             actions._commit(v, "watched folders")
 
+    def forget_due(self) -> list | None:
+        """R10: the //forget lines a prompt hook or cortex_prime retired and queued, swept from
+        every store (cortex.forget.run_due), in the periodic pass's thread when a vault is set
+        up and no job runs; committed. The receipts, or None when it did not run."""
+        from cortex import forget, session
+        from cortex.vault import Vault
+        if not self.entry() or self.jobs.running():
+            return None
+        v = Vault(self.root)
+        try:
+            return forget.run_due(v)
+        finally:
+            if v.writes:
+                session._commit(v, "cortex: forget a line", v.wrote_since(0))
+
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:
             self.jobs.cur.cancel()
@@ -2511,9 +2526,16 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         app.stop.set()
         srv.shutdown()
 
+    def forget_due():  # R10: a //forget's sweep, queued by a hook or cortex_prime
+        try:
+            app.forget_due()
+        except Exception as e:  # noqa: BLE001  (the next pass tries again)
+            echo(f"cortex app: forgetting a //forget line failed ({type(e).__name__})")
+
     def auto():  # the live import: first after a minute, then every 10
         from cortex import browse_serve
         wait = browse_serve.AUTO_FIRST_S
+        forget_due()  # once at start, then with each pass
         while not app.stop.wait(wait):
             wait = browse_serve.AUTO_EVERY_S
             try:
@@ -2525,6 +2547,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
                 app.watch_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: watched folders failed ({type(e).__name__})")
+            forget_due()
             try:  # the rollup pages after the import; a stamp check when nothing changed
                 if app.root is not None and (app.root / ".cortex").is_dir() \
                         and not app.jobs.running():

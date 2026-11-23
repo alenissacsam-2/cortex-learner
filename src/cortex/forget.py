@@ -150,6 +150,41 @@ def claim(vault: Vault, page_: str | None, cid: str, also: tuple[str, ...] = ())
                     rules=_refresh_rules(vault))
 
 
+def due(events) -> list[dict]:
+    """The //forget lines tags retired and queued (`forget_due` log events), oldest first, but
+    those a `forget_done` names (its `ref`) or a void voided."""
+    events = list(events)
+
+    def kind(e):
+        return e.get("kind") == "log" and isinstance(p := e.get("payload"), dict) and p.get("kind")
+    closed = {e["payload"].get("ref") for e in events if kind(e) == "forget_done"} | {
+        e.get("ref") for e in events if e.get("kind") == "void"}
+    return [e for e in events if kind(e) == "forget_due" and e["id"] not in closed]
+
+
+def run_due(vault: Vault) -> list[dict]:
+    """Each `due` //forget swept from every store (`claim`; the line is in `## Past` by now),
+    then a `forget_done` log event with the receipt's counts only (its `left` quotes the
+    text). A line gone meanwhile (a CLI forget) has only the //forget's words swept. Only the
+    Cortex app's periodic pass runs this. The receipts."""
+    from cortex.events import EventLog
+
+    evlog, out = EventLog(vault), []
+    for e in due(evlog.iter_events()):
+        p = e["payload"]
+        text = str(p.get("text") or "")
+        try:
+            out.append(claim(vault, p.get("page"), str(p.get("claim")), also=(text,)))
+            removed = out[-1]["removed"]
+        except VaultError as err:
+            if err.code != "unknown_id":
+                raise
+            removed = _sweep(vault, {text})
+        evlog.append(session="cli", kind="log", source="self", fields={"payload": {
+            "kind": "forget_done", "ref": e["id"], "removed": removed}})
+    return out
+
+
 def browse(vault: Vault, rule, what: str) -> dict:
     """`cortex browse forget`: `purge` (every browse store), then the shared finish and the
     browse stores compacted. The receipt; `removed` holds purge's counts too."""
@@ -318,13 +353,14 @@ def _sweep(vault: Vault, texts, hashes=frozenset(), refs=(), names=()) -> dict:
             return pat.sub(MARK, ev) if pat else ev
         return {k: v if k in KEEP else _scrub(v, pat, hashes, FOLD) for k, v in ev.items()}
 
+    ledger = _ledger_pages(vault)  # before the events are rewritten: a warm parse, not a re-read
     for p in sorted((root / "events").glob("*/*/*.jsonl")):
         if n := _rewrite(vault, p, event, needles):
             out["events"] = out.get("events", 0) + n
     chat_needles = _needles(chat, refs)
     mine = [*(root / f for f in OWN_FILES),
             *(p for d in OWN_DIRS for p in (root / d).rglob("*.md"))]
-    chat_pages = [*(root / CHAT_ARCHIVE).glob("*.md"), *_ledger_pages(vault)]
+    chat_pages = [*(root / CHAT_ARCHIVE).glob("*.md"), *ledger]
     for p, use in [*((p, pat) for p in mine), *((p, chat_pat) for p in dict.fromkeys(chat_pages))]:
         if use is not None and p.is_file() and _sweep_page(vault, p, use):  # locks per page
             out["pages"] = out.get("pages", 0) + 1
