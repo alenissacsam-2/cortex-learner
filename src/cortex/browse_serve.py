@@ -18,6 +18,7 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 
 from cortex.browse import Settings, load_settings
@@ -140,10 +141,13 @@ def run_import(v: Vault, progress=None, say=None, srcs: list | None = None) -> d
     srcs = sources.chosen(settings) if srcs is None else srcs
     checked = (check_titles(v, runner, settings, budget)
                if runner is not None and settings.visible_to_claude else {})
+    go = partial(build.run, v, srcs, settings, runner=runner, budget=budget,
+                 progress=progress, say=say, pause=build.PAUSE_S)
     with semantic.background():
-        r = build.run(v, srcs, settings, embed=semantic.load_embedder(),
-                      runner=runner, budget=budget, progress=progress, say=say,
-                      pause=build.PAUSE_S)
+        try:
+            r = go(embed=semantic.load_embedder())
+        except semantic.NotLoaded:  # the files do not load: as with no model (its days stay
+            r = go(embed=None)  # dirty until their pages are saved, so this run makes them)
         r.update(checked)
         r["model"] = runner is not None
         sites.update_vectors(v, say, background=True)

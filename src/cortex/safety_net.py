@@ -553,12 +553,13 @@ def undo(vault: Vault, chat: str | None = None, now: datetime | None = None) -> 
 def background_tools():
     """(runner, embed) for the app: the runner only when the PC is idle and the model is
     already loaded (browse.titles.may_run), the embedder only when already in memory (M1: not
-    after its idle drop, which the next foreground call undoes)."""
+    after its idle drop, which the next foreground call undoes), and then one whose use keeps
+    it no longer than a person's last use would (M3: `semantic.loaded_embedder`)."""
     from cortex import semantic
     from cortex.browse import titles
     e = semantic._embedder
-    return titles.may_run()[0], (e if e is not semantic._embed_real or semantic._main.model
-                                 else None)
+    return titles.may_run()[0], (e if e is not semantic._embed_real
+                                 else semantic.loaded_embedder())
 
 
 def cli_tools():
