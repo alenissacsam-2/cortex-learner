@@ -228,9 +228,23 @@ const out = {};
     DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', targets: [
       { id: 'claude-desktop', label: 'Claude Desktop', detected: false, connected: false, files: [], snippet: '', note: '' },
       { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install cortex', commands: true, note: '' }] };
+    // R32a: a pack's size switch moves the text, the count and the changed line; Copy records it
+    DATA.routes['/api/connect'].packs = [{ id: 'interview', sizes: [
+      { chars: 1500, text: 'short pack', hash: 'aaaaaaaaaaaaaaaa', changed: false },
+      { chars: 5000, text: 'the long pack', hash: 'bbbbbbbbbbbbbbbb', changed: true }] }];
+    DATA.routes['/api/connect/copied'] = { ok: true };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'connect').fire('click');
     await tick();
-    out.whatLines = $('connect').querySelectorAll('details').map((d) => d.querySelectorAll('p').map((p) => p.textContent));
+    out.whatLines = $('connect').querySelectorAll('details').filter((d) => d.querySelectorAll('p').length).map((d) => d.querySelectorAll('p').map((p) => p.textContent));
+    const prow = $('connect').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Interview');
+    const pstate = () => [prow.querySelector('textarea').value, prow.querySelector('.val').textContent,
+      prow.querySelector('.stale').hidden, prow.querySelector('.pack-size').querySelectorAll('button').map((b) => [b.textContent, b.getAttribute('aria-pressed')])];
+    out.pack = [pstate()];
+    prow.querySelector('.pack-size').querySelectorAll('button')[1].fire('click');
+    out.pack.push(pstate());
+    prow.querySelector('.acts').querySelector('button').fire('click');
+    await tick(); await tick();
+    out.pack.push(pstate(), clipboard.slice(-1), fetched.filter((f) => f.path === '/api/connect/copied').map((f) => f.body));
     // Chat with neither the search model nor a local model: both rows, each with its own button
     const settings = { length: 'normal', temperature: 0.2, passages: 8, history: true,
       sources: { notes: true, chats: true, browsing: true, private: true } };
@@ -562,6 +576,13 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert "Open Chat" in out["tryIt"]
     assert out["whatLines"] == [["Files:", "Commands Cortex runs:"],  # found apps first
                                 ["Set up a vault first; the entry points at it."]]
+    sizes = lambda a, b: [["1,500 characters", a], ["5,000 characters", b]]  # noqa: E731
+    assert out["pack"] == [
+        ["short pack", "10 characters", True, sizes("true", "false")],
+        ["the long pack", "13 characters", False, sizes("false", "true")],  # changed at 5,000
+        ["the long pack", "13 characters", True, sizes("false", "true")],  # copied: line gone
+        ["the long pack"],
+        [{"pack": "interview", "chars": 5000, "hash": "bbbbbbbbbbbbbbbb"}]]
 
 
 def test_installs_offer_admin_override_and_licenses():

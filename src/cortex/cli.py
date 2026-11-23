@@ -852,16 +852,22 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
 
 @app.command("pack")
 @_errors
-def pack_cmd(name: Annotated[str, typer.Argument(help="general, coding or writing")],
+def pack_cmd(name: Annotated[str, typer.Argument(
+                 help="general, coding, writing, interview, research or review")],
+             chars: Annotated[int, typer.Option(
+                 "--chars", help="the most characters: 1500 or 5000")] = 1500,
              vault: VaultOpt = None) -> None:
     """Print a context pack to paste into a web chat (ChatGPT, Gemini): your pinned core, then
-    the pack's preference lines, at most 2,500 characters, never a private page."""
+    the pack's preference lines, at most 1,500 (or 5,000) characters, never a private page."""
     from cortex import packs
 
     if name not in packs.PACKS:
         typer.echo(f"error: the pack is one of {', '.join(packs.PACKS)}.", err=True)
         raise typer.Exit(2)
-    text = packs.pack(_vault(vault), name)
+    if chars not in packs.SIZES:
+        typer.echo("error: --chars is 1500 or 5000.", err=True)
+        raise typer.Exit(2)
+    text = packs.pack(_vault(vault), name, chars)
     if not text:
         typer.echo("Nothing to pack yet: add lines to me/core.md or me/preferences.md.",
                    err=True)

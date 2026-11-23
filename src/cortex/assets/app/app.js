@@ -202,10 +202,11 @@
   }
   // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast, or
   // runs `onFail` (e.g. selects the text so Ctrl+C copies it)
-  function copyBtn(text, failMsg, cls, withIcon, onFail) {
+  function copyBtn(text, failMsg, cls, withIcon, onFail, onOk) {
     const face = () => (withIcon ? [icon('copy'), 'Copy'] : ['Copy']);
     let timer;
     const b = btn('', () => Promise.resolve().then(() => navigator.clipboard.writeText(text())).then(() => {
+      if (onOk) onOk();
       clearTimeout(timer);
       b.replaceChildren(icon('check'), 'Copied');
       announce('Copied');
@@ -1059,20 +1060,42 @@
       d.packs ? packsBoard(d.packs) : null, d.profiles ? profilesBoard(d.profiles, d.scopes) : null);
   }
   // plan v9 item 8: context packs for web chats with no MCP; Copy, else the text is selected
-  const PACK_NAMES = { general: 'General', coding: 'Coding', writing: 'Writing' };
+  const PACK_NAMES = { general: 'General', coding: 'Coding', writing: 'Writing', interview: 'Interview', research: 'Research', review: 'Review' };
+  // R32a: role packs say what they hold; the others name their own preferences
+  const PACK_PREFS = { interview: 'career and communication preferences, for a job interview practice chat',
+    research: 'learning, project and communication preferences, for a research collaboration chat',
+    review: 'coding and communication preferences, for a code review chat' };
   function packsBoard(packs) {
     return board('Context packs', { note: 'for ChatGPT, Gemini and other web chats' }, ...packs.map((p) => {
       const name = PACK_NAMES[p.id] || p.id;
-      if (!p.text) return row(name, null, 'Nothing to pack yet: add lines to me/core.md or me/preferences.md.');
-      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, value: p.text, 'aria-label': `${name} pack text` });
+      if (!p.sizes.some((s) => s.text)) return row(name, null, 'Nothing to pack yet: add lines to me/core.md or me/preferences.md.');
+      let cur = p.sizes[0];  // 1,500 characters each time the page opens
+      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, 'aria-label': `${name} pack text` });
+      const count = h('span', { class: 'val' });
+      const stale = h('span', { class: 'sub stale' }, h('span', { class: 'stale-dot', 'aria-hidden': 'true' }), 'Changed since your last copy');
+      const sizeBtns = p.sizes.map((s) => {
+        const b = h('button', { class: 'chip', type: 'button' }, s.chars.toLocaleString('en-US'), h('span', { class: 'sr-only', text: ' characters' }));
+        b.addEventListener('click', () => { cur = s; show(); });
+        return b;
+      });
+      const show = () => {
+        area.value = cur.text;
+        count.textContent = `${cur.text.length.toLocaleString('en-US')} characters`;
+        stale.hidden = !cur.changed;
+        sizeBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(p.sizes[i] === cur)));
+      };
+      show();
       const what = h('details', { class: 'what' }, h('summary', { text: 'Show the text' }), area);
       const select = () => { what.open = true; area.focus(); area.select(); toast('Copy is blocked here; the text is selected, press Ctrl+C.'); };
+      const copied = () => { const s = cur; post('/api/connect/copied', { pack: p.id, chars: s.chars, hash: s.hash }, () => { s.changed = false; show(); }); };
       return h('div', { class: 'brow' },
         h('div', { class: 't' },
-          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: name }), h('span', { class: 'val', text: `${p.text.length.toLocaleString()} characters` })),
-          h('span', { class: 'sub', text: 'Your pinned core, then your ' + (p.id === 'general' ? 'preferences' : name.toLowerCase() + ' preferences') + '. Paste it at the start of a chat. Private pages are never in it.' }),
+          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: name }), count),
+          h('span', { class: 'sub', text: 'Your pinned core, then your ' + (PACK_PREFS[p.id] || (p.id === 'general' ? 'preferences' : name.toLowerCase() + ' preferences')) + '. Paste it at the start of a chat. Private pages are never in it.' }),
+          stale,
+          h('div', { class: 'pack-size', role: 'group', 'aria-label': `${name} pack size` }, ...sizeBtns),
           what),
-        h('div', { class: 'acts' }, copyBtn(() => p.text, '', null, true, select)));
+        h('div', { class: 'acts' }, copyBtn(() => cur.text, '', null, true, select, copied)));
     }));
   }
   // plan v9 item 8: which scopes each AI app gets over MCP; saved at once, from this page only
