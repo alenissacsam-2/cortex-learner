@@ -46,11 +46,13 @@ def _hidden_words(vault: Vault) -> list[re.Pattern]:
     return [re.compile(rf"(?<!\w){re.escape(w.lower())}(?!\w)") for w in words if len(w) >= 4]
 
 
-def lines(vault: Vault, scopes, now: datetime | None = None) -> tuple[list[str], list[str]]:
-    """(core lines, preference lines) for a pack of `scopes` (None: all)."""
+def lines(vault: Vault, scopes, now: datetime | None = None,
+          events: list[dict] | None = None) -> tuple[list[str], list[str]]:
+    """(core lines, preference lines) for a pack of `scopes` (None: all); `events`: the event
+    log, read here when not given (Connect reads it once for every pack)."""
     now = now or datetime.now(UTC)
     today = local_day(now)
-    events = list(EventLog(vault).iter_events())
+    events = list(EventLog(vault).iter_events()) if events is None else events
     served = prime.served_claims(vault, events)
     private = {p for p in ("core", "setup", *access.SECTIONED)
                if (n := prime.me(vault, p)) is not None and is_private(n)}
@@ -66,12 +68,13 @@ def lines(vault: Vault, scopes, now: datetime | None = None) -> tuple[list[str],
     return ok[0], ok[1]
 
 
-def sized(vault: Vault, name: str, now: datetime | None = None) -> dict[int, str]:
+def sized(vault: Vault, name: str, now: datetime | None = None,
+          events: list[dict] | None = None) -> dict[int, str]:
     """The `name` pack (PACKS) at each of SIZES, its lines read once: {size: text}; "" when
     nothing is recorded."""
     if name not in PACKS:
         raise ValueError(f"pack must be one of {', '.join(PACKS)}")
-    core, prefs = lines(vault, PACKS[name], now)
+    core, prefs = lines(vault, PACKS[name], now, events)
     return {size: _cut(name, core, prefs, size) for size in SIZES}
 
 
@@ -87,12 +90,13 @@ def _cut(name: str, core: list[str], prefs: list[str], size: int) -> str:
     return "\n".join(out) if len(out) > first else ""
 
 
-def pack(vault: Vault, name: str, size: int = SIZES[0], now: datetime | None = None) -> str:
+def pack(vault: Vault, name: str, size: int = SIZES[0], now: datetime | None = None,
+         events: list[dict] | None = None) -> str:
     """The `name` pack (PACKS), at most `size` (one of SIZES) characters; "" when nothing is
     recorded."""
     if size not in SIZES:
         raise ValueError(f"size must be one of {', '.join(map(str, SIZES))}")
-    return sized(vault, name, now)[size]
+    return sized(vault, name, now, events)[size]
 
 
 def digest(text: str) -> str:
@@ -101,9 +105,10 @@ def digest(text: str) -> str:
 
 
 def copied(events) -> dict[tuple[str, int], str]:
-    """A fold over events: the last copied hash per (pack, size), from the app's Copy."""
+    """A fold over events: the latest copied hash (by ts, then id) per (pack, size), from the
+    app's Copy."""
     out = {}
-    for e in live(events):
+    for e in sorted(live(events), key=lambda e: (e.get("ts", ""), e.get("id", ""))):
         pl = e.get("payload")
         if e.get("kind") == "log" and isinstance(pl, dict) and pl.get("kind") == "pack_copied":
             out[(pl.get("pack"), pl.get("chars"))] = pl.get("hash")

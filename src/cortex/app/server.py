@@ -446,14 +446,15 @@ class App:
         extra = {}
         if self.entry() is not None:
             v = self._vault()
-            last = packs.copied(EventLog(v).iter_events())
+            events = list(EventLog(v).iter_events())  # read once for every pack
+            last = packs.copied(events)
 
             def size(n, s, text):  # R32a: changed only when copied before and now different
                 h = packs.digest(text)
                 return {"chars": s, "text": text, "hash": h,
                         "changed": (n, s) in last and last[(n, s)] != h}
             extra = {"packs": [{"id": n, "sizes": [size(n, s, t) for s, t in
-                                                   packs.sized(v, n).items()]}
+                                                   packs.sized(v, n, events=events).items()]}
                                for n in packs.PACKS],
                      "profiles": profiles.load(v), "scopes": list(access.SCOPES)}
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,

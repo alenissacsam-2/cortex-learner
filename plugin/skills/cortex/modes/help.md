@@ -61,7 +61,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `safety-net` (`--dry-run`, `--undo`) | Record the topics and concepts your recent chats covered that the chat forgot to log |
 | `fact-harvest` | Save facts you stated about yourself in recent chats as guesses about you (needs a local model already loaded) |
 | `export context` | A paste-ready "about me" file for ChatGPT, Gemini or Cursor |
-| `pack general\|coding\|writing` | A short context pack (≤ 2,500 characters) to paste into a web chat |
+| `pack general\|coding\|writing\|interview\|research\|review` | A context pack (≤ 1,500 characters, or 5,000 with `--chars 5000`) to paste into a web chat |
 | `undo <session>` / `void` | Revert one chat's changes / cancel one record |
 | `backup` | Zip the whole vault |
 | `doctor` / `lint` / `relink` | Health check / vault problems / fix Obsidian links |

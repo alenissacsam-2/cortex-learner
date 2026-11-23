@@ -568,6 +568,34 @@ def test_changed_since_your_last_copy(vroot):
         srv.server_close()
 
 
+def test_connect_reads_the_event_log_once(vroot, monkeypatch):
+    """R32a review: six packs at two sizes and the copy fold share one read of the log."""
+    from test_app import _serve, call
+
+    from cortex.events import EventLog
+    reads = []
+    real = EventLog.iter_events
+    monkeypatch.setattr(EventLog, "iter_events",
+                        lambda self, *a, **k: reads.append(1) or real(self, *a, **k))
+    srv, a = _serve(vroot)
+    try:
+        assert call(a, "GET", "/api/connect")[0] == 200 and len(reads) == 1
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_copied_takes_the_latest_copy_by_time():
+    """R32a review: copies from several session files resolve to the newest by (ts, id)."""
+    def ev(i, ts, h):
+        return {"id": i, "ts": ts, "kind": "log", "payload": {
+            "kind": "pack_copied", "pack": "coding", "chars": 1500, "hash": h}}
+    got = packs.copied([ev("02", "2026-11-24T10:00:00Z", "b" * 16),
+                        ev("01", "2026-11-24T09:00:00Z", "a" * 16),
+                        ev("03", "2026-11-24T10:00:00Z", "c" * 16)])
+    assert got == {("coding", 1500): "c" * 16}
+
+
 def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
     """Audit 21 Nov: `private: true` on a me/ page kept it out of the index only; prime,
     context, start and the Claude Code hook still served it to every cloud app."""
