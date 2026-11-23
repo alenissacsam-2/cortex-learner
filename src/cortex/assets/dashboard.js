@@ -17,7 +17,12 @@
   async function api(path, body) {
     const r = await fetch(path, body === undefined ? { headers: { 'X-Cortex-Token': KEY }, cache: 'no-store' } : {
       method: 'POST', headers: { 'X-Cortex-Token': KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) throw Object.assign(new Error(`The app answered ${r.status}.`), { key: r.status === 401 || r.status === 403, status: r.status });
+    if (!r.ok) {  // the app's own words when it gives them (409: "Wait: Importing is still running.")
+      let d = {};
+      try { d = await r.json(); } catch (e) { /* no body */ }
+      const msg = typeof d.error === 'string' && d.error ? d.error : `The app answered ${r.status}.`;
+      throw Object.assign(new Error(msg), { key: r.status === 401 || r.status === 403, status: r.status });
+    }
     return r.json();
   }
   function offline(err) {  // the header chip: the app is not answering, or no longer takes this page's key
@@ -1747,7 +1752,8 @@
     const f = p && p.found;
     if (!f && !(p && p.remind)) return null;
     const b = board(f ? 'Found in Downloads' : 'claude.ai chats', { cls: 'pickup' });
-    const r = brow(f ? { title: `You downloaded a ${f.name} export on ${fmtDay(f.day)}. Add its chats to Cortex?`, sub: f.file }
+    const what = f && f.source === 'google-activity' ? 'history' : 'chats';  // Search, YouTube, Chrome
+    const r = brow(f ? { title: `You downloaded a ${f.name} export on ${fmtDay(f.day)}. Add its ${what} to Cortex?`, sub: f.file }
       : { title: 'Export your claude.ai chats so Cortex keeps all of them (2 minutes)' });
     const close = () => { b.root.remove(); pickupEl = null; $('view-home').focus(); };
     const post = (path, body, said) => async () => {
@@ -1756,7 +1762,7 @@
       if (said) toast(said);
     };
     r.querySelector('.acts').append(...(f
-      ? [button('btn', 'Add chats', post('/api/import/pickup/add', { path: f.path }, 'Adding the chats. Setup shows when it is done.')),
+      ? [button('btn', `Add ${what}`, post('/api/import/pickup/add', { path: f.path }, `Adding the ${what}. Setup shows when it is done.`)),
         button('btn', 'Not this one', post('/api/import/pickup/dismiss', { path: f.path }))]
       : [button('btn', 'Show me how', () => location.assign('/manage#import-claude')),
         button('btn', 'Later', post('/api/import/pickup/later', {}))]));

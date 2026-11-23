@@ -947,6 +947,11 @@ PICKUP_PROBE = r"""
   out.html = b.querySelector('.sub').innerHTML;
   const btns = [...b.querySelectorAll('.acts button')];
   out.buttons = btns.map((x) => x.textContent);
+  btns[0].click();  // Add chats while another job runs: the app's own words, not a bare 409
+  const t = document.getElementById('toast');
+  for (let i = 0; i < 200 && (t.hidden || !t.textContent); i++) await sleep(50);
+  out.toast = t.textContent;
+  out.stays = !!document.querySelector('.board.pickup');
   btns[1].click();  // Not this one
   for (let i = 0; i < 200 && document.querySelector('.board.pickup'); i++) await sleep(50);
   out.gone = !document.querySelector('.board.pickup');
@@ -977,6 +982,7 @@ def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
     shutil.copytree(HOME_FIXTURES / "vault_mini", root)
     (root / ".cortex").mkdir()
     srv, app = _serve(root)
+    app.jobs.cur = server.Job("Indexing", "setup", False)  # running: Add chats gets a 409
     try:
         out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
                    probe=PICKUP_PROBE)
@@ -989,6 +995,7 @@ def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
     assert p["title"].endswith(". Add its chats to Cortex?")
     assert p["sub"] == "a&amp;b.zip" and p["html"] == "a&amp;amp;b.zip"
     assert p["buttons"] == ["Add chats", "Not this one"] and p["gone"]
+    assert p["toast"] == "Wait: Indexing is still running." and p["stays"]
     seen = desktop.load_state()[exports.KEY]["seen"]
     assert [v[2] for v in seen.values()] == ["dismissed"]
 

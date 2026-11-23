@@ -1386,6 +1386,33 @@
       }, 'btn', { 'aria-expanded': open ? 'true' : 'false', 'aria-label': `${open ? 'Close' : 'Start'}: ${name}` })]));
       if (open) out.push(h('div', { class: 'guide' }, ...guidePanel(d, id)));
     }
+    if (d.watched) out.push(...watchedRows(d.watched));
+    return out;
+  }
+  /* R18: watched folders (cortex.watch); the app's periodic pass imports their new and changed files */
+  const WATCH_KINDS = { docs: 'Documents', notes: 'Notes', repos: 'Code projects', zotero: 'Zotero' };
+  function watchedRows(wd) {
+    const out = [row('Watched folders', wd.rows.length ? String(wd.rows.length) : 'none',
+      'Cortex imports the new and changed files in these folders by itself, every 10 minutes while the app runs; files it has read are not read again until they change.')];
+    for (const w of wd.rows) {
+      const last = w.missing ? 'Not found; kept, and checked again on the next pass.'
+        : w.last ? `${w.last.at.replace('T', ' ').slice(0, 16)}: ${w.last.line}` : 'Not read yet: the first pass runs within 10 minutes.';
+      out.push(row(w.path, `${WATCH_KINDS[w.source] || w.source} · ${AUDIENCE[w.tier] || w.tier}`, last,
+        [btn('Stop watching', () => post('/api/import/watch/remove', { path: w.path }, () => load('setup')), 'btn', { 'aria-label': `Stop watching: ${w.path}` })]));
+    }
+    const path = h('input', { type: 'text', id: 'w-path', spellcheck: 'false', placeholder: 'C:\\Users\\you\\Documents\\Papers' });
+    const kind = h('select', { id: 'w-source', 'aria-label': 'What the folder holds' },
+      Object.entries(WATCH_KINDS).map(([v, t]) => h('option', { value: v, text: t })));
+    const tier = h('select', { id: 'w-tier', 'aria-label': 'Who may read its pages' },
+      Object.entries(AUDIENCE).map(([v, t]) => h('option', { value: v, text: t })));
+    kind.value = 'docs';
+    tier.value = wd.tiers.docs || 'cloud';
+    kind.addEventListener('change', () => { tier.value = wd.tiers[kind.value] || 'cloud'; });  // each source's last choice
+    const add = () => post('/api/import/watch/add', { path: path.value, source: kind.value, tier: tier.value },
+      () => { toast.ok('Watching it: the first pass runs within 10 minutes.'); load('setup'); });
+    out.push(h('div', { class: 'field' }, h('label', { for: 'w-path', text: 'Watch a folder (its full path)' }),
+      h('div', { class: 'inline' }, path, kind, tier, btn('Watch', add, 'btn lit')),
+      h('p', { class: 'help', text: 'For Zotero, leave the path empty to use the library on this computer, or paste its data folder.' })));
     return out;
   }
 

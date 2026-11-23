@@ -341,11 +341,14 @@ def skip_folder(rel: str, rules: tuple[str, ...] = ()) -> bool:
     return False
 
 
-def docs_source(path: Path, skip: tuple[str, ...] = ()) -> sources.Source:
+def docs_source(path: Path, skip: tuple[str, ...] = (), files: list | None = None
+                ) -> sources.Source:
     """One page per document in the folder (or the one file); see the module docstring. The
-    walk leaves out `skip_folder`'s folders (`skip`: more folder rules) and shortcut files."""
+    walk leaves out `skip_folder`'s folders (`skip`: more folder rules) and shortcut files.
+    `files`: `importers._files` entries already walked (a watched folder's changed ones)."""
     path = Path(path)
-    files = importers._files(path, skip_dir=lambda rel: skip_folder(rel, skip))
+    if files is None:
+        files = importers._files(path, skip_dir=lambda rel: skip_folder(rel, skip))
 
     def items():
         parse = _Parser()
@@ -540,13 +543,13 @@ def decision_proposals(vault, events) -> list[dict]:
     return out[:SHOWN_DECISIONS]
 
 
-def repos_source(path: Path) -> sources.Source:
-    """One page per repo `find_repos` finds; see the module docstring."""
+def repos_source(path: Path, repos: list[Path] | None = None) -> sources.Source:
+    """One page per repo `find_repos` finds (or per one of `repos`, a watched folder's changed
+    ones); see the module docstring."""
     path = Path(path)
     if not path.is_dir():
         raise VaultError("invalid_argument", f"{path.name} is not a folder of git projects.")
-    repos = find_repos(path)
-    if not repos:
+    if repos is None and not (repos := find_repos(path)):
         raise VaultError("invalid_argument", f"Found no git repository in {path.name} or one "
                          "or two folders below it.")
     return sources.Source("repos", "Git", "folder", lambda: map(repo_item, repos),
@@ -689,5 +692,11 @@ def highlights_source(path: Path) -> sources.Source:
                           skips=skips)
 
 
+def zotero_source(path: Path | None) -> sources.Source:
+    """R18: a Zotero library (cortex.zotero); with no path, the one on this computer."""
+    from cortex import zotero  # it imports this module
+    return zotero.source(path)
+
+
 SOURCE_OF = {"docs": docs_source, "repos": repos_source, "highlights": highlights_source,
-             **life_sources.SOURCE_OF}  # Sources B
+             **life_sources.SOURCE_OF, "zotero": zotero_source}  # Sources B, then R18
