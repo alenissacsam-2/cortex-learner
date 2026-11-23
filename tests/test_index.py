@@ -304,3 +304,56 @@ def test_read_pages_through_one_long_line(vault):
     # no window: the cap cuts mid-line, and reading on still advances
     r = idx.read("oneline")
     assert idx.read("oneline", at=r["next_at"]).get("next_at", 10_000) > r["next_at"]
+
+
+# ---- R13d: any page's `aliases:` names find it -------------------------------------------------
+
+def _page(vault, rel, front, body):
+    p = vault.root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\n{front}---\n{body}\n", encoding="utf-8")
+
+
+def _aliased(vault):
+    _page(vault, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
+          "# K-Graph\n\nA learner model.")
+    _page(vault, "people/iit-hyderabad.md",
+          "title: IIT Hyderabad\nkind: person\nprivate: false\naliases: IITH\n",
+          "# IIT Hyderabad\n\nMy college.")
+    _page(vault, "people/ana.md", "title: Ana\nkind: person\naliases: [Zorbina]\n",
+          "# Ana\n\nA friend.")  # a people page is private unless it says private: false
+    _page(vault, "notes/mentions.md", "title: Mentions\n",
+          "# Mentions\n\nCortex and IITH, said in passing.")
+    _page(vault, "notes/hidden.md", "title: Hidden\nprivate: true\naliases: [Zorblax]\n",
+          "# Hidden\n\nA secret.")
+
+
+def test_an_alias_finds_any_page_kind_as_its_title_does(vault):
+    _aliased(vault)
+    idx = Index(vault, Catalog.load(vault))
+    assert ids(idx.find("Cortex"))[0] == "k-graph"  # a list alias, ranked over a mention
+    assert ids(idx.find("iith"))[0] == "iit-hyderabad"  # one string, any case
+    assert ids(idx.find("K-Graph"))[0] == "k-graph"  # the title still
+    assert idx.title_matches("Cortex", "project") == ["k-graph"]
+    # a private page's alias does not reveal it
+    assert idx.find("Zorblax") == [] and "hidden" not in ids(idx.find("secret"))
+    assert idx.find("Zorbina") == []
+
+
+def test_aliases_hold_after_a_snapshot_load(vault):
+    """The snapshot keeps every front-matter field, so aliases need no snapshot schema bump:
+    an index loaded from it finds them as a parsed one does."""
+    _aliased(vault)
+    Index(vault, Catalog.load(vault)).save_snapshot()
+    idx = Index(vault, Catalog.load(vault))
+    assert idx._parsed == 0  # every page came from the snapshot
+    assert ids(idx.find("Cortex"))[0] == "k-graph"
+    assert ids(idx.find("IITH"))[0] == "iit-hyderabad"
+    assert idx.find("Zorblax") == []
+
+
+def test_aliases_are_read_as_a_list_or_one_string():
+    from cortex.index import aliases
+    assert aliases({"aliases": ["Cortex", " ", None, "KG "]}) == ["Cortex", "KG"]
+    assert aliases({"aliases": "IITH"}) == ["IITH"]
+    assert aliases({}) == [] and aliases({"aliases": None}) == []
