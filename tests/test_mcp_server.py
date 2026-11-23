@@ -175,6 +175,20 @@ def test_find_and_read(root):
     run(root, body)
 
 
+def test_find_by_a_page_alias(root):
+    """R13d: any page's `aliases:` find it in cortex_find, as its title does."""
+    (root / "projects").mkdir(exist_ok=True)
+    (root / "projects" / "k-graph.md").write_text(
+        "---\ntitle: K-Graph\nkind: project\naliases: [Cortex]\n---\n# K-Graph\n",
+        encoding="utf-8")
+
+    async def body(call):
+        hits = (await call("cortex_find", {"query": "cortex"}))["hits"]
+        assert hits[0]["id"] == "k-graph"
+
+    run(root, body)
+
+
 @pytest.mark.parametrize("args", [
     {"kind": "self_report", "payload": {"concept": "two-pointers", "verdict": "correct",
                                         "hints": True}},
