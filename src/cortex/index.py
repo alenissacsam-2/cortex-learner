@@ -45,6 +45,9 @@ OUTLINE = 8  # headings a cut read lists of the rest
 WIKILINK_RE = re.compile(r"^\[\[([^\]|#^]+)(?:[|#^][^\]]*)?\]\]$")
 LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")  # a [[link]] anywhere in text
 FENCE_RE = re.compile(r"^(```|~~~).*?^\1[^\n]*$", re.M | re.S)
+# BM25 column weights (id, kind, title, aliases, headings, body): an alias is a name like the
+# title (R13d), so it weighs the same
+BM25 = "bm25(fts, 0, 0, 10, 10, 3, 1)"
 
 SCHEMA = """
 CREATE VIRTUAL TABLE fts USING fts5(id UNINDEXED, kind UNINDEXED, title, aliases, headings,
@@ -87,6 +90,14 @@ def _target(raw) -> str | None:
 def link_targets(text: str) -> list[str]:
     """The ids of the [[links]] in `text`, in order, by `_target`'s rules."""
     return [t for m in LINK_RE.finditer(text) if (t := _target(f"[[{m.group(1)}]]"))]
+
+
+def aliases(fields: Mapping) -> list[str]:
+    """A page's `aliases:` (Obsidian's convention: a YAML list or one string), stripped, empty
+    ones dropped. Untrusted note text, like a title."""
+    a = fields.get("aliases") or []
+    return [s for x in (a if isinstance(a, (list, tuple)) else [a])
+            if x is not None and (s := str(x).strip())]
 
 
 def _edge_targets(value) -> list[str]:
@@ -431,8 +442,6 @@ class Index:
         headings = [m.group(2) for line in note.body.splitlines()
                     if (m := HEADING_RE.match(line))]
         title = str(f.get("title") or (headings[0] if headings else note.id))
-        aliases = f.get("aliases") or []
-        aliases = [str(a) for a in (aliases if isinstance(aliases, list) else [aliases])]
         entry = getattr(self.catalog, "entries", {}).get(note.id)
         parent = (_edge_targets(f["parent"]) or [None])[0] if f.get("parent") else \
             (entry.parent if entry else None)
@@ -441,7 +450,7 @@ class Index:
                                 "body": note.body}
         self._rowid[note.id] = self.db.execute(
             "INSERT INTO fts VALUES (?, ?, ?, ?, ?, ?)",
-            (note.id, note.kind, title, " ".join(aliases), " ".join(headings),
+            (note.id, note.kind, title, " ".join(aliases(f)), " ".join(headings),
              note.body)).lastrowid
         self.db.execute("INSERT INTO nodes VALUES (?, ?, ?, ?, ?)",
                         (note.id, note.kind, title, parent, domain))
@@ -522,7 +531,7 @@ class Index:
             return []
         sql = ("SELECT id, kind, title, snippet(fts, 5, '', '', '…', 16) FROM fts "
                "WHERE fts MATCH ?" + (" AND kind = ?" if kind else "") +
-               " ORDER BY bm25(fts, 0, 0, 10, 8, 3, 1)")
+               f" ORDER BY {BM25}")
         if keep is None:
             sql += " LIMIT ?"
         args = (match, kind) if kind else (match,)
@@ -558,7 +567,7 @@ class Index:
             return []
         return [r[0] for r in self.db.execute(
             "SELECT id FROM fts WHERE fts MATCH ? AND kind = ? "
-            "ORDER BY bm25(fts, 0, 0, 10, 8, 3, 1) LIMIT ?",
+            f"ORDER BY {BM25} LIMIT ?",
             (f"{{title aliases}} : ({match})", kind, limit))]
 
     def related(self, query: str, limit: int = 5) -> list[dict]:

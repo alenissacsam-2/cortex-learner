@@ -9,8 +9,8 @@ pystray's Windows icon runs its own message loop on any thread:
 - cortex-notify: the once-a-day notifications (reviews due, an exam in 3 days or tomorrow);
 - cortex-end: waits for `app.stop` (Quit in the tray or on the page, an update) and destroys
   the window, which ends the main thread's GUI loop; `run` then stops the rest.
-Closing the window only hides it. Without pywebview or the WebView2 runtime the app opens in
-the browser, as `cortex app` does.
+Closing the window only hides it, and its page sleeps a minute later (`Desktop.hide`). Without
+pywebview or the WebView2 runtime the app opens in the browser, as `cortex app` does.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ EXAM_DAYS = (3, 1)
 FIRST_S, EVERY_S = 60, 30 * 60  # the first daily check after start, then every 30 minutes
 KEEP_DAYS = 40  # a sent notification's key is remembered this long
 SM_SHUTTINGDOWN = 0x2000
+SLEEP_S = 60  # this long in the tray, the page sleeps (WebView2's TrySuspendAsync)
 
 _lock = threading.Lock()
 
@@ -223,6 +224,41 @@ def _shutting_down() -> bool:  # tests replace this
     return bool(ctypes.windll.user32.GetSystemMetrics(SM_SHUTTINGDOWN))
 
 
+def _native(win, fn) -> bool:
+    """fn(form, control) on the GUI thread, given pywebview's WinForms form and its Edge WebView2
+    control; False, with nothing run, for another backend or a window already gone."""
+    form = getattr(win, "native", None)
+    control = getattr(getattr(form, "browser", None), "webview", None)
+    if not hasattr(type(control), "CoreWebView2"):  # its value: only on the GUI thread
+        return False
+    try:
+        from System import Func, Type  # pythonnet: pywebview's WinForms backend loaded it
+        form.Invoke(Func[Type](lambda: fn(form, control)))
+        return True
+    except Exception:  # noqa: BLE001  (closing at Quit; pythonnet's errors)
+        traceback.print_exc(limit=1)
+        return False
+
+
+def _hide(form, control) -> None:
+    # WinForms' Hide alone leaves WebView2's page visible (document.hidden false: its 3D brain
+    # and polls ran on, docs/benchmarks/memory.md); hiding the control while the form is still
+    # shown sets the WebView2 IsVisible false, so the page knows and can sleep
+    control.Visible = False
+    form.Hide()
+
+
+def _show(form, control) -> None:
+    form.Show()
+    control.Visible = True  # IsVisible again: a sleeping page wakes
+    form.Activate()
+
+
+def _sleep(form, control) -> None:
+    if not form.Visible and control.CoreWebView2 is not None:  # still hidden, WebView2 ready
+        control.CoreWebView2.TrySuspendAsync()
+
+
 class Desktop:
     """One running app's window and tray icon (threads: see the module doc)."""
 
@@ -242,7 +278,8 @@ class Desktop:
         if self.fresh:
             self.fresh = False
             self.win.load_url(server.start_url(self.app))
-        self.win.show()
+        if not _native(self.win, _show):
+            self.win.show()
         if self.state == "minimized":
             self.win.restore()
         return True
@@ -260,8 +297,22 @@ class Desktop:
             return True
         self.app.lock()  # the Private switch relocks when the window goes to the tray
         # hidden from another thread: this handler runs on the GUI thread inside FormClosing
-        threading.Thread(target=self.win.hide, daemon=True, name="cortex-hide").start()
+        threading.Thread(target=self.hide, daemon=True, name="cortex-hide").start()
         return False
+
+    def hide(self) -> None:
+        """To the tray; SLEEP_S later, still there, its page sleeps: WebView2 pauses its
+        timers and animations and lets Windows take the renderer's memory back, and wakes it
+        when the window shows."""
+        if _native(self.win, _hide):
+            self.sleep_later()
+        else:
+            self.win.hide()
+
+    def sleep_later(self) -> None:
+        t = threading.Timer(SLEEP_S, lambda: self.quitting or _native(self.win, _sleep))
+        t.daemon = True
+        t.start()
 
     def minimized(self) -> None:
         self.state = "minimized"
@@ -413,6 +464,8 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         ev.minimized += d.minimized
         ev.maximized += lambda: setattr(d, "state", "maximized")
         ev.restored += lambda: setattr(d, "state", "normal")
+        if hidden:  # Start with Windows: the page sleeps until the window is first opened
+            d.sleep_later()
         threading.Thread(target=d.end, daemon=True, name="cortex-end").start()
         webview.start(icon=str(ICON))  # blocks this (main) thread until the window is destroyed
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)
