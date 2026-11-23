@@ -171,3 +171,10 @@ def test_a_quote_counts_only_when_a_passage_holds_it():
     assert ask.unquoted(answer, texts) == ["a crankshaft spins forever"]  # "an engine": short
     assert ask.unquoted("“made up but long enough”", []) == ["made up but long enough"]
     assert ask.unquoted("no quotes at all", []) == []
+
+
+def test_a_line_since_after_the_range_did_not_hold_then():
+    """R13a: a line that replaced another holds from its `(since …)` day, not before it."""
+    body = "## Coding\n- Writes code in Helix (since 2026-11-01)\n"
+    assert not ask._spans(body, "2026-07-01", "2026-07-31")
+    assert ask._spans(body, "2026-11-10", "2026-11-20")

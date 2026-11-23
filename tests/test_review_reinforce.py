@@ -92,7 +92,7 @@ def test_reinforce_event_shape_and_fold(root):
     assert e["payload"] == {"note": "reinforce", "page": "preferences", "claim": cid,
                             "client": "cursor"}
     assert review.reinforced(events(root)) == {
-        cid: {"sessions": {"cli"}, "apps": {"cursor"}, "last": today()}}
+        cid: {"sessions": {"cli"}, "apps": {"cursor"}, "last": today(), "days": {"cli": today()}}}
     review.reinforce(log, "not a session", "preferences", cid)  # refused by the log: no raise
     assert len(review.reinforced(events(root))[cid]["sessions"]) == 1
 
