@@ -16,7 +16,10 @@ browse import) runs inside `background()`: a copy of the model capped at half th
 below-normal priority; a query never waits on the cap. Each model (the embedder, the capped
 copy, the reranker) is dropped after IDLE_UNLOAD seconds unused and loaded again on its next
 use, and runs without onnxruntime's CPU arena (ARENA), so an idle process gives its memory back
-(docs/benchmarks/memory.md).
+(docs/benchmarks/memory.md). Only a person's use keeps a model: background work loads nothing
+until it embeds, drops the capped copy when it ends and never restarts the main model's idle
+clock (`_Held.use(touch=False)`, `loaded_embedder`). When the last model goes (an idle drop or
+a background run's end), the process empties its working set (TRIM, `_trim_if_none`).
 
 An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) reorders the top
 `RERANK_POOL` hits; it never changes a hit's `score` or `match`. `rerank: false` in
@@ -46,6 +49,7 @@ from cortex import vecstore
 from cortex.events import local_day
 from cortex.index import BM25, STOPWORDS, Index, _one_line, aliases
 from cortex.topics import is_hub, page_date, page_source
+from cortex.vault import VaultError
 
 log = logging.getLogger(__name__)
 
@@ -108,13 +112,21 @@ def models_dir() -> Path:
 def load_embedder(download: bool = False):
     """The model as `embed(texts) -> array`, or None when it is not downloaded. Only
     `download=True` (the `cortex model download` command) may fetch it. The function stays;
-    the model behind it is dropped when idle and loaded again by its next call (`_Held`)."""
+    the model behind it is dropped when idle and loaded again by its next call (`_Held`).
+    Inside `background()` it loads nothing: the function, when the download is whole
+    (doctor.search_model_ready), and its first embed loads the capped copy; files that do
+    not load raise `NotLoaded` there. `_embedder` (what prime and review take as "this
+    process has it") is set only by a load outside `background()`."""
     global _embedder
     with _EMBED_LOCK:  # the server's warm-up thread and a first tool call may race
         if _embedder is not None:
             return _embedder
         if not download and not models_dir().is_dir():
             return None
+        if not download and getattr(_bg, "on", False):
+            from cortex import doctor  # here: its imports cost 0.8 s (the app has it already)
+
+            return _embed_real if doctor.search_model_ready() else None
         try:
             model = _text_embedding(download)
         except Exception:
@@ -133,14 +145,46 @@ def _text_embedding(download: bool = False, threads: int | None = None):
                          threads=threads, enable_cpu_mem_arena=ARENA)
 
 
+class NotLoaded(VaultError):
+    """Background work's first embed found the model's files whole but not loading (corrupt):
+    the caller goes on without the model, as when load_embedder returns None."""
+
+    def __init__(self):
+        super().__init__("not_set_up", NOT_SET_UP)
+
+
 def _embed_real(texts) -> np.ndarray:
     """The real model's embed: in `background()` the capped copy, when it loads."""
-    if getattr(_bg, "on", False):
+    bg = getattr(_bg, "on", False)
+    if bg:
         with _capped.use() as m:
             if m:
                 return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
-    with _main.use() as m:
+    try:
+        with _main.use(touch=not bg) as m:
+            return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
+    except Exception as e:
+        if bg and _main.model is None:  # its load failed, not an embed
+            raise NotLoaded() from e
+        raise
+
+
+def _embed_quiet(texts) -> np.ndarray:
+    """The main model for background work that found it in memory (`loaded_embedder`): its use
+    does not restart the idle clock, so only a person's own use keeps the model loaded."""
+    with _main.use(touch=False) as m:
         return np.asarray(list(m.embed(list(texts))), dtype=np.float32)
+
+
+def loaded_embedder():
+    """For work that embeds only with a model already in memory (the safety net, review's
+    scorer): `_embed_quiet` while the main model is loaded, else None; never a load. An
+    `_embedder` other than the real model's (a test's) is returned as it is.
+    shortcut: a drop between this check and the embed loads it again for that call (dropped at
+    the next idle check, as its clock was not restarted)."""
+    if _embedder is not None and _embedder is not _embed_real:
+        return _embedder
+    return _embed_quiet if _main.model else None
 
 
 # ---- idle unload: a model unused for IDLE_UNLOAD seconds is dropped ---------------------------
@@ -151,12 +195,17 @@ IDLE_CHECK = 60.0  # seconds between the idle thread's checks
 # index build, 1.6 GB); without it a run frees them. A query is no slower; bulk embedding is
 # 7-40% slower (docs/benchmarks/memory.md)
 ARENA = False
+# Windows: once the last model is dropped, the idle process empties its working set (`_trim`)
+TRIM = True
 
 
 class _Held:
     """A model made by `load()` on first use and dropped by `drop_idle` once unused for
     IDLE_UNLOAD seconds; never while a call holds it (`use`). A load that returned a falsy
-    model (the capped copy that failed) stays as it is: never dropped, never tried again."""
+    model (the capped copy that failed) stays as it is: never dropped, never tried again.
+    A use with `touch=False` (background work) leaves the idle clock where a person's last use
+    set it: background work never keeps a model, and one no person used goes at the next
+    check."""
 
     def __init__(self, load):
         self.load, self.lock = load, threading.Lock()
@@ -168,7 +217,7 @@ class _Held:
         _watch()
 
     @contextmanager
-    def use(self):
+    def use(self, touch: bool = True):
         with self.lock:  # one load, not two: a racing call waits for it
             if self.model is None:
                 self.model = self.load()
@@ -180,7 +229,8 @@ class _Held:
         finally:
             with self.lock:
                 self.busy -= 1
-                self.used = time.monotonic()
+                if touch:
+                    self.used = time.monotonic()
 
     def drop(self, now: float) -> bool:
         with self.lock:
@@ -198,6 +248,36 @@ def drop_idle(now: float | None = None) -> list[str]:
                                  ("reranker", _ranker)) if h.drop(now)]
 
 
+def idle_pass(now: float | None = None) -> list[str]:
+    """One check of the idle thread: `drop_idle`, then, when that dropped the last model held,
+    `_trim`. The names of the models dropped."""
+    dropped = drop_idle(now)
+    if dropped:
+        _trim_if_none()
+    return dropped
+
+
+def _trim_if_none() -> None:
+    """`_trim` once no model is held (TRIM): after an idle drop or a background run's end."""
+    if TRIM and not any(h.model for h in (_main, _capped, _ranker)):
+        _trim()
+
+
+def _trim() -> None:
+    """Empty this process's working set (Windows; nothing elsewhere). Its pages go to the
+    standby list, where other programs may have them; the next call faults back only what it
+    touches. Private bytes do not change: what the process still holds is in them
+    (docs/benchmarks/memory.md, M3)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    k = ctypes.WinDLL("kernel32")  # its own instance: the argtypes below stay local
+    k.GetCurrentProcess.restype = ctypes.c_void_p
+    k.K32EmptyWorkingSet.argtypes = [ctypes.c_void_p]
+    k.K32EmptyWorkingSet(k.GetCurrentProcess())
+
+
 _WATCH_LOCK = threading.Lock()
 _watching = False
 
@@ -213,7 +293,7 @@ def _watch() -> None:
     def loop():
         while True:
             time.sleep(IDLE_CHECK)
-            drop_idle()
+            idle_pass()
 
     threading.Thread(target=loop, name="cortex-model-idle", daemon=True).start()
 
@@ -228,7 +308,9 @@ _bg = threading.local()
 def background():
     """Embedding in this thread is background work while inside: the real model's calls go to
     a second copy capped at BG_THREADS threads, all at below-normal priority (Windows), so the
-    PC stays quick. A query in another thread keeps the full model. Nests."""
+    PC stays quick. A query in another thread keeps the full model. Nests. The outermost exit
+    drops the copy (unless another thread's background work holds it): it served only this.
+    When that leaves no model, the working set is emptied too (`_trim_if_none`)."""
     if getattr(_bg, "on", False):
         yield
         return
@@ -238,6 +320,8 @@ def background():
         yield
     finally:
         _bg.on = False
+        if _capped.drop(math.inf):
+            _trim_if_none()
         if old is not None:
             _priority(old)
 
