@@ -66,8 +66,8 @@ def _revlog() -> list[tuple]:
     return rows
 
 
-def _fill(con, schema: int) -> None:
-    con.executescript(TABLES)
+def _fill(con, schema: int, tables: str = TABLES) -> None:
+    con.executescript(tables)
     if schema == 18:
         con.execute("CREATE TABLE decks (id integer primary key not null, name text not null, "
                     "mtime_secs integer, usn integer, common blob, kind blob)")
@@ -250,6 +250,48 @@ def test_the_newest_format_and_broken_files_are_refused(root_plain, tmp_path):
         assert f"Cannot read {f.name}: it is not an Anki collection" in str(e.value), f.name
     with pytest.raises(VaultError):
         anki.source(tmp_path / "missing-folder")
+
+
+def test_a_strangers_collection_is_only_read(root_plain, tmp_path):
+    """A shared deck is untrusted: a generated column calling a function and triggers that
+    would write never run (trusted_schema off, a read-only copy, plain SELECTs): the import
+    reads it like any other, or refuses it in one line."""
+    calls = []
+    tables = TABLES.replace("flags integer,\n    data text);\nCREATE TABLE revlog",
+                            "flags integer,\n    data text, doubled integer GENERATED ALWAYS AS "
+                            "(evil(ivl)) VIRTUAL);\nCREATE TABLE revlog")
+    assert "evil(ivl)" in tables
+    with closing(sqlite3.connect(tmp_path / "hostile.db")) as con:
+        con.create_function("evil", 1, lambda x: calls.append(x) or x, deterministic=True)
+        _fill(con, 11, tables)
+        con.executescript("""
+            CREATE TRIGGER wipe_notes AFTER UPDATE ON cards BEGIN DELETE FROM notes; END;
+            CREATE TRIGGER wipe_cards BEFORE DELETE ON revlog BEGIN DELETE FROM cards; END;
+            CREATE VIEW every_card AS SELECT evil(ivl) FROM cards;""")
+        con.commit()
+    made = len(calls)
+    apkg = _apkg(tmp_path / "shared", {"collection.anki21": tmp_path / "hostile.db"})
+    try:
+        src = anki.source(apkg, NOW)
+    except VaultError as e:
+        assert "Cannot read Physics.apkg: it is not an Anki collection" in str(e)
+    else:
+        v = Vault(root_plain)
+        assert sources.run(v, src, C)["imported"] == 2
+        assert "6 cards, 2 mature, 80% recalled" in _page(v, "deck-anki-physics-optics")
+    assert len(calls) == made  # the function was never called by the import
+
+
+def test_a_folder_with_a_stray_export_keeps_its_other_kind(tmp_path):
+    d = tmp_path / "Downloads"
+    d.mkdir()
+    (d / "lecture notes.md").write_text("# Optics\n\nSnell's law.\n", encoding="utf-8")
+    _legacy_apkg(tmp_path).replace(d / "Physics.apkg")
+    assert importers.detect(d) == ["notes", "anki"]
+    (d / "lecture notes.md").unlink()
+    assert importers.detect(d) == ["anki"]
+    assert importers.detect(_profile(tmp_path)) == ["anki"]  # collection.media is not walked
+    assert importers.detect(d / "Physics.apkg") == ["anki"]
 
 
 def test_import_never_changes_the_source(root_plain, tmp_path):

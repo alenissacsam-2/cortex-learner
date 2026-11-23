@@ -49,13 +49,14 @@ _CLOZE = re.compile(r"\{\{c\d+::(.*?)(?:::[^{}]*?)?\}\}", re.S)
 _STUB = sources.Source("anki", LABEL, "file", tuple)  # `source_pages`' labels only
 
 
-def holds(path: Path | str) -> bool:
-    """Whether `path` is an Anki export or collection, or a folder holding one (a profile
-    folder, or .apkg/.colpkg files at its top)."""
+def holds(path: Path | str, top: bool = False) -> bool:
+    """Whether `path` is Anki's alone: an export, a collection file or a profile folder (one
+    holding collection.anki2). With `top`, also a folder with .apkg/.colpkg files at its top,
+    which may hold other kinds too (importers.detect adds "anki" to them)."""
     p = Path(path)
     try:
         if p.is_dir():
-            return (p / COLLECTION).is_file() or any(
+            return (p / COLLECTION).is_file() or top and any(
                 c.suffix.lower() in PACKAGES and c.is_file() for c in p.iterdir())
     except OSError:
         return False
@@ -124,6 +125,8 @@ def decks(path: Path | str, now: float | None = None) -> list[dict]:
             db = _copy(f, Path(tmp))
             try:
                 with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as con:
+                    # a shared deck is a stranger's file: no functions from its schema
+                    con.execute("PRAGMA trusted_schema = OFF")
                     out += _read(con, now_ms)
             except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError) as e:
                 raise _bad(f.name, e) from None

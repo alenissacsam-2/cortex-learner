@@ -393,6 +393,8 @@ def detect(path: Path) -> list[str]:
     from cortex import voice_memos
     if not kinds and any(n.endswith(voice_memos.AUDIO) for n in names):
         kinds.append("voice-memos")  # last: a notes folder with a recording is still notes
+    if anki.holds(path, top=True):  # .apkg/.colpkg files at a folder's top, beside the rest
+        kinds.append("anki")
     return kinds
 
 
