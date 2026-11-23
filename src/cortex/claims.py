@@ -332,6 +332,19 @@ def is_not_me(page: str, text: str, claim: str) -> bool:
     return norm(claim) in {norm(r["text"]) for r in parse(page, text) if r["status"] == "not_me"}
 
 
+def drop(text: str, page: str, cid: str) -> tuple[str, list[dict]]:
+    """R10 forget: `text` without claim `cid`'s lines (any section) and the `## Past` lines
+    that led to it (`→ ^cid)`, followed back); the rows removed, each with its raw `line`."""
+    lines, rows = text.splitlines(keepends=True), parse(page, text)
+    ids, gone = {cid}, {}
+    while more := [r for r in rows if r["line_no"] not in gone and (r["id"] in ids or any(
+            f"→ ^{i})" in r["text"] for i in ids))]:
+        for r in more:
+            gone[r["line_no"]] = {**r, "line": lines[r["line_no"]].rstrip("\r\n")}
+            ids.add(r["id"])
+    return "".join(ln for n, ln in enumerate(lines) if n not in gone), list(gone.values())
+
+
 def rows(vault) -> list[dict]:
     """The claim rows (`parse`) of every claim page, any status."""
     out = []

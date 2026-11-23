@@ -854,16 +854,26 @@ class App:
         r = self._live(body)
         v = self._vault()
         events = list(EventLog(v).iter_events())
-        forget = "forget" if any(c["id"] == r["id"] for x in tags.forget_cards(
-            v, events, self._today()) for c in x["candidates"]) else None
+        cards = [x["text"] for x in tags.forget_cards(v, events, self._today())
+                 if any(c["id"] == r["id"] for c in x["candidates"])]
+        forget = "forget" if cards else None
         card = forget or ("crowded" if any(x["id"] == r["id"] for x in review.crowded(
             v, review.live_rows(v, events, self._today()))[0]) else None)
         live = {x["id"]: x for x in claims.rows(v) if x["status"] == "live"}
-        return self._clicks([("cortex_patch", "cortex_patch", {
+        view = self._clicks([("cortex_patch", "cortex_patch", {
             "id": f"me/{live[cid]['page']}", "op": "retire", "target": cid,
             "user_confirmed": True}, card if n == 0 else None, forget)
             for n, cid in enumerate(self._line_group(r["id"]) if card is None else [r["id"]])
             if cid in live])
+        if not forget or r["id"] not in live:
+            return view
+        # R10: a //forget card's line then goes from every store; the answer carries the receipt
+        from cortex import forget as forget_
+        from cortex import session
+        mark = v.writes
+        receipt = forget_.claim(v, live[r["id"]]["page"], r["id"], also=tuple(cards))
+        session._commit(v, "cortex: forget a line", v.wrote_since(mark))
+        return {**self.review(), "receipt": receipt}
 
     def review_crowded_keep(self, body: dict) -> dict:
         """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin

@@ -181,7 +181,13 @@ def _forget(core, text: str, day: str, said: bool) -> dict:
                                     user_confirmed=True)
         finally:
             core.tagged = False
-        return {**out, "summary": f"//forget retired a line on me/{r['page']}"}
+        if "error" in out:
+            return out
+        from cortex import forget  # R10: the retired line then goes from every store
+
+        forget.claim(core.vault, r["page"], r["id"], also=(text,))
+        return {**out, "summary": f"//forget forgot a line on me/{r['page']} everywhere Cortex "
+                                  "keeps it"}
     shown = (strong or rows)[:SHOWN]
     core._append("log", {"payload": {"kind": "tag_forget", "text": text, "candidates": [
         {"page": r["page"], "id": r["id"]} for r in shown]}})

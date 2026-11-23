@@ -1,0 +1,217 @@
+"""R10: a forget takes the text out of every store Cortex owns, and its receipt names the rest."""
+
+import json
+import time
+from datetime import UTC, datetime
+
+import pytest
+from conftest import FakeEmbed, git, note
+from test_browse import chromium, hubbed, m
+from test_browse_sites import OWNER
+from test_chat_log import serve
+from typer.testing import CliRunner
+
+from cortex import chat_import, claims, clients, forget, levels, semantic
+from cortex.app import server, targets
+from cortex.browse import build, sources
+from cortex.catalog import Catalog
+from cortex.cli import app
+from cortex.events import EventLog, void_event
+from cortex.index import Index
+from cortex.vault import Vault, VaultError
+
+pytestmark = pytest.mark.usefixtures("home")
+CANARY = "zqcanary9x"
+
+
+def hits(root, home):
+    """Every file under the vault (but .git) and the temp home (.cortex, the AI apps' rules
+    files and their backups) holding the canary."""
+    out = []
+    for base in (root, home):
+        out += [p.relative_to(base.parent).as_posix() for p in base.rglob("*") if p.is_file()
+                and ".git" not in p.relative_to(base).parts and CANARY.encode() in p.read_bytes()]
+    return sorted(out)
+
+
+def cli(*args, ok=True):
+    r = CliRunner().invoke(app, [str(a) for a in args], input="y\n")
+    assert (r.exit_code == 0) == ok, r.output
+    return r.output
+
+
+def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
+    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(home / ".cortex" / "claude-chat"))
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    hubbed(root)
+    note(root, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Sam.\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "core")
+    got = {}
+
+    async def body(call):  # a chat, a page, claim lines, all through the normal paths
+        p = await call("cortex_prime", {"prompt": f"remember my word {CANARY} please"})
+        got["add"] = await call("cortex_add", {"kind": "note", "title": f"Note {CANARY}",
+                                               "fields": {"summary": f"Note {CANARY}"}})
+        await call("cortex_patch", {"id": got["add"]["id"], "op": "append_to_section",
+                                    "target": "Notes", "text": f"- Note {CANARY} car"})
+        got["claim"] = await call("cortex_patch", {
+            "id": "me/profile", "op": "append_to_section", "target": "Brief",
+            "user_confirmed": True, "text": f"- My lucky word is {CANARY}"})
+        await call("cortex_patch", {  # the pinned core, served into AI apps' rules files once
+            "id": "me/core", "op": "append_to_section", "target": "Core",  # the owner approves
+            "user_confirmed": True, "text": f"- Greet me with {CANARY}"})
+        await call("cortex_log", {"kind": "chat_turn", "payload": {
+            "chat": p["chat"], "user": f"My lucky word is {CANARY}", "gist": "noted"}})
+        await call("cortex_end", {"summary": f"added Note {CANARY}"})
+
+    serve(root, body)
+    (home / ".codex").mkdir()  # Codex, Cursor and VS Code rules files, all under the temp home
+    (home / ".cursor").mkdir()
+    targets._vscode_user().mkdir(parents=True)
+    rules = [targets.by_id()[t] for t in ("codex", "cursor", "vscode")]
+    for t in rules:
+        t.apply(clients.server_entry("cortex", root))
+    rules = [t.rule_path() for t in rules]
+    a = server.App(root)
+    monkeypatch.setattr(a, "entry", lambda: clients.server_entry("cortex", root))
+    a.review_approve({"key": next(x for x in a.review()["pending"] if x["page"] == "core")["key"]})
+    assert all(str(p).startswith(str(home)) and CANARY in p.read_text("utf-8") for p in rules)
+    local = tmp_path / "local"  # a browse page
+    chromium(local / "Google" / "Chrome" / "User Data" / "Default" / "History", [
+        (m(0), f"https://lichess.org/study/{CANARY}", f"Chess {CANARY} openings", 300)])
+    build.run(Vault(root), sources.discover(local, tmp_path / "roaming"), OWNER, tz=UTC,
+              now=m(0, 2), embed=FakeEmbed())
+    assert chat_import.run(Vault(root), now=time.time() + 10**5)["saved"] == 1
+    v = Vault(root)
+    idx = Index(v, Catalog.load(v))
+    idx.save_snapshot()
+    assert semantic.vectors(idx, FakeEmbed(), 4) is not None
+    before = hits(root, home)
+    assert {"vault/.cortex/vectors.db", "vault/.cortex/index-snapshot.json",
+            "vault/.cortex/chat-import.sqlite", "home/.cortex/claude-chat"} & {
+        h if h.startswith("vault/") else h.rsplit("/", 2)[0] for h in before}
+    chat = next(e["payload"]["pages"][0] for e in EventLog(v).iter_events()
+                if (e.get("payload") or {}).get("kind") == "chat_saved")
+    cid = {r["page"]: r["id"] for r in claims.rows(v) if CANARY in r["text"]}
+    git(root, "add", "-A")  # what the imports above left uncommitted
+    git(root, "commit", "-qm", "imports")
+
+    out = cli("forget", f"me/profile^{cid['profile']}", "--vault", root)
+    assert out.startswith("Forget the line ") and "removed 1 claim lines" in out
+    assert "1 chat transcripts swept" in out and "filter-repo" in out, out
+    assert "Backups" in out and "raw/" in out and "AI apps keep" in out
+    out = cli("forget", f"me/core^{cid['core']}", "--vault", root)
+    assert "3 AI apps' rules files rewritten" in out, out
+    assert all(f"rewritten: {p}" in out for p in rules) and "rules files, or the" not in out
+    assert not any(CANARY in p.read_text("utf-8") for p in rules)
+    out = cli("forget", chat, "--vault", root)
+    assert "chat transcripts swept or deleted" in out, out
+    out = cli("forget", got["add"]["id"], "--vault", root)
+    assert "removed the page; 3 events redacted" in out, out  # 2 changes, the close summary
+    out = cli("browse", "forget", "--site", "lichess.org", "--vault", root)
+    assert "forgot lichess.org:" in out and "deny_domains" in out
+    assert hits(root, home) == []
+    assert git(root, "status", "--porcelain") == ""  # each forget is committed
+    v = Vault(root)
+    assert all(e.get("id") and e.get("ts") and e.get("kind") for e in EventLog(v).iter_events())
+    assert Index(v, Catalog.load(v)).find(CANARY) == []
+    assert chat_import.run(Vault(root), now=time.time() + 10**5).get("saved", 0) == 0
+    assert hits(root, home) == []  # the chat is not imported again
+
+
+def _session(root, when, text, verdict="correct"):
+    from cortex.session import SessionManager
+
+    mgr = SessionManager(Vault(root), clock=lambda: when)
+    s = mgr.start()
+    ev = mgr.log.append(session=s.id, kind="grade", source="tutor", mode="learn", now=when,
+                        fields={"object": "concept:two-pointers", "verdict": verdict,
+                                "hints": 0, "confidence": 3,
+                                "payload": {"answer": f"{text}, said twice: {text}"}})
+    mgr.note("graded", "two-pointers")
+    assert mgr.close()["commit"]
+    return s.id, ev["id"]
+
+
+def _levels(root):
+    return levels.replay(Vault(root), today="2026-11-20")[0].get("two-pointers")
+
+
+def test_redacted_events_still_fold_void_and_undo(root):
+    git(root, "config", "core.autocrlf", "false")
+    p = root / "me" / "profile.md"
+    p.write_text(p.read_text(encoding="utf-8") + f"- My lucky word is {CANARY} ^c-aaaaa\n",
+                 encoding="utf-8")
+    git(root, "commit", "-qam", "a claim")
+    first, ev1 = _session(root, datetime(2026, 11, 10, 12, tzinfo=UTC),
+                          f"My lucky word is {CANARY}")
+    second, ev2 = _session(root, datetime(2026, 11, 11, 12, tzinfo=UTC), "two pointers meet")
+    v = Vault(root)
+    lv, before = _levels(root), list(EventLog(v).iter_events())
+    out = cli("forget", "me/profile^c-aaaaa", "--vault", root)
+    assert "1 events redacted" in out
+    after = list(EventLog(Vault(root)).iter_events())
+    assert CANARY not in json.dumps(after) and _levels(root) == lv
+    assert [{k: e[k] for k in sorted(e) if k != "payload"} for e in after] == [
+        {k: e[k] for k in sorted(e) if k != "payload"} for e in before]
+    graded = next(e for e in after if e["id"] == ev1)
+    assert graded["payload"] == {"answer": "[forgotten], said twice: [forgotten]"}
+    assert git(root, "status", "--porcelain") == ""
+
+    out = cli("undo", first, "--vault", root)  # its redacted event file goes with it
+    assert "reverted" in out and "events" not in out
+    assert not list(root.glob(f"events/**/{first}.jsonl"))
+    v = Vault(root)
+    assert {e["session"] for e in EventLog(v).iter_events() if e["kind"] == "grade"} == {second}
+    assert _levels(root).attempts == lv.attempts - 1
+    void_event(EventLog(v), session="cli", event_id=ev2, reason="test", source="external")
+    assert _levels(root) is None  # no live grade left
+
+
+def test_app_forget_card_forgets_and_returns_the_receipt(root):
+    from conftest import run
+
+    from cortex.app import server
+
+    (root / ".cortex").mkdir(exist_ok=True)
+    (root / "me" / "preferences.md").write_text(
+        "# Preferences\n\n## Coding\n- Writes Python with type hints\n"
+        "- Writes Rust for small CLI tools\n", encoding="utf-8")
+
+    async def body(call):  # matches both lines: a Review card
+        await call("cortex_prime", {"prompt": "hello"})
+        out = await call("cortex_log", {"kind": "chat_turn", "payload": {
+            "user": "//forget: writes python rust", "gist": "x"}})
+        assert "nothing changed" in out["tags"][0]
+
+    run(root, body)
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "the card")
+    app = server.App(root)
+    (card,) = app.review()["forget"]
+    pick = next(c for c in card["candidates"] if c["text"].startswith("Writes Python"))
+    view = app.review_retire({"id": pick["id"]})
+    assert view["forget"] == [] and "events redacted" in " ".join(forget.lines(view["receipt"]))
+    assert not [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts
+                and b"writes python" in p.read_bytes().lower()]
+    assert "Writes Rust" in (root / "me" / "preferences.md").read_text(encoding="utf-8")
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_drop_takes_the_line_and_its_past(tmp_path):
+    text = ("# Profile\n\n## Brief\n- Lives in Pune ^c-bbbbb\n- Keeps this ^c-ccccc\n\n## Past\n"
+            "- Lives in Delhi (until 2026-01-02 → ^c-bbbbb) ^c-ddddd\n"
+            "- Lives in Agra (until 2025-01-02 → ^c-ddddd) ^c-eeeee\n")
+    new, gone = claims.drop(text, "profile", "c-bbbbb")
+    assert new == "# Profile\n\n## Brief\n- Keeps this ^c-ccccc\n\n## Past\n"
+    assert sorted(r["id"] for r in gone) == ["c-bbbbb", "c-ddddd", "c-eeeee"]
+    assert gone[0]["line"] == "- Lives in Pune ^c-bbbbb"
+
+
+def test_refuses_what_it_cannot_forget(root):
+    v = Vault(root)
+    for bad, why in (("concepts/two-pointers", "catalog.yaml"), ("me/profile", "^c-"),
+                     ("nothing-here", "No page"), ("me/profile^c-zzzzz", "No claim line")):
+        with pytest.raises(VaultError, match=why.replace("^", r"\^")):
+            forget.forget(v, bad)

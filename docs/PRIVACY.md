@@ -81,6 +81,23 @@ These measures lower the risk; they do not remove it. Review changes to your `me
 - Export: `cortex backup` writes a zip of the whole vault, including its history, `browse/private/` and the browse stores in `.cortex/browse/` listed above (a snapshot of `store.db` and `vectors-private.db`, `sites.json`, `state.json`, `inbox-archive/`, the extension visits not yet imported, and the older `site-days.json`, `verdicts.json` and `vectors-private.npz` as `*.migrated` backups: the app's start or the next browse import reads each into its store once and renames it, never deletes it, and a forget still removes what it forgets from them; `cortex doctor` names any not read in yet), which hold browsing your browsers have already forgotten, and a snapshot of `.cortex/vectors.db`. It leaves out the old browser extension's pairing token, your local chat history (`.cortex/browse/chat/`), lock files, older backups and an old `dashboard.html`. **A backup zip holds your private browsing: keep it as private as the vault itself.** `cortex backup --no-private` writes a zip without private pages, pages under a private subject, the raw files of private resources, `browse/private/`, the browse stores in `.cortex/browse/` (their visits mix private browsing in), the chat import's state (`.cortex/chat-import.sqlite`, which holds the raw turns of private chats too) and the history (`.git`, which holds every private page); your event log, with your results on private subjects, stays in it.
 - Delete everything: delete the vault folder and `~/.cortex`, then remove Cortex from Claude (see [INSTALL.md](INSTALL.md), section 11).
 
+## Forgetting one thing
+
+`cortex forget <page or line>` (a page such as `people/asha` or a note's id, a saved chat page, or one line about you such as `me/profile^c-ab2cd`), a `//forget:` line that matches one line about you, and the //forget card in the app's Review all forget the same way. `cortex browse forget --site` and `--category` do the same for browsing.
+
+**What it removes.** The page or line itself (a line together with the `## Past` lines that led to it; a person together with the voice samples and drafts addressed to them). Then every copy of its text Cortex keeps: the page's id and title, or the line's words, in the event log (each event that held them is rewritten with `[forgotten]` in their place), in Cortex's own pages (session notes, summaries, `log.md`, `Today.md`, `index.md`, `inbox.md`, saved chat pages), in the working files under `.cortex/` (the search log, the X-ray, the local Chat's history and the other ledgers), and in the chat copies Cortex keeps under `~/.cortex/claude-chat` (a forgotten chat page's own copy is deleted, and that chat is never imported again). The rules files Cortex writes your pinned core into for other AI apps (Cursor, VS Code, Codex's `AGENTS.md`) are rewritten at once, and the receipt names each. The search snapshot is written again, the page's search vectors are deleted, and the databases are rebuilt (`VACUUM`, after emptying their write-ahead log) so no deleted row stays in free space. The event log keeps each rewritten event's id, time, day, kind and the ids of what it graded, so your levels and `cortex undo` work as before. Cortex writes no record of what you forgot.
+
+**What it cannot remove**, and says so in the receipt it prints:
+- The vault's git history: every old version of the page stays there. Cortex never rewrites history; the receipt shows the `git filter-repo` command you can run yourself, after which any clone or remote copy must be deleted too.
+- Backups: the zips in `.cortex/backups/` and any made with `cortex backup --to`.
+- Raw exports under `raw/` and the export files you imported, wherever you saved them.
+- What AI apps already received: their own chat histories, memories and Claude Code's transcripts in `~/.claude/projects`. For a line of your pinned core, the older `.cortex-*.bak` backups beside those rules files keep it until you delete them; the receipt lists them.
+- A synced vault folder's version history (OneDrive, Dropbox and the like).
+- Copies in other words: Cortex removes the exact text (any case and spacing), not a paraphrase. Text shorter than 4 characters is not swept, and text shorter than 12 not from chats (it would hit other words); the receipt lists it.
+- Your own pages that still mention it: Cortex leaves what you wrote and lists those pages.
+
+A forget cannot be undone.
+
 ## Browsing
 
 Cortex can turn your browser history into pages. It is off until you run an import, and [GUIDE.md section 6](GUIDE.md#6-your-browsing) explains every step and setting.
