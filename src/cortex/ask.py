@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import UTC, datetime
-from itertools import chain, zip_longest
+from itertools import chain
 from pathlib import PurePosixPath
 
 import numpy as np
@@ -234,27 +234,93 @@ _ASKS_PAST = re.compile(r"\b(?:used? to|before|previously|in the past|what did i
                         re.I)
 
 
-def _past(p: dict, question: str) -> None:
+def _past(p: dict, question: str, keep: bool = False) -> None:
     """Drop `## Past` from a me/ page's passage, or mark the passage `past` when the question
-    asks about the past and it keeps one."""
+    asks about the past (or `keep`: a past window it held in) and it keeps one."""
     if not p["path"].startswith("me/"):
         return
-    if _ASKS_PAST.search(question):
+    if keep or _ASKS_PAST.search(question):
         if _PAST.search(p["text"]):
             p["past"] = True
     else:
         p["text"] = _PAST.sub("", p["text"]).rstrip()
 
 
+# R3b: a claim line's span: `(until DAY)` (claims.move_to_past's stamp, a line's own expiry)
+# and `(since DAY)` when a line has one
+_SPAN = re.compile(r"\((since|until) (\d{4}-\d\d-\d\d)")
+
+
+def _spans(body: str, lo: str, hi: str) -> bool:
+    """Whether a line of `body` held in [lo, hi] by its own since and until days."""
+    return any((s := dict(_SPAN.findall(line))) and s.get("since", lo) <= hi
+               and s.get("until", hi) >= lo for line in body.splitlines())
+
+
+def _held(idx: Index, paths: dict, lo: str, hi: str) -> set[str]:
+    """R3b: the paths of pages not dated in [lo, hi] that held then: a me/ page with a line
+    whose since or until days meet it (`_spans`), and a decision made by `hi` that was in
+    force at `lo`: not replaced, or replaced (a STALE status) by a later decision dated `lo`
+    or after (one whose page names it, or that it names, as chat_pages reads a reversal),
+    with that later decision, which says when it changed."""
+    from cortex.chat_pages import _names
+
+    decs = {i: page_date(i, n["fields"], n["body"]) for i, n in idx._notes.items()
+            if n["kind"] == "decision" and i in paths}
+    out = {paths[i] for i, n in idx._notes.items()
+           if paths.get(i, "").startswith("me/") and _spans(n["body"], lo, hi)}
+    for i, d in decs.items():
+        n = idx._notes[i]
+        if not d or d > hi:
+            continue
+        end, by = (hi, i) if (n["kind"], str(n["fields"].get("status") or "")) not in \
+            semantic.STALE else min(((d2, j) for j, d2 in decs.items() if j != i and d2 >= d and (
+                _names(idx._notes[j]["body"], i) or _names(n["body"], j))), default=("", i))
+        if end >= lo:
+            out |= {paths[i], paths[by]}
+    return out
+
+
+SEEDS, LINKS = 1, 2  # R3a: LINKS pages linked with the top SEEDS pages found (eval-tuned)
+LINK_AT, TIME_AT = 2, 0  # R3c: the rank the links and time arms start at (links: after 2)
+NEAR = 0.6  # R3e: share of 3-word runs two passages share to be near-copies (eval max: 0.47)
+# R3f: no answer from a search whose best passage is under semantic.MIN_COS and holds under
+# this share of the question's terms (the eval's answerable questions: 0.20 and up)
+ABSTAIN_COVER = 0.2
+
+
+def _fuse(arms: list[list[dict]], start: tuple[int, ...] = ()) -> list[dict]:
+    """R3c: the arms' passages by reciprocal rank fusion (the sum of 1 / (RRF_K + rank) over
+    the arms a page is in; arm a's ranks start at start[a], else 0), one per path (its first
+    arm's); ties by rank, then arm order, so pages found once are taken in turn as before and
+    a page two arms found moves up."""
+    score: dict[str, float] = {}
+    first: dict[str, tuple] = {}
+    for a, arm in enumerate(arms):
+        for r, p in enumerate(arm, start[a] if a < len(start) else 0):
+            score[p["path"]] = score.get(p["path"], 0.0) + 1 / (semantic.RRF_K + r + 1)
+            first.setdefault(p["path"], (r, a, p))
+    return [first[k][2] for k in sorted(score, key=lambda k: (-score[k], *first[k][:2]))]
+
+
+def _runs(text: str) -> set:
+    w = re.findall(r"\w+", text.lower())
+    return {tuple(w[i:i + 3]) for i in range(max(1, len(w) - 2))}
+
+
 def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] | None = None,
               sources: dict | None = None, topic: str = "",
               stats: dict | None = None) -> list[dict]:
-    """[{path, title, text, kind (note|chat|browse), day, at, len}]: browse pages, recalled
-    notes and private notes (`_private_hits`, under the `private` switch) taken in turn,
-    deduped by path, at most `k`, cut to BUDGET characters in all. `sources` turns SOURCES off
+    """[{path, title, text, kind (note|chat|browse), day, at, len}]: the arms (browse pages,
+    recalled notes, private notes (`_private_hits`, under the `private` switch), with
+    `between` the pages that held then (`_held`), and the pages linked with the top page
+    found (`semantic.linked`)) fused by `_fuse`, deduped by path, no
+    near-copy of a passage already taken (NEAR), at most `k`, cut to BUDGET characters in
+    all; none when the search found only noise (ABSTAIN_COVER). `sources` turns SOURCES off
     one by one; `private` is off unless the caller turns it on (Chat's switch, ask's
-    `private`). With `between` (first and last ISO day) only pages dated inside it, then the
-    pages of those days by `topic` (`_dated`); undated pages drop out. `at` and `len`: the
+    `private`). With `between` (first and last ISO day) only pages dated inside it or that
+    held then, then the pages of those days by `topic`
+    (`_dated`); other undated pages drop out. `at` and `len`: the
     passage's span in its page's body, for Chat's passage view (`chat.passage`). `stats` gets
     {"matched"}: how many pages the search found under the switches (and in the range), of
     which at most `k` are read (Chat's coverage line), and "more": True when a source returned
@@ -263,38 +329,57 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
     src = {**SOURCES, "private": False, **(sources or {})}
     want = k if between is None else vectors.MAX_K  # the range filters after the search
     browse = [{"path": h["path"], "title": h["title"], "text": h["text"], "kind": "browse",
-               "day": _browse_day(h["path"]), "at": h.get("at", 0)}
+               "day": _browse_day(h["path"]), "at": h.get("at", 0), "_cos": h["score"]}
               for h in (vectors.search(vault, question, want)
                         if src["browsing"] or src["private"] else [])]
     idx = Index(vault, Catalog.load(vault))
-    hits = semantic.search(idx, question, want,
-                           quiet=harvest.quiet(EventLog(vault).iter_events()))[0]
+    quiet, ex = harvest.quiet(EventLog(vault).iter_events()), {}
+    hits = semantic.search(idx, question, want, quiet=quiet, explain=ex)[0]
     paths = {i: v[0] for i, v in semantic._pages(idx).items()}
-    notes = []
-    for h in hits:
-        if h["id"] not in paths:
-            continue
-        n, p = idx._notes[h["id"]], paths[h["id"]]
-        notes.append(_note(vault, h["id"], n, p, semantic._chunk_text(n, h.get("at", 0)),
-                           "browse" if p.startswith("browse/") else
-                           "chat" if semantic.is_chat(n) else "note", title=h["title"],
-                           _at=h.get("at", 0)))
+
+    def note(i: str, at: int = 0, **extra) -> dict:
+        n, p = idx._notes[i], paths[i]
+        return _note(vault, i, n, p, semantic._chunk_text(n, at), "browse" if p.startswith(
+            "browse/") else "chat" if semantic.is_chat(n) else "note", _at=at,
+            _id=i, _cos=ex.get("cos", {}).get(i, 0.0), _cover=ex.get("cover", {}).get(i, 0.0),
+            **extra)
+    notes = [note(h["id"], h.get("at", 0), title=h["title"]) for h in hits if h["id"] in paths]
     private = _private_hits(vault, idx, question, want) if src["private"] else []
-    searched = [p for p in chain.from_iterable(zip_longest(browse, notes, private))
-                if p and (between is None or between[0] <= p["day"] <= between[1])]
-    found = iter(searched)
+    held = _held(idx, paths, *between) if between is not None else set()
+    def inside(arm: list[dict]) -> list[dict]:
+        return [p for p in arm if between is None or between[0] <= p["day"] <= between[1]
+                or p["path"] in held]
+    arms = [inside(arm) for arm in (browse, notes, private)]
+    # R3b: the time arm, pages that held in the range by how well they match the question
+    # (unweighted: a replaced decision is the answer to when it held)
+    (wc, wk), cos, kw = ex.get("w", (0.0, 1.0)), ex.get("cos", {}), ex.get("kw", {})
+    arms.append([note(i) for i in sorted(
+        (i for i, p in paths.items() if p in held),
+        key=lambda i: (-wc * cos.get(i, 0.0) - wk * kw.get(i, 0.0), i))])
+    searched = [p for arm in arms for p in arm]
+    # R3a: the links arm, pages linked with the top SEEDS found and not found themselves
+    seeds = [p["_id"] for p in _fuse(arms, (0, 0, 0, TIME_AT))
+             if "_id" in p and src[_switch(p)]][:SEEDS]
+    taken = {p["path"] for p in searched}
+    arms.append(inside([note(i) for i in semantic.linked(idx, seeds, quiet, ex.get("score"))
+                        if i in paths and paths[i] not in taken])[:LINKS])
+    found = iter(_fuse(arms, (0, 0, 0, TIME_AT, LINK_AT)))
     if between is not None:
         def listed():  # read only when the search left room
             yield from _dated(vault, idx, between, topic)
-        found = chain(searched, listed())
-    out, seen, left = [], set(), BUDGET
+        found = chain(found, listed())
+    out, seen, runs, left = [], set(), [], BUDGET
     for p in found:
         if p["path"] in seen or not src[_switch(p)]:
             continue
         if len(out) >= k or left < 200:
             break
         seen.add(p["path"])
-        _past(p, question)
+        _past(p, question, p["path"] in held)
+        pr = _runs(p["text"][:PASSAGE])
+        if any(len(r & pr) >= NEAR * len(r | pr) for r in runs):
+            continue  # R3e: a near-copy of a passage already taken
+        runs.append(pr)
         p["text"] = p["text"][:min(PASSAGE, left)]
         if "_body" in p:  # a browse page's text is its body's own slice: at holds, len is it
             p["at"], p["len"] = _span(p.pop("_body"), p["text"], p["title"], p.pop("_at", 0))
@@ -306,14 +391,23 @@ def _passages(vault: Vault, question: str, k: int, *, between: tuple[str, str] |
         stats["matched"] = len(seen | {p["path"] for p in searched if src[_switch(p)]})
         if any(len(got) >= want for got in (browse, hits, private)):
             stats["more"] = True  # a full source may have had more: "matched" is a floor
+    # R3f: a search (no date range) whose every passage is under the cosine floor and holds
+    # few of the question's terms found noise: no passage, so Chat says it found nothing
+    if between is None and ex.get("cos") and out and max(p.get("_cos", 1.0) for p in out) \
+            < semantic.MIN_COS and max(p.get("_cover", 0.0) for p in out) < ABSTAIN_COVER:
+        out = []
+    for p in out:
+        for key in ("_id", "_cos", "_cover"):
+            p.pop(key, None)
     return out
 
 
 def header(p: dict) -> str:
-    """A passage's first line, `[<day or undated> | <status>]`: "replaced" for a page whose
-    status says it no longer holds, "past" for a me/ page's kept `## Past`, "current" for any
-    other me/ page (its live lines); other pages have no status."""
-    status = "replaced" if p.get("stale") else "past" if p.get("past") else \
+    """A passage's first line, `[<day or undated> | <status>]`: "superseded" for a page whose
+    status says it no longer holds (a superseded decision); "current" for a me/ page (its live
+    lines), "current | superseded" when it keeps its `## Past` (replaced or retired lines, R3g);
+    other pages have no status."""
+    status = "superseded" if p.get("stale") else "current | superseded" if p.get("past") else \
         "current" if p["path"].startswith("me/") else ""
     return f"[{p.get('day') or 'undated'}" + (f" | {status}" if status else "") + "]"
 
