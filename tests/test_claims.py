@@ -151,19 +151,21 @@ def test_revise_retire_reject_and_not_me(root):
         assert again["queued"] is False and "Not me" in again["summary"]
         ctx = (await call("cortex_context"))["context"]
         assert "Neovim" in ctx and "Vim (" not in ctx and "Tabs" not in ctx
-        assert "Night owl" not in ctx and "^c-" not in ctx
+        assert "Night owl" not in ctx and "^c-" not in ctx and "(since" not in ctx  # R13a
 
     run(root, body)
     prefs = read(root, "me/preferences.md")
     new = claims.parse("preferences", prefs)[0]
-    assert new["section"] == "Coding" and new["text"] == f"Neovim (confirmed {d})"
+    # R13a: a line that replaced another says since when it holds
+    assert new["section"] == "Coding" and new["text"] == f"Neovim (confirmed {d}) (since {d})"
     assert prefs.startswith("---\nsummary: x\n---\n")
     assert f"## Past\n- Vim (confirmed 2026-01-01) (until {d} → ^{new['id']}) ^{vim}\n" \
            f"- Tabs (until {d}) ^{tabs}\n" in prefs
     assert f"## Not me\n- Night owl (rejected {d})\n" in prefs
     assert "Night owl" not in read(root, "inbox.md")
     goals = read(root, "me/goals.md")
-    assert "## Now\n- Pass the OA with 3/3 ^c-" in goals and f"(until {d} → ^c-" in goals
+    assert f"## Now\n- Pass the OA with 3/3 (since {d}) ^c-" in goals \
+        and f"(until {d} → ^c-" in goals
 
 
 def test_serving_newest_first_never_past_or_not_me(root):

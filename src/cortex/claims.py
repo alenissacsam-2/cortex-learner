@@ -25,8 +25,10 @@ ACT_TIERS = ("typed", "confirmed")  # act-grade: may be said as the user (PHASE1
 RELAYED_FROM = "2026-11-17"
 ID_TAIL = re.compile(r"\s+\^(c-[a-z2-7]{5})\s*$")
 _ANY_ID = re.compile(r"\s+\^c-[a-z2-7]{5}(?![a-z2-7])")  # ids are server-stamped only
-_MARK = re.compile(r"\s*\((?:confirmed|proposed|rejected|until)\b[^)]*\)")
+_MARK = re.compile(r"\s*\((?:(?:confirmed|proposed|rejected|until)\b[^)]*|since \d{4}-\d\d-\d\d)\)")
 _UNTIL = re.compile(r"\s*\(until (\d{4}-\d\d-\d\d)\s*\)")  # a live line's own expiry (agenda 4)
+# R13a: the day a line that replaced another started to hold (valid time; `stamp_since`)
+_SINCE = re.compile(r"\s*\(since (\d{4}-\d\d-\d\d)\)")
 _H2 = re.compile(r"^##[ \t]+(.*?)[ \t]*$")
 _TOP = re.compile(r"^#{1,2}[ \t]")  # a heading that ends a ## section
 
@@ -182,6 +184,33 @@ def expired(text: str, today: str) -> str | None:
 
 def strip_id(line: str) -> str:
     return ID_TAIL.sub("", line)
+
+
+def since(text: str) -> str | None:
+    """R13a: a claim line's own `(since YYYY-MM-DD)` day, else None."""
+    m = _SINCE.search(text)
+    return m.group(1) if m else None
+
+
+def strip_since(line: str) -> str:
+    """A served line without its `(since …)` stamp: rules files and tool text carry no dates,
+    so the clients' prompt caches keep hitting."""
+    return _SINCE.sub("", line)
+
+
+def stamp_since(text: str, page: str, target: str, day: str) -> tuple[str, str | None]:
+    """R13a: page `text` with ` (since DAY)` before the id of its live claim `target`, and that
+    line; (text, None) when the line is not live there or already has a since or until day."""
+    c = next((r for r in parse(page, text) if r["id"] == target and r["status"] == "live"), None)
+    if c is None or since(c["text"]) or re.search(r"\(until\b", c["text"]):
+        return text, None
+    lines = text.splitlines(keepends=True)
+    body = lines[c["line_no"]].rstrip("\r\n")
+    m = ID_TAIL.search(body)
+    at = m.start() if m else len(body.rstrip())
+    new = f"{body[:at]} (since {day}){body[at:]}"
+    lines[c["line_no"]] = new + lines[c["line_no"]][len(body):]
+    return "".join(lines), new
 
 
 def make_id(page: str, text: str, day: str, taken=()) -> str:
