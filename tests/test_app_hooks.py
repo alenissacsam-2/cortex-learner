@@ -196,3 +196,24 @@ def test_an_unparseable_hooks_file_is_left_alone(home, bad):
         t.apply(ENTRY)
     assert p.read_text("utf-8") == bad and toml.read_text("utf-8") == 'model = "o3"\n'
     assert not _baks(p) and not _baks(toml)
+
+
+def test_each_apps_hook_serves_its_own_guesses_not_another_apps(vault, tmp_path):
+    """R5d through the hooks: a guess made in a Codex session reaches Codex's hook, and
+    neither Gemini's nor Claude Code's, until the owner approves it."""
+    from cortex.mcp_server import Cortex
+    (vault / "me/preferences.md").write_text(  # short: within the preferences cap
+        "# Preferences\n\n## Communication\n- Email: formal greeting.\n", encoding="utf-8")
+    c = Cortex(Vault(vault))
+    c.over_mcp, c.sessions.client = True, "codex-mcp-client"
+    out = c._call("cortex_patch", c.cortex_patch, {
+        "id": "me/preferences", "op": "append_to_section", "target": "Communication",
+        "text": "Likes tables over prose."})
+    assert "error" not in out and out.get("changed"), out
+    c.sessions.close(summary="test")
+    assert "Likes tables over prose" in context(
+        prime_hook.run(codex("plan the DBMS email", tmp_path), "codex"), "UserPromptSubmit")
+    assert "Likes tables over prose" not in context(
+        prime_hook.run(gemini("plan the DBMS email", tmp_path), "gemini"), "BeforeAgent")
+    claude = codex("plan the DBMS email", tmp_path).replace(CODEX_SID, GEMINI_SID[::-1])
+    assert "Likes tables over prose" not in context(prime_hook.run(claude), "UserPromptSubmit")

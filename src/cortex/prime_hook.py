@@ -238,7 +238,7 @@ def _light(root, prompt: str, seen: set[str] | None = None,
                 lambda p, h: access.scope_section(scopes, p, h))
             evs = list(EventLog(vault).iter_events())
             parts, _ = prime.core(vault, prompt, evs, datetime.now(UTC),
-                                  profiles.withheld(vault, scopes), xr, allow)
+                                  profiles.withheld(vault, scopes), xr, allow, client)
             if seen is None:
                 out, ids = "\n\n".join(parts), [c for c, _ in delta.claim_lines(vault, parts)]
                 served, trimmed = xr["served"], xr["trimmed"]
