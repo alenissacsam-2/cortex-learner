@@ -933,7 +933,7 @@ class App:
         mark = v.writes
         receipt = forget_.claim(v, live[r["id"]]["page"], r["id"], also=tuple(cards))
         session._commit(v, "cortex: forget a line", v.wrote_since(mark))
-        return {**self.review(), "receipt": receipt}
+        return {**self.review(), "receipt": receipt, "receipt_lines": forget_.lines(receipt)}
 
     def review_crowded_keep(self, body: dict) -> dict:
         """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin

@@ -1784,7 +1784,11 @@
       board('Lines you asked to forget', { note: String((d.forget || []).length) }, ...list((d.forget || []).flatMap((x) => {
         const n = kb('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, `Dismiss: ${x.text}`);
         return [card(`//forget: ${x.text}`, x.candidates.length ? 'Retire the line you meant' : 'No line matched', null, [n[0]], { n }),
-          ...x.candidates.map((c) => { const r = retire(c); return card(c.text, where(c), null, [r[0]], { r }); })];
+          ...x.candidates.map((c) => {
+            // R10: retiring a //forget card's line sweeps it from every store; the receipt shows above Today's 5
+            const r = kb('Forget it', () => act('/api/review/retire', { id: c.id }, 'Forgotten everywhere Cortex keeps it. The receipt is at the top of Review.'), null, `Forget: ${c.text}`);
+            return card(c.text, where(c), null, [r[0]], { r });
+          })];
       }), 'Nothing to forget.')),
       board('Imported notes you edited', { note: String((d.imports || []).length) }, ...list((d.imports || []).map((x) => {
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
@@ -1794,7 +1798,10 @@
       'No line looks like an instruction to an AI.')),
       board('Changed outside Cortex', { note: String(outside.length) }, ...list(outside.map((x) => outsideCard(x)),
       'No line changed outside Cortex.')));
-    put('review', todayBoard(d, m), more);
+    // R10: the receipt of a //forget just done: what went from each store and what Cortex cannot remove
+    const receipt = (d.receipt_lines || []).length ? board('Forgotten', { note: 'receipt', id: 'forget-receipt' },
+      ...d.receipt_lines.map((t) => h('p', { class: 'pad ink-2' + (t.startsWith('- ') ? ' mono' : ''), text: t }))) : null;
+    put('review', receipt, todayBoard(d, m), more);
     cardsDrawn('review');
   }
 

@@ -194,6 +194,7 @@ def test_app_forget_card_forgets_and_returns_the_receipt(root):
     pick = next(c for c in card["candidates"] if c["text"].startswith("Writes Python"))
     view = app.review_retire({"id": pick["id"]})
     assert view["forget"] == [] and "events redacted" in " ".join(forget.lines(view["receipt"]))
+    assert view["receipt_lines"] == forget.lines(view["receipt"])  # what the Review board shows
     assert not [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts
                 and b"writes python" in p.read_bytes().lower()]
     assert "Writes Rust" in (root / "me" / "preferences.md").read_text(encoding="utf-8")
