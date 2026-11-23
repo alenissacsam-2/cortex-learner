@@ -297,3 +297,111 @@ def test_an_ai_app_cannot_start_a_harvest_session(root):
             assert "harvest" not in tool.input_schema["properties"]["mode"]["enum"]
             return await c.call_tool("cortex_start", {"mode": "harvest"})
     assert anyio.run(start).is_error
+
+
+# ---- C8: the piggyback pass right after a local Chat turn ---------------------------------
+
+@pytest.fixture
+def piggy(app, monkeypatch):  # noqa: F811
+    """The piggyback on, short waits, the local model enabled and `find_loaded` giving the
+    test's runner (`piggy.runner`); log lines in `piggy.lines`. `find` is never asked."""
+    from cortex import localllm
+
+    class P:
+        runner, lines = facts(PUNE), []
+    monkeypatch.setattr(server, "PIGGYBACK", True)
+    monkeypatch.setattr(fh, "PIGGY_WAIT_S", 0.02)
+    monkeypatch.setattr(localllm, "enabled", lambda config=None: True)
+    monkeypatch.setattr(localllm, "find_loaded", lambda config=None: P.runner)
+    monkeypatch.setattr(localllm, "find", lambda *a, **k: pytest.fail("a model was loaded"))
+    app.echo = P.lines.append
+    P.app = app
+    return P
+
+
+def test_a_chat_turn_ends_with_a_piggyback_that_saves_and_logs_counts(piggy, monkeypatch):
+    from test_app import call
+
+    from cortex import chat as chat_mod
+    app = piggy.app
+    chat(app.root, "c1", "I moved to Pune last month")
+    monkeypatch.setattr(chat_mod, "reply", lambda vault, cid, text, find, emit, cancel,
+                        files=None: emit({"t": "done"}))
+    assert call(app, "POST", "/api/chat", {"text": "hi"})[0] == 200
+    for _ in range(3000):  # the thread waits PIGGY_WAIT_S, then runs the pass
+        if piggy.lines:
+            break
+        time.sleep(0.02)
+    assert live(app.root, "profile")["Moved to Pune"]["tier"] == "agent"
+    [line] = piggy.lines
+    assert "chats 1" in line and "saved 1" in line and "Pune" not in line and "s_" not in line
+    assert not fh.pending(Vault(app.root))
+    assert fh.after_chat(app) is None and len(piggy.runner.calls) == 1  # nothing pending
+
+
+def test_the_piggyback_needs_a_loaded_model_no_pause_no_job_and_no_turn(piggy, monkeypatch):
+    from cortex import localllm
+    app, r = piggy.app, piggy.runner
+    chat(app.root, "c1", "I moved to Pune last month")
+    for name, target, attr, value in (
+            ("no loaded model", localllm, "find_loaded", lambda config=None: None),
+            ("model off", localllm, "enabled", lambda config=None: False),
+            ("paused", fh, "paused", lambda v: True),
+            ("a job", app.jobs, "running", lambda: True)):
+        with monkeypatch.context() as m:
+            m.setattr(target, attr, value)
+            assert fh.after_chat(app) is None, name
+    with app.chatting:  # a turn in flight
+        assert fh.after_chat(app) is None
+    assert r.calls == [] and fh.pending(Vault(app.root))
+    assert not (app.root / ".cortex" / "fact-harvest.json").exists()  # nothing written
+    assert fh.after_chat(app)["saved"] == 1
+
+
+def test_a_new_turn_during_the_wait_stops_it_and_never_two_at_once(piggy, monkeypatch):
+    app, r = piggy.app, piggy.runner
+    chat(app.root, "c1", "I moved to Pune last month")
+    monkeypatch.setattr(fh, "PIGGY_WAIT_S", 0.2)
+    t = app.piggyback()
+    assert t is not None and app.piggyback() is None  # one at a time
+    with app.chatting:  # the owner asks again during the wait
+        t.join(30)
+    assert not t.is_alive() and r.calls == [] and piggy.lines == []
+    assert fh.pending(Vault(app.root))
+    t = app.piggyback()  # the slot was freed
+    t.join(30)
+    assert r.calls and piggy.lines
+
+
+class Slow(type(facts())):
+    """A runner whose answer takes `s` seconds on `clock` (fh's fake monotonic clock),
+    calling `then()` first."""
+
+    def __init__(self, clock, s, then=lambda: None):
+        super().__init__({"facts": [PUNE]})
+        self.clock, self.s, self.then = clock, s, then
+
+    def chat(self, system, user, **kw):
+        self.then()
+        self.clock[0] += self.s
+        return super().chat(system, user, **kw)
+
+
+def test_the_budget_and_a_new_turn_stop_the_pass_before_the_next_chat(piggy, monkeypatch):
+    from types import SimpleNamespace
+    app = piggy.app
+    for k in range(3):
+        chat(app.root, f"c{k}", "I moved to Pune last month")
+    clock = [0.0]
+    monkeypatch.setattr(fh, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    piggy.runner = Slow(clock, fh.PIGGY_S + 5)  # the first chat outlasts the budget; it ends
+    out = fh.after_chat(app)
+    assert out["chats"] == 1 and out["left"] == 2 and len(piggy.runner.calls) == 1
+    assert fh.pending(Vault(app.root))
+    piggy.runner = Slow(clock, 0, then=lambda: app.chatting.acquire(blocking=False))  # a turn
+    try:
+        out = fh.after_chat(app)
+    finally:
+        app.chatting.release()
+    assert out["chats"] == 1 and out["left"] == 1 and len(piggy.runner.calls) == 1
+    assert fh.after_chat(app)["chats"] == 1 and not fh.pending(Vault(app.root))

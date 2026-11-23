@@ -29,6 +29,12 @@ The model pass needs a runner whose local model is already loaded (the app: also
 safety_net.background_tools). While the "imports" producer is paused (`paused`) a pass does
 nothing and records nothing: the chats stay pending.
 
+C8, the piggyback (`after_chat`): a local Chat turn leaves the model loaded and warm, so the app
+runs a short pass PIGGY_WAIT_S after the turn ends, with a model already loaded
+(localllm.find_loaded, never `find`) instead of the idle wait. It stops starting chats after
+PIGGY_S (`run`'s `budget_s`) or when a new Chat turn or a job starts (`run`'s `gate`); the chat
+in progress finishes, the rest stays pending (`left`).
+
 RR-10 for its lines (`ledger`, a fold over the event log and STATE): STATE also remembers each
 pass that saved lines (its session id, time, day and number of lines saved). A pass whose
 session's events are gone from the log (the owner undid it: Tonight's Undo or `cortex undo`,
@@ -60,6 +66,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import Counter
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -444,9 +451,12 @@ def _save(vault: Vault, found: list[tuple[str, str, str, bool]]) -> tuple[Counte
     return counts, sid
 
 
-def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -> dict:
+def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None,
+        budget_s: float | None = None, gate=None) -> dict:
     """One pass. `runner`: a local runner whose model is already loaded, or None (Tier 0
-    only); `guard`: a lock held while writing (the app's Review lock). Returns counts (chats,
+    only); `guard`: a lock held while writing (the app's Review lock); `budget_s`: no chat is
+    started after this many seconds, and none once `gate()` turns False (the chat in progress
+    finishes; the rest are `left`, pending for a later pass). Returns counts (chats,
     facts, tier0, saved, review, not_saved, left, skipped_<why>) and `session` when a line was
     offered for saving. VaultError("busy") while another pass runs."""
     if paused(vault):
@@ -457,6 +467,8 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
     todo = sn._todo(vault, state, model)  # with a model: also the chats only Tier 0 read
     if not todo:
         return {}
+    stop_at = None if budget_s is None else time.monotonic() + budget_s
+    halt = False
     with vault.job_lock(LOCK, 0, BUSY):
         counts: Counter = Counter()
         work, found, done = [], [], {}
@@ -487,7 +499,9 @@ def run(vault: Vault, runner=None, *, now: datetime | None = None, guard=None) -
                     counts[f"skipped_{why}"] += 1
                     state[note.id] = {"what": why, "sig": sig, "hash": h}
                     continue
-                if counts["chats"] >= MAX_CHATS:
+                halt = halt or (stop_at is not None and time.monotonic() >= stop_at) or (
+                    gate is not None and not gate())
+                if halt or counts["chats"] >= MAX_CHATS:
                     counts["left"] += 1  # next pass
                     continue
                 turns = harvest.user_turns(note.body) or chat.turns
@@ -529,6 +543,29 @@ def auto(app) -> dict | None:
     if not pending(v) or paused(v):  # stats first: no model probe when nothing changed
         return None
     return run(v, sn.background_tools()[0], guard=app.reviewing)
+
+
+PIGGY_WAIT_S, PIGGY_S = 3.0, 10.0  # C8: the wait after a Chat turn; the pass's time budget
+
+
+def after_chat(app) -> dict | None:
+    """C8: the app's piggyback pass right after a local Chat turn ended (server.py
+    App.piggyback, PIGGY_WAIT_S later): only with the chat import on, a vault set up, no job
+    running, no Chat turn in flight, something pending, the producer not paused and the local
+    model enabled and already loaded. Its counts, or None when it did not run."""
+    # `auto`'s idle check is replaced: the owner just finished a Chat turn and none is in
+    # flight, so the model is warm and nobody waits on it
+    if (not chat_import.enabled() or not app.entry() or app.jobs.running()
+            or app.chatting.locked()):
+        return None
+    v = Vault(app.root)
+    if not pending(v) or paused(v) or not localllm.enabled():
+        return None
+    runner = cli_runner()  # find_loaded: Cortex never loads a model in the background
+    if runner is None:
+        return None
+    return run(v, runner, guard=app.reviewing, budget_s=PIGGY_S,
+               gate=lambda: not app.chatting.locked() and not app.jobs.running())
 
 
 def cli_runner():
