@@ -265,6 +265,70 @@ def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypa
     assert d.win.calls == ["show", "restore"]
 
 
+def test_the_tray_tells_the_page_it_is_hidden_and_it_sleeps_until_shown(monkeypatch):
+    """M2: WinForms' Hide left the WebView2 page visible (its 3D brain and polls ran on); the
+    control is hidden first, while the form still shows, so WebView2 hides the page. SLEEP_S
+    later, still in the tray, the page sleeps (TrySuspendAsync); a show in between keeps it
+    awake. Showing makes the control visible again (WebView2 wakes the page)."""
+    log = []
+    system = types.ModuleType("System")  # pythonnet's delegate: Func[Type](fn) is fn here
+    system.Type = object
+    system.Func = {object: lambda fn: fn}
+    monkeypatch.setitem(sys.modules, "System", system)
+
+    class Control:
+        Visible = True
+        CoreWebView2 = types.SimpleNamespace(TrySuspendAsync=lambda: log.append("suspend"))
+
+        def __setattr__(self, k, v):
+            log.append(f"control {'shown' if v else 'hidden'}")
+            object.__setattr__(self, k, v)
+
+    class Form:
+        Visible = True
+        browser = types.SimpleNamespace(webview=Control())
+
+        def Invoke(self, fn):  # noqa: N802  (WinForms names)
+            log.append("gui")
+            fn()
+
+        def Hide(self):  # noqa: N802
+            log.append("form hidden")
+            self.Visible = False
+
+        def Show(self):  # noqa: N802
+            log.append("form shown")
+            self.Visible = True
+
+        def Activate(self):  # noqa: N802
+            log.append("activate")
+
+    monkeypatch.setattr(desktop, "SLEEP_S", 0.1)
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.win = FakeWindow()
+    d.win.native = Form()
+    d.hide()
+    assert log == ["gui", "control hidden", "form hidden"] and d.win.calls == []
+    _until(lambda: "suspend" in log)
+    assert log[3:] == ["gui", "suspend"]
+    del log[:]
+    d.show()
+    assert log == ["gui", "form shown", "control shown", "activate"] and d.win.calls == []
+    d.hide()
+    d.show()  # back before SLEEP_S: the page stays awake
+    time.sleep(0.3)
+    assert "suspend" not in log
+    d.win.native.Visible = False  # started hidden (run's sleep_later): never shown, it sleeps
+    d.sleep_later()
+    _until(lambda: "suspend" in log)
+    d.quitting = True  # Quit within SLEEP_S: no call to a window being destroyed
+    del log[:]
+    d.hide()
+    time.sleep(0.3)
+    assert log == ["gui", "control hidden", "form hidden"]
+    assert desktop._native(FakeWindow(), lambda f, c: log.append("ran")) is False  # not WinForms
+
+
 def test_minimise_and_hide_to_the_tray_relock_the_private_switch(gui, vault, monkeypatch):
     """The Private switch relocks when the window is minimised or hidden to the tray."""
     apps, seen, real = [], {}, server.start

@@ -25,7 +25,7 @@ const [appPath, htmlPath, dataPath] = process.argv.slice(2);
 const DATA = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 const errors = [], sinks = [], fetched = [], xhrs = [], replaced = [], held = [], clipboard = [];
 const release = () => { for (const r of held.splice(0)) r(); };
-const stream = {}, winL = {}, scrolls = [];
+const stream = {}, winL = {}, docL = {}, scrolls = [];
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: {
   writeText: async (t) => { if (DATA.fail) throw new Error('denied'); clipboard.push(t); } } } });
 process.on('unhandledRejection', (e) => errors.push(String(e && e.stack || e)));
@@ -122,7 +122,9 @@ Object.assign(globalThis, {
   addEventListener: (t, fn) => (winL[t] = winL[t] || []).push(fn), confirm: () => true,
   scrollTo: (x, y) => scrolls.push(y), innerHeight: 800, scrollY: 0,
   document: {
-    documentElement: new Element('html'), body,
+    documentElement: new Element('html'), body, hidden: false,
+    addEventListener: (t, fn) => (docL[t] = docL[t] || []).push(fn),
+    removeEventListener: (t, fn) => { docL[t] = (docL[t] || []).filter((f) => f !== fn); },
     getElementById: (id) => [...body.walk()].find((e) => e.id === id) || null,
     createElement: (t) => new Element(t), createElementNS: (ns, t) => new Element(t),
     querySelectorAll: (s) => body.querySelectorAll(s),
@@ -671,6 +673,52 @@ def test_a_job_the_page_did_not_start_shows_with_cancel(root_committed, tmp_path
                             "line": "chrome/Default: 120 visits read",
                             "toast": "Wait: Importing new history is still running."}
     assert out["cancelled"]
+
+
+HIDDEN = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const job = (running) => ({ seq: running ? 2 : 3, job: { name: 'Importing new history', section: 'browse',
+  running, cancellable: true, line: 'reading', seconds: 4, error: null, result: running ? null : { ok: true } } });
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const polls = () => fetched.filter((f) => f.path === '/api/job').length;
+(async () => {
+  try {
+    DATA.routes['/api/job'] = job(true);
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    out.running = $('job-name').textContent;
+    document.hidden = true;  // the window went to the tray
+    await wait(700);  // the step under way ends
+    const n = polls();
+    await wait(1500);
+    out.hiddenPolls = polls() - n;
+    DATA.routes['/api/job'] = job(false);
+    document.hidden = false;
+    for (const fn of [...(docL.visibilitychange || [])]) fn();
+    await tick();
+    out.shownPolls = polls() - n;
+    out.after = $('job-name').textContent;
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_a_hidden_page_stops_polling_the_job_and_catches_up_when_shown(
+        root_committed, tmp_path, monkeypatch):
+    """M2: while the page is hidden (the window in the tray, or minimised) a running job is not
+    polled; shown again, it is at once, and a job that ended meanwhile reads as ended."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    out = _run(node, tmp_path, "hidden", HIDDEN,
+               {"routes": _sweep_routes(root_committed, monkeypatch), "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["running"] == "Importing new history"
+    assert out["hiddenPolls"] == 0
+    assert out["shownPolls"] >= 1 and out["after"] == "Importing new history: done"
 
 
 UNTICK = HARNESS[:HARNESS.index("const out = {};")] + r"""
