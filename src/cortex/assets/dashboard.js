@@ -1521,8 +1521,10 @@
     return s;
   }
   function examRow(a) {
-    const n = a.days_left;
-    return brow({ id: a.id, title: [a.company || a.title || a.id, a.kind].filter(Boolean).join(' · '), sub: fmtDay(a.date),
+    const n = a.days_left, name = a.company || a.title || a.id;
+    // the kind only when the name does not say it already: "DSA exam", but "Google · interview"
+    const kind = a.kind && !name.toLowerCase().includes(a.kind.toLowerCase()) ? a.kind : null;
+    return brow({ id: a.id, title: [name, kind].filter(Boolean).join(' · '), sub: fmtDay(a.date),
       right: el('span', 'kind', n === 0 ? 'today' : `${plural(n, 'day')} left`),
       prompt: a.kind === 'deadline' ? null : `/cortex mock ${a.id}`, brainId: a.id });
   }

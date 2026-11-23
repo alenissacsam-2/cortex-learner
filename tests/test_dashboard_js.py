@@ -104,6 +104,7 @@ setTimeout(() => {
   await send('Page.addScriptToEvaluateOnNewDocument', { source: fs.readFileSync(cfg.helpers, 'utf8') });
   await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
   if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  if (cfg.narrow) await send('Emulation.setDeviceMetricsOverride', { width: cfg.narrow, height: 812, deviceScaleFactor: 1, mobile: false });
   const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
   async function load() {
     // a URL with a #hash loaded again is a same-document navigation: no load event
@@ -1130,6 +1131,8 @@ DATE_PROBE = r"""
   for (let i = 0; i < 200 && !$('date-open'); i++) await sleep(50);
   const board = $('date-open').closest('.board');
   out.board = board.querySelector('h2').textContent;
+  out.examTitles = [...board.querySelectorAll('.brow')].filter((r) => !r.querySelector('.acts .btn'))
+    .map((r) => r.querySelector('.ttl').textContent);
   out.suggested = [...board.querySelectorAll('.brow')].filter((r) => r.querySelector('.acts .btn'))
     .map((r) => [r.querySelector('.ttl').textContent, r.querySelector('.ttl').children.length,
       r.querySelector('.acts .btn').textContent, r.querySelector('.acts .btn').getAttribute('aria-label')]);
@@ -1157,6 +1160,14 @@ DATE_PROBE = r"""
   $('date-what').closest('form').requestSubmit();
   out.refused = await toastText('');
   out.stays = !!document.querySelector('form.date-form');
+  // every button of the open form and the suggestions is shown and inside the page's width
+  const shown = (b) => b.offsetParent !== null && b.getBoundingClientRect().width > 0
+    && b.getBoundingClientRect().left >= 0 && b.getBoundingClientRect().right <= innerWidth;
+  out.width = innerWidth;
+  out.visible = [...$('date-what').closest('.board').querySelectorAll('.brow .acts .btn, form.date-form button')]
+    .map((b) => [b.textContent, shown(b)]);
+  out.addLit = getComputedStyle(document.querySelector('form.date-form .btn.lit')).backgroundColor;
+  out.overflow = document.documentElement.scrollWidth > innerWidth;
   // the submit (Enter in the text field is the form's implicit submission)
   $('date-when').value = cfgDay;
   $('date-what').value = 'DSA &amp; <i exam';
@@ -1169,21 +1180,23 @@ DATE_PROBE = r"""
   out.imgs = document.querySelectorAll('.board img').length;
   // a suggestion's button adds it, and it leaves the list with the next load
   const adds = () => [...document.querySelectorAll('.board .brow .acts .btn')].filter((b) => b.textContent.startsWith('Add as'));
-  const was = $('toast').textContent;
+  const was = $('toast').textContent, n0 = adds().length;
   adds()[0].click();
   out.sugToast = await toastText(was);
-  for (let i = 0; i < 200 && adds().length; i++) await sleep(50);
-  out.sugLeft = adds().length;
+  for (let i = 0; i < 200 && adds().length >= n0; i++) await sleep(50);
+  out.sugLeft = adds().map((b) => b.textContent);
   return out;
 })()
 """  # noqa: E501  (JavaScript)
 
 
-def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch):
+@pytest.mark.parametrize("narrow", [None, 375])
+def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch, narrow):
     """R31: Home's Add a date opens an inline form (labelled fields, today as the date's
     minimum), Esc or Cancel puts the focus back on Add a date, a refusal shows the server's
     words, a submit adds the page and says so in the toast, and its name shows as text; a
-    calendar event that looks like an exam is offered and leaves once added."""
+    calendar event that looks like an exam is offered and leaves once added; a row names its
+    kind only when its name does not. At 375 px too, every button is shown inside the page."""
     from datetime import date, timedelta
 
     from test_app import _serve
@@ -1207,18 +1220,26 @@ def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch):
     day = today + timedelta(days=20)
     sday = (today + timedelta(days=6)).isoformat()
     _note(root, "resources", "calendar-2099-03", {"title": "Calendar", "kind": "resource"},
-          f"## Events\n- {sday} 09:00 · OS exam · Hall B\n- {sday} 12:00 · Lunch\n")
+          f"## Events\n- {sday} 09:00 · OS exam · Hall B\n- {sday} 12:00 · Lunch\n"
+          f"- {(today + timedelta(days=9)).isoformat()} all day · Compiler project deadline\n")
+    _note(root, "assessments", "google-onsite", {
+        "title": "Google onsite", "company": "Google", "kind": "interview",
+        "date": (today + timedelta(days=3)).isoformat(), "outcome": "pending"})
     srv, app = _serve(root)
     try:
         out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
-                   probe=f"const cfgDay = {json.dumps(day.isoformat())};\n" + DATE_PROBE)
+                   probe=f"const cfgDay = {json.dumps(day.isoformat())};\n" + DATE_PROBE,
+                   **({"narrow": narrow} if narrow else {}))
     finally:
         srv.shutdown()
         srv.server_close()
     assert out["errors"] == []
     p = out["probe"]
     assert p["board"] == "Exams and deadlines"
-    assert p["suggested"] == [["OS exam", 0, "Add as exam", "Add as exam: OS exam"]]
+    assert p["suggested"] == [["OS exam", 0, "Add as exam", "Add as exam: OS exam"],
+                              ["Compiler project deadline", 0, "Add as deadline",
+                               "Add as deadline: Compiler project deadline"]]
+    assert "Google · interview" in p["examTitles"]
     assert p["form"] and p["focus"] == "date-what"
     assert p["labels"] == [["What", "date-what", True], ["When", "date-when", True],
                            ["Exam or deadline", "date-kind", True]]
@@ -1227,9 +1248,15 @@ def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch):
     assert p["buttons"] == [["submit", "Add"], ["button", "Cancel"]]
     assert p["escClosed"] and p["escFocus"] == "date-open" and p["cancelFocus"] == "date-open"
     assert "passed" in p["refused"] and p["stays"]
+    assert p["width"] == (narrow or 1400) and not p["overflow"]
+    assert p["visible"] == [["Add as exam", True], ["Add as deadline", True], ["Add", True],
+                            ["Cancel", True]]
+    assert p["addLit"] not in ("rgba(0, 0, 0, 0)", "transparent")  # the lit Add, filled
     mon = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()[day.month - 1]
     assert p["added"] == f"Added: DSA &amp; <i exam on {day.day} {mon}."
     assert p["closedAfter"]
     # the name as text: no element made from it, its entity not decoded
-    assert p["row"] == ["DSA &amp; <i exam · exam", 0] and p["imgs"] == 0
-    assert p["sugToast"].startswith("Added: OS exam on ") and p["sugLeft"] == 0
+    # the name says "exam", so the row does not say it again
+    assert p["row"] == ["DSA &amp; <i exam", 0] and p["imgs"] == 0
+    assert p["sugToast"].startswith("Added: OS exam on ")
+    assert p["sugLeft"] == ["Add as deadline"]
