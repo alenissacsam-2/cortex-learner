@@ -130,6 +130,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
 | `cortex eval` | How well search and the study forecasts are doing |
 | `cortex chat eval` | The Chat test: 60 questions on a made-up vault, scored in code ([below](#the-chat-test)) |
+| `cortex eval agent` | The agent test: does each AI app get the right lines about you ([below](#the-agent-test)) |
 | `cortex backup` | Zips the whole vault, private browsing and its stored visit history included (not chat history; see [PRIVACY.md](PRIVACY.md#your-data)). Keep the zip as private as the vault |
 | `cortex exclude add <folder>` | Turns Cortex off in a folder (e.g. a work repo) |
 | `cortex kill` | Emergency stop for anything that acts as you |
@@ -273,6 +274,10 @@ The Chat test checks how well the app's Chat answers. It asks Chat 60 questions 
 
   A metric with no questions behind it says "no data". The pass bar is 35 of 40.
 - **Terminal options.** `--served` lists the pages each answer was given, `--out report.json` saves everything (answers and passage text), `--no-model` runs only the 14 data questions, and `--keep <new folder>` leaves the made-up vault there for a look.
+
+### The agent test
+
+`cortex eval agent` checks that each AI app gets the right lines about you and none it must not. It runs ten cases on made-up vaults in a temp folder; your own vault is never read. Each case names an app (Cursor, VS Code, Codex, Claude Code, an app with no profile), and the test checks what Cortex really serves that app: its prime, its rules-file block, a context pack. For example, Cursor must get your uv rule but not a line you retired, not your teaching contract and not your profile; a muted line must reach no app; a guess must come marked (ask). This part needs no model and takes a few seconds. Add `--model` to also ask the local model you already loaded (Cortex never loads one) each case's question three times with that context; a case passes only if all three answers keep the rules. A case marked "known failure" is a gap Cortex still has, named in the line. `--json` prints the result for scripts.
 
 ---
 

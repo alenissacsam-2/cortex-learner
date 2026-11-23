@@ -2412,6 +2412,24 @@ def eval_harvest_facts(file: Annotated[Path | None, typer.Option(
     typer.echo("targets: met" if fh.meets(r) else "targets: NOT met")
 
 
+@eval_app.command("agent")
+@_errors
+def eval_agent(model: Annotated[bool, typer.Option(
+                   "--model", help="Also ask the local model you already loaded (Layer B, "
+                                   "three replies per case); never loads one.")] = False,
+               json_out: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False
+               ) -> None:
+    """R12: does each AI app get the right lines about you and none it must not? Builds ten
+    made-up vaults and checks what each app is served (Layer A, no model); --model also
+    checks a loaded local model's replies. Reads no vault of yours."""
+    from cortex import agent_eval
+
+    r = agent_eval.run(model=model)
+    typer.echo(json.dumps(r, indent=1) if json_out else agent_eval.summary(r))
+    if r["a_fail"]:
+        raise typer.Exit(1)
+
+
 @eval_app.command("all")
 @_errors
 def eval_all(k: Annotated[int, typer.Option(help="Score the top k recall hits.")] = 8,
