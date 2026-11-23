@@ -1,12 +1,12 @@
 """`cortex doctor --security`: an offline red team (R28b). It builds a made-up vault per probe in a
 new temp folder (never the owner's vault, which it never reads), fires five memory attacks at it
 through the real code paths (the MCP tool methods, prime, the chat importer, fact harvest, Review,
-the stores' removal) and says PASS or FAIL for each, naming the guard that let a FAIL through.
+`cortex forget`) and says PASS or FAIL for each, naming the guard that let a FAIL through.
 
 HOME, the app-data folders, the chat-export folders and the config are pointed at the temp folder
 for the run (and `taint.pinned`), so nothing touches the owner's ~/.cortex; the folder is deleted
-afterwards, also on error. No network and no model: an embedder already in memory is not loaded
-by this run, and none is found on disk under the temp HOME."""
+afterwards, also on error. No network and no model: P5's vectors come from a stand-in embedder,
+and no model is found on disk under the temp HOME."""
 
 from __future__ import annotations
 
@@ -265,44 +265,56 @@ def p4_outside_core(root: Path, now: datetime) -> None:
 def p5_carving(root: Path, now: datetime) -> None:
     import numpy as np
 
-    from cortex import semantic, vecstore
-    from cortex.browse import forget, sources, store
+    from cortex import claims, forget, semantic
+    from cortex.browse import forget as browse_forget
+    from cortex.browse import sources, store
     from cortex.browse.privacy import Settings
+    from cortex.catalog import Catalog
+    from cortex.index import Index
 
     v = _vault(root)
+    said = f"My lucky word is {CANARY}"
+    c = _cortex(v, "claude-ai")  # a Claude app: prime starts the chat's live log
+    try:  # a chat turn, a page, a recall and a claim line, through the normal tools
+        chat = _call(c, "cortex_prime", prompt=said).get("chat")
+        note = _call(c, "cortex_add", kind="note", title=f"Note {CANARY}",
+                     fields={"summary": f"Note {CANARY}"})
+        _call(c, "cortex_recall", query=f"Note {CANARY}")
+        _call(c, "cortex_patch", id="me/profile", op="append_to_section", target="Background",
+              text=said, user_confirmed=True)
+        if chat:
+            _call(c, "cortex_log", kind="chat_turn",
+                  payload={"chat": chat, "user": said, "gist": "noted"})
+    finally:
+        _close(c)
+    # its embedding (a stand-in embedder: no model) and a visit in the browsing store
+    semantic.vectors(Index(v, Catalog.load(v)), lambda texts: np.ones((len(texts), 4),
+                                                                       np.float32), 4)
     host = "q7xk-canary.example.org"
     url = f"https://{host}/{CANARY.lower()}"
-    visit = sources.Visit(start=now - timedelta(hours=1), url=url, title=f"{CANARY} page",
-                          secs=120.0, source=store.EXT, native=store.native_of(url, CANARY))
     con = store.connect(v)
     try:
-        store.ingest(con, [visit], Settings(), UTC)
+        store.ingest(con, [sources.Visit(
+            start=now - timedelta(hours=1), url=url, title=f"{CANARY} page", secs=120.0,
+            source=store.EXT, native=store.native_of(url, CANARY))], Settings(), UTC)
     finally:
         con.close()
-    vec = v.root / semantic.CACHE
-    con = vecstore.connect(vec)
-    try:
-        vecstore.put(con, {f"notes/{CANARY}.md": (json.dumps([f"notes/{CANARY}.md", 1, 1]), True,
-                                                   [0], np.ones((1, 4), np.float32))})
-    finally:
-        con.close()
-    files = [Path(f"{p}{s}") for p in (v.root / store.PATH, vec) for s in vecstore.SUFFIXES]
+    bases = (v.root, Path(os.environ["CORTEX_CHAT_EXPORT_DIR"]), Path(os.environ["HOME"]))
 
     def held() -> list[str]:
-        logs = sorted((v.root / "events").rglob("*.jsonl"))
-        return [p.name for p in [*files, *logs] if p.is_file()
-                and CANARY.lower().encode() in p.read_bytes().lower()]
+        return sorted(p.relative_to(b.parent).as_posix() for b in bases for p in b.rglob("*")
+                      if p.is_file() and CANARY.lower().encode() in p.read_bytes().lower())
 
-    if len(held()) < 2:
-        raise Hole("probe setup: the canary did not reach both stores")
-    forget.purge(v, forget.Rule(hosts=(host,)), write=False)
-    con = vecstore.connect(vec)
-    try:
-        vecstore.delete(con, [f"notes/{CANARY}.md"])
-    finally:
-        con.close()
+    where = " ".join(held())
+    need = ("/events/", "/notes/", "/me/profile.md", "vectors.db", "store.db", "exports/")
+    if missing := [x for x in need if x not in where]:
+        raise Hole(f"probe setup: the canary did not reach {', '.join(missing)}")
+    cid = next(r["id"] for r in claims.rows(v) if CANARY in r["text"])
+    forget.forget(v, f"me/profile^{cid}")
+    forget.forget(v, note["id"])
+    forget.browse(v, browse_forget.Rule(hosts=(host,)), host)
     if left := held():
-        raise Hole(f"deleted bytes left in {', '.join(left)} (SQLite secure_delete/checkpoint)")
+        raise Hole(f"forget left the canary in {', '.join(left)} (cortex.forget)")
 
 
 PROBES: tuple[tuple[str, str, str, Callable[[Path, datetime], None]], ...] = (
@@ -318,7 +330,7 @@ PROBES: tuple[tuple[str, str, str, Callable[[Path, datetime], None]], ...] = (
     ("P4", "untracked core write",
      "A line is written straight into me/core.md on disk, outside Cortex.", p4_outside_core),
     ("P5", "deleted-row carving",
-     "A canary saved in the browsing and vector stores is removed, then searched for on disk.",
+     "A canary saved through the tools and in the stores is forgotten, then searched for on disk.",
      p5_carving),
 )
 

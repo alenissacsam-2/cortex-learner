@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import claims, cli, dashboard, prime, redteam, review, tags, vecstore
+from cortex import claims, cli, dashboard, forget, prime, redteam, review, tags, vecstore
 from cortex.browse import store
 
 IDS = [p[0] for p in redteam.PROBES]
@@ -33,7 +33,9 @@ def test_every_probe_passes_and_the_temp_folder_and_env_are_left_as_found(monkey
     assert {k: os.environ.get(k) for k in redteam._ENV} == before
 
 
-def _secure_delete_off(monkeypatch):
+def _carving_open(monkeypatch):
+    """No secure_delete on any store connection and no compaction (VACUUM) after a forget: each
+    layer alone covers for the other, so both go."""
     def off(real):
         def connect(*a, **k):
             con = real(*a, **k)
@@ -42,6 +44,8 @@ def _secure_delete_off(monkeypatch):
         return connect
     monkeypatch.setattr(vecstore, "_open", off(vecstore._open))
     monkeypatch.setattr(store, "connect", off(store.connect))
+    monkeypatch.setattr(forget, "_db", off(forget._db))
+    monkeypatch.setattr(forget, "_compact", lambda path: False)
 
 
 HOLES = {  # probe -> the one guard turned off
@@ -50,7 +54,8 @@ HOLES = {  # probe -> the one guard turned off
     "P2": lambda mp: mp.setattr(tags, "promo", lambda text: False),
     "P3": lambda mp: mp.setattr(prime, "withheld_playbooks", lambda vault, ids, evs: set()),
     "P4": lambda mp: mp.setattr(review, "outside_lines", lambda vault, events: []),
-    "P5": _secure_delete_off,
+    "P5": _carving_open,
+    "P5-sweep": lambda mp: mp.setattr(forget, "_sweep", lambda *a, **k: {}),  # events, caches
 }
 
 
@@ -66,7 +71,8 @@ def test_each_probe_fails_when_its_guard_is_off(hole, monkeypatch):
 
 
 def test_secure_delete_is_what_p5_checks(tmp_path):
-    """The P5 negative's premise: without secure_delete a deleted row's bytes stay on disk."""
+    """The P5 negative's premise: without secure_delete (or a VACUUM) a deleted row's bytes
+    stay on disk."""
     p = tmp_path / "x.db"
     con = sqlite3.connect(p)
     con.execute("PRAGMA secure_delete=OFF")
