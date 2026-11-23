@@ -438,3 +438,18 @@ def test_a_big_vector_store_adds_a_page_without_rewriting_the_rest(tmp_path):
     assert len(ids) == 10001 and m.shape == (100010, dim)
     assert add < 0.5 and wrote < size / 20, (add, wrote, size)
     assert cold < 10, cold
+
+
+def test_the_background_net_uses_the_embedder_only_while_it_is_in_memory(monkeypatch):
+    from cortex import safety_net
+    from cortex.browse import titles
+    monkeypatch.setattr(titles, "may_run", lambda: (None, "no model"))
+    monkeypatch.setattr(semantic, "_embedder", semantic._embed_real)
+    monkeypatch.setattr(semantic._main, "model", None)  # dropped after IDLE_UNLOAD
+    assert safety_net.background_tools() == (None, None)
+    monkeypatch.setattr(semantic._main, "model", object())
+    assert safety_net.background_tools() == (None, semantic._embed_real)
+    fake = lambda texts: texts  # noqa: E731  (a test's injected embedder is always in memory)
+    monkeypatch.setattr(semantic, "_embedder", fake)
+    monkeypatch.setattr(semantic._main, "model", None)
+    assert safety_net.background_tools() == (None, fake)

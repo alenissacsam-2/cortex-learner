@@ -2101,6 +2101,7 @@ def model_build(vault: VaultOpt = None) -> None:
     Saves each minute; run it again to resume. Never downloads."""
     from cortex import semantic
 
+    semantic.ARENA = True  # a short-lived bulk build: the arena's speed, its memory ends with us
     embed = semantic.load_embedder()
     if embed is None:
         raise VaultError("invalid_argument", semantic.NOT_SET_UP)
