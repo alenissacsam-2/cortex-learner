@@ -34,7 +34,7 @@ from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError
 
 EPILOG = ("About you: claims [--unasked|--summary], voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
-          "Import: import [--dry-run|--private], import-chats, digest · "
+          "Import: import [--dry-run|--private], import-chats, watch, digest · "
           "Chats: chats, harvest status, safety-net, fact-harvest · "
           "Vault: lint, relink, concept duplicates, topics, replay, undo, backup · "
           "Setup: app, setup [--print-mcp-config], init, doctor, model download, exclude")
@@ -1086,20 +1086,21 @@ def digest_cmd(yes: Annotated[bool, typer.Option(
 
 @app.command("import")
 @_errors
-def import_cmd(path: Annotated[Path, typer.Argument(
+def import_cmd(path: Annotated[Path | None, typer.Argument(
         help="A chat export (claude.ai, ChatGPT, Gemini Takeout, Perplexity .md), a Google "
              "Takeout of My Activity, a notes folder or .zip (Obsidian, Notion, .md/.txt), "
              "a calendar .ics (or Google's .zip of them), a folder of documents (.pdf, "
              ".docx), a folder of your git projects, reading highlights (Kindle "
              "My Clippings.txt, a Readwise or Pocket .csv), sent mail (.mbox), a Google "
-             "Timeline (location history), a photo folder, a Spotify data export or a "
-             "folder of voice memos (transcribed locally).")],
+             "Timeline (location history), a photo folder, a Spotify data export, a "
+             "folder of voice memos (transcribed locally) or Zotero's data folder. With "
+             "--source zotero it may be left out: Cortex finds your Zotero library.")] = None,
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
                  "obsidian, notion, notes, calendar, docs, repos, highlights, mail, "
                  "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages), "
-                 "location (Google Timeline), photos (a photo folder), spotify or "
-                 "voice-memos (a folder of recordings).")] = None,
+                 "location (Google Timeline), photos (a photo folder), spotify, "
+                 "voice-memos (a folder of recordings) or zotero (a Zotero library).")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
@@ -1123,6 +1124,9 @@ def import_cmd(path: Annotated[Path, typer.Argument(
     if private and tier not in (None, "private"):
         raise VaultError("invalid_argument", "--private is --tier private; give only one.")
     given = tier or ("private" if private else None)
+    if path is None and source != "zotero":
+        raise VaultError("invalid_argument", "Give the file or folder to import (only --source "
+                         "zotero finds its library by itself).")
     kinds = [importers.SOURCES[source]] if source else importers.detect(path)
     if not kinds:
         raise VaultError("invalid_argument", f"Cannot tell what {path.name} is; add --source "
@@ -1178,6 +1182,68 @@ def import_cmd(path: Annotated[Path, typer.Argument(
             typer.echo(f"calendar: {r['events']} events in {r['months']} months, {r['new']} "
                        f"new events{dry}")
             typer.echo(importers.report_line("calendar", r))
+
+
+watch_app = typer.Typer(no_args_is_help=True, help="Folders (and Zotero) that come in by "
+                        "themselves: the app reads their new and changed files every 10 "
+                        "minutes while it runs.")
+app.add_typer(watch_app, name="watch")
+
+
+@watch_app.command("add")
+@_errors
+def watch_add_cmd(path: Annotated[Path | None, typer.Argument(
+        help="The folder to watch (its full path); for --source zotero, Zotero's data folder, "
+             "or leave it out to find your library.")] = None,
+        source: Annotated[str, typer.Option(
+            help="What it holds: docs (PDFs, Word, text), notes (.md/.txt), repos (your git "
+                 "projects) or zotero.")] = "docs",
+        tier: Annotated[str | None, typer.Option(
+            help="Who may read its pages: private, normal or skip. Without it, the source's "
+                 "last choice (or normal).")] = None,
+        vault: VaultOpt = None) -> None:
+    """Watch a folder: the Cortex app imports its new and changed files by itself."""
+    from cortex import sources, watch
+
+    if tier is not None and tier not in sources.WORDS:
+        raise VaultError("invalid_argument", f"--tier must be one of {', '.join(sources.WORDS)}.")
+    told: list[str] = []
+    w = watch.add(_vault(vault), path, source, tier, said=told.append)
+    typer.echo(render.term(f"Watching {w['path']} as {w['source']}, tier "
+                           f"{sources.word(sources.Audience(w['tier']))}. The Cortex app reads "
+                           "its new and changed files every 10 minutes while it runs."))
+    for line in told:
+        typer.echo(line)
+
+
+@watch_app.command("list")
+@_errors
+def watch_list_cmd(vault: VaultOpt = None) -> None:
+    """The watched folders, their source and tier, and what their last pass did."""
+    from cortex import sources, watch
+
+    rows = watch.listing(_vault(vault))["rows"]
+    if not rows:
+        typer.echo("No folder is watched; add one with `cortex watch add <folder>`.")
+    for w in rows:
+        last = w.get("last") or {}
+        typer.echo(render.term(f"{w['path']}  {w['source']}  "
+                               f"{sources.word(sources.Audience(w['tier']))}"
+                               + ("  (not found)" if w["missing"] else "")))
+        typer.echo(render.term(f"  last {last['at']}: {last['line']}" if last.get("line")
+                               else "  not read yet"))
+
+
+@watch_app.command("remove")
+@_errors
+def watch_remove_cmd(path: Annotated[Path, typer.Argument(help="A watched folder.")],
+                     vault: VaultOpt = None) -> None:
+    """Stop watching a folder; the pages it brought stay."""
+    from cortex import watch
+
+    if not watch.remove(_vault(vault), path):
+        raise VaultError("invalid_argument", f"{path} is not watched; see `cortex watch list`.")
+    typer.echo(render.term(f"Stopped watching {path}; its pages stay."))
 
 
 def _ask_tier(src) -> str:

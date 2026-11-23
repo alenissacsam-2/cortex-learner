@@ -39,7 +39,7 @@ SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "take
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
            "selfchat": "selfchat", "location": "location", "photos": "photos",
-           "spotify": "spotify", "voice-memos": "voice-memos"}
+           "spotify": "spotify", "voice-memos": "voice-memos", "zotero": "zotero"}
 
 GUIDES = {
     "notes": {
@@ -444,15 +444,17 @@ def _clean(name: str) -> str:
     return "/".join(_NOTION_ID.sub("", p) for p in name.replace("\\", "/").split("/"))
 
 
-def notes_source(path: Path, flavor: str | None = None) -> sources.Source:
+def notes_source(path: Path, flavor: str | None = None, files: list | None = None
+                 ) -> sources.Source:
     """One item per .md/.txt note (≤ MAX_BYTES, UTF-8 text, outside hidden folders such as
     .obsidian); anything else is skipped with its reason. A note whose frontmatter marks it
     private (any truthy `private`, a `private` tag, or frontmatter that does not parse) is a
     private item. Dedupe hashes the whole text, frontmatter too; RR-18: a changed note rewrites
     its page (by its path, `From:`) when that page is as the import wrote it, else comes in as
-    a new page (`sources.Source.by_origin`)."""
+    a new page (`sources.Source.by_origin`). `files`: `_files` entries already walked (a
+    watched folder's changed ones)."""
     errors: list[OSError] = []
-    files = _files(path, errors=errors)
+    files = _files(path, errors=errors) if files is None else files
     names = [n.replace("\\", "/") for n, *_ in files]
     flavor = flavor or ("obsidian" if any(".obsidian" in n.split("/") for n in names) or
                         (Path(path).is_dir() and (Path(path) / ".obsidian").is_dir())

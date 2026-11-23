@@ -338,6 +338,8 @@ class App:
             "/api/import/pickup/add": self.pickup_add,
             "/api/import/pickup/dismiss": self.pickup_dismiss,
             "/api/import/pickup/later": self.pickup_later,
+            "/api/import/watch/add": self.watch_add,
+            "/api/import/watch/remove": self.watch_remove,
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
@@ -1210,7 +1212,8 @@ class App:
                             for t in targets.describe(self.entry())],
                 "first_prompts": list(cli.FIRST_PROMPTS), "connect_skipped": _connect_skipped(),
                 "guides": {**chats.GUIDES, **importers.GUIDES},
-                "imports": status.imports(self.root if self.entry() else None)}
+                "imports": status.imports(self.root if self.entry() else None),
+                "watched": self._watched()}
 
     # ---- POST ----
     def _want(self, body: dict) -> dict:
@@ -1908,6 +1911,49 @@ class App:
         exports.later()
         return {"ok": True}
 
+    # R18: watched folders (cortex.watch), re-imported by the periodic pass (`watch_auto`)
+    def _watched(self) -> dict | None:
+        from cortex import watch
+        if self.root is None or not (self.root / ".cortex").is_dir():
+            return None
+        return watch.listing(self._vault())
+
+    def watch_add(self, body: dict) -> dict:
+        from cortex import watch
+        from cortex.vault import VaultError
+        path, source, tier = body.get("path"), body.get("source"), body.get("tier")
+        if source not in watch.SOURCES:
+            raise ValueError(f"source must be one of {', '.join(watch.SOURCES)}")
+        if tier not in (None, "skip", "local", "cloud"):
+            raise ValueError("tier must be one of skip, local, cloud")
+        if not isinstance(path, str | None) or (not (path or "").strip() and source != "zotero"):
+            raise ValueError("Paste the folder's full path.")
+        try:  # an empty path: Zotero finds its own library
+            watch.add(self._vault(), (path or "").strip() or None, source, tier)
+        except VaultError as e:
+            raise ValueError(str(e)) from None
+        return {"ok": True, "watched": self._watched()}
+
+    def watch_remove(self, body: dict) -> dict:
+        from cortex import watch
+        if not isinstance(body.get("path"), str) or not watch.remove(self._vault(), body["path"]):
+            raise ValueError("That folder is not watched.")
+        return {"ok": True, "watched": self._watched()}
+
+    def watch_auto(self) -> list | None:
+        """One pass over the watched folders (cortex.watch.run), in the periodic pass's thread,
+        when a vault is set up and no job runs; committed like an import. Its results, or None
+        when it did not run."""
+        from cortex import watch
+        from cortex.vault import Vault
+        if not self.entry() or self.jobs.running():
+            return None
+        v = Vault(self.root)
+        try:
+            return watch.run(v)
+        finally:
+            actions._commit(v, "watched folders")
+
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:
             self.jobs.cur.cancel()
@@ -2465,6 +2511,10 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             except Exception as e:  # noqa: BLE001  (the next check tries again)
                 echo(f"cortex app: live import failed ({type(e).__name__}); retried in "
                      f"{browse_serve.AUTO_EVERY_S // 60} minutes")
+            try:  # R18: the watched folders' new and changed files; stats only when none
+                app.watch_auto()
+            except Exception as e:  # noqa: BLE001  (the next pass tries again)
+                echo(f"cortex app: watched folders failed ({type(e).__name__})")
             try:  # the rollup pages after the import; a stamp check when nothing changed
                 if app.root is not None and (app.root / ".cortex").is_dir() \
                         and not app.jobs.running():
