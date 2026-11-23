@@ -422,6 +422,22 @@ def _summary(front: str) -> str:
     return next((v for k in ("summary", "description") if isinstance(v := fm.get(k), str)), "")
 
 
+def _aliases(front: str) -> list[str]:
+    """R13d-2: a note's `aliases:` (one string or a list of strings; any other value is
+    ignored), untrusted text: each stripped, one line of at most 80 characters, at most 20."""
+    from ruamel.yaml import YAML, YAMLError
+    try:
+        fm = YAML(typ="safe").load(front)
+    except (YAMLError, ValueError):
+        return []
+    a = fm.get("aliases") if isinstance(fm, dict) else None
+    a = [a] if isinstance(a, str) else a
+    if not isinstance(a, list) or not all(isinstance(x, str) for x in a):
+        return []
+    return [s for x in a if (s := x.strip()) and len(s) <= 80
+            and not any(c in s for c in "\r\n\x85  ")][:20]
+
+
 def report_line(label: str, r: dict) -> str:
     """The line every import ends with: counts read, imported, private, duplicate and
     skipped, with the reason for each skip; then the items the quality gate kept out
@@ -492,7 +508,8 @@ def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
     return sources.Item(PurePosixPath(rel).stem, _day(mtime),
                         text[fm.end():] if fm else text, rel,
                         private=bool(fm and _is_private(fm.group(1))), key=text,
-                        summary=_summary(fm.group(1)) if fm else "")
+                        summary=_summary(fm.group(1)) if fm else "",
+                        aliases=_aliases(fm.group(1)) if fm else [])
 
 
 def _tier(private: bool, tier: str | None) -> sources.Audience:
@@ -547,13 +564,18 @@ def _when(prop) -> tuple[str, str]:
     return t.date().isoformat(), t.strftime("%H:%M") + (f" ({tz})" if tz else "")
 
 
-def calendar_source(path: Path) -> sources.Source:
+def calendar_source(path: Path, files: list | None = None) -> sources.Source:
     """One month-page line per event: date, time, title, location and the RRULE as text (not
-    expanded). Attendees, organizers and descriptions are never read."""
-    texts = [read().decode("utf-8-sig", errors="replace") for n, _, _, read in _files(path)
+    expanded). Attendees, organizers and descriptions are never read. `files`: `_files`
+    entries already walked (a watched folder's new and changed .ics files)."""
+    if files is None:
+        files = _files(path)
+        if not any(n.lower().endswith(".ics") for n, *_ in files):
+            raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
+    # shortcut: an event moved to another day (same UID) keeps its old line beside the new one;
+    # lines carry no UID, so replacing it needs a UID -> line store. Build that if moves matter.
+    texts = [read().decode("utf-8-sig", errors="replace") for n, _, _, read in files
              if n.lower().endswith(".ics")]
-    if not texts:
-        raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
 
     def items():
         for ev in (e for t in texts for e in _events(t)):

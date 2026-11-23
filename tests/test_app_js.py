@@ -416,6 +416,13 @@ def test_app_js_has_no_html_sinks():
     assert not HTML_SINKS.findall(APP_JS.read_text(encoding="utf-8"))
 
 
+def test_the_watch_form_offers_every_watched_source():
+    """R31: a source watch.py accepts (calendar) is one the Setup form can pick, in its order."""
+    from cortex import watch
+    m = re.search(r"const WATCH_KINDS = \{([^}]*)\}", APP_JS.read_text(encoding="utf-8"))
+    assert tuple(re.findall(r"(\w+):", m.group(1))) == watch.SOURCES
+
+
 def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, monkeypatch):
     node = shutil.which("node")
     if node is None:

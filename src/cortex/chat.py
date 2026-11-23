@@ -34,7 +34,7 @@ from cortex import (
     xray,
 )
 from cortex.chat_study import study_answer  # noqa: F401  chat.study_answer, beside site_list
-from cortex.index import STOPWORDS, _wrap
+from cortex.index import STOPWORDS, _wrap, aliases
 from cortex.vault import Vault, VaultError
 
 DIR = ".cortex/browse/chat"
@@ -579,11 +579,11 @@ def _index(vault: Vault):
 
 
 def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
-    """[(day, kind, id, title, body, is_chat, is_private)] of notes, saved AI chats and journal
-    pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under Chat's
-    `notes` and `chats` switches. Private pages (`ask.private_pages`: their own `private: true`,
-    or under a private subject) come under the `private` switch instead: the local model may
-    read them (owner's decision, 19 Nov 2026)."""
+    """[(day, kind, id, title, body, is_chat, is_private, aliases)] of notes, saved AI chats and
+    journal pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under
+    Chat's `notes` and `chats` switches. Private pages (`ask.private_pages`: their own
+    `private: true`, or under a private subject) come under the `private` switch instead: the
+    local model may read them (owner's decision, 19 Nov 2026). `aliases`: index.aliases."""
     with _INDEX_LOCK:
         idx = _index(vault)
         paths = {i: p for p, i in idx._ids.items()}
@@ -603,7 +603,7 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
                                               semantic.is_chat(n))
         if lo <= d <= hi and (i in private or sources.get("chats" if is_chat else "notes")):
             out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat,
-                        i in private))
+                        i in private, aliases(n["fields"])))
     _DAYS[vault.root] = memo
     return sorted(out, key=lambda p: (p[0], p[3]))
 
