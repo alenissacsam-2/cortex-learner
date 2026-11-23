@@ -29,7 +29,7 @@ from datetime import date, timedelta
 from cortex import chat_pages, chat_study, planner
 from cortex.catalog import Catalog
 from cortex.events import EventLog
-from cortex.index import STOPWORDS, _wrap
+from cortex.index import STOPWORDS, _wrap, aliases
 
 SOURCES = ("notes", "chats", "journal", "browsing", "study")  # the order facts list them in
 NOUN = {"notes": "note", "chats": "saved AI chat", "journal": "journal line",
@@ -559,7 +559,22 @@ def _page(vault, term: str, sources: dict, titles: dict) -> dict | None:
     if key in titles:
         id_, title, kind, d = titles[key]
         return {"id": id_, "title": title, "kind": kind, "day": d}
+    for id_, title, kind, d in titles.values():  # R13d-2: an alias names a page as its title
+        if key in {a.casefold() for a in _aliases(vault, id_) if len(a) >= 2}:
+            return {"id": id_, "title": title, "kind": kind, "day": d}
     return None
+
+
+def _aliases(vault, id_: str) -> list[str]:
+    """A page's `aliases:` (index.aliases) from Chat's index, or from its file when the index
+    leaves it out as private (it is in `titles` only when Chat may read it)."""
+    from cortex import ask, chat
+    with chat._INDEX_LOCK:
+        idx = chat._index(vault)
+        n = idx._notes.get(id_)
+        path = None if n else next((p for p, i in idx._ids.items() if i == id_), None)
+    n = n or (ask._page(vault, path, id_) if path else None)
+    return aliases(n["fields"]) if n else []
 
 
 # ---- words -------------------------------------------------------------------------------------

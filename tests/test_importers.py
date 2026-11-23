@@ -461,3 +461,44 @@ def test_an_import_dates_a_file_by_the_cortex_day():
     want = local_day(datetime.fromtimestamp(t, UTC))
     assert importers.note_item("a.md", 2, t, lambda: b"hi").date == want
     assert more_sources._day(t) == want
+
+
+def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypatch):
+    """R13d-2: a note's `aliases:` (a list or one string) reach its page and name it in find;
+    a bad value is ignored; a private note's alias stays in its private page; a changed alias
+    updates the page."""
+    from conftest import FakeEmbed
+
+    from cortex import semantic
+    from cortex.mcp_server import Cortex
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    src = tmp_path / "MyNotes"
+    src.mkdir()
+    (src / "Campus.md").write_text("---\naliases: [IITH, ' Hyderabad campus ', '']\n---\n"
+                                   "Hostel and mess notes.\n", "utf-8")
+    (src / "Lab.md").write_text("---\naliases: Kandi lab\n---\nLab bench notes.\n", "utf-8")
+    (src / "Bad.md").write_text("---\naliases: {a: 1}\n---\nOdd front matter.\n", "utf-8")
+    (src / "Mixed.md").write_text("---\naliases: [ok, 3]\n---\nMixed list.\n", "utf-8")
+    (src / "Long.md").write_text("---\naliases: ['" + "x" * 81 + "', fine]\n---\nLong.\n",
+                                 "utf-8")
+    (src / "Secret.md").write_text("---\naliases: [Zorblat]\nprivate: true\n---\nHidden.\n",
+                                   "utf-8")
+    v = Vault(root_plain)
+    importers.import_notes(v, src, "obsidian")
+    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["IITH",
+                                                                       "Hyderabad campus"]
+    assert v.read("resource", "obsidian-lab").fields["aliases"] == ["Kandi lab"]
+    assert "aliases" not in v.read("resource", "obsidian-bad").fields
+    assert "aliases" not in v.read("resource", "obsidian-mixed").fields
+    assert v.read("resource", "obsidian-long").fields["aliases"] == ["fine"]
+    secret = v.read("resource", "obsidian-secret")
+    assert secret.fields["private"] is True and secret.fields["aliases"] == ["Zorblat"]
+    assert "aliases" not in secret.body
+    c = Cortex(v)
+    assert [h["id"] for h in c.cortex_find("IITH")["hits"]][:1] == ["obsidian-campus"]
+    assert [h["id"] for h in c.cortex_find("Kandi")["hits"]][:1] == ["obsidian-lab"]
+    assert "obsidian-secret" not in json.dumps(c.cortex_find("Zorblat"))
+    (src / "Campus.md").write_text("---\naliases: [IIT Hyderabad]\n---\n"
+                                   "Hostel and mess notes.\n", "utf-8")
+    assert importers.import_notes(v, src, "obsidian")["updated"] == 1
+    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["IIT Hyderabad"]
