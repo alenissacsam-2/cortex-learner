@@ -45,7 +45,7 @@ import numpy as np
 from cortex import vecstore
 from cortex.events import local_day
 from cortex.index import STOPWORDS, Index, _one_line
-from cortex.topics import page_date, page_source
+from cortex.topics import is_hub, page_date, page_source
 
 log = logging.getLogger(__name__)
 
@@ -448,8 +448,10 @@ def _weight(index: Index, id: str, chats: bool, quiet: dict[str, float] | None,
 def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = False,
            quiet: dict[str, float] | None = None, out: dict | None = None) -> list[dict]:
     """`hits` reordered by the cross-encoder over each hit's best chunk (`at`; chunk 0 without
-    one), its sigmoid times the page's `_weight`; on any failure, as they were. Each hit's
-    `score` and `match` are untouched (the Honest Double check reads them)."""
+    one), its sigmoid times the page's `_weight`, blended with the first-stage rank r (R3d,
+    QMD's rule: _blend(r) / r + (1 - _blend(r)) x that, so the top few stay unless the
+    cross-encoder is clearly surer); on any failure, as they were. Each hit's `score` and
+    `match` are untouched (the Honest Double check reads them)."""
     if len(hits) < 2:
         return hits
     try:
@@ -463,7 +465,13 @@ def rerank(index: Index, query: str, hits: list[dict], score, chats: bool = Fals
          for x, h in zip(s, hits, strict=True)]
     if out is not None:  # `--explain` shows the weighted rerank score per page
         out.update({h["id"]: float(x) for x, h in zip(s, hits, strict=True)})
-    return [h for _, h in sorted(zip(s, hits, strict=True), key=lambda p: -p[0])]
+    b = [_blend(r) / r + (1 - _blend(r)) * x for r, x in enumerate(s, 1)]
+    return [h for _, h in sorted(zip(b, hits, strict=True), key=lambda p: -p[0])]
+
+
+def _blend(r: int) -> float:
+    """The first stage's weight at rank r in the rerank blend (QMD's numbers)."""
+    return 0.75 if r <= 3 else 0.60 if r <= 10 else 0.40
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -927,6 +935,66 @@ def _keyword(index: Index, query: str) -> dict[str, float]:
 def _neighbours(index: Index, id: str):
     return index.db.execute("SELECT dst, type FROM edges WHERE src = ?1 UNION "
                             "SELECT src, type FROM edges WHERE dst = ?1", (id,)).fetchall()
+
+
+MENTIONED_BY = 8  # R3a: the pages saying a page's name that count as linked, best BM25 first
+_WORD = re.compile(r"[\w-]+")  # a hyphenated id is one word: "dec-x" is not in "dec-x-v2"
+
+
+def _names(id: str, title: str) -> list[tuple[str, ...]]:
+    """The words a page is named by in other pages' text: its title without a trailing
+    "(…)" ("Paper (PDF)" is said "Paper") and an id with a hyphen and a letter; a one-word
+    name only of 5+ characters."""
+    out = []
+    for name in (re.sub(r"\s*\([^)]*\)\s*$", "", title), id if "-" in id and re.search(
+            r"[^\W\d_]", id) else ""):
+        w = tuple(_WORD.findall(name.lower()))
+        if (len(w) > 1 or (w and len(w[0]) >= 5)) and w not in out:
+            out.append(w)
+    return out
+
+
+def _holds(words: list[str], name: tuple[str, ...]) -> bool:
+    return any(tuple(words[k:k + len(name)]) == name for k, w in enumerate(words) if w == name[0])
+
+
+def _says(index: Index, name: tuple[str, ...]) -> list[str]:
+    """The MENTIONED_BY pages whose body says `name` most (an FTS phrase, BM25 order)."""
+    phrase = " ".join(re.findall(r"\w+", " ".join(name)))  # word characters only: no FTS syntax
+    return [] if not phrase else [i for (i,) in index.db.execute(
+        "SELECT id FROM fts WHERE fts MATCH ? ORDER BY rank LIMIT ?",
+        (f'body : "{phrase}"', MENTIONED_BY))]
+
+
+def linked(index: Index, ids: list[str], quiet: dict[str, float] | None = None,
+           rank: dict[str, float] | None = None) -> list[str]:
+    """R3a: the pages linked with those in `ids` by the most kinds of link (summed over
+    `ids`), then by `rank` (higher first: how well each answers the question), then in the
+    order of `ids`. The kinds: an edge either way (wiki links, front-matter keys), the page
+    saying another's name (`_names`) and another saying the page's name (`_says`). `ids`,
+    quiet pages (weight 0), pages the index lacks and the pages Cortex builds over many
+    others (rollups, topic hubs: they link everything) are left out."""
+    def words(i: str) -> list[str]:
+        return _WORD.findall(index._notes[i]["body"].lower())
+
+    count: dict[str, list] = {}  # id -> [links, first seed]
+    for s, seed in enumerate(ids):
+        if seed not in index._notes:
+            continue
+        w = words(seed)
+        have = set(w)  # a name's first word must be here: skips _names for most pages
+        got = [{n for n, _ in _neighbours(index, seed)},
+               {i for i, n in index._notes.items()
+                if (i in have or ((m := _WORD.search(n["title"].lower())) and m[0] in have))
+                and any(_holds(w, name) for name in _names(i, n["title"]))},
+               {i for name in _names(seed, index._notes[seed]["title"])
+                for i in _says(index, name) if i in index._notes and _holds(words(i), name)}]
+        for i in set().union(*got):
+            if i not in ids and i in index._notes and (quiet or {}).get(i) != 0 \
+                    and index._notes[i]["kind"] != "rollup" and not is_hub(index._notes[i]):
+                c = count.setdefault(i, [0, s])
+                c[0] += sum(i in g for g in got)
+    return sorted(count, key=lambda i: (-count[i][0], -(rank or {}).get(i, 0.0), count[i][1], i))
 
 
 def recall(index: Index, query: str, embed=None, limit: int = 8, hops: int = 1,

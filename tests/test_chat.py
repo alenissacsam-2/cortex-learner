@@ -1745,13 +1745,14 @@ def test_a_question_about_the_past_keeps_it(vault, stream, q):
     _turn(vault, None, q, s.runner())
     user = s.bodies[0]["messages"][-1]["content"]
     assert "Use Pipenv for car motor scripts" in user
-    assert "[undated | past]\nMy preferences" in user
+    assert "[undated | current | superseded]\nMy preferences" in user  # R3g
 
 
 def test_every_passage_starts_with_its_day_and_status():
     p = {"path": "decisions/dec-a.md", "title": "A", "kind": "note", "day": "2026-07-05",
          "text": "x", "stale": True}
-    assert ask.prompt([p], "q").startswith('<untrusted_note id="1">\n[2026-07-05 | replaced]\nA\n')
+    assert ask.prompt([p], "q").startswith(
+        '<untrusted_note id="1">\n[2026-07-05 | superseded]\nA\n')
     assert ask.header({"path": "notes/b.md", "day": ""}) == "[undated]"
     assert ask.header({"path": "notes/b.md", "day": "2026-11-01"}) == "[2026-11-01]"
 
@@ -1761,4 +1762,77 @@ def test_a_superseded_decision_is_marked_stale(vault):
          "status: superseded\ndate: 2026-07-05\n", "# Old car motor choice\n\nCar motor A.")
     found = ask._passages(vault, "car motor choice", 8, sources=ask.SOURCES)
     old = next(p for p in found if p["path"] == "decisions/dec-old.md")
-    assert old["stale"] and ask.header(old) == "[2026-07-05 | replaced]"
+    assert old["stale"] and ask.header(old) == "[2026-07-05 | superseded]"
+
+
+# ---- R3: the links and time arms, fusion, near-copies, abstention ------------------------------
+
+def _index(vault):
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+    return Index(vault, Catalog.load(vault))
+
+
+def test_linked_pages_are_named_either_way_but_not_by_a_rollup(vault):
+    note(vault.root, "people/ana-ray.md", "title: Ana Ray\nkind: person\nprivate: false\n",
+         "# Ana Ray\n\nTeammate on Zephyrdb.")
+    note(vault.root, "projects/zephyrdb.md", "title: Zephyrdb\nkind: project\n",
+         "# Zephyrdb\n\nA small database.")
+    note(vault.root, "notes/focus.md", "title: Focus\n", "# Focus\n\nAna Ray said: test first.")
+    note(vault.root, "rollups/rollup-2026-11.md", "title: November 2026\nkind: rollup\n",
+         "# November 2026\n\nAna Ray, Zephyrdb.")
+    got = semantic.linked(_index(vault), ["ana-ray"])
+    assert {"zephyrdb", "focus"} <= set(got)  # the page names it; another names the page
+    assert "rollup-2026-11" not in got and "ana-ray" not in got
+
+
+def test_a_month_question_reaches_what_held_then(vault):
+    _prefs(vault)  # a Past line held until 2026-09-12
+    dec = "kind: decision\nstatus: {}\ndate: {}\ntitle: {}\n"
+    note(vault.root, "decisions/dec-a.md", dec.format("superseded", "2026-07-05", "Car motor A"),
+         "# Car motor A\n\nCar motor A.")
+    note(vault.root, "decisions/dec-b.md", dec.format("accepted", "2026-10-14", "Car motor B"),
+         "# Car motor B\n\nCar motor B. Reversed dec-a.")
+    note(vault.root, "decisions/dec-z.md", dec.format("superseded", "2026-01-02", "Car motor Z"),
+         "# Car motor Z\n\nCar motor Z. Superseded by dec-y.")
+    note(vault.root, "decisions/dec-y.md", dec.format("accepted", "2026-02-01", "Car motor Y"),
+         "# Car motor Y\n\nCar motor Y.")
+    idx = _index(vault)
+    paths = {i: v[0] for i, v in semantic._pages(idx).items()}
+    # A held in September until B replaced it in October; Z was replaced by Y in February
+    assert ask._held(idx, paths, "2026-09-01", "2026-09-30") >= {
+        "me/preferences.md", "decisions/dec-a.md", "decisions/dec-b.md", "decisions/dec-y.md"}
+    assert "decisions/dec-z.md" not in ask._held(idx, paths, "2026-09-01", "2026-09-30")
+    assert "me/preferences.md" not in ask._held(idx, paths, "2026-10-01", "2026-10-31")
+    found = ask._passages(vault, "car motor scripts", 8, between=("2026-07-01", "2026-07-31"),
+                          sources=ask.SOURCES)
+    prefs = next(p for p in found if p["path"] == "me/preferences.md")
+    assert "Use Pipenv" in prefs["text"] and ask.header(prefs) == "[undated | current | superseded]"
+
+
+def test_fusion_lifts_a_page_two_arms_found_and_starts_an_arm_late():
+    def p(*xs):
+        return [{"path": x} for x in xs]
+
+    def paths(arms, start=()):
+        return [x["path"] for x in ask._fuse(arms, start)]
+
+    assert paths([p("a", "b"), p("c")]) == ["a", "c", "b"]  # one each: taken in turn
+    assert paths([p("a", "b"), p("b")]) == ["b", "a"]
+    assert paths([p("a", "b", "c"), p("d")], (0, 2)) == ["a", "b", "c", "d"]
+
+
+def test_a_near_copy_is_served_once(vault):
+    note(vault.root, "notes/engines-copy.md", "title: Engines\n",
+         "# Engines\n\nAutomobile car motor basics.")
+    got = _paths(ask._passages(vault, "car motor basics", 8, sources=ask.SOURCES))
+    assert len({"notes/engines.md", "notes/engines-copy.md"} & set(got)) == 1
+
+
+@pytest.mark.parametrize("cos, n", [(0.3, 0), (0.9, 1)])
+def test_a_search_of_only_noise_serves_nothing(vault, monkeypatch, cos, n):
+    hit = {"path": "browse/browse-2026-11-15.md", "title": "Browsing", "at": 0,
+           "text": "A forum", "score": cos}
+    monkeypatch.setattr(ask.vectors, "search", lambda *a, **k: [hit])
+    # R3f: no note matches; the one browse page (no floor) is under semantic.MIN_COS at 0.3
+    assert len(ask._passages(vault, "what is quantum foam?", 8, sources=ask.SOURCES)) == n

@@ -16,17 +16,22 @@ pytestmark = pytest.mark.usefixtures("home")
 REAL_LOAD = semantic.load_reranker  # conftest swaps it per test; this is the original
 
 
-def pasta_first(query, texts):
-    return [t.count("Pasta") for t in texts]
+def pasta_first(query, texts):  # a cross-encoder sure of pasta (logit +5) and of the rest (-5)
+    return [10.0 * min(t.count("Pasta"), 1) - 5 for t in texts]
 
 
 def test_rerank_reorders_and_keeps_score_and_match(idx):  # noqa: F811
     pool = {h["id"]: h for h in semantic.recall(idx, "vehicle", FakeEmbed(), 20)}
     base = semantic.recall(idx, "vehicle", FakeEmbed())
     rr = semantic.recall(idx, "vehicle", FakeEmbed(), rerank_with=pasta_first)
-    assert ids(base)[0] == "engines" and ids(rr)[:2] == ["pasta", "engines"]
+    assert ids(base)[:3] == ["engines", "gearbox", "pasta"]
+    # R3d: the first stage's top page stays; a clearly surer cross-encoder lifts pasta over #2
+    assert ids(rr)[:3] == ["engines", "pasta", "gearbox"]
     assert all(h == pool[h["id"]] for h in rr)  # score, match and via as recall gave them
     assert len(semantic.recall(idx, "vehicle", FakeEmbed(), 2, rerank_with=pasta_first)) == 2
+    unsure = semantic.recall(idx, "vehicle", FakeEmbed(), rerank_with=lambda q, texts: [
+        0.5 * t.count("Pasta") for t in texts])  # a slight preference moves nothing up top
+    assert ids(unsure)[:3] == ids(base)[:3]
 
 
 def test_no_reranker_or_a_broken_one_keeps_the_current_order(idx, home, monkeypatch):  # noqa: F811
@@ -41,7 +46,7 @@ def test_no_reranker_or_a_broken_one_keeps_the_current_order(idx, home, monkeypa
     assert REAL_LOAD() is None and not (home / ".cortex/models").exists()  # never downloads
 
     monkeypatch.setattr(semantic, "_reranker", pasta_first)
-    assert ids(semantic.search(idx, "vehicle")[0])[0] == "pasta"
+    assert ids(semantic.search(idx, "vehicle")[0])[:2] == ["engines", "pasta"]
     (home / ".cortex").mkdir()
     (home / ".cortex/config.yaml").write_text("vault: x\nrerank: false\n", "utf-8")
     assert REAL_LOAD() is None and REAL_LOAD(config=False) is pasta_first
@@ -137,9 +142,9 @@ def test_eval_set_and_metrics(idx):  # noqa: F811
             {"opened": "a", "id": "engines"}, {"opened": "a", "id": "gearbox"},
             {"opened": "c", "id": "engines"}]
     assert recall_log.eval_set(rows) == [("vehicle", {"engines", "gearbox"})]
-    m = recall_log.evaluate(idx, [("vehicle", {"engines"})], FakeEmbed(), pasta_first, k=3)
-    assert m["current"] == (1.0, 1.0) and m["rerank"] == (1.0, 0.5)
-    assert set(m) == set(recall_log.VARIANTS) and m["rrf"][1] == 1.0
+    m = recall_log.evaluate(idx, [("vehicle", {"pasta"})], FakeEmbed(), pasta_first, k=3)
+    assert m["current"] == (1.0, pytest.approx(1 / 3)) and m["rerank"] == (1.0, 0.5)
+    assert set(m) == set(recall_log.VARIANTS) and m["rrf"][0] == 1.0
     assert recall_log.evaluate(idx, [], None, None)["rerank"] is None
 
 
@@ -156,5 +161,6 @@ def test_eval_cli_prints_each_variant(root, monkeypatch):  # noqa: F811
     monkeypatch.setattr(semantic, "_reranker", pasta_first)
     out = run(app, ["eval", "recall", "--vault", str(root)])
     rows = {ln.split()[0]: ln.split()[1:] for ln in out.output.splitlines()[2:]}
-    assert rows["rerank"] == ["1.000", "0.500"] and rows["current"] == ["1.000", "1.000"]
+    # R3d: the reranker keeps the first stage's top page (the opened one) on top
+    assert rows["rerank"] == ["1.000", "1.000"] and rows["current"] == ["1.000", "1.000"]
     assert rows["no-downrank"] == ["1.000", "1.000"]  # no chat pages: same as current
