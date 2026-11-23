@@ -205,6 +205,18 @@ def opposed(a: str, b: str) -> bool:
     return fa[1] != fb[1] or (bool(x) and x != y and y == tuple((r, c, w) for w, c, r in x))
 
 
+def since_for(old: dict, new: dict, day: str, newer: bool | None = None) -> str | None:
+    """R13a: the `(since …)` day line `new` gets when it replaces `old` (rows with `text`, and
+    `day` when `newer` is None), or None. A line saying the same facts keeps the old line's own
+    since day; a newer line saying something else gets `day`; an older one (the owner's line
+    kept over a later guess) none. `newer` None: `new`'s tier day is after `old`'s."""
+    if same_facts(old["text"], new["text"]):
+        return claims.since(old["text"])
+    if newer is None:
+        newer = str(new.get("day") or "") > str(old.get("day") or "")
+    return day if newer else None
+
+
 def apart(a: str, b: str) -> bool:
     """Each line names something the other does not ("reads news" / "reads papers", "uses
     Python" / "uses Rust"): two facts however close they score, so Cortex never retires one
@@ -313,8 +325,9 @@ def kept_cover(rows: list[dict], events, known: dict | None = None):
 
 def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()) -> dict:
     """D1, D2, D5 over `rows` (tiered live claim rows, none private): {retire: [{retire, keep,
-    why}] with raw rows, cards: [{key, why, left, right}]} (why `opposite`, `maybe_update` or
-    `maybe_opposite`).
+    why, newer}] with raw rows, cards: [{key, why, left, right}]} (why `opposite`, `maybe_update`
+    or `maybe_opposite`). `newer` (R13a, `since_for`): whether `keep` is a recorded pair's newer
+    line; None when no pair says.
     - a recorded pair (claims.recorded_pairs) whose lines agree: the newer stays, unless the
       older is the owner's and the newer inferred (why `update` or `supersedes`); a guessed
       `update` pair is applied only when `same_facts` or `opposed` (W1), else it is a card
@@ -342,8 +355,8 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
     def kept(i: int) -> bool:  # the user undid Cortex retiring this line: never again
         return f"{rows[i]['page']}/{rows[i]['id']}" in skip
 
-    def drop(i: int, k: int, why: str) -> None:
-        out.append({"retire": rows[i], "keep": rows[k], "why": why})
+    def drop(i: int, k: int, why: str, newer: bool | None = None) -> None:
+        out.append({"retire": rows[i], "keep": rows[k], "why": why, "newer": newer})
         gone.add(i)
 
     asks = []  # W1b: guessed updates left alone: a card, so prime.held's hold on the older ends
@@ -359,9 +372,9 @@ def settle(rows: list[dict], events, known: dict | None = None, skip=frozenset()
             forced.append((o, n))
         elif owned(rows[o]) and not owned(rows[n]):
             if not kept(n):
-                drop(n, o, why)
+                drop(n, o, why, False)
         elif not kept(o):
-            drop(o, n, why)
+            drop(o, n, why, True)
     rep: dict[int, int] = {}  # a line -> the kept line it near-duplicates
     keep: list[int] = []
     for i in sorted((i for i in range(len(rows)) if i not in gone),
@@ -640,7 +653,8 @@ def _baseline(vault) -> dict | None:
 def guard(vault, events) -> tuple[dict | None, set]:
     """R5a: ({page: line hashes Cortex wrote or found at the baseline}, None before the
     baseline is taken; the hashes of the kept card keys). Written: an unvoided change on a
-    GUARDED page listing its `lines` (cortex_patch); kept: a `dismiss` change on id OUTSIDE."""
+    GUARDED page listing its `lines` (cortex_patch), or a retire's `kept` line it stamped with
+    `(since …)` (R13a); kept: a `dismiss` change on id OUTSIDE."""
     base = _baseline(vault)
     events = list(events)
     voided, ok, kept = _voided(events), {p: set() for p in GUARDED}, set()
@@ -652,6 +666,9 @@ def guard(vault, events) -> tuple[dict | None, set]:
             ok[c["id"]].update(h for h in c["lines"] if isinstance(h, str))
         elif c.get("tool") == "dismiss" and c.get("id") == OUTSIDE:
             kept.add(c.get("hash"))
+        k = c.get("kept")  # R13a: the line a retire stamped `(since …)`, as Cortex wrote it
+        if isinstance(k, dict) and k.get("page") in GUARDED and isinstance(k.get("line"), str):
+            ok[k["page"]].add(k["line"])
     if base is None:
         return None, kept
     for p in GUARDED:
@@ -805,6 +822,45 @@ def reinforced(events, known: dict | None = None) -> dict[str, dict]:
                 x["last"] = max(x["last"], y["last"])
     for cid in list(out):
         saw(cid, wrote.get(cid))
+    return out
+
+
+def use(vault, events, before: str | None = None, known: dict | None = None) -> dict[str, dict]:
+    """G5b-4: {claim id: {n, last}}: how often a claim line was used and the last day it was:
+    each X-ray call that served it to an AI app, each yes reconfirm and each time it came back
+    (`reinforced`'s sightings; `known`: `known_texts`, read when not given). With `before` (an
+    ISO day) only days before it, so prime's order from it stays the same all day. A fold over
+    the X-ray ring and the events; nothing stored.
+    shortcut: the ring keeps xray.CAP calls, so a call falling off it during the day can move a
+    line across a bucket edge (prime.use_order); snapshot the fold per day if caches miss."""
+    from cortex import xray
+    from cortex.events import local_day
+
+    out: dict[str, dict] = {}
+
+    def add(cid, day: str, n: int = 1) -> None:
+        if isinstance(cid, str) and day and (before is None or day < before):
+            x = out.setdefault(cid, {"n": 0, "last": ""})
+            x["n"] += n
+            x["last"] = max(x["last"], day)
+
+    for r in xray.rows(vault):
+        try:
+            day = local_day(dt.datetime.fromisoformat(str(r.get("ts"))))
+        except (TypeError, ValueError):
+            continue
+        for i in _ids(r.get("served")):
+            if i.startswith("^"):
+                add(i[1:], day)
+    events = [e for e in events if before is None or str(e.get("day") or "") < before]
+    voided = _voided(events)
+    for e in events:
+        pl = _payload(e)
+        if (e.get("kind") == "log" and pl.get("kind") == "reconfirm" and pl.get("verdict") == "yes"
+                and e.get("id") not in voided):
+            add(pl.get("claim"), str(e.get("day") or ""))
+    for cid, x in reinforced(events, known_texts(vault) if known is None else known).items():
+        add(cid, x["last"], len(x["sessions"]))
     return out
 
 
@@ -990,7 +1046,8 @@ def view(vault, events, today: str) -> dict:
     single inference (a waiting line other than a teaching rule that fewer than SIGHTINGS
     chats proposed) leaves the view SINGLE_DAYS after its stamp (inbox.md keeps it), and
     `today` orders at most TODAY_MAX cards a day (`_today`). RR-10: a `paused` producer's
-    cards (`ledger`) are not offered; `paused` lists them for the Status line."""
+    cards (`ledger`) are not offered; `paused` lists them for the Status line. G5b-4: a claim
+    line on a card that chats said again carries `said` {times, last} (`reinforced`)."""
     events = list(events)
     led = ledger(events)
     off = {p for p, x in led.items() if x["paused"]}
@@ -1014,10 +1071,16 @@ def view(vault, events, today: str) -> dict:
                for page in dict.fromkeys(p["page"] for p in waiting)
                for g in collapse([p for p in waiting if p["page"] == page])]
     known = known_texts(vault)
-    old = stale(rows, events, today, known)
+    back = reinforced(events, known)
+
+    def said(cid: str) -> dict:  # G5b-4: how often chats said the line, a fold (`reinforced`)
+        x = back.get(cid)
+        return {"said": {"times": len(x["sessions"]), "last": x["last"]}} if x else {}
+
+    old = [{**x, **said(x["id"])} for x in stale(rows, events, today, known)]
 
     def side(r: dict) -> dict:
-        return {"page": r["page"], "id": r["id"], "text": _shown(r["text"])}
+        return {"page": r["page"], "id": r["id"], "text": _shown(r["text"]), **said(r["id"])}
 
     current = [r for r in rows if not claims.expired(r["text"], today)]  # = live_rows
     pairs = [{"key": c["key"], "why": c["why"], "left": side(c["left"]),

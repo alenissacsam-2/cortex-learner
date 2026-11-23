@@ -357,6 +357,7 @@ SUPERSEDES_MAX = 3  # RR-4: claim ids one new line may replace
 SUPERSEDES_NEXT = ("Cortex keeps the newer line of such a pair and retires the older (the user's "
                    "own line is never retired for a guess); say so in one line. ")
 TIDY_FILE = ".cortex/tidy.json"  # D1/D2: the pair keys Cortex settled itself, so an undo sticks
+GUESS_DAYS = 30  # G5b-2: an AI app's guess this many days old that no app used retires itself
 # PHASE4 V3 cortex_as_me
 AS_ME_TASK, AS_ME_ASKS = 300, 5
 AS_ME_NEXT = ("Write only from self and voice; self.withheld lines may not reach this "
@@ -2893,6 +2894,11 @@ class Cortex:
             if settled.get("lost"):
                 return settled["lost"]
             replaced = settled["retire"]
+            # R13a: the new line replaces these, so it says since when it holds
+            since = min((s for x in replaced if (s := review.since_for(
+                x["retire"], {"text": text}, day, True))), default=None)
+            if since and not claims.since(text) and "(until" not in text:
+                text = f"{text.rstrip()} (since {since})"
         if op == "append_to_section" and kind == "me" and nid in CONFIRM_PAGES:
             if user_confirmed or not claim_page:  # D3: an inferred claim line has no marker
                 text = f"{text.rstrip()} (confirmed {day})"
@@ -3070,29 +3076,87 @@ class Cortex:
                                     f"(^{keep['id']})",
                          "next": "Already saved; go on." + self._next(MORE_NEXT)}}
 
-    def _auto_retire(self, r: dict, keep: dict, why: str) -> bool:
+    def _auto_retire(self, r: dict, keep: dict | None, why: str, since: str | None = None
+                     ) -> bool:
         """D1/D2: retire live claim row `r` to `## Past` as cortex_patch's retire does, for
-        `keep` ({page, id}), recorded as a change (card `duplicate` or `conflict`, `auto`,
-        `why`, `kept`) in the open session, so `cortex undo` takes it back; its pair key goes to
-        TIDY_FILE so the sweep never redoes an undone retire. False when the line is no longer
-        live."""
+        `keep` ({page, id}; None for G5b-2's unused guess, which no line replaces), recorded as
+        a change (card `duplicate` or `conflict`, `auto`, `why`, `kept`) in the open session, so
+        `cortex undo` takes it back; R13a: `keep` gets `(since SINCE)` (`_stamp_since`). Its
+        pair key and `page/id` go to TIDY_FILE so the sweep never redoes an undone retire.
+        False when the line is no longer live."""
         day = local_day(self._now())
         try:
             self.vault._mutate(self.vault.path_for("me", r["page"]),
                                lambda t: claims.move_to_past(t, r["page"], r["id"], day)[0])
         except VaultError:
             return False
-        self.sessions.note("patched", change={
-            "tool": "patch", "id": r["page"], "kind": "me", "op": "retire", "target": r["id"],
-            "claim": r["id"], "auto": True, "why": why,
-            "card": "duplicate" if why == "duplicate" else "conflict",
-            "kept": {"page": keep["page"], "claim": keep["id"]}})
-        done = self._tidy_done() | {claims.pair_key((r["page"], r["id"]),
-                                                    (keep["page"], keep["id"])),
-                                    f"{r['page']}/{r['id']}"}
+        change = {"tool": "patch", "id": r["page"], "kind": "me", "op": "retire",
+                  "target": r["id"], "claim": r["id"], "auto": True, "why": why}
+        done = self._tidy_done() | {f"{r['page']}/{r['id']}"}
+        if keep is not None:
+            change.update(card="duplicate" if why == "duplicate" else "conflict",
+                          kept={"page": keep["page"], "claim": keep["id"]})
+            change.update(self._stamp_since(keep, since))
+            done.add(claims.pair_key((r["page"], r["id"]), (keep["page"], keep["id"])))
+        self.sessions.note("patched", change=change)
         self.vault.write_text(self.vault.root / TIDY_FILE,
                               json.dumps({**self._tidy_state(), "done": sorted(done)[-5000:]}))
         return True
+
+    def _stamp_since(self, keep: dict, since: str | None) -> dict:
+        """R13a: `(since SINCE)` on the live claim line `keep` ({page, id}) that replaced a
+        retired one, unless it has a since or until day already: {since, kept: {page, claim[,
+        line: its R5a hash on a review.GUARDED page]}} for the retire's change event; {} when
+        nothing was stamped."""
+        got: dict = {}
+
+        def edit(t: str) -> str:
+            new, got["line"] = claims.stamp_since(t, keep["page"], keep["id"], since)
+            return new
+
+        try:
+            if not since or not self.vault._mutate(self.vault.path_for("me", keep["page"]), edit):
+                return {}
+        except VaultError:
+            return {}
+        line = {"line": review.line_hash(got["line"])} if keep["page"] in review.GUARDED else {}
+        return {"since": since, "kept": {"page": keep["page"], "claim": keep["id"], **line}}
+
+    def _kept_by_click(self, page: str, target: str, day: str) -> tuple[dict, str | None] | None:
+        """R13a: Keep first or second on a conflict card (the Review click's `card` stamp)
+        retires the other line: (the card's line that stays, the since it gets:
+        review.since_for, a guessed update's right line being the newer), or None when the
+        retired line is on no shown card or on several."""
+        events = list(self.log.iter_events())
+        cid = target.strip().lstrip("^")
+        hits = [(c, c["right"] if (c["left"]["page"], c["left"]["id"]) == (page, cid)
+                 else c["left"])
+                for c in review.conflicts(review.live_rows(self.vault, events, day), events,
+                                          review.known_texts(self.vault))
+                if (page, cid) in ((c["left"]["page"], c["left"]["id"]),
+                                   (c["right"]["page"], c["right"]["id"]))]
+        if len(hits) != 1:
+            return None
+        c, keep = hits[0]
+        old = c["left"] if keep is c["right"] else c["right"]
+        newer = (keep is c["right"]) if c["why"] == "maybe_update" else None
+        return keep, review.since_for(old, keep, day, newer)
+
+    def _old_guesses(self, events: list[dict], day: str) -> list[dict]:
+        """G5b-2, at most once a day (TIDY_FILE's `guesses` day): the live guesses (tier agent
+        or exposed: no yes, no Approve) of the non-private claim pages but me/core, written over
+        GUESS_DAYS days ago, that no X-ray call served and no one confirmed or said again
+        (review.use), not X-ray pinned, and not a retire the owner undid. None while the X-ray
+        holds no call (as review.unused)."""
+        if self._tidy_state().get("guesses") == day or not xray.rows(self.vault):
+            return []
+        cut = (datetime.fromisoformat(day) - timedelta(days=GUESS_DAYS)).date().isoformat()
+        used, done = review.use(self.vault, events), self._tidy_done()
+        pins = xray.settings(self.vault)["pin"]
+        return [r for r in review.live_rows(self.vault, events, day)
+                if r["tier"] in review.INFERRED and r["page"] != "core"
+                and str(r["day"] or "~") < cut and r["id"] not in used
+                and xray.claim(r["id"]) not in pins and f"{r['page']}/{r['id']}" not in done]
 
     def tidy(self) -> dict:
         """D1-D3, the app's sweep (at start and with each chat-import pass): the about-me lines
@@ -3100,7 +3164,11 @@ class Cortex:
         then `review.settle` retires up to review.TIDY_MAX lines (near-copies, settled pairs)
         under the vault lock, in one session closed at once (one `cortex undo`). Opens no
         session when there is nothing to do. First, once (0.4.1), `_repair_merges` puts back
-        the lines the 0.4.0 sweep retired for a different fact. {moved, retired[, restored]}."""
+        the lines the 0.4.0 sweep retired for a different fact. R13a: a kept line that replaced
+        a retired one says `(since …)` (review.since_for). G5b-2: last, once a day, the old
+        guesses no app used (`_old_guesses`) retire the same way, and the receipt says how
+        many. {moved, retired[, restored][, guesses]}."""
+        guesses = 0
         with self.vault.lock():
             day = local_day(self._now())
             waiting = [p for p in review.pending(self.vault, day)
@@ -3110,7 +3178,8 @@ class Cortex:
                                  review.known_texts(self.vault),
                                  self._tidy_done())["retire"][:review.TIDY_MAX]
             wrong = self._wrong_merges(events)
-            if not waiting and not plan and not wrong:
+            old = self._old_guesses(events, day)
+            if not waiting and not plan and not wrong and not old:
                 return {"moved": 0, "retired": 0}
             self.session = self.sessions.start("tidy")
             self._reset()
@@ -3121,12 +3190,22 @@ class Cortex:
                 plan = review.settle(review.live_rows(self.vault, events, day), events,
                                      review.known_texts(self.vault),
                                      self._tidy_done())["retire"][:review.TIDY_MAX]
-                retired = sum(self._auto_retire(x["retire"], x["keep"], x["why"])
+                retired = sum(self._auto_retire(x["retire"], x["keep"], x["why"],
+                                                review.since_for(x["retire"], x["keep"], day,
+                                                                 x["newer"]))
                               for x in plan)
+                if old:  # the lines as the sweep left them
+                    guesses = sum(self._auto_retire(r, None, "unused") for r in
+                                  self._old_guesses(list(self.log.iter_events()), day))
+                    self.vault.write_text(self.vault.root / TIDY_FILE,
+                                          json.dumps({**self._tidy_state(), "guesses": day}))
             finally:
                 if self.sessions.current is not None:
-                    self.sessions.close(summary="Cortex tidied the about-me lines")
-        return {"moved": moved, "retired": retired, **({"restored": restored} if restored else {})}
+                    self.sessions.close(summary="Cortex tidied the about-me lines" + (
+                        f". Cortex retired {guesses} old guess{'es' if guesses != 1 else ''} "
+                        "no app used" if guesses else ""))
+        return {"moved": moved, "retired": retired, **({"restored": restored} if restored else {}),
+                **({"guesses": guesses} if guesses else {})}
 
     def _migrate_inbox(self, waiting: list[dict]) -> int:
         """D3, once per waiting line: an about-me line under `## About me (unconfirmed)` (claim
@@ -3306,22 +3385,34 @@ class Cortex:
                                "first.")
                 line += f" (confirmed {day})"
             scan_secrets(line)
-        claim = None
+        claim, kept = None, None
         with self.vault.lock():
             if op == "reject":
                 inbox, said = claims.unpropose(self._raw("inbox.md"), target)
                 self.vault._mutate(path, lambda t: claims.add_not_me(t, said, day))
                 self.vault.write_text(self.vault.root / "inbox.md", inbox)
             else:
+                if op == "retire" and self.sessions.stamp.get("card") == "conflict":
+                    kept = self._kept_by_click(nid, target, day)  # R13a: before it goes
                 done: dict[str, str] = {}
 
                 def edit(t: str) -> str:
-                    new, done["id"] = claims.move_to_past(t, nid, target, day, line, until)
+                    done["line"] = line
+                    old = next((r for r in claims.parse(nid, t) if line is not None
+                                and r["id"] == target.strip().lstrip("^")
+                                and r["status"] == "live"), None)
+                    if (old and not claims.since(line) and "(until" not in line
+                            and (s := review.since_for(old, {"text": line}, day, True))):
+                        done["line"] = f"{line} (since {s})"  # R13a: what it replaces
+                    new, done["id"] = claims.move_to_past(t, nid, target, day, done["line"],
+                                                          until)
                     return new
 
                 self.vault._mutate(path, edit)
-                claim = done["id"]
+                claim, line = done["id"], done["line"]
         change = {"tool": "patch", "id": nid, "kind": "me", "op": op, "target": target}
+        if kept:
+            change.update(self._stamp_since(*kept))
         if line is not None and nid in review.GUARDED:  # R5a: the revised line Cortex wrote
             change["lines"] = [review.line_hash(f"- {claims._ANY_ID.sub('', line)}")]
         if claim:
