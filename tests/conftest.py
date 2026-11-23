@@ -104,6 +104,8 @@ def _status_probes_fresh(monkeypatch):
 
     monkeypatch.setattr(status, "kept", lambda key, fn: fn())
     monkeypatch.setattr(server, "WARM_STATUS", False)
+    # nor a fact-harvest piggyback after a Chat turn (test_fact_harvest.py turns it on)
+    monkeypatch.setattr(server, "PIGGYBACK", False)
     # the Claude Code row: never a real `cortex --version` (the venv's cortex is on PATH) or
     # the real system PATH; tests/test_status_copies.py sets its own
     from cortex import update

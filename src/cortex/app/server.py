@@ -38,6 +38,7 @@ PRIVATE_S = 10 * 60  # the Private switch relocks by itself after 10 minutes
 UPDATE_FIRST_S, UPDATE_EVERY_S = 60, 6 * 3600  # the quiet update check: a minute in, then 6 h
 WATCH_S = 5  # seconds between idle checks
 WARM_STATUS = True  # `start` asks Status's slow probes at once (tests turn it off: conftest)
+PIGGYBACK = True  # C8: a fact-harvest pass after each Chat turn (tests turn it off: conftest)
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
@@ -276,6 +277,8 @@ class App:
         self.scanned: dict = {}  # source key -> the last scan's counts
         self.uploads: dict[str, Path] = {}  # upload id -> its file under ~/.cortex/tmp
         self.chatting = threading.Lock()  # one chat answer at a time, beside any job
+        self.piggy = threading.Lock()  # C8: one fact-harvest piggyback after a Chat turn at once
+        self.echo = print  # `start` sets its own: the background passes' log lines
         from cortex import askfile
         self.files = askfile.Store()  # C1: files attached in Chat, in memory only
         self.last = time.monotonic()
@@ -1451,6 +1454,37 @@ class App:
             raise Busy("An answer is still being written; wait for it or press Stop.")
         return vault, cid, text
 
+    def piggyback(self) -> threading.Thread | None:
+        """C8: after a Chat turn ends, a daemon thread waits fact_harvest.PIGGY_WAIT_S and then
+        runs fact_harvest.after_chat, unless the app is quitting or a new Chat turn started
+        meanwhile. At most one at a time (`piggy`); it never holds `chatting`. The thread, or
+        None when one already runs."""
+        if not PIGGYBACK or not self.piggy.acquire(blocking=False):
+            return None
+
+        def go():
+            from cortex import fact_harvest
+            try:
+                if self.stop.wait(fact_harvest.PIGGY_WAIT_S) or self.chatting.locked():
+                    return  # quitting, or the owner asked again: that turn's end tries again
+                c = fact_harvest.after_chat(self)
+                if c:  # counts only: never a page's text
+                    self.echo("cortex app: facts from chats after a Chat turn: " + ", ".join(
+                        f"{k} {n}" for k, n in sorted(c.items()) if k != "session"))
+            except Exception as e:  # noqa: BLE001  (the next turn or chats pass tries again)
+                self.echo(f"cortex app: saving facts after a Chat turn failed "
+                          f"({type(e).__name__})")
+            finally:
+                self.piggy.release()
+
+        t = threading.Thread(target=go, daemon=True, name="fact-piggyback")
+        try:
+            t.start()
+        except RuntimeError:  # no thread to spare: never keep `piggy` held
+            self.piggy.release()
+            return None
+        return t
+
     def chat_delete(self, body: dict) -> dict:
         from cortex import chat
         if self.chatting.locked():  # the answer's final save would bring the chat back
@@ -2146,6 +2180,7 @@ def _handler(app: App):
             finally:
                 ended.set()
                 app.chatting.release()
+                app.piggyback()  # C8: the model is warm; a short fact-harvest pass
 
         def _upload(self, ctype: str):
             """Stream an export to ~/.cortex/tmp/upload-<id>-<stem><ext>, owner-only (0600).
@@ -2350,6 +2385,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             raise SystemExit(f"Port {port} is in use or not allowed ({e.strerror or e}). Pick "
                              "another, or leave --port out for a free one.") from None
         srv, app = make_server(root, 0)  # PORT is taken (a second Cortex, another program)
+    app.echo = echo
     url = start_url(app)
     try:
         _save_state(app)
