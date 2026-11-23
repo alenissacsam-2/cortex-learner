@@ -66,6 +66,9 @@ KEEP = FOLD | {"id", "ts", "day", "session", "mode", "source", "schema", "predic
 OWN_DIRS = ("sessions", "rollups")  # pages Cortex writes itself (chat pages: from the ledger)
 OWN_FILES = ("log.md", "Today.md", "index.md", "inbox.md")
 SKIP_CACHE = ("backups", "tmp")  # .cortex folders not swept (backups are named in `left`)
+# the snapshot is written again; watch-files.json keys each watched file by its path, and a
+# dropped key would read the file as new and bring a forgotten page back (`left` says so)
+UNSWEPT = ("index-snapshot.json", "watch-files.json")
 STATE = ".cortex/chat-import.sqlite"  # chat_import.STATE (not imported: it loads a lot)
 DBS = (".cortex/vectors.db", STATE)
 BROWSE_DBS = (".cortex/browse/store.db", ".cortex/browse/vectors-private.db")
@@ -329,7 +332,7 @@ def _sweep(vault: Vault, texts, hashes=frozenset(), refs=(), names=()) -> dict:
     for p in sorted(cache.rglob("*.json*")) if cache.is_dir() else []:
         rel = p.relative_to(cache).parts
         if (p.suffix not in (".json", ".jsonl") or rel[0] in SKIP_CACHE
-                or p.name == "index-snapshot.json"):  # the snapshot is written again
+                or p.name in UNSWEPT):
             continue
         if rel[:2] == ("browse", "chat"):  # the local Chat's history: a chat
             n = _sweep_json(vault, p, chat_pat, (), chat_needles)
@@ -569,6 +572,11 @@ def _receipt(what: str, removed: dict, vault: Vault, paths: list[str], texts,
     left += [f"{r}: the raw file this page was made from; delete it yourself." for r in raw]
     left.append("Raw exports under raw/ and the export files you imported (in Downloads or "
                 "wherever you saved them) still hold what they held.")
+    from cortex import watch
+    if watch.watched(vault):
+        left.append("Watched folders and Zotero keep their files, and Cortex keeps their paths "
+                    "(.cortex/watch-files.json) so an unchanged file is not read again; a file "
+                    "that changes comes in again: delete it there, or stop watching its folder.")
     for c in chats_:
         if c.get("source") == "claude-code":
             left.append(f"Claude Code keeps its own transcript of chat {c.get('chat_id')} in "

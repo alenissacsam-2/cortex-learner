@@ -293,6 +293,21 @@ def test_a_person_forget_redacts_every_mention_of_the_name(root):
     assert _texts_in(root, "asha") == []
 
 
+def test_a_forgotten_page_from_a_watched_folder_stays_forgotten(root, tmp_path):
+    from cortex import watch
+
+    d = tmp_path / "Docs"
+    d.mkdir()
+    (d / "Big data pipelines.md").write_bytes(b"# Big data pipelines\n\nKafka and Spark.\n")
+    v = Vault(root)
+    watch.add(v, d, "docs", "normal")
+    assert watch.run(v)[0]["read"] == 1
+    (page,) = [p for p in (root / "resources").glob("docs-*.md")]
+    r = forget.forget(v, page.stem)
+    assert any(x.startswith("Watched folders") for x in r["left"]) and not page.exists()
+    assert watch.run(v)[0]["read"] == 0 and not page.exists()  # its file is unchanged
+
+
 def test_drop_takes_the_line_and_its_past(tmp_path):
     text = ("# Profile\n\n## Brief\n- Lives in Pune ^c-bbbbb\n- Keeps this ^c-ccccc\n\n## Past\n"
             "- Lives in Delhi (until 2026-01-02 → ^c-bbbbb) ^c-ddddd\n"

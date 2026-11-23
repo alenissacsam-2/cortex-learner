@@ -93,7 +93,8 @@ These measures lower the risk; they do not remove it. Review changes to your `me
 - Raw exports under `raw/` and the export files you imported, wherever you saved them.
 - What AI apps already received: their own chat histories, memories and Claude Code's transcripts in `~/.claude/projects`. For a line of your pinned core, the older `.cortex-*.bak` backups beside those rules files keep it until you delete them; the receipt lists them.
 - A synced vault folder's version history (OneDrive, Dropbox and the like).
-- Copies in other words: Cortex removes the exact text (any case and spacing), not a paraphrase. Text shorter than 4 characters is not swept, and text shorter than 12 not from chats (it would hit other words); the receipt lists it.
+- Copies in other words: Cortex removes the exact text (any case and spacing), not a paraphrase. It sweeps a title, a line or a `//forget:`'s words only when they are specific (12 characters or more, or 4 or more in two words or more; from chats, 12 or more), so forgetting a page called "Python" leaves every other "Python" in your chats alone; the receipt lists what it did not sweep. A page's id is removed only where it stands alone or as a link (`[[id]]`, `folder/id`), never inside other words. A person's name is the exception: it is swept everywhere from 4 characters, one word too, so every mention of anyone with that name goes, and the receipt says so.
+- Watched folders and Zotero keep their files. Cortex remembers each watched file's path, so an unchanged file is not read again; a file that changes comes in again, so delete it there or stop watching its folder.
 - Your own pages that still mention it: Cortex leaves what you wrote and lists those pages.
 
 A forget cannot be undone.
