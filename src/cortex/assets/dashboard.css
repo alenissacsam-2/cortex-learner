@@ -222,6 +222,22 @@ a.icon-btn { color: inherit; }
 .qc-need { color: var(--ink-2); font-size: 12.5px; margin: 8px 0 0; }
 .qc-out { margin-top: 6px; overflow-wrap: anywhere; }
 .qc-out p { margin: 6px 0; }
+/* R31: Add a date, inline under the Exams and deadlines rows */
+.date-form {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 8px 8px;
+  padding: 10px 12px 12px; border-top: 1px solid var(--rule);
+}
+.date-form .df-what, .date-form .df-acts { grid-column: 1 / -1; }
+.df-field { display: flex; flex-direction: column; min-width: 0; }
+.df-field input {
+  min-width: 0; background: var(--panel); border: 1px solid var(--edge); border-radius: 2px;
+  padding: 6px 10px; color: var(--ink);
+}
+.df-field input::placeholder { color: var(--ink-3); }
+.df-acts { display: flex; gap: 6px; }
+.btn.lit { background: var(--lit); border-color: var(--lit); color: var(--ground); font-weight: 600; }
+.btn.lit:hover { color: var(--ground); }
+.btn:disabled { opacity: .6; cursor: default; }
 .brain-slot { position: relative; background: var(--stage); overflow: hidden; }
 .brain-host { position: absolute; inset: 0; }
 .ready { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; }  /* a long label wraps under the bar */

@@ -64,13 +64,20 @@ def add(vault: Vault, title: str, fields: dict) -> str:
 
 
 def forget(vault: Vault, id: str) -> dict:
-    """Delete the page and the voice samples and drafts addressed to it. Git history keeps
-    the old file (PHASE4 decision 5). Returns {page, samples, drafts} counts removed."""
+    """Delete the page and the voice samples and drafts addressed to it, and every copy of
+    its name and id Cortex keeps (cortex.forget). Git history keeps the old file (PHASE4
+    decision 5; the receipt says how to remove it). Returns the receipt."""
+    from cortex import forget as forget_
+
     if get(vault, id) is None:
         raise VaultError("unknown_id", f"No people page '{id}'; use the exact id people/<slug>.")
+    return forget_.page(vault, id)
+
+
+def drop_voice(vault: Vault, id: str) -> dict:
+    """The voice samples and drafts addressed to people page `id`, deleted: their counts."""
     out = {}
     with vault.lock():
-        out["page"] = int(vault.remove(vault.path_for("person", id[len(PREFIX):])))
         for rel, name in zip(VOICE_FILES, ("samples", "drafts"), strict=True):
             path = vault.root / rel
             if not path.is_file():
@@ -89,5 +96,4 @@ def forget(vault: Vault, id: str) -> dict:
             if gone:
                 vault.write_text(path, "".join(keep))
             out[name] = gone
-        relink.apply(vault, relink.people_fixes(vault))  # drop it from the hub
     return out

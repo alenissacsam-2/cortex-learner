@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 from cortex import (
     brainmap,
+    chat_pages,
     claims,
     index,
     know,
@@ -107,6 +108,33 @@ def _plans(vault, catalog, hidden, pc) -> list[dict]:
 
 
 STUDY_KINDS = ("concept", "track", "assessment")
+SUGGEST_DAYS, SUGGESTED = 60, 3
+_EXAM_WORD = re.compile(rf"\b{chat_pages._EVENT}\b", re.I)
+_DEADLINE_WORD = re.compile(r"\bdeadlines?\b", re.I)
+
+
+def exam_suggestions(notes: dict, today: date, shut: set) -> list[dict]:
+    """R31: up to SUGGESTED imported calendar events (`calendar-*` month pages' lines, as
+    chat_pages reads them) in the next SUGGEST_DAYS days whose title looks like an exam or a
+    deadline (chat_pages._EVENT) and that no assessment page holds on the same day by the same
+    name (case-folded), soonest first: {day, title, kind (exam or deadline), page}. A fold over
+    the pages, never stored; a page in `shut` (private, or under a private subject) is never
+    read, and an added one goes because its assessment page now exists."""
+    have = {(str(n.fields.get("date") or "")[:10], str(n.fields.get("title") or "").casefold())
+            for n in notes["assessment"]}
+    lo, hi, out = today.isoformat(), (today + timedelta(days=SUGGEST_DAYS)).isoformat(), {}
+    for n in notes["resource"]:
+        if not n.id.startswith("calendar-") or n.id in shut or is_private(n):
+            continue
+        for ln in n.body.splitlines():
+            if not (m := chat_pages._CAL_LINE.fullmatch(ln.strip())) or not lo <= m[1] <= hi:
+                continue
+            title = plain(m[2].split(" · ")[0], 120)
+            key = (m[1], title.casefold())
+            if title and _EXAM_WORD.search(title) and key not in have and key not in out:
+                out[key] = {"day": m[1], "title": title, "page": n.id,
+                            "kind": "deadline" if _DEADLINE_WORD.search(title) else "exam"}
+    return sorted(out.values(), key=lambda r: (r["day"], r["title"]))[:SUGGESTED]
 
 
 def studies(vault: Vault, events: list[dict], notes: dict | None = None) -> bool:
@@ -160,6 +188,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
               "state": i["state"], "why": plain(i["why"])} for i in items]
 
     scores = {n.id: n.fields.get("score") for n in notes["assessment"]}
+    titles = {n.id: plain(str(n.fields.get("title") or "")) for n in notes["assessment"]}
     pairs, calibrated = _once(memo, "calibrated", (gen, pc),
                               lambda: learning_eval.calibrated(events, pc))
 
@@ -170,6 +199,7 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         score = scores.get(a["id"])
         share = planner.readiness(vault, catalog, states, a)
         return {"id": a["id"], "company": plain(a["company"] or "") or None,
+                "title": titles.get(a["id"]) or None,
                 "kind": plain(a["kind"] or "") or None, "date": d.isoformat() if d else None,
                 "days_left": (d - today_d).days if d else None,
                 "outcome": a["outcome"] or "pending",
@@ -339,6 +369,8 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         # Start here; only someone who does not study is asked (a body scan: ~20 µs a page)
         "imported": not study and any(map(_imported, pages)),
         "assessments": coming,
+        # R31: calendar events that look like exams, offered on Home's board to add as one
+        "exam_suggestions": exam_suggestions(notes, today_d, private | hidden),
         "mistakes": mistakes,
         "graph": {"nodes": nodes, "links": links},
         "vault_name": vault.root.name,

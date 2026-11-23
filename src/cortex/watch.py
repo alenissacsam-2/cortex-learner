@@ -2,7 +2,8 @@
 step) comes in by itself. The app's periodic pass (server.start's `auto` loop, after the live
 browse import: every browse_serve.AUTO_EVERY_S) calls `run`, which re-imports each watched
 folder through `sources.run` with its remembered source and tier: documents, notes, git
-projects, or a Zotero library (cortex.zotero).
+projects, calendars (a folder of .ics files, or one .ics file's folder: its month pages gain the
+new lines only), or a Zotero library (cortex.zotero).
 
 WATCHED (.cortex/watched.json) holds [{path, source, tier, last}]; `last` is the line of the last
 pass that read something, failed or found the folder gone, and when. FILES
@@ -31,9 +32,9 @@ from cortex import importers, more_sources, sources
 from cortex.vault import Vault, VaultError
 
 WATCHED, FILES = ".cortex/watched.json", ".cortex/watch-files.json"
-SOURCES = ("docs", "notes", "repos", "zotero")
+SOURCES = ("docs", "notes", "repos", "calendar", "zotero")
 SUFFIXES = {"docs": more_sources.DOC_SUFFIXES + importers.NOTE_SUFFIXES,
-            "notes": importers.NOTE_SUFFIXES}
+            "notes": importers.NOTE_SUFFIXES, "calendar": (".ics",)}
 PER_PASS = 200  # new or changed files (repos, Zotero items) read per folder per pass
 MAX_LISTED = 100_000  # files of its kinds listed per folder per pass
 # hidden, system, offline, and the cloud placeholders that download when read (recall on open
@@ -81,6 +82,8 @@ def _folder(vault: Vault, path, source: str) -> Path:
             raise VaultError("invalid_argument", "Give the folder's full path, such as "
                              "C:\\Users\\you\\Documents\\Papers.")
         folder = p.resolve()
+        if source == "calendar" and folder.suffix.lower() == ".ics" and folder.is_file():
+            folder = folder.parent  # one exported calendar: its folder's .ics files are read
         if not folder.is_dir():
             raise VaultError("invalid_argument", f"{folder} is not a folder.")
     if _under(folder, _norm(vault.root.resolve())):
@@ -102,7 +105,8 @@ def _source(source: str, folder: Path, todo: list) -> sources.Source:
             replace(it, key=at + Path(folder, it.origin).relative_to(folder).as_posix())
             if isinstance(it, sources.Item) else it for it in src.items()))
     return {"notes": partial(importers.notes_source, files=todo),
-            "repos": partial(more_sources.repos_source, repos=todo)}[source](folder)
+            "repos": partial(more_sources.repos_source, repos=todo),
+            "calendar": partial(importers.calendar_source, files=todo)}[source](folder)
 
 
 def add(vault: Vault, path, source: str = "docs", tier: str | None = None,
