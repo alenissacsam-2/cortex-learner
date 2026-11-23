@@ -1115,3 +1115,121 @@ def test_a_leech_row_is_tagged_and_the_line_opens_it(tmp_path):
     assert p["line"] == "1 concept keeps slipping: simplify its note.", p
     assert p["tag"] in ([], [["label muted", why]]), p  # tagged when it is in today's plan
     assert p["reader"], p
+
+
+DATE_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const $ = (id) => document.getElementById(id);
+  const out = {};
+  const toastText = async (was) => {
+    const t = $('toast');
+    for (let i = 0; i < 200 && (t.hidden || !t.textContent || t.textContent === was); i++) await sleep(50);
+    return t.textContent;
+  };
+  for (let i = 0; i < 200 && !$('date-open'); i++) await sleep(50);
+  const board = $('date-open').closest('.board');
+  out.board = board.querySelector('h2').textContent;
+  out.suggested = [...board.querySelectorAll('.brow')].filter((r) => r.querySelector('.acts .btn'))
+    .map((r) => [r.querySelector('.ttl').textContent, r.querySelector('.ttl').children.length,
+      r.querySelector('.acts .btn').textContent, r.querySelector('.acts .btn').getAttribute('aria-label')]);
+  $('date-open').click();
+  const form = board.querySelector('form.date-form');
+  out.form = !!form && !$('date-open');
+  out.focus = document.activeElement.id;
+  out.labels = [...form.querySelectorAll('label')].map((l) => [l.textContent, l.htmlFor, !!$(l.htmlFor)]);
+  const what = $('date-what'), when = $('date-when'), kind = $('date-kind');
+  out.fields = [what.placeholder, what.maxLength, what.required, when.type, when.min, kind.value,
+    [...kind.options].map((o) => o.textContent)];
+  out.buttons = [...form.querySelectorAll('button')].map((b) => [b.type, b.textContent]);
+  // Esc closes the form and puts the focus back on Add a date
+  what.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  out.escClosed = !board.querySelector('form.date-form');
+  out.escFocus = document.activeElement.id;
+  // Cancel does the same
+  $('date-open').click();
+  [...document.querySelectorAll('form.date-form button')].find((b) => b.textContent === 'Cancel').click();
+  out.cancelFocus = document.activeElement.id;
+  // a refusal: the server's words in the toast, and the form stays open
+  $('date-open').click();
+  $('date-what').value = 'DSA exam';
+  $('date-when').value = '2001-01-01';
+  $('date-what').closest('form').requestSubmit();
+  out.refused = await toastText('');
+  out.stays = !!document.querySelector('form.date-form');
+  // the submit (Enter in the text field is the form's implicit submission)
+  $('date-when').value = cfgDay;
+  $('date-what').value = 'DSA &amp; <i exam';
+  $('date-what').closest('form').requestSubmit();
+  out.added = await toastText(out.refused);
+  out.closedAfter = !document.querySelector('form.date-form');
+  const mine = () => [...($('date-open') ? $('date-open').closest('.board').querySelectorAll('.ttl') : [])].find((x) => x.textContent.includes('DSA &amp;'));
+  for (let i = 0; i < 200 && !mine(); i++) await sleep(50);
+  out.row = mine() ? [mine().textContent, mine().children.length] : null;
+  out.imgs = document.querySelectorAll('.board img').length;
+  // a suggestion's button adds it, and it leaves the list with the next load
+  const adds = () => [...document.querySelectorAll('.board .brow .acts .btn')].filter((b) => b.textContent.startsWith('Add as'));
+  const was = $('toast').textContent;
+  adds()[0].click();
+  out.sugToast = await toastText(was);
+  for (let i = 0; i < 200 && adds().length; i++) await sleep(50);
+  out.sugLeft = adds().length;
+  return out;
+})()
+"""  # noqa: E501  (JavaScript)
+
+
+def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch):
+    """R31: Home's Add a date opens an inline form (labelled fields, today as the date's
+    minimum), Esc or Cancel puts the focus back on Add a date, a refusal shows the server's
+    words, a submit adds the page and says so in the toast, and its name shows as text; a
+    calendar event that looks like an exam is offered and leaves once added."""
+    from datetime import date, timedelta
+
+    from test_app import _serve
+    from test_home import FIXTURES as HOME_FIXTURES
+    from test_home import _note
+
+    from cortex import localllm
+    from cortex.app import server
+    from cortex.events import local_day
+
+    def no_runner(*a, **k):
+        raise OSError("no runner in tests")
+
+    monkeypatch.setattr(localllm, "_request", no_runner)
+    monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    root = tmp_path / "vault"
+    shutil.copytree(HOME_FIXTURES / "vault_mini", root)
+    (root / ".cortex").mkdir()
+    today = date.fromisoformat(local_day(datetime.now(UTC)))
+    day = today + timedelta(days=20)
+    sday = (today + timedelta(days=6)).isoformat()
+    _note(root, "resources", "calendar-2099-03", {"title": "Calendar", "kind": "resource"},
+          f"## Events\n- {sday} 09:00 · OS exam · Hall B\n- {sday} 12:00 · Lunch\n")
+    srv, app = _serve(root)
+    try:
+        out = _run(tmp_path, None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   probe=f"const cfgDay = {json.dumps(day.isoformat())};\n" + DATE_PROBE)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == []
+    p = out["probe"]
+    assert p["board"] == "Exams and deadlines"
+    assert p["suggested"] == [["OS exam", 0, "Add as exam", "Add as exam: OS exam"]]
+    assert p["form"] and p["focus"] == "date-what"
+    assert p["labels"] == [["What", "date-what", True], ["When", "date-when", True],
+                           ["Exam or deadline", "date-kind", True]]
+    assert p["fields"] == ["DSA exam", 120, True, "date", today.isoformat(), "exam",
+                           ["Exam", "Deadline"]]
+    assert p["buttons"] == [["submit", "Add"], ["button", "Cancel"]]
+    assert p["escClosed"] and p["escFocus"] == "date-open" and p["cancelFocus"] == "date-open"
+    assert "passed" in p["refused"] and p["stays"]
+    mon = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()[day.month - 1]
+    assert p["added"] == f"Added: DSA &amp; <i exam on {day.day} {mon}."
+    assert p["closedAfter"]
+    # the name as text: no element made from it, its entity not decoded
+    assert p["row"] == ["DSA &amp; <i exam · exam", 0] and p["imgs"] == 0
+    assert p["sugToast"].startswith("Added: OS exam on ") and p["sugLeft"] == 0

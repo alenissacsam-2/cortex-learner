@@ -547,13 +547,18 @@ def _when(prop) -> tuple[str, str]:
     return t.date().isoformat(), t.strftime("%H:%M") + (f" ({tz})" if tz else "")
 
 
-def calendar_source(path: Path) -> sources.Source:
+def calendar_source(path: Path, files: list | None = None) -> sources.Source:
     """One month-page line per event: date, time, title, location and the RRULE as text (not
-    expanded). Attendees, organizers and descriptions are never read."""
-    texts = [read().decode("utf-8-sig", errors="replace") for n, _, _, read in _files(path)
+    expanded). Attendees, organizers and descriptions are never read. `files`: `_files`
+    entries already walked (a watched folder's new and changed .ics files)."""
+    if files is None:
+        files = _files(path)
+        if not any(n.lower().endswith(".ics") for n, *_ in files):
+            raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
+    # shortcut: an event moved to another day (same UID) keeps its old line beside the new one;
+    # lines carry no UID, so replacing it needs a UID -> line store. Build that if moves matter.
+    texts = [read().decode("utf-8-sig", errors="replace") for n, _, _, read in files
              if n.lower().endswith(".ics")]
-    if not texts:
-        raise VaultError("invalid_argument", f"Found no .ics calendar in {Path(path).name}.")
 
     def items():
         for ev in (e for t in texts for e in _events(t)):
