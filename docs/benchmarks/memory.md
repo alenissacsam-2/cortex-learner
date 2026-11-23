@@ -31,7 +31,9 @@ during every run, so the seconds are noisy; the memory numbers are not.
 | first search after idle (both models loaded again) | 2,832 | 4,179 | 400 | 873 |
 
 The peak working set during the index build: 1,875 MB before, and it stayed; 1,140 MB after,
-for the length of a batch, then back to 256 MB.
+for the length of a batch, then back to 256 MB. A second "after" run, with another test suite
+keeping the CPU at about 75%, matched within 3 MB at every step (idle 511 MB, 185 MB once the
+models were dropped).
 
 ## Where it went
 
@@ -102,4 +104,8 @@ index build took 262 s against 209 s before. Builds are background work at low p
 - **What stays after the drop** (186 MB working set): Python and the imported modules, the
   loaded onnxruntime and tokenizer libraries, the MCP core's catalog and index, the vector
   matrices kept for queries (`semantic._MEM`, `browse.vectors._MEM`: 4 bytes × 384 per chunk)
-  and the app home's caches. TRACE
+  and the app home's caches. tracemalloc (`--trace`) counted 74 MB of Python allocations at
+  idle: 22 MB by the imports, 20 MB on loading the embedder (fastembed, tokenizers), 5 MB by
+  the index build, 21 MB by the app home; nothing big was left from a build to release.
+  (In that run the steps were slow enough that the idle thread itself dropped the embedder and
+  the reranker while the background copy worked, 82 MB, and the next search loaded them again.)
