@@ -39,7 +39,8 @@ SOURCES = {**dict.fromkeys(chats.EXPORT_DIRS, "chats"), "google-activity": "take
            **dict.fromkeys(LABELS, "notes"), "calendar": "calendar", "docs": "docs",
            "repos": "repos", "highlights": "highlights", "mail": "mail",
            "selfchat": "selfchat", "location": "location", "photos": "photos",
-           "spotify": "spotify", "voice-memos": "voice-memos", "zotero": "zotero"}
+           "spotify": "spotify", "voice-memos": "voice-memos", "zotero": "zotero",
+           "anki": "anki"}
 
 GUIDES = {
     "notes": {
@@ -174,6 +175,15 @@ GUIDES = {
         "wait": "the transcribing runs on this computer: seconds to a minute per minute of "
                 "audio",
         "pick": "paste the full path of the folder of recordings"},
+    "anki": {
+        "name": "Anki decks",
+        "link": "https://docs.ankiweb.net/exporting.html",
+        "steps": ["In Anki: File > Export, Anki Deck Package or Collection Package, tick Support "
+                  "older Anki versions, then pick the file here.",
+                  "Or pick your Anki profile folder (%APPDATA%\\Anki2\\<profile>): Cortex reads "
+                  "a copy and never changes Anki."],
+        "wait": "instant",
+        "pick": "the .apkg or .colpkg file, or paste the full path of your Anki profile folder"},
 }
 
 _NOTION_ID = re.compile(r" [0-9a-f]{32}(?=\.\w+$|$)")
@@ -333,11 +343,14 @@ def json_value(read):
 
 def detect(path: Path) -> list[str]:
     """The importers an export needs, in order: "chats" (claude.ai, ChatGPT, Gemini,
-    Perplexity), "takeout" (Search, YouTube, Chrome activity), "calendar", "notes"."""
-    from cortex import more_sources  # it imports this module
+    Perplexity), "takeout" (Search, YouTube, Chrome activity), "calendar", "notes", "anki"
+    (an .apkg/.colpkg export or Anki's profile collection) and the rest of SOURCES' kinds."""
+    from cortex import anki, more_sources  # they import this module
     from cortex.browse import takeout  # takeout imports this module
     if more_sources.holds_repos(path):  # before _files, which would walk every repo
         return ["repos"]
+    if anki.holds(path):  # before _files, which would walk a profile's collection.media
+        return ["anki"]
     files = _files(path)
     names = [n.lower() for n, *_ in files]
     from cortex import life_sources

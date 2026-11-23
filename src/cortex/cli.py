@@ -1099,14 +1099,16 @@ def import_cmd(path: Annotated[Path | None, typer.Argument(
              ".docx), a folder of your git projects, reading highlights (Kindle "
              "My Clippings.txt, a Readwise or Pocket .csv), sent mail (.mbox), a Google "
              "Timeline (location history), a photo folder, a Spotify data export, a "
-             "folder of voice memos (transcribed locally) or Zotero's data folder. With "
+             "folder of voice memos (transcribed locally), Zotero's data folder or Anki "
+             "(an .apkg/.colpkg export or your Anki profile folder). With "
              "--source zotero it may be left out: Cortex finds your Zotero library.")] = None,
         source: Annotated[str | None, typer.Option(
             help="Force the kind: claude, chatgpt, gemini, perplexity, google-activity, "
                  "obsidian, notion, notes, calendar, docs, repos, highlights, mail, "
                  "selfchat (a WhatsApp chat with yourself, Telegram Saved Messages), "
                  "location (Google Timeline), photos (a photo folder), spotify, "
-                 "voice-memos (a folder of recordings) or zotero (a Zotero library).")] = None,
+                 "voice-memos (a folder of recordings), zotero (a Zotero library) or anki "
+                 "(Anki decks).")] = None,
         dry_run: Annotated[bool, typer.Option(
             "--dry-run", help="Print counts only; write nothing.")] = False,
         private: Annotated[bool, typer.Option(
@@ -1183,6 +1185,9 @@ def import_cmd(path: Annotated[Path | None, typer.Argument(
             typer.echo(importers.report_line(importers.LABELS[r["source"]], r))
         elif kind in more_sources.SOURCE_OF:
             typer.echo(importers.report_line(src.label, sources.run(v, src, t, dry_run)) + dry)
+            if kind == "anki" and not dry_run:  # parent decks and concepts, once pages exist
+                from cortex import anki
+                anki.link(v)
         else:
             r = importers.import_calendar(v, path, dry_run, tier=t)
             typer.echo(f"calendar: {r['events']} events in {r['months']} months, {r['new']} "
