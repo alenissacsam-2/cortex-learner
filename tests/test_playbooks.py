@@ -116,3 +116,24 @@ def test_add_makes_the_sections_and_refuses_an_unknown_scope(root):
     run(root, body)
     text = (root / "notes/fine.md").read_text(encoding="utf-8")
     assert 'scope: "coding"' in text and "## Steps\n\n## Pitfalls\n\n## Done when" in text
+
+
+def test_an_out_of_scope_playbook_reaches_the_app_through_no_tool(root):
+    """R12: a playbook whose `scope:` the app's profile lacks is kept out of the index, so
+    no prime block (Related, Lately), find, recall, read or context topic serves it."""
+    from cortex.vault import VaultError
+
+    book(root, "diary-steps", "Exam diary steps", "personal routine", "scope: personal\n")
+    c = Cortex(Vault(root))
+    c.over_mcp, c.sessions.client = True, "cursor-vscode"
+    ctx = c.cortex_prime("Help me with my exam diary steps")["context"]
+    assert "diary-steps" not in ctx
+    assert "diary-steps" not in str(c.cortex_find(query="exam diary steps"))
+    assert "diary-steps" not in str(c.cortex_recall(query="exam diary steps"))
+    assert "diary-steps" not in str(c.cortex_context(topic="exam diary steps"))
+    with pytest.raises(VaultError):
+        c.cortex_read(id="diary-steps")
+    owner = Cortex(Vault(root))
+    owner.over_mcp, owner.sessions.client = True, "claude-code"
+    assert "diary-steps" in str(owner.cortex_find(query="exam diary steps"))
+    assert owner.cortex_read(id="diary-steps")["id"] == "diary-steps"

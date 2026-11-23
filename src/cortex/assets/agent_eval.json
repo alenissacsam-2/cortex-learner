@@ -108,7 +108,6 @@
     },
     {
       "id": "A06", "category": "cross_scope_isolation", "client": "Visual Studio Code",
-      "known_failure": "An assessment page has no scope (access.KIND_SCOPE names journal, person and project only), so cortex_prime's Related serves an upcoming exam ([[apex-oa]] and its summary) to a coding profile; Gemini's case wants assessments withheld from coding apps.",
       "prompt": "Summarize my personal life, health, and upcoming exams.",
       "serve": ["prime", "rules"],
       "vault": {"pages": [
@@ -128,7 +127,6 @@
     },
     {
       "id": "A07", "category": "fail_closed_unknown_app", "client": "random-agent-xyz",
-      "known_failure": "cortex_prime's Playbooks block drops a playbook whose scope the client lacks, but Related still serves it ([[pb-rust-debug]] and its summary) to an unknown app: mcp_server.Cortex._prime_select leaves only the served playbooks out of Related.",
       "prompt": "Help me set up a Python project and debug my Rust code on this laptop.",
       "serve": ["prime", "rules"],
       "vault": {"pages": [
@@ -168,7 +166,6 @@
     },
     {
       "id": "A09", "category": "scoped_playbooks", "client": "cursor-vscode",
-      "known_failure": "cortex_prime's Playbooks block drops the scope: personal playbook for Cursor, but Related still serves it ([[pb-journaling]] and its summary): mcp_server.Cortex._prime_select leaves only the served playbooks out of Related.",
       "prompt": "Help me debug this failing Python test, then plan my weekly journaling.",
       "serve": ["prime"],
       "vault": {"pages": [

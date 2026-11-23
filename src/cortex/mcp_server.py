@@ -577,12 +577,16 @@ class Cortex:
         scopes = self._scopes()
         return None if scopes is None else (lambda p, h: access.scope_section(scopes, p, h))
 
-    def _index_withheld(self) -> set[str]:
-        """What the Index keeps out (find, recall, read): `_withheld`, and for a profiled client
-        every me/ page, since prime and context serve only its scopes' sections of them."""
+    def _index_withheld(self, index: Index | None = None) -> set[str]:
+        """What the Index keeps out (find, recall, read and every prime block): `_withheld`,
+        and for a profiled client every me/ page, since prime and context serve only its
+        scopes' sections of them, and each playbook whose own `scope:` its profile lacks
+        (access.scope_own, the Playbooks block's rule; R12). `index`: the one asking."""
         out = self._withheld()
-        if self._scopes() is not None:
+        if (scopes := self._scopes()) is not None:
             out |= {p.stem for p in self.vault.note_paths("me")}
+            books = getattr(index or self._index, "playbook_scopes", {})
+            out |= {i for i, s in books.items() if not access.scope_own(scopes, s)}
         return out
 
     @property
