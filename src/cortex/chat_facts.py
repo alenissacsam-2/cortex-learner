@@ -29,7 +29,7 @@ from datetime import date, timedelta
 from cortex import chat_pages, chat_study, planner
 from cortex.catalog import Catalog
 from cortex.events import EventLog
-from cortex.index import STOPWORDS, _wrap, aliases
+from cortex.index import STOPWORDS, _wrap
 
 SOURCES = ("notes", "chats", "journal", "browsing", "study")  # the order facts list them in
 NOUN = {"notes": "note", "chats": "saved AI chat", "journal": "journal line",
@@ -223,12 +223,12 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
            titles: dict) -> tuple[int, list]:
     """(items read, matches) of notes, saved AI chats and journal lines dated in [lo, hi]
     under Chat's switches (`chat._pages_in`). An item: (day, ts, source, title, n, mentions,
-    site), a page's id last. `titles` gets {casefolded title: (id, title, kind, day)} of
-    every page read."""
+    site), a page's id last. `titles` gets {casefolded title: (id, title, kind, day, aliases)}
+    of every page read."""
     from cortex import chat
 
     read, out = 0, []
-    for d, kind, _id, title, body, is_chat, _private in chat._pages_in(vault, lo, hi, sources):
+    for d, kind, _id, title, body, is_chat, _, names in chat._pages_in(vault, lo, hi, sources):
         if kind == "journal":
             if "journal" not in want:
                 continue
@@ -239,7 +239,7 @@ def _pages(vault, lo: str, hi: str, sources: dict, match, rxs, want: set,
                     if match(line):
                         out.append((d, 0.0, "journal", line, 1, 1, ""))
             continue
-        titles.setdefault(title.casefold(), (_id, title, kind, d))
+        titles.setdefault(title.casefold(), (_id, title, kind, d, names))
         src = "chats" if is_chat else "notes"
         if src not in want:
             continue
@@ -556,25 +556,14 @@ def _page(vault, term: str, sources: dict, titles: dict) -> dict | None:
         for e in catalog.entries.values():
             if e.id not in hide and key in {n.casefold() for n in (e.id, e.title, *e.aliases)}:
                 return {"id": e.id, "title": chat_study._title(e.title) or e.id, "kind": e.kind}
-    if key in titles:
-        id_, title, kind, d = titles[key]
+    # R13d-2: else an alias names a page as its title does (titles first; the oldest page wins)
+    named = titles.get(key) or next((t for t in titles.values()
+                                     if any(len(a) >= 2 and a.casefold() == key for a in t[4])),
+                                    None)
+    if named:
+        id_, title, kind, d, _ = named
         return {"id": id_, "title": title, "kind": kind, "day": d}
-    for id_, title, kind, d in titles.values():  # R13d-2: an alias names a page as its title
-        if key in {a.casefold() for a in _aliases(vault, id_) if len(a) >= 2}:
-            return {"id": id_, "title": title, "kind": kind, "day": d}
     return None
-
-
-def _aliases(vault, id_: str) -> list[str]:
-    """A page's `aliases:` (index.aliases) from Chat's index, or from its file when the index
-    leaves it out as private (it is in `titles` only when Chat may read it)."""
-    from cortex import ask, chat
-    with chat._INDEX_LOCK:
-        idx = chat._index(vault)
-        n = idx._notes.get(id_)
-        path = None if n else next((p for p, i in idx._ids.items() if i == id_), None)
-    n = n or (ask._page(vault, path, id_) if path else None)
-    return aliases(n["fields"]) if n else []
 
 
 # ---- words -------------------------------------------------------------------------------------
