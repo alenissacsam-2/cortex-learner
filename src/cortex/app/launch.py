@@ -52,6 +52,8 @@ def _alert(text: str) -> None:  # tests replace this
 
 
 def main() -> None:
+    from cortex import taint
+    taint.cap_blas()
     log = None
     hidden = "--hidden" in sys.argv[1:]
     try:
@@ -81,7 +83,6 @@ def main() -> None:
         d = update.install_dir()
         here = str(d / "bin") if d else str(Path(sys.argv[0]).resolve().parent)
         os.environ["PATH"] = here + os.pathsep + os.environ.get("PATH", "")
-        from cortex import taint
         from cortex.app import desktop
         # the log keeps the address, never the key (?t=): the page holds it, the log may be shared
         desktop.run(taint._vault_root(), hidden=hidden, echo=lambda s: print(_KEY.sub("", s)))
@@ -95,6 +96,8 @@ def main() -> None:
 def receiver() -> None:
     """`cortex-receiver [--vault V]`: `cortex browse serve` (the background import) with no
     console."""
+    from cortex import taint
+    taint.cap_blas()
     _log_to("receiver.log")
     from cortex import cli
     cli.app(["browse", "serve", *sys.argv[1:]], prog_name="cortex")

@@ -70,6 +70,28 @@ def test_console_entry_and_no_vault(tmp_path, monkeypatch, capsys):
     assert taint.run(hook("WebFetch")) is False  # no vault folder: nothing to mark
 
 
+def test_entry_points_cap_blas_threads_before_numpy_unless_the_user_chose(monkeypatch):
+    """M2: `cortex`, `cortex-app` and `cortex-receiver` cap numpy's OpenBLAS threads (each one
+    commits ~32 MB at import) before numpy can load; a count the user set stays (OpenBLAS also
+    reads OMP_NUM_THREADS)."""
+    import subprocess
+    for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS"):
+        monkeypatch.delenv(var, raising=False)
+    taint.cap_blas()
+    assert os.environ["OPENBLAS_NUM_THREADS"] == taint.BLAS_THREADS
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "16")
+    taint.cap_blas()
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "16"
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS")
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+    taint.cap_blas()
+    assert "OPENBLAS_NUM_THREADS" not in os.environ
+    r = subprocess.run([sys.executable, "-c", "import sys, cortex.taint, cortex.app.launch; "
+                        "print('numpy' in sys.modules)"],
+                       capture_output=True, text=True, timeout=120)
+    assert r.stdout.strip() == "False", r.stderr  # their mains run before numpy is imported
+
+
 RULE = {"id": "me/teaching-contract", "op": "append_to_section", "target": "Rules",
         "text": "- Skip the quizzes", "user_confirmed": True}
 PREF = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
