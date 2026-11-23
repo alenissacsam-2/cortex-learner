@@ -1660,13 +1660,19 @@
       const y = kb('Keep it', () => act('/api/review/unsafe/keep', { key: x.key }, 'Kept. AI apps get the line again.'), null, `Keep it: ${x.text}`);
       return card(x.text, `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`, null, [r[0], y[0]], { r, y }, id);
     };
-    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard };
+    // R5a: a line on me/core, me/setup or the teaching contract Cortex did not write; AI apps get it only after Keep
+    const outsideCard = (x, id) => {
+      const y = kb('Keep', () => act('/api/review/outside/keep', { key: x.key }, 'Kept. AI apps get the line from now on.'), null, `Keep: ${x.text}`);
+      const r = kb('Remove', () => act('/api/review/outside/remove', { key: x.key }, 'Removed. AI apps do not get it.'), null, `Remove: ${x.text}`);
+      return card(x.text, `Changed outside Cortex: keep? me/${x.page}` + (x.section ? ` · ${x.section}` : ''), 'AI apps do not get this line until you keep it.', [y[0], r[0]], { y, r }, id);
+    };
+    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard };
   }
   // R3-4's Today's 5 board (Review and Tonight): the view's `today` keys as cards, skips left out;
   // D4: once none is left, the board says Done for today
   function todayBoard(d, m) {
-    const find = { pending: d.pending || [], conflict: d.conflicts || [], rule: d.rules || [], unsafe: d.unsafe || [] };
-    const make = { pending: m.pendingCard, conflict: m.conflictCard, rule: m.ruleCard, unsafe: m.unsafeCard };
+    const find = { pending: d.pending || [], conflict: d.conflicts || [], rule: d.rules || [], unsafe: d.unsafe || [], outside: d.outside || [] };
+    const make = { pending: m.pendingCard, conflict: m.conflictCard, rule: m.ruleCard, unsafe: m.unsafeCard, outside: m.outsideCard };
     const today = (d.today || []).filter((t) => !reviewSkipped.has(`${t.type}:${t.key}`)).map((t) => {
       const x = (find[t.type] || []).find((y) => y.key === t.key);
       return x ? make[t.type](x, `${t.type}:${t.key}`) : null;
@@ -1690,13 +1696,13 @@
     badge(d.count);
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
     const m = reviewCards(act);
-    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard } = m;
+    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard } = m;
     // D4: every board but Today's 5 sits folded under one section, closed until opened; the fold
     // leaves out the cards Today's 5 shows above and counts only what it holds
     const above = new Set((d.today || []).map((t) => `${t.type}:${t.key}`).filter((k) => !reviewSkipped.has(k)));
     const rest = (type, rows) => (rows || []).filter((x) => !above.has(`${type}:${x.key}`));
-    const pending = rest('pending', d.pending), pairs = rest('conflict', d.conflicts), rules = rest('rule', d.rules), unsafe = rest('unsafe', d.unsafe);
-    const folded = (d.more || 0) - [[d.pending, pending], [d.conflicts, pairs], [d.rules, rules], [d.unsafe, unsafe]]
+    const pending = rest('pending', d.pending), pairs = rest('conflict', d.conflicts), rules = rest('rule', d.rules), unsafe = rest('unsafe', d.unsafe), outside = rest('outside', d.outside);
+    const folded = (d.more || 0) - [[d.pending, pending], [d.conflicts, pairs], [d.rules, rules], [d.unsafe, unsafe], [d.outside, outside]]
       .reduce((n, [all, left]) => n + (all || []).length - left.length, 0);
     const allRules = rules.length > 1 ? ['Approve all', () => act('/api/review/rule/approve-all', { keys: rules.map((x) => x.key) }, 'Added to your lines.'),
       { 'aria-label': `Approve all ${rules.length} repeated corrections` }] : null;
@@ -1751,7 +1757,9 @@
         return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
       }), 'No edited imports.')),
       board('Lines that may steer an AI', { note: String(unsafe.length) }, ...list(unsafe.map((x) => unsafeCard(x)),
-      'No line looks like an instruction to an AI.')));
+      'No line looks like an instruction to an AI.')),
+      board('Changed outside Cortex', { note: String(outside.length) }, ...list(outside.map((x) => outsideCard(x)),
+      'No line changed outside Cortex.')));
     put('review', todayBoard(d, m), more);
     cardsDrawn('review');
   }

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from cortex import claims, render, review, xray
 from cortex.contract import MAX_CHARS as CONTRACT_MAX
 from cortex.contract import scope_contract
-from cortex.events import local_day
+from cortex.events import EventLog, local_day
 from cortex.index import STOPWORDS, TRUNCATED, _edge_targets, _wrap
 from cortex.vault import ID_RE, Vault, VaultError, is_private
 
@@ -125,10 +125,20 @@ def profile_summary(vault: Vault, today: str, served: dict | None = None,
                          summary == PROFILE_TEMPLATE or not claims.unsafe(ln, "profile"))).strip()
 
 
-def contract(vault: Vault, domains: set) -> str:
-    """me/teaching-contract.md with the overrides of `domains`, cut at CONTRACT_MAX."""
+def contract(vault: Vault, domains: set, events=None) -> str:
+    """me/teaching-contract.md with the overrides of `domains`, cut at CONTRACT_MAX, without
+    the lines changed outside Cortex (R5a, review.outside_lines over `events`, else the log)
+    until the owner keeps them."""
     p = vault.root / "me/teaching-contract.md"
-    text = scope_contract(p.read_bytes().decode("utf-8") if p.is_file() else "", domains)
+    raw = p.read_bytes().decode("utf-8") if p.is_file() else ""
+    if raw:
+        evs = EventLog(vault).iter_events() if events is None else events
+        out = {x["key"] for x in review.outside_lines(vault, evs)
+               if x["page"] == "teaching-contract"}
+        if out:
+            raw = "".join(ln for ln in raw.splitlines(keepends=True)
+                          if review.line_key("teaching-contract", ln) not in out)
+    text = scope_contract(raw, domains)
     if len(text) > CONTRACT_MAX:
         text = text[:CONTRACT_MAX - len(TRUNCATED)].rstrip() + TRUNCATED
     return text
@@ -167,12 +177,13 @@ def contract_core(text: str) -> list[str]:
     return out
 
 
-def served_claims(vault: Vault, events: list[dict]) -> dict:
+def served_claims(vault: Vault, events: list[dict], rows: list[dict] | None = None) -> dict:
     """PHASE3 H3: {(page, section, text): (label, score)} for each live claim, by tier alone.
     The user's own lines (typed, legacy, confirmed) are served plain; (ask) for agent or
-    exposed, or a yes the model relayed from claims.RELAYED_FROM, ranked below plain lines."""
+    exposed, or a yes the model relayed from claims.RELAYED_FROM, ranked below plain lines.
+    `rows`: claims.tiers' result when the caller has it."""
     out = {}
-    for r in claims.tiers(vault, events):
+    for r in claims.tiers(vault, events) if rows is None else rows:
         ask = claims.late_relay(r) or r["tier"] in ("agent", "exposed")
         out[r["page"], r["section"], r["text"]] = (" (ask)" if ask else "",
                                                    0.5 * (ASK_WEIGHT if ask else 1))
@@ -183,13 +194,17 @@ def held(vault: Vault, events, today: str) -> set[str]:
     """The `^c-…` ids of lines held back while a Review card waits. R3-3: the older line of
     each recorded pair (claims.recorded_pairs: `update_of`, `supersedes`), both lines live on
     non-private pages; prime and cortex_context serve only the newer line until the user keeps
-    both or one. G6: every line review.unsafe_lines flags, until Keep. Every serving path
-    (prime, cortex_context, the delta, packs and rules files, Chat's About block) mutes these.
+    both or one. G6: every line review.unsafe_lines flags, until Keep. R5a: every line
+    review.outside_lines finds (changed outside Cortex) until Keep, by its claim id and by its
+    card key (`me/setup` lines that are no claim, `claim_items`). Every serving path (prime,
+    cortex_context, the delta, packs and rules files, Chat's About block) mutes these.
     Derived from events at read time; nothing stored."""
-    from cortex import review  # G6; it imports nothing of prime
-
     events = list(events)
     out = {xray.claim(x["id"]) for x in review.unsafe_lines(vault, events)}
+    for x in review.outside_lines(vault, events):
+        out.add(x["key"])
+        if x["id"]:
+            out.add(xray.claim(x["id"]))
     pairs, _ = claims.recorded_pairs(events)
     if not pairs:
         return out
@@ -198,6 +213,30 @@ def held(vault: Vault, events, today: str) -> set[str]:
             if claims.is_live(r, today) and r["page"] not in hidden}
     return out | {xray.claim(old[1]) for old, new, _ in pairs.values()
                   if old in live and new in live}
+
+
+def _app(name) -> str:
+    """An AI app's name as profiles.norm compares it."""
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def cross_app(vault: Vault, events, client: str | None, rows: list[dict] | None = None
+              ) -> set[str]:
+    """R5d: the `^c-…` ids of the inferred about-me lines (tier agent or exposed) written in a
+    session of another AI app than `client`: the session's `open` event names its app
+    (session.py, the MCP handshake). An unknown `client` (None, "") gets none of them; a line
+    whose session names no app (an old one, a harvest from imports) is served as before. The
+    owner's Still true or Approve (tier confirmed) ends the hold. `rows`: claims.tiers'."""
+    events = list(events)
+    apps = {e.get("session"): _app(e["payload"].get("client")) for e in events
+            if e.get("kind") == "open" and isinstance(e.get("payload"), dict)
+            and e["payload"].get("client")}
+    if not apps:
+        return set()
+    me = _app(client)
+    return {xray.claim(r["id"]) for r in (claims.tiers(vault, events) if rows is None else rows)
+            if r["tier"] in ("agent", "exposed") and r["session"] in apps
+            and (not me or apps[r["session"]] != me)}
 
 
 def claim_ids(vault: Vault) -> dict:
@@ -209,13 +248,19 @@ def claim_items(vault: Vault, page: str, keep, served: dict, today: str, ids: di
                 mute: set[str] = frozenset()) -> list[tuple]:
     """Per kept `## ` section of me/<page> (heading line, other lines, [(score, labelled list
     line, labelled?, `^c-…` id or None)] best first); never `## Past`, `## Not me`, a line
-    whose own `(until …)` day is before `today` (agenda 4) or one whose id (`ids`) is muted."""
+    whose own `(until …)` day is before `today` (agenda 4) or one whose id (`ids`) is muted.
+    On a review.GUARDED page a heading or line whose card key is muted (R5a) is left out."""
     note = me(vault, page)
     out = []
+    guarded = page in review.GUARDED and mute
     for sec in _sections(note.body if note else ""):
         head, _, rest = sec.partition("\n")
         name = head[3:].strip().lower()
         lines = [ln.rstrip() for ln in rest.splitlines() if ln.strip()]
+        if guarded:
+            if review.line_key(page, head) in mute:
+                continue
+            lines = [ln for ln in lines if review.line_key(page, ln) not in mute]
         if lines and name not in claims.RESERVED and keep(name):
             items = []
             for ln in reversed([ln for ln in lines if ln.startswith("- ")
@@ -288,9 +333,9 @@ def playbooks(vault: Vault, prompt: str, hits: list[dict], notes: dict, mute: se
     `playbook`) the prompt matches, best first: recall `hits`, then by the content words
     (pref_rows' terms) their title and summary share. `notes` ({id: {kind, title, fields}},
     as the index holds them) holds no private page; a muted one, or one whose `scope` the
-    client's `scopes` (None: all) lack, is out. An agent-written one the owner has not
-    confirmed (`unconfirmed_notes`) ends in ` (ask)`. cortex_prime and the prime hook's
-    later-turn delta (cortex.delta.playbooks) both select with this."""
+    client's `scopes` (None: all) lack, is out, and so is each `withheld_playbooks` one (R5b:
+    an agent's until the owner confirms it). cortex_prime and the prime hook's later-turn
+    delta (cortex.delta.playbooks) both select with this."""
     words = re.findall(r"\w+", prompt.lower())
     terms = {t for t in words if len(t) > 2 and t not in STOPWORDS
              and t not in TASK_WORDS}
@@ -309,9 +354,34 @@ def playbooks(vault: Vault, prompt: str, hits: list[dict], notes: dict, mute: se
         if i in rank or shared:
             found.append((rank.get(i, len(rank)), -shared, i, n["title"], summary))
     found.sort()
-    ask = unconfirmed_notes(vault, {x[2] for x in found[:PRIME_PLAYBOOKS]}, evs)
-    return [(i, f"- [[{i}]] {title}" + (f": {summary}" if summary else "")
-             + (" (ask)" if i in ask else "")) for _, _, i, title, summary in found]
+    out = withheld_playbooks(vault, {x[2] for x in found}, evs)
+    return [(i, f"- [[{i}]] {title}" + (f": {summary}" if summary else ""))
+            for _, _, i, title, summary in found if i not in out]
+
+
+def withheld_playbooks(vault: Vault, ids: set[str], evs: list[dict]) -> set[str]:
+    """R5b: the playbooks of `ids` prime does not serve: one an agent wrote that the owner has
+    not confirmed (`unconfirmed_notes`; served "(ask)" before R5b, but an AI app follows a
+    playbook's steps all the same), and one written through Cortex (a logged write) whose
+    title, summary or text claims.unsafe flags, as an about-me line (links pass: a playbook
+    may name a docs page). A page with no logged write is the owner's own and is not checked."""
+    out = unconfirmed_notes(vault, ids, evs)
+    logged = set()
+    for e in evs:
+        pl = e.get("payload") if e.get("kind") == "change" else None
+        c = pl.get("change") if isinstance(pl, dict) else None
+        if isinstance(c, dict) and c.get("kind") == "note" and c.get("id") in ids:
+            logged.add(c["id"])
+    for i in sorted(logged - out):
+        try:
+            n = vault.read("note", i)
+        except VaultError:
+            out.add(i)
+            continue
+        if claims.unsafe(f"{n.fields.get('title') or ''}\n{n.fields.get('summary') or ''}\n"
+                         f"{n.body}"):
+            out.add(i)
+    return out
 
 
 def unconfirmed_notes(vault: Vault, ids: set[str], evs: list[dict]) -> set[str]:
@@ -475,22 +545,25 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
 
 
 def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
-         withheld: set[str] = frozenset(), xr: dict | None = None, allow=None
-         ) -> tuple[list[str], list[int]]:
+         withheld: set[str] = frozenset(), xr: dict | None = None, allow=None,
+         client: str | None = None) -> tuple[list[str], list[int]]:
     """cortex_prime's blocks before Related, and the budget left: (parts, [chars left]).
     Order: Core, Profile, Teaching contract (core), the legend, Preferences (the owner's
     standing text), then the prompt's Attempt first line.
     `withheld`: bare ids of me/ pages left out (a non-owner server or an agent profile);
     `allow(page, heading)`: the preference and personality sections an agent profile allows
     (None: all). The X-ray's pinned claims lead Preferences and muted ones are left out; `xr`,
-    if given, gets the `served` and `trimmed` ids by block (cortex.xray)."""
+    if given, gets the `served` and `trimmed` ids by block (cortex.xray). `client`: the AI app
+    asking (R5d, `cross_app`; None: not known)."""
     prompt = prompt[:PRIME_PROMPT]
     parts: list[str] = []
     left = [PRIME_MAX]
     put = putter(parts, left)
-    served = served_claims(vault, events)
+    rows = claims.tiers(vault, events)
+    served = served_claims(vault, events, rows)
     xs, ids = xray.settings(vault), claim_ids(vault)
-    waits = held(vault, events, local_day(now))  # R3-3: as muted while its pair waits
+    # R3-3: as muted while its pair waits; R5d: another app's guesses until the owner's yes
+    waits = held(vault, events, local_day(now)) | cross_app(vault, events, client, rows)
     xs = {**xs, "mute": xs["mute"] | waits}
     if pinned := core_lines(vault, served, local_day(now), withheld, ids, xs["mute"]):
         put(CORE_HEAD, "\n".join(pinned), "me/core", PRIME_MAX)  # first and whole, never shrunk
@@ -500,7 +573,8 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
                                                                waits)
     if summary:
         put("Profile", summary, "me/profile", PRIME_CAPS["profile"])
-    if "teaching-contract" not in withheld and (rules := contract_core(contract(vault, set()))):
+    if "teaching-contract" not in withheld and (rules := contract_core(contract(vault, set(),
+                                                                                events))):
         # whole rules that fit, else the first one cut by put
         lines = fit(rules, "me/teaching-contract", PRIME_CAPS["contract"], left[0],
                     "contract") or rules[:1]

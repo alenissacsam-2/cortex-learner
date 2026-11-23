@@ -1543,6 +1543,10 @@ class Cortex:
             self.session = None
             self._reset()
         tagged = self._tags(prompt, hooked=related_only)
+        if self.role == "owner" and not getattr(self, "_guard_taken", False):
+            # R5a, first run: the guarded lines present at the upgrade are the baseline
+            review.record_baseline(self.vault)
+            self._guard_taken = True
         parts, xr, hits = self._prime_select(prompt, related_only)
         context = "\n\n".join(parts)
         if chat and not related_only:  # G3: a later turn's delta never repeats these
@@ -1577,7 +1581,8 @@ class Cortex:
         xs, xr = xray.settings(self.vault), {"served": {}, "trimmed": {}}
         evs = list(self.log.iter_events())
         parts, left = ([], [PRIME_MAX]) if related_only else prime.core(
-            self.vault, prompt, evs, self._now(), self._withheld(), xr, self._allow())
+            self.vault, prompt, evs, self._now(), self._withheld(), xr, self._allow(),
+            self.sessions.client)
         put = prime.putter(parts, left)
         self._refresh_index()
         # RR-5: the coverage line goes last, its room kept from the start
@@ -1697,8 +1702,11 @@ class Cortex:
             put("Setup", got["setup"][0], "me/setup")
 
     def _held(self) -> set[str]:
-        """R3-3: the older lines of recorded pairs still waiting in Review (prime.held)."""
-        return prime.held(self.vault, self.log.iter_events(), local_day(self._now()))
+        """R3-3: the older lines of recorded pairs still waiting in Review, and every other
+        line prime.held holds; R5d: another AI app's guesses (prime.cross_app)."""
+        evs = list(self.log.iter_events())
+        return (prime.held(self.vault, evs, local_day(self._now()))
+                | prime.cross_app(self.vault, evs, self.sessions.client))
 
     def _served_claims(self, events: list[dict] | None = None) -> dict:
         """cortex.prime.served_claims over `events`, else one read of the log."""
@@ -2506,7 +2514,7 @@ class Cortex:
             return ""
         try:
             parts, _ = prime.core(self.vault, user, list(self.log.iter_events()), self._now(),
-                                  self._withheld(), {}, self._allow())
+                                  self._withheld(), {}, self._allow(), self.sessions.client)
             seen = self._served(cid)
             text, ids = delta.lines(self.vault, user, parts, seen)
         except Exception:  # noqa: BLE001  (the turn is logged either way)
@@ -2924,13 +2932,17 @@ class Cortex:
         else:
             changed = self.vault.check_item(kind, nid, target, text)
         change = {"tool": "patch", "id": nid, "kind": kind, "op": op, "target": target}
+        if kind == "me" and nid in review.GUARDED and op == "append_to_section":
+            # R5a: what Cortex wrote here, so review.outside_lines knows it from an outside edit
+            change["lines"] = [review.line_hash(ln) for ln in (f"## {target.strip()}",
+                                                               *text.splitlines()) if ln.strip()]
         if claim:
             change.update(claim=claim, **self._tier(user_confirmed, said == "yes"))
             if update and isinstance(claim, str):  # the pair the app's Review shows
                 change["update_of"] = {"page": update["page"], "claim": update["id"]}
             if sup and isinstance(claim, str):  # RR-4: explicit pairs, shown alike
                 change["supersedes"] = sup
-        elif kind == "note":  # G4: a playbook is served (ask) until a confirmed write
+        elif kind == "note":  # G4, R5b: a playbook is withheld until a confirmed write
             change.update(self._tier(user_confirmed, said == "yes"))
         if self.app_clicks:
             change["confirm"] = "clicked"
@@ -3212,6 +3224,32 @@ class Cortex:
             "hash": review.text_hash(text), "confirm": "clicked"})
         return {"changed": True, "summary": f"dismissed a proposed line for me {page}"}
 
+    def _remove_outside(self, page: str, key: str) -> dict[str, Any]:
+        """R5a, the app's Remove on a line changed outside Cortex that is no claim line (a
+        contract line, a heading or other line on me/core or me/setup; a claim line is retired
+        instead): the first line of me/<page> with card key `key` is deleted and a `remove`
+        change recorded, so `cortex undo` puts it back."""
+        if not self.app_clicks:
+            raise invalid("Remove is the Cortex app's own action.")
+        if page not in review.GUARDED:
+            raise invalid(f"me/{page} is not a guarded page.")
+        gone = []
+
+        def drop(text: str) -> str:
+            lines = text.splitlines(keepends=True)
+            at = next((i for i, ln in enumerate(lines) if ln.strip()
+                       and review.line_key(page, ln) == key), None)
+            gone[:] = [] if at is None else [at]
+            return text if at is None else "".join(lines[:at] + lines[at + 1:])
+
+        self.vault.update_text(self.vault.path_for("me", page), drop)
+        if not gone:
+            raise invalid("That line is no longer on the page.")
+        self.sessions.note("patched", change={
+            "tool": "remove", "id": page, "kind": "me", "op": "remove", "target": key,
+            "confirm": "clicked"})
+        return {"changed": True, "summary": f"removed a line changed outside Cortex from me {page}"}
+
     def _decide(self, title: str, fields: dict, hash: str) -> dict[str, Any]:
         """RR-9, the app's Approve on a decision found in a commit subject: a decision page (as
         cortex_add writes it) and a `decide` change holding the proposal's key, so the Review
@@ -3284,6 +3322,8 @@ class Cortex:
                 self.vault._mutate(path, edit)
                 claim = done["id"]
         change = {"tool": "patch", "id": nid, "kind": "me", "op": op, "target": target}
+        if line is not None and nid in review.GUARDED:  # R5a: the revised line Cortex wrote
+            change["lines"] = [review.line_hash(f"- {claims._ANY_ID.sub('', line)}")]
         if claim:
             change.update(claim=claim, **self._tier(confirmed, clicked))
         if self.app_clicks:

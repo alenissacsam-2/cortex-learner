@@ -355,6 +355,8 @@ class App:
             "/api/review/forget/dismiss": self.review_forget_dismiss,
             "/api/review/import/dismiss": self.review_import_dismiss,
             "/api/review/unsafe/keep": self.review_unsafe_keep,
+            "/api/review/outside/keep": self.review_outside_keep,
+            "/api/review/outside/remove": self.review_outside_remove,
             "/api/review/crowded/keep": self.review_crowded_keep,
             "/api/review/playbook/keep": self.review_playbook_keep,
             "/api/review/promote/pin": self.review_promote_pin,
@@ -697,7 +699,9 @@ class App:
         root = self.root
         if root is None or not (root / ".cortex").is_dir():
             return {"moved": 0, "retired": 0}
+        from cortex import review
         with self.reviewing:  # never beside a Review click
+            review.record_baseline(Vault(root))  # R5a, first run: the guard's baseline
             return Cortex(Vault(root)).tidy()
 
     def review(self) -> dict:
@@ -743,7 +747,9 @@ class App:
                     core.sessions.close(summary="Review in the Cortex app")
         if "error" in out:
             raise ValueError(out.get("message") or out["error"])
-        if any(c[2].get("id") == "me/core" for c in calls):  # R3-7: the rules-file block
+        # R3-7: the rules-file block; R5a: a Keep or Remove on a line changed outside Cortex
+        if any(c[2].get("id") == "me/core" or c[2].get("page") in ("outside", "core")
+               for c in calls):
             try:  # follows the core at once
                 targets.refresh_rules(self.entry())
             except Exception as e:  # noqa: BLE001  (the periodic pass tries again)
@@ -1085,6 +1091,36 @@ class App:
         return self._clicks([("cortex_patch", "_dismiss", {
             "page": "unsafe", "section": "Unsafe", "text": k, "waiting": False}, None, None)
             for k in review.group([x for x in lines if x["page"] not in hidden], key)])  # D5
+
+    def _outside(self, body: dict) -> dict:
+        """R5a: the card's line changed outside Cortex (review.outside_lines), by its key."""
+        from cortex import review
+        from cortex.events import EventLog
+        v, key = self._vault(), body.get("key")
+        hidden = review._private(v)
+        x = next((x for x in review.outside_lines(v, EventLog(v).iter_events())
+                  if isinstance(key, str) and x["key"] == key and x["page"] not in hidden), None)
+        if x is None:
+            raise NotFound
+        return x
+
+    def review_outside_keep(self, body: dict) -> dict:
+        """R5a: Keep, on a line changed outside Cortex: a `dismiss` change on id `outside`
+        holding its key, so AI apps are served it from now on; the line stays as it is."""
+        x = self._outside(body)
+        return self._click("cortex_patch", "_dismiss", {
+            "page": "outside", "section": "Outside", "text": x["key"], "waiting": False})
+
+    def review_outside_remove(self, body: dict) -> dict:
+        """R5a: Remove, on a line changed outside Cortex: a claim line is retired to `## Past`
+        (cortex_patch retire), any other line deleted (Cortex._remove_outside); undoable."""
+        x = self._outside(body)
+        if x["id"] and x["page"] != "teaching-contract":
+            return self._click("cortex_patch", "cortex_patch", {
+                "id": f"me/{x['page']}", "op": "retire", "target": x["id"],
+                "user_confirmed": True})
+        return self._click("cortex_patch", "_remove_outside", {"page": x["page"],
+                                                               "key": x["key"]})
 
     # ---- Tonight (Gemini round 3 "Nightly Closeout"): close the day ----
     def tonight(self) -> dict:

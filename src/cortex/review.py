@@ -22,6 +22,9 @@
   a newer page beside it (cortex.sources.edited_pages; Dismiss);
 - unsafe (G6): a live claim line that reads as an instruction to an AI or holds invisible
   characters (`unsafe_lines`); it is not served until Keep it (Keep it out retires it);
+- outside (R5a): a line on me/core, me/setup or the teaching contract that Cortex did not write
+  and that was not there at the baseline (`outside_lines`); not served until Keep (Remove
+  retires a claim line, deletes any other);
 - crowded (G7): lines the X-ray shows cut for space in most of the latest primes that offered
   them (`crowded`; Keep pins it, Retire, Skip), and unused playbooks (G7): no X-ray call served
   them and their file is UNUSED_DAYS old (`unused`; Keep asks again in UNUSED_DAYS, Open);
@@ -42,6 +45,7 @@ import datetime as dt
 import functools
 import hashlib
 import itertools
+import json
 import re
 import sys
 import unicodedata
@@ -582,6 +586,109 @@ def unsafe_lines(vault, events) -> list[dict]:
     return out
 
 
+# R5a: the pages every AI app takes as standing orders. A line on them that Cortex did not write
+# and the owner did not keep is "changed outside Cortex" and is not served until Keep.
+GUARDED = ("core", "setup", "teaching-contract")
+OUTSIDE = "outside"  # the card's type and its Keep's `dismiss` id
+GUARD_FILE = ".cortex/guard-baseline.json"  # the guarded lines present at the upgrade
+
+
+def line_hash(line: str) -> str:
+    """R5a: a guarded line's mark: the line without its claim id, whitespace collapsed; case
+    and `(confirmed …)`-style markers count, so any edit makes a new line."""
+    return hashlib.sha256(" ".join(claims.strip_id(line).split()).encode()).hexdigest()[:16]
+
+
+def line_key(page: str, line: str) -> str:
+    """R5a: a guarded line's card key, also its mark in prime.held's set."""
+    return f"{page}:{line_hash(line)}"
+
+
+def guarded_lines(vault) -> list[dict]:
+    """R5a: every line an AI app may be served from the GUARDED pages, as {page, section,
+    line, id (a claim row's, else None), key}: on me/core and me/setup the non-blank lines of
+    each `## ` section but Past and Not me, its heading included (cortex_context serves a
+    section's other lines too); on the contract every non-blank line, front matter too."""
+    out = []
+    for page in GUARDED:
+        p = vault.root / "me" / f"{page}.md"
+        text = p.read_bytes().decode("utf-8") if p.is_file() else ""
+        claim = page in claims.PAGES
+        ids = {r["line_no"]: r["id"] for r in claims.parse(page, text)} if claim else {}
+        section = None
+        for no, ln in enumerate(text.splitlines()):
+            if claim and (m := claims._H2.match(ln)):
+                section = m.group(1)
+            if not ln.strip() or claim and (section is None
+                                            or section.lower() in claims.RESERVED):
+                continue
+            out.append({"page": page, "section": section, "line": ln.rstrip(),
+                        "id": ids.get(no), "key": line_key(page, ln)})
+    return out
+
+
+def _baseline(vault) -> dict | None:
+    """R5a: GUARD_FILE's {page: line hashes}, None when it is missing or unreadable."""
+    try:
+        got = json.loads((vault.root / GUARD_FILE).read_bytes())
+    except (OSError, ValueError):
+        return None
+    return got.get("lines") if isinstance(got, dict) and isinstance(got.get("lines"),
+                                                                   dict) else None
+
+
+def guard(vault, events) -> tuple[dict | None, set]:
+    """R5a: ({page: line hashes Cortex wrote or found at the baseline}, None before the
+    baseline is taken; the hashes of the kept card keys). Written: an unvoided change on a
+    GUARDED page listing its `lines` (cortex_patch); kept: a `dismiss` change on id OUTSIDE."""
+    base = _baseline(vault)
+    events = list(events)
+    voided, ok, kept = _voided(events), {p: set() for p in GUARDED}, set()
+    for e in events:
+        c = _payload(e).get("change") if e.get("kind") == "change" else None
+        if not isinstance(c, dict) or e.get("id") in voided:
+            continue
+        if c.get("id") in GUARDED and isinstance(c.get("lines"), list):
+            ok[c["id"]].update(h for h in c["lines"] if isinstance(h, str))
+        elif c.get("tool") == "dismiss" and c.get("id") == OUTSIDE:
+            kept.add(c.get("hash"))
+    if base is None:
+        return None, kept
+    for p in GUARDED:
+        if isinstance(got := base.get(p), list):
+            ok[p].update(h for h in got if isinstance(h, str))
+    return ok, kept
+
+
+def outside_lines(vault, events) -> list[dict]:
+    """R5a: the `guarded_lines` changed outside Cortex: neither written by Cortex, present at
+    the baseline nor kept; [] before the baseline is taken. A removed line needs no guard."""
+    ok, kept = guard(vault, events)
+    if ok is None:
+        return []
+    return [x for x in guarded_lines(vault) if line_hash(x["line"]) not in ok[x["page"]]
+            and text_hash(x["key"]) not in kept]
+
+
+def record_baseline(vault) -> bool:
+    """R5a, first run: with no GUARD_FILE yet, every guarded line present now is written there
+    as Cortex's own (through cortex.vault, under its lock), so nothing the owner has on upgrade
+    is withheld. A cache file, as the X-ray's, never a note; True when it wrote one.
+    shortcut: a deleted file is taken again from the pages as they are then; an event in the
+    log if a program that deletes it ever matters (it could edit the log as well)."""
+    path = vault.root / GUARD_FILE
+    if path.is_file():
+        return False
+    with vault.lock():
+        if path.is_file():  # another process took it meanwhile
+            return False
+        lines: dict[str, set[str]] = {p: set() for p in GUARDED}
+        for x in guarded_lines(vault):
+            lines[x["page"]].add(line_hash(x["line"]))
+        vault.write_text(path, json.dumps({"lines": {p: sorted(h) for p, h in lines.items()}}))
+    return True
+
+
 def _private(vault) -> set[str]:
     return {n.id for n in vault.iter_notes("me") if is_private(n)}
 
@@ -939,6 +1046,10 @@ def view(vault, events, today: str) -> dict:
                "text": _shown("".join(c for c in g["text"] if c.isprintable()))}
               for g in collapse([x for x in unsafe_lines(vault, events)
                                  if x["page"] not in hidden])]
+    outside = [{"key": x["key"], "page": x["page"], "section": plain(x["section"] or "", 80),
+                "id": x["id"], "text": _shown("".join(
+                    c for c in claims.strip_id(x["line"]).removeprefix("- ") if c.isprintable()))}
+               for x in outside_lines(vault, events) if x["page"] not in hidden]
     spare = _spare_left(events, today)  # G7: crowded first, then unused, within the month's cap
     lines, window = crowded(vault, current) if spare else ([], 0)
     crowd = [{**side(x), "cut": x["cut"], "seen": x["seen"], "window": window}
@@ -948,16 +1059,18 @@ def view(vault, events, today: str) -> dict:
     pin = [{**side(x), "proofs": x["proofs"], "apps": x["apps"], "served": x["served"]}
            for x in promote(vault, current, events, today)]  # R28a: one a month at most
     left = max(0, TODAY_MAX - answered_today(events, today))
-    first = [{"type": "unsafe", "key": x["key"]} for x in unsafe]  # G6: always asked, first
+    first = ([{"type": "unsafe", "key": x["key"]} for x in unsafe]  # G6: always asked, first
+             + [{"type": OUTSIDE, "key": x["key"]} for x in outside])  # R5a: likewise
     today_ = first + _today(waiting, pairs, rules)[:max(0, left - len(first))]
     return {"pending": waiting, "expired": expired, "stale": old, "conflicts": pairs,
             "rules": rules, "decisions": decisions, "forget": forget, "imports": imports,
-            "unsafe": unsafe, "crowded": crowd, "unused": books, "promote": pin,
+            "unsafe": unsafe, OUTSIDE: outside, "crowded": crowd, "unused": books, "promote": pin,
             "today": today_, "today_left": left,
             "paused": [{"producer": p, "label": PRODUCERS[p], **led[p]} for p in sorted(off)],
             "count": len(today_),  # D4: the badge counts only Today's 5 still unanswered
             "more": len(waiting) + len(expired) + len(old) + len(pairs) + len(rules)
-            + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(crowd)
+            + len(decisions) + len(forget) + len(imports) + len(unsafe) + len(outside)
+            + len(crowd)
             + len(books) + len(pin)}
 
 
