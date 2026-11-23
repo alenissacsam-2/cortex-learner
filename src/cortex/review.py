@@ -780,16 +780,18 @@ def reinforced(events, known: dict | None = None) -> dict[str, dict]:
     copy; a copy no change wrote is not counted), its AI app (the event's `client`, else its
     session's `open` one) and its day. A kept line takes over its retired copy's sightings, so
     a line said again and again keeps adding up; once a line has one, its own write counts
-    too. `len(sessions)` is its proofs, `len(apps)` its apps."""
+    too. `len(sessions)` is its proofs, `len(apps)` its apps, `days` {session: its first day}
+    (for `use`)."""
     events = list(events)
     voided, apps, wrote, out = _voided(events), {}, {}, {}
 
     def saw(cid, by) -> dict | None:
         if not isinstance(cid, str) or by is None or not by[1]:
             return None
-        x = out.setdefault(cid, {"sessions": set(), "apps": set(), "last": ""})
+        x = out.setdefault(cid, {"sessions": set(), "apps": set(), "last": "", "days": {}})
         sid, day, app = by
         x["sessions"].add(sid)
+        x["days"][sid] = min(day, x["days"].get(sid, day))
         if app := app or apps.get(sid):
             x["apps"].add(app)
         x["last"] = max(x["last"], day)
@@ -818,6 +820,8 @@ def reinforced(events, known: dict | None = None) -> dict[str, dict]:
             x = saw(c["kept"].get("claim"), wrote.get(copy) if isinstance(copy, str) else None)
             if x is not None and (y := out.pop(copy, None)) is not None:
                 x["sessions"] |= y["sessions"]
+                for s, d in y["days"].items():
+                    x["days"][s] = min(d, x["days"].get(s, d))
                 x["apps"] |= y["apps"]
                 x["last"] = max(x["last"], y["last"])
     for cid in list(out):
@@ -825,23 +829,28 @@ def reinforced(events, known: dict | None = None) -> dict[str, dict]:
     return out
 
 
-def use(vault, events, before: str | None = None, known: dict | None = None) -> dict[str, dict]:
+def use(vault, events, before: str | None = None, known: dict | None = None,
+        back: dict | None = None) -> dict[str, dict]:
     """G5b-4: {claim id: {n, last}}: how often a claim line was used and the last day it was:
     each X-ray call that served it to an AI app, each yes reconfirm and each time it came back
-    (`reinforced`'s sightings; `known`: `known_texts`, read when not given). With `before` (an
-    ISO day) only days before it, so prime's order from it stays the same all day. A fold over
-    the X-ray ring and the events; nothing stored.
-    shortcut: the ring keeps xray.CAP calls, so a call falling off it during the day can move a
-    line across a bucket edge (prime.use_order); snapshot the fold per day if caches miss."""
+    (`back`: `reinforced` over `events`, folded here when not given; `known`: `known_texts`,
+    read when not given). With `before` (an ISO day) only days before it, so prime's order from
+    it stays the same all day. A fold over the X-ray ring and the events; nothing stored.
+    shortcut: the ring keeps xray.CAP calls, and a tidy's retire hands a copy's past sightings
+    to the kept line, so either during the day can move a line across a bucket edge
+    (prime.use_order); snapshot the fold per day if caches miss."""
     from cortex import xray
     from cortex.events import local_day
 
     out: dict[str, dict] = {}
+    events = list(events)
+    if back is None:
+        back = reinforced(events, known_texts(vault) if known is None else known)
 
-    def add(cid, day: str, n: int = 1) -> None:
+    def add(cid, day: str) -> None:
         if isinstance(cid, str) and day and (before is None or day < before):
             x = out.setdefault(cid, {"n": 0, "last": ""})
-            x["n"] += n
+            x["n"] += 1
             x["last"] = max(x["last"], day)
 
     for r in xray.rows(vault):
@@ -859,8 +868,9 @@ def use(vault, events, before: str | None = None, known: dict | None = None) -> 
         if (e.get("kind") == "log" and pl.get("kind") == "reconfirm" and pl.get("verdict") == "yes"
                 and e.get("id") not in voided):
             add(pl.get("claim"), str(e.get("day") or ""))
-    for cid, x in reinforced(events, known_texts(vault) if known is None else known).items():
-        add(cid, x["last"], len(x["sessions"]))
+    for cid, x in back.items():
+        for day in x["days"].values():
+            add(cid, day)
     return out
 
 

@@ -3146,16 +3146,23 @@ class Cortex:
         """G5b-2, at most once a day (TIDY_FILE's `guesses` day): the live guesses (tier agent
         or exposed: no yes, no Approve) of the non-private claim pages but me/core, written over
         GUESS_DAYS days ago, that no X-ray call served and no one confirmed or said again
-        (review.use), not X-ray pinned, and not a retire the owner undid. None while the X-ray
-        holds no call (as review.unused)."""
-        if self._tidy_state().get("guesses") == day or not xray.rows(self.vault):
+        (review.use), not X-ray pinned, and not a retire the owner undid. Only a guess the
+        X-ray saw all of: its oldest call is on or before the guess's day.
+        shortcut: a busy owner's ring (xray.CAP calls) may never reach 30 days back, and then
+        nothing retires; a per-day fold of served ids if that matters."""
+        ring = [str(r.get("ts")) for r in xray.rows(self.vault)]
+        if self._tidy_state().get("guesses") == day or not ring:
+            return []
+        try:
+            first = local_day(datetime.fromisoformat(min(ring)))
+        except ValueError:
             return []
         cut = (datetime.fromisoformat(day) - timedelta(days=GUESS_DAYS)).date().isoformat()
         used, done = review.use(self.vault, events), self._tidy_done()
         pins = xray.settings(self.vault)["pin"]
         return [r for r in review.live_rows(self.vault, events, day)
                 if r["tier"] in review.INFERRED and r["page"] != "core"
-                and str(r["day"] or "~") < cut and r["id"] not in used
+                and first <= str(r["day"] or "") < cut and r["id"] not in used
                 and xray.claim(r["id"]) not in pins and f"{r['page']}/{r['id']}" not in done]
 
     def tidy(self) -> dict:

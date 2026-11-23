@@ -550,11 +550,13 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
     return rows
 
 
-def use_order(vault: Vault, events, today: str, known: dict | None = None) -> dict[str, int]:
+def use_order(vault: Vault, events, today: str, known: dict | None = None,
+              back: dict | None = None) -> dict[str, int]:
     """G5b-4: {`^c-…` id: use bucket}: the log2 of how often a line was used before `today`
-    (review.use), so the calls of one day leave prime's order as it was that morning."""
+    (review.use; `back`: its `reinforced` fold when the caller has it), so the calls of one day
+    leave prime's order as it was that morning."""
     return {xray.claim(c): x["n"].bit_length()
-            for c, x in review.use(vault, events, today, known).items()}
+            for c, x in review.use(vault, events, today, known, back).items()}
 
 
 def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
@@ -594,9 +596,10 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
             PRIME_CAPS["contract"], more(len(rules) - len(lines), "contract"))
     known = review.known_texts(vault)
-    back = {xray.claim(c): x["last"] for c, x in review.reinforced(events, known).items()}
+    again = review.reinforced(events, known)  # once per prompt: R13b's `back` and the use order
+    back = {xray.claim(c): x["last"] for c, x in again.items()}
     rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,
-                     ids, xs, back, use_order(vault, events, local_day(now), known))
+                     ids, xs, back, use_order(vault, events, local_day(now), known, again))
     # the prompt's Attempt first line follows Preferences (the owner's standing text first, so
     # it stays the same from chat to chat) and still comes out of the preferences cap
     problem = named_problem(vault, prompt)

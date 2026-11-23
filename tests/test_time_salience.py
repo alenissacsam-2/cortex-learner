@@ -201,7 +201,9 @@ def test_an_old_guess_no_app_used_retires_once_a_day_undoably(root):
                                                         40)), True)
     _guess(root, "core", "Keep answers short.", 40)
     assert tidy(root) == {"moved": 0, "retired": 0}  # no X-ray call yet: nothing to judge by
-    _ring(root, (ago(3), [jazz]))
+    _ring(root, (ago(20), []), (ago(3), [jazz]))
+    assert tidy(root) == {"moved": 0, "retired": 0}  # older than the ring: may have been served
+    _ring(root, (ago(45), []), (ago(3), [jazz]))
     assert tidy(root) == {"moved": 0, "retired": 0, "guesses": 1}
     assert set(live(root, "preferences")) == {"Likes jazz", "Drinks green tea", "Reads papers",
                                               "Runs at dawn"}
