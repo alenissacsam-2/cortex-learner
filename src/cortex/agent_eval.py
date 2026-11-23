@@ -1,5 +1,5 @@
 """`cortex eval agent` (R12): does each AI app get the right lines about the owner, and none it
-must not? Ten cases (assets/agent_eval.json, adapted from Gemini round 5's A01-A10), each a
+must not? Eleven cases (assets/agent_eval.json, adapted from Gemini round 5's A01-A10), each a
 made-up vault, an AI app's MCP client name and a prompt.
 
 Layer A, model-free: each case's vault is built in a temp folder through cortex.vault, and the

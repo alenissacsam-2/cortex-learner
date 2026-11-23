@@ -137,3 +137,21 @@ def test_an_out_of_scope_playbook_reaches_the_app_through_no_tool(root):
     owner.over_mcp, owner.sessions.client = True, "claude-code"
     assert "diary-steps" in str(owner.cortex_find(query="exam diary steps"))
     assert owner.cortex_read(id="diary-steps")["id"] == "diary-steps"
+
+
+def test_an_app_no_profile_names_gets_no_page_from_any_tool(root):
+    """R12: an unknown app (scopes: core only) gets the pinned core and no vault page from any
+    tool; each tool's `next` says why and where the owner can give it more."""
+    from cortex.mcp_server import CORE_ONLY_NEXT
+
+    book(root, "release-steps", "Rust release steps", "how I ship a Rust crate")
+    c = Cortex(Vault(root))
+    c.over_mcp, c.sessions.client = True, "random-agent-xyz"
+    ctx = c.cortex_prime("Follow my Rust release steps")["context"]
+    assert "release-steps" not in ctx and "Rust release steps" not in ctx
+    for r in (c.cortex_find(query="rust release steps"),
+              c.cortex_recall(query="rust release steps"),
+              c.cortex_context(topic="rust release steps"),
+              c.cortex_read(id="release-steps")):
+        assert "release-steps" not in str({k: v for k, v in r.items() if k != "id"}), r
+        assert r["next"].startswith(CORE_ONLY_NEXT), r

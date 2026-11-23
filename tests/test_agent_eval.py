@@ -36,7 +36,7 @@ def test_a_check_bites(tmp_path):
 
 def test_cases_are_well_formed():
     ids = [c["id"] for c in SPEC["cases"]]
-    assert ids == [f"A{n:02}" for n in range(1, 11)]
+    assert ids == [f"A{n:02}" for n in range(1, 12)]
     for c in SPEC["cases"]:
         assert set(c["layer_a"]) == {"must_serve", "forbid"}
         assert set(c["layer_b"]) == {"regex_all", "regex_none", "must_not_leak"}
@@ -82,12 +82,12 @@ def test_command_runs_layer_a_only_and_never_looks_for_a_model(monkeypatch):
     res = CliRunner().invoke(app, ["eval", "agent"])
     assert res.exit_code == 0, res.output
     lines = res.output.splitlines()
-    assert [ln.split()[0] for ln in lines[:10]] == [c["id"] for c in SPEC["cases"]]
-    assert all("B not run" in ln for ln in lines[:10])
+    assert [ln.split()[0] for ln in lines[:11]] == [c["id"] for c in SPEC["cases"]]
+    assert all("B not run" in ln for ln in lines[:11])
     assert "Layer B: not run (no --model)" in res.output
     res = CliRunner().invoke(app, ["eval", "agent", "--json"])
     r = json.loads(res.output)
-    assert len(r["cases"]) == 10 and r["b_pass"] is None and r["runs"] == 0
+    assert len(r["cases"]) == 11 and r["b_pass"] is None and r["runs"] == 0
 
 
 def test_command_with_model_and_none_loaded_says_why(monkeypatch):

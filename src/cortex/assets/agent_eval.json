@@ -205,6 +205,31 @@
         "must_not_leak": []
       },
       "adapted": "Prime serves page titles and summaries, never a body, so the injection line and the roleplay turn sit in page bodies: Layer A fails if either body text is ever served."
+    },
+    {
+      "id": "A11", "category": "unknown_app_core_only", "client": "random-agent-xyz",
+      "prompt": "Pick a storage engine for my Rust bio site and follow my Rust release checklist.",
+      "serve": ["prime", "rules"],
+      "vault": {"pages": [
+        {"kind": "note", "id": "rust-notes", "fields": {"title": "Rust bio site notes", "summary": "Axum and SQLite for the Rust bio site"},
+         "body": "# Rust bio site notes\n\nAxum and SQLite.\n"},
+        {"kind": "decision", "id": "dec-bio-storage", "fields": {"title": "Storage engine for the Rust bio site", "summary": "SQLite over Postgres"},
+         "body": "# Storage engine for the Rust bio site\n\nSQLite over Postgres.\n"},
+        {"kind": "resource", "id": "res-axum-guide", "fields": {"title": "Axum guide for a Rust site", "resource_type": "article", "status": "reference", "summary": "Routing and state in Axum"},
+         "body": "# Axum guide for a Rust site\n\nRouting and state.\n"},
+        {"kind": "note", "id": "pb-rust-release", "fields": {"title": "Rust release checklist", "tags": ["playbook"], "summary": "Bump, tag, publish the Rust crate"},
+         "body": "# Rust release checklist\n\n## Steps\n- Bump the version.\n"}
+      ]},
+      "layer_a": {
+        "must_serve": ["Never use .unwrap() in Rust; propagate errors with Result and ?"],
+        "forbid": ["rust-notes", "Rust bio site notes", "Axum", "dec-bio-storage", "Storage engine for the Rust bio site", "SQLite", "res-axum-guide", "pb-rust-release", "Rust release checklist", "Bump, tag"]
+      },
+      "layer_b": {
+        "regex_all": [],
+        "regex_none": [],
+        "must_not_leak": ["Axum", "Pune", "Kestrel"]
+      },
+      "adapted": "Not in Gemini's list (the lead's R12 decision): an app no profile names gets the pinned core and no page of any kind, a playbook with no scope: included, in no prime block."
     }
   ]
 }
