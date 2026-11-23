@@ -188,6 +188,78 @@ Possible fixes, all outside M2's files (`semantic.py`, `browse_serve.py`, `safet
   restart the idle clock;
 - or a shorter `IDLE_UNLOAD` in the app.
 
+## M3: an idle Cortex gives its memory back
+
+The owner's installed 0.4.2, 15 minutes after start on a PC in use: the app's Python process
+had a 726 MB working set and 1,184 MB of private bytes, and each idle `cortex mcp` had 295-323
+MB. M3 closes the two gaps M2 found in the app and makes an idle MCP connection small.
+
+Two probe runs, both on made-up data with a temp HOME and the real models:
+- `--launch 25 --busy --scale 0.2 --notes 300` starts the app as the installer does. It makes
+  one person's search at the start. Every minute it adds 40 visits to a made-up Chrome
+  history, and every fifth minute a chat page. The browse import, the chats import, the
+  safety net and the idle check run on their schedules. `--scale 0.2` shortens every schedule
+  and `IDLE_UNLOAD` five times, so 25 minutes take 5. Times are shown at full scale.
+- `--mcp 15 --scale 0.2 --notes 300` starts `cortex mcp` over stdio as an AI app does:
+  `initialize`, then one `cortex_prime` and one `cortex_recall` (first calls, timed), then 15
+  idle minutes, then the same two calls again.
+
+Both print the working set and private bytes each minute, and which models are loaded and for
+how long they have gone unused.
+
+<!-- M3 before/after tables: added after the measurement -->
+
+**The rule: only a person's use keeps a model.** Background work still uses the models, but it
+never keeps one loaded:
+- **The browse import loads nothing to get its embed function.** Inside
+  `semantic.background()`, `load_embedder()` returns the function when the download is whole,
+  by the same rule as `doctor.search_model_ready` (the `.complete` marker, else no
+  `*.incomplete` file). It never loads a model. The first embed loads the capped copy, which
+  is the model background work uses anyway. When the outermost `background()` ends, the copy
+  is dropped, since it served only that work. `_embedder`, which prime and review read as
+  "this process has the model", is set only by a load outside `background()`. A background
+  import therefore never makes them load the model.
+- **A background use never restarts the idle clock.** `_Held.use(touch=False)` leaves the
+  clock where a person's last use set it. A model no person used goes at the next idle check,
+  even while background work runs every few minutes.
+- **The safety net never loads the main embedder by itself.**
+  `safety_net.background_tools()` gets `semantic.loaded_embedder()`, which returns an embed
+  function only while the main model is in memory. That function does not restart the clock.
+  If the model is dropped between that check and the embed, the call loads it again, and the
+  next idle check drops it.
+- **The failure path is the same as before.** Before M3, a model whose files did not load
+  (corrupt or half downloaded) made `load_embedder()` return None, and the import ran without
+  it. Now a half download is still None, by the readiness rule. A whole download that does not
+  load fails at the first embed with `semantic.NotLoaded`, a `VaultError` with the `not_set_up`
+  message. `browse_serve.run_import` then runs `build.run` again without a model. Its days
+  stay dirty until their pages are saved, so the second run makes them, with no topics and no
+  vectors. The private vectors' pass already reports any failure and goes on.
+  `test_a_broken_model_leaves_the_background_import_as_without_one` covers both cases.
+
+**What an idle `cortex mcp` holds.**
+- **The imports.** They take about 127 MB of working set before any model loads, and they stay
+  for the life of the process:
+  - the MCP SDK brings starlette, uvicorn, sse_starlette and cryptography;
+  - fastembed brings onnxruntime, tokenizers, PIL, huggingface_hub, requests, tqdm, mmh3 and
+    loguru;
+  - numpy comes in through `cortex.cli`, by way of dashboard and brainmap.
+- **The embedder.** The warm-up after `notifications/initialized` loads it, so the first prime
+  is quick and orders by cosine. It stays: dropping it would slow the first call.
+- **The core's catalog and index, and the vector matrices kept for queries**
+  (`semantic._MEM`). Dropping `_MEM` would change what `cortex_read` lists as similar pages.
+
+The M1 idle check drops the embedder after `IDLE_UNLOAD`. On Windows a process keeps the pages
+it touched in its working set after the memory is freed. So when that check drops the last
+model, the process now empties its working set (`semantic.idle_pass`, then `_trim`, which calls
+`K32EmptyWorkingSet`; `TRIM = False` turns it off). The pages go to the standby list, where
+other programs can take them, and the next call faults back only the pages it touches. Private
+bytes do not change, and no tool's output or server-stamped field changes.
+
+**What is left.** `review._warm` is in `review.py`, which is R13's file. Once a person's use has
+set `_embedder`, it loads the main embedder again after an idle drop whenever it meets texts it
+has no vectors for. Those texts come from the review lines it reads or writes. That use restarts
+the idle clock as a person's use does.
+
 ## What is left (not changed here)
 
 - **The index build's transient peak**, about 900 MB above the loaded model at a batch of 64
