@@ -15,6 +15,12 @@ gone from the context; before a compaction (PreCompact) it prints one line askin
 durable items first. Otherwise it never imports the `mcp` SDK or the embedder and never builds
 the index, so it stays fast on a large vault. It never fails: any error prints nothing and
 exits 0.
+
+R7: `cortex prime-hook --client codex|gemini` is the same hook for Codex CLI (its
+UserPromptSubmit and SessionStart payloads and output are Claude Code's) and Gemini CLI (its
+BeforeAgent event carries the prompt and is answered under that name). A chat's state keys on
+the app's own session id; the light prime is scoped by the owner's profile for the name the
+app gives itself over MCP (cortex.profiles), as cortex_prime scopes it for that app.
 """
 
 from __future__ import annotations
@@ -60,14 +66,19 @@ AGAIN_NUDGE = ("Cortex (the user's second brain) could not serve its context aga
 PRECOMPACT = ("Cortex: record durable items now (cortex_patch / cortex_log) before context is "
               "compacted.")
 pending: threading.Thread | None = None  # the prime thread, left running past BUDGET
+# R7: `--client` -> (the name the app gives itself over MCP, its prompt event's name)
+CLIENTS = {"claude-code": ("claude-code", "UserPromptSubmit"),
+           "codex": ("codex-mcp-client", "UserPromptSubmit"),
+           "gemini": ("gemini-cli-mcp-client", "BeforeAgent")}
 
 
-def run(raw: str) -> str:
-    """The hook's stdout for one payload: a hookSpecificOutput JSON object, a PreCompact
-    line, or ""."""
+def run(raw: str, client: str = "claude-code") -> str:
+    """The hook's stdout for one payload from `client` (a CLIENTS key): a hookSpecificOutput
+    JSON object, a PreCompact line, or ""."""
     global pending
     pending = None
     try:
+        name, ask = CLIENTS[client]
         hook = json.loads(raw)
         event = hook.get("hook_event_name")
         sid, cwd = hook.get("session_id"), hook.get("cwd")
@@ -84,7 +95,7 @@ def run(raw: str) -> str:
             source = hook.get("source")
             if source not in AGAIN_SOURCES:
                 return ""
-            got, done = _light(root, ""), AGAIN_SOURCES[source]
+            got, done = _light(root, "", None, name), AGAIN_SOURCES[source]
             out = got[0] if got else None
             return _out("SessionStart", "\n\n".join([AGAIN.format(source=done), out,
                                                      AGAIN_NEXT])
@@ -96,12 +107,12 @@ def run(raw: str) -> str:
         note = ([TAGGED.format(lines="; ".join(saved))] if saved else []) + (
             [REFUSED.format(lines=" ".join(refused))] if refused else [])
         if sid in _primed(root):
-            extra = [*_later(root, sid, prompt), *note]
-            return _out("UserPromptSubmit", "\n\n".join(extra)) if extra else ""
+            extra = [*_later(root, sid, prompt, name), *note]
+            return _out(ask, "\n\n".join(extra)) if extra else ""
         from cortex import delta
 
         if delta.trivial(prompt):  # a greeting or an ack is not the chat's first prime
-            return _out("UserPromptSubmit", "\n\n".join(note)) if note else ""
+            return _out(ask, "\n\n".join(note)) if note else ""
         from cortex.vault import Vault, VaultError
 
         vault = Vault(root)
@@ -113,7 +124,7 @@ def run(raw: str) -> str:
                 vault.write_text(root / STATE, "\n".join([*seen[-(KEEP - 1):], sid]) + "\n")
         except (VaultError, OSError):  # a busy vault: prime unmarked rather than wait
             pass
-        got = _light(root, prompt)
+        got = _light(root, prompt, None, name)
         out = got[0] if got else None
         try:  # G3: the delta never repeats what this prime served
             with vault.lock(LOCK_WAIT):
@@ -126,7 +137,7 @@ def run(raw: str) -> str:
                 _save(vault, sessions)
         except Exception:  # noqa: BLE001  (a busy vault: the delta may repeat a line)
             pass
-        return _out("UserPromptSubmit",
+        return _out(ask,
                     "\n\n".join([HEAD, out, NEXT, *note]) if out is not None
                     else "\n\n".join([NUDGE, *note]))
     except Exception:  # noqa: BLE001  (garbage stdin, a busy vault lock, a broken vault)
@@ -178,7 +189,7 @@ def _save(vault, sessions: dict) -> None:
     vault.write_text(vault.root / SERVED, json.dumps(dict(list(sessions.items())[-KEEP:])))
 
 
-def _later(root, sid: str, prompt: str) -> list[str]:
+def _later(root, sid: str, prompt: str, client: str = "claude-code") -> list[str]:
     """G3 and G5 for a later prompt of a primed chat: the new matching lines (delta.lines,
     within BUDGET, not for a trivial prompt) and, every delta.EVERY-th prompt, the save nudge;
     SERVED counts the prompt and keeps the ids. [] on any error or a corrupt sidecar."""
@@ -187,7 +198,8 @@ def _later(root, sid: str, prompt: str) -> list[str]:
         from cortex.vault import Vault
 
         mine = _sessions(root).get(sid) or {"ids": []}
-        got = None if delta.trivial(prompt) else _light(root, prompt, set(mine["ids"]))
+        got = None if delta.trivial(prompt) else _light(root, prompt, set(mine["ids"]),
+                                                         client)
         text, ids = got or ("", [])
         vault = Vault(root)
         with vault.lock(LOCK_WAIT):  # read again: another chat may have written meanwhile
@@ -201,7 +213,8 @@ def _later(root, sid: str, prompt: str) -> list[str]:
         return []
 
 
-def _light(root, prompt: str, seen: set[str] | None = None) -> tuple[str, list[str]] | None:
+def _light(root, prompt: str, seen: set[str] | None = None,
+           client: str = "claude-code") -> tuple[str, list[str]] | None:
     """prime.core's context for `prompt` and the `^c-…` ids of the claim lines it serves,
     within BUDGET seconds, else None (left running in `pending`, so the caller can exit without
     waiting). With `seen` (a primed chat's served ids, G3) the context is only delta.lines:
@@ -219,8 +232,8 @@ def _light(root, prompt: str, seen: set[str] | None = None) -> tuple[str, list[s
     def work() -> None:
         try:
             xr: dict = {}
-            # the owner's profile for Claude Code, as cortex_prime applies it over MCP
-            scopes = profiles.scopes_for(profiles.load(vault), "claude-code")
+            # the owner's profile for the app (`client`: its MCP name), as cortex_prime applies it
+            scopes = profiles.scopes_for(profiles.load(vault), client)
             allow = None if scopes is None else (
                 lambda p, h: access.scope_section(scopes, p, h))
             evs = list(EventLog(vault).iter_events())
@@ -236,7 +249,7 @@ def _light(root, prompt: str, seen: set[str] | None = None) -> tuple[str, list[s
                 out, ids = "\n\n".join(x for x in (out, books) if x), ids + bids
             # before `out` is handed over: the process may exit as soon as it is
             if seen is None or ids:
-                xray.record(vault, "prime-hook", "claude-code", served, trimmed, len(out))
+                xray.record(vault, "prime-hook", client, served, trimmed, len(out))
             box["out"] = out, ids
         except Exception:  # noqa: BLE001  (no traceback on the hook's stderr; nudge instead)
             pass

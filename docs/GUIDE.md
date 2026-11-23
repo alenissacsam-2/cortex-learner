@@ -24,6 +24,12 @@ The Claude desktop **Chat tab** gets the same tools but no automatic prime, so t
 
 **Other AI apps.** Cursor, VS Code (Copilot) and Codex get your pinned core in their rules file when you connect them (not when their profile leaves out the core, and never a line you muted in Agent X-ray), and see only what their **agent profile** allows: by default your core, your coding preferences (your Workflow section included), your environment preferences, your setup page (`me/setup.md`: hardware and software) and your projects, never your teaching contract, profile, journal or people pages. An app Cortex does not know gets your core only. ChatGPT and Gemini on the web have no Cortex tools, so you paste a **context pack** (General, Coding or Writing) at the start of a chat. All three are in the app's **Connect AI apps**; [INSTALL.md](INSTALL.md#other-ai-apps-rules-files-profiles-and-context-packs) has the details.
 
+**Codex CLI.** Connecting Codex also adds Cortex's hooks to `~/.codex/hooks.json`. Your first real message in each Codex chat is primed the way Claude Code's is (within Codex's agent profile), a later message on a new topic brings only the lines Codex has not seen yet, your `//pref:`, `//fact:` and `//forget:` lines are saved at once, and the prime is served again after Codex compacts, resumes or clears the chat. After Codex runs another server's MCP tool, your next Cortex write counts as exposed to outside text. Codex runs a new or changed hook only after you trust it: open `/hooks` in Codex once after connecting (and again after Cortex moves to a new folder). Removing Codex takes out only Cortex's hooks.
+
+**Gemini CLI.** Connecting Gemini CLI also adds Cortex's hooks to `~/.gemini/settings.json`: the same prime on your first real message (`BeforeAgent`), only new lines after that, your `//` lines saved, the prime served again after `/clear` or a resumed chat, and a web fetch, a web search or another server's MCP tool marking outside text. Gemini knows no agent profile by default, so it gets your core only until you give it one. Removing Gemini CLI takes out only Cortex's hooks.
+
+**Cursor** has hooks too, but its prompt hook can only allow or block a message, not add to it, so Cursor still relies on its rules file to call `cortex_prime`.
+
 ---
 
 ## 2. The `/cortex` commands

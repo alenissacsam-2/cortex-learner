@@ -6,7 +6,8 @@ Every write backs the file up first (`<name>.cortex-YYYYmmdd-HHMMSS.bak` beside 
 only the `cortex` entry, and leaves a file it cannot parse untouched with a clear message.
 `entry` is `clients.server_entry(...)`: {"command": ..., "args": ["mcp", "--vault", ...]}.
 Cursor, VS Code (Copilot) and Codex also get a marked Cortex block (the pinned core and the
-cortex_prime line) in a rules file (`Rules`); `refresh_rules` keeps it current.
+cortex_prime line) in a rules file (`Rules`); `refresh_rules` keeps it current. Gemini CLI and
+Codex CLI also get Cortex's prompt and after-tool hooks (`Hooks`, R7).
 """
 
 from __future__ import annotations
@@ -247,6 +248,105 @@ class Rules:
         return super().remove() + self._rule_write(False, None)
 
 
+# R7: Cortex's hooks in an app's config: any hook whose command runs `cortex prime-hook` or
+# `cortex taint` with `--client <app>` (hook_command writes it so).
+_OURS = re.compile(r"\s(?:prime-hook|taint) --client (?:codex|gemini)$")
+
+
+def hook_command(base: dict, args: str, powershell: bool = False) -> str:
+    """The shell line that runs `base`'s cortex executable with `args`. On Windows, Gemini CLI
+    runs hook commands in PowerShell and Codex CLI in cmd.exe."""
+    exe = str(base["command"])
+    if sys.platform != "win32":
+        import shlex
+        return f"{shlex.quote(exe)} {args}"
+    if powershell:
+        return "& '" + exe.replace("'", "''") + f"' {args}"
+    return f'"{exe}" {args}'
+
+
+def _ours(group) -> bool:
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    return isinstance(hooks, list) and any(
+        isinstance(h, dict) and isinstance(h.get("command"), str) and _OURS.search(h["command"])
+        for h in hooks)
+
+
+def hook_change(path: Path, groups: dict | None) -> tuple[str, dict | None]:
+    """(change, the file's data after it, or None when it would not change) for `path` with
+    Cortex's hook groups taken out of its `hooks` and `groups` ({event: [group]}; None: none)
+    added. ValueError, the file untouched, when it is not a JSON object or `hooks` (or an
+    event's list Cortex adds to) is not the shape the app documents."""
+    data = load_json(path)
+    new = copy.deepcopy(data)
+    hooks = new.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f'{path}: "hooks" is not an object; Cortex left it untouched.')
+    had = False
+    for ev, lst in list(hooks.items()):
+        if isinstance(lst, list) and any(_ours(g) for g in lst):
+            had = True
+            if keep := [g for g in lst if not _ours(g)]:
+                hooks[ev] = keep
+            else:
+                del hooks[ev]
+    for ev, gs in (groups or {}).items():
+        lst = hooks.setdefault(ev, [])
+        if not isinstance(lst, list):
+            raise ValueError(f'{path}: "hooks.{ev}" is not a list; Cortex left it untouched.')
+        lst.extend(gs)
+    if hooks:
+        new["hooks"] = hooks
+    elif had:  # emptied by taking Cortex's out (an empty `hooks` the owner wrote stays)
+        new.pop("hooks", None)
+    if new == data:
+        return "none", None
+    return ("remove" if groups is None else "update" if had else "add"), new
+
+
+class Hooks:
+    """R7: a target whose app runs `cortex prime-hook --client <app>` on each prompt (and
+    `cortex taint` after a tool) from a JSON hooks config: Apply adds or refreshes Cortex's
+    hook groups, Remove takes out only those (a file left `{}` goes, after its backup)."""
+
+    def hook_path(self) -> Path:
+        raise NotImplementedError
+
+    def hook_groups(self, base: dict) -> dict:
+        raise NotImplementedError
+
+    def plan(self, add: bool, base: dict | None = None) -> list[dict]:
+        out, p = super().plan(add, base), self.hook_path()
+        try:
+            change, new = hook_change(p, self.hook_groups(base) if add else None)
+            if new is not None:
+                out.append(_row(p, change, "the Cortex hooks"))
+        except (OSError, ValueError) as e:
+            if not any(r["file"] == str(p) and r["change"] == "error" for r in out):
+                out.append(_row(p, "error", str(e)))
+        return out
+
+    def _hook_write(self, groups: dict | None) -> list[dict]:
+        p = self.hook_path()
+        change, new = hook_change(p, groups)
+        if new is None:
+            return []
+        if new:
+            write(p, json.dumps(new, indent=2, ensure_ascii=False) + "\n")
+        else:  # only Cortex's hooks were in it
+            backup(p)
+            p.unlink()
+        return [_row(p, change, "the Cortex hooks")]
+
+    def apply(self, base: dict) -> list[dict]:
+        hook_change(self.hook_path(), self.hook_groups(base))  # unreadable: stop before writing
+        return super().apply(base) + self._hook_write(self.hook_groups(base))
+
+    def remove(self) -> list[dict]:
+        hook_change(self.hook_path(), None)
+        return super().remove() + self._hook_write(None)
+
+
 def refresh_rules(base: dict | None) -> list[dict]:
     """The app's periodic check (each automatic chat-import pass, every 5 minutes): rewrite
     the Cortex block where a rules file holds one and the pinned core changed since. Never
@@ -366,9 +466,29 @@ class ClaudeDesktop(JsonTarget):
         return out
 
 
-class Gemini(JsonTarget):
+class Gemini(Hooks, JsonTarget):
     """Gemini CLI: `~/.gemini/settings.json` plus a short block in `~/.gemini/GEMINI.md`
-    between markers, so it can be taken out again."""
+    between markers, so it can be taken out again. R7: settings.json also gets Cortex's hooks
+    (github.com/google-gemini/gemini-cli docs/hooks/reference.md): BeforeAgent primes the
+    prompt (`hookSpecificOutput.additionalContext`), SessionStart serves the prime again after
+    a resume or /clear, AfterTool marks outside text (timeouts in milliseconds)."""
+
+    # its web tools and other servers' MCP tools (`mcp_<server>_<tool>`), not Cortex's own
+    TAINT = r"^(?!mcp_cortex_)(web_fetch|google_web_search|mcp_.+)$"
+
+    def hook_path(self) -> Path:
+        return self._path()
+
+    def hook_groups(self, base: dict) -> dict:
+        def hook(name: str, args: str, ms: int) -> dict:
+            return {"name": name, "type": "command",
+                    "command": hook_command(base, f"{args} --client gemini", powershell=True),
+                    "timeout": ms}
+        prime = hook("cortex-prime", "prime-hook", 30000)
+        return {"BeforeAgent": [{"hooks": [prime]}],
+                "SessionStart": [{"hooks": [dict(prime)]}],  # the hook skips `startup`
+                "AfterTool": [{"matcher": self.TAINT,
+                               "hooks": [hook("cortex-taint", "taint", 10000)]}]}
 
     START, END = START, END
     BLOCK = ("## Cortex\n"
@@ -381,7 +501,8 @@ class Gemini(JsonTarget):
         super().__init__("gemini-cli", "Gemini CLI",
                          lambda: Path.home() / ".gemini" / "settings.json",
                          note="Also adds a short Cortex note to ~/.gemini/GEMINI.md, between "
-                              "markers, so Gemini calls Cortex first.")
+                              "markers, so Gemini calls Cortex first, and hooks that bring "
+                              "Cortex into each chat.")
 
     def md(self) -> Path:
         return Path.home() / ".gemini" / "GEMINI.md"
@@ -520,13 +641,31 @@ class CodexToml:
         return self._do(None)
 
 
-class Codex(Rules, CodexToml):
-    """Codex CLI, plus the Cortex block in its global `~/.codex/AGENTS.md`."""
+class Codex(Hooks, Rules, CodexToml):
+    """Codex CLI, plus the Cortex block in its global `~/.codex/AGENTS.md`. R7: and Cortex's
+    hooks in `~/.codex/hooks.json` (learn.chatgpt.com/docs/hooks): UserPromptSubmit primes the
+    prompt, SessionStart serves the prime again after a compaction, resume or clear, and
+    PostToolUse marks outside text after another server's MCP tool (timeouts in seconds).
+    Codex runs a new or changed hook only once the owner trusts it under /hooks."""
 
     CLIENT = "codex-mcp-client"
+    note = "After a change, open /hooks in Codex once and trust Cortex's hooks."
 
     def rule_path(self) -> Path:
         return Path.home() / ".codex" / "AGENTS.md"
+
+    def hook_path(self) -> Path:
+        return Path.home() / ".codex" / "hooks.json"
+
+    def hook_groups(self, base: dict) -> dict:
+        def hook(args: str, s: int) -> dict:
+            return {"type": "command",
+                    "command": hook_command(base, f"{args} --client codex"), "timeout": s}
+        return {"UserPromptSubmit": [{"hooks": [hook("prime-hook", 30)]}],
+                "SessionStart": [{"matcher": "compact|resume|clear",
+                                  "hooks": [hook("prime-hook", 30)]}],
+                # its hosted web search fires no hook; Cortex's own tools: taint.EXCLUDED
+                "PostToolUse": [{"matcher": "^mcp__", "hooks": [hook("taint", 10)]}]}
 
 
 # Plan v9 item 8: the rules files that carry the Cortex block. Cursor documents no global
@@ -703,6 +842,8 @@ def describe(base: dict | None) -> list[dict]:
                "private_offer": lms and offer, "private": False}
         try:
             rules = [t.rule_path()] if isinstance(t, Rules) else []
+            rules += [t.hook_path()] if isinstance(t, Hooks) and t.hook_path() not in t.paths() \
+                else []
             row.update(detected=t.detect(), connected=t.connected(),
                        files=[str(p) for p in [*t.paths(), *rules]], private=lms and t.private())
             if base is not None:
