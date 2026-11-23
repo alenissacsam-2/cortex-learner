@@ -18,8 +18,8 @@ copy, the reranker) is dropped after IDLE_UNLOAD seconds unused and loaded again
 use, and runs without onnxruntime's CPU arena (ARENA), so an idle process gives its memory back
 (docs/benchmarks/memory.md). Only a person's use keeps a model: background work loads nothing
 until it embeds, drops the capped copy when it ends and never restarts the main model's idle
-clock (`_Held.use(touch=False)`, `loaded_embedder`). When the last model goes, the idle thread
-empties the process's working set (TRIM, `idle_pass`).
+clock (`_Held.use(touch=False)`, `loaded_embedder`). When the last model goes (an idle drop or
+a background run's end), the process empties its working set (TRIM, `_trim_if_none`).
 
 An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) reorders the top
 `RERANK_POOL` hits; it never changes a hit's `score` or `match`. `rerank: false` in
@@ -249,9 +249,15 @@ def idle_pass(now: float | None = None) -> list[str]:
     """One check of the idle thread: `drop_idle`, then, when that dropped the last model held,
     `_trim`. The names of the models dropped."""
     dropped = drop_idle(now)
-    if dropped and TRIM and not any(h.model for h in (_main, _capped, _ranker)):
-        _trim()
+    if dropped:
+        _trim_if_none()
     return dropped
+
+
+def _trim_if_none() -> None:
+    """`_trim` once no model is held (TRIM): after an idle drop or a background run's end."""
+    if TRIM and not any(h.model for h in (_main, _capped, _ranker)):
+        _trim()
 
 
 def _trim() -> None:
@@ -300,7 +306,8 @@ def background():
     """Embedding in this thread is background work while inside: the real model's calls go to
     a second copy capped at BG_THREADS threads, all at below-normal priority (Windows), so the
     PC stays quick. A query in another thread keeps the full model. Nests. The outermost exit
-    drops the copy (unless another thread's background work holds it): it served only this."""
+    drops the copy (unless another thread's background work holds it): it served only this.
+    When that leaves no model, the working set is emptied too (`_trim_if_none`)."""
     if getattr(_bg, "on", False):
         yield
         return
@@ -310,7 +317,8 @@ def background():
         yield
     finally:
         _bg.on = False
-        _capped.drop(math.inf)
+        if _capped.drop(math.inf):
+            _trim_if_none()
         if old is not None:
             _priority(old)
 

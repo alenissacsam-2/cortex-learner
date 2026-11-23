@@ -345,9 +345,12 @@ def test_background_import_setup_loads_no_model(home, root, monkeypatch):
 
     monkeypatch.setattr(build, "run", run)
     monkeypatch.setattr(sites, "update_vectors", lambda *a, **k: None)
+    trims = []
+    monkeypatch.setattr(semantic, "_trim", lambda: trims.append(1))
     browse_serve.run_import(Vault(root), srcs=[])
     assert got == {"loads": 0, "shape": (1, 4), "loaded": (None, True)}
     assert Counted.loads == 1 and semantic._capped.model is None  # dropped as the run ended
+    assert trims == [1]  # no model left: the working set emptied too
     assert semantic._main.model is None and semantic._embedder is None
     from cortex import safety_net
     assert safety_net.background_tools()[1] is None  # nothing in memory: the net uses none
