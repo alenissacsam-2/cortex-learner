@@ -1,8 +1,8 @@
 """Plan v9 item 8: what other agents get. The Cortex block in Cursor, VS Code (Copilot) and
 Codex rules files (add, refresh, remove; the rest of the file untouched; backups), per-agent
 profiles enforced over MCP (a restricted client gets no personality, profile, journal or
-people text; profiles are set from the app only), and the context packs (at most 2,500
-characters, never a private page or a hidden subject) with `cortex pack`."""
+people text; profiles are set from the app only), and the context packs (at most 1,500
+or 5,000 characters, never a private page or a hidden subject) with `cortex pack`."""
 
 import json
 import re
@@ -244,7 +244,7 @@ def test_packs_core_first_scoped_and_capped(vroot):
     v = Vault(vroot)
     general, coding, writing = (packs.pack(v, n) for n in ("general", "coding", "writing"))
     for p in (general, coding, writing):
-        assert p.startswith(packs.PACK_HEAD) and len(p) <= packs.PACK_MAX
+        assert p.startswith(packs.PACK_HEAD) and len(p) <= packs.SIZES[0]
         assert p.index("Call me Sam.") < p.index("Preferences:")
         assert "tarot" not in p.lower()  # names a hidden (private) subject
         assert "CANARY-PROF" not in p and "CANARY-JRNL" not in p  # not preference lines
@@ -254,11 +254,43 @@ def test_packs_core_first_scoped_and_capped(vroot):
     # long pages: whole lines up to the cap, never a cut line
     many = "".join(f"- Coding rule {k} " + "x" * 200 + "\n" for k in range(40))
     note(vroot, "me/preferences.md", "id: preferences\n", "# P\n\n## Coding\n" + many)
-    big = packs.pack(v, "coding")
-    assert 2000 < len(big) <= packs.PACK_MAX
-    served = [ln.replace("[Coding] ", "") for ln in big.splitlines()
-              if ln.startswith("- [Coding]")]
-    assert served and all(ln + "\n" in many for ln in served)
+    for size in packs.SIZES:  # R32a: both sizes cut whole lines and never exceed the size
+        big = packs.pack(v, "coding", size)
+        assert size - 300 < len(big) <= size
+        served = [ln.replace("[Coding] ", "") for ln in big.splitlines()
+                  if ln.startswith("- [Coding]")]
+        assert served and all(ln + "\n" in many for ln in served)
+    with pytest.raises(ValueError):
+        packs.pack(v, "coding", 2500)
+
+
+ROLE_PREFS = PREFS + ("\n## Career\n- CANARY-CARE-4Q wants a backend role.\n"
+                      "- CANARY-CASK-4Q maybe likes startups. ^c-ccccc\n"
+                      "\n## Projects\n- CANARY-PRJS-4Q ships small apps.\n")
+# R32a: every canary line and the packs it may reach (by the pack's scopes)
+ROLE_LINES = {"Python first": {"review"}, "Short answers": {"interview", "research", "review"},
+              "Direct.": {"interview", "research", "review"}, "CANARY-PERS-4Q": set(),
+              "tarot": set(), "CANARY-THNK-4Q": {"research"}, "CANARY-CARE-4Q": {"interview"},
+              "CANARY-CASK-4Q": set(), "CANARY-PRJS-4Q": {"research"}}
+
+
+def test_role_packs_hold_only_their_scopes(vroot):
+    from cortex.events import EventLog
+    note(vroot, "me/preferences.md", "id: preferences\n", ROLE_PREFS)
+    v = Vault(vroot)
+    EventLog(v).append(session="cli", kind="change", source="tutor", fields={"payload": {
+        "change": {"id": "preferences", "kind": "me", "tier": "agent", "claim": "c-ccccc"}}})
+    assert "CANARY-CASK-4Q" in "".join(serve(vroot, "claude-ai", _sweep))  # an (ask) line
+    for name, purpose in packs.PACK_FOR.items():
+        for size in packs.SIZES:
+            p = packs.pack(v, name, size)
+            assert p.startswith(packs.PACK_HEAD + "\n" + purpose + "\n") and len(p) <= size
+            assert "Call me Sam." in p  # the core is in every pack
+            for canary, where in ROLE_LINES.items():
+                assert (canary in p) == (name in where), (name, canary)
+    note(vroot, "me/personality.md", "id: personality\nprivate: true\n", PERSONALITY)
+    out = "".join(packs.pack(v, n, s) for n in packs.PACK_FOR for s in packs.SIZES)
+    assert "Direct." not in out and "CANARY-THNK-4Q" not in out  # a private page: never
 
 
 def test_unconfirmed_lines_are_not_packed(vroot):
@@ -285,6 +317,10 @@ def test_cli_pack(vroot):
     assert r.exit_code == 0 and "Python first" in r.output and "Call me Sam." in r.output
     assert "CANARY-PERS" not in r.output
     assert CliRunner().invoke(app, ["pack", "poetry", "--vault", str(vroot)]).exit_code == 2
+    r = CliRunner().invoke(app, ["pack", "review", "--chars", "5000", "--vault", str(vroot)])
+    assert r.exit_code == 0 and "For a code review chat." in r.output
+    r = CliRunner().invoke(app, ["pack", "coding", "--chars", "2500", "--vault", str(vroot)])
+    assert r.exit_code == 2 and "--chars is 1500 or 5000" in r.output
 
 
 # ---- per-agent profiles over MCP ---------------------------------------------------------
@@ -474,14 +510,59 @@ def test_app_shows_packs_and_saves_profiles(vroot):
     srv, a = _serve(vroot)
     try:
         _, js, _, _ = call(a, "GET", "/api/connect")
-        got = {p["id"]: p["text"] for p in js["packs"]}
-        assert set(got) == set(packs.PACKS) and "Python first" in got["coding"]
+        assert [p["id"] for p in js["packs"]] == list(packs.PACKS)
+        got = {p["id"]: p["sizes"][0]["text"] for p in js["packs"]}
+        assert "Python first" in got["coding"]
+        assert [s["chars"] for s in js["packs"][0]["sizes"]] == list(packs.SIZES)
         assert js["profiles"] == profiles.DEFAULT and js["scopes"] == list(access.SCOPES)
         new = {"profiles": [{"match": "cursor", "scopes": ["core"]}], "unknown": ["core"]}
         status, saved, _, _ = call(a, "POST", "/api/profiles", new)
         assert status == 200 and saved["profiles"] == new
         assert profiles.load(Vault(vroot)) == new
         assert call(a, "POST", "/api/profiles", {"profiles": "all"})[0] == 400
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_changed_since_your_last_copy(vroot):
+    """R32a: Copy records one log event (pack, chars, hash only; the log stamps the rest);
+    Connect says a pack changed only when it was copied before and its text differs now."""
+    from test_app import _serve, call
+
+    from cortex.events import EventLog
+
+    def coding(js, size=1500):
+        return next(s for p in js["packs"] if p["id"] == "coding" for s in p["sizes"]
+                    if s["chars"] == size)
+    srv, a = _serve(vroot)
+    try:
+        js = call(a, "GET", "/api/connect")[1]
+        assert not any(s["changed"] for p in js["packs"] for s in p["sizes"])  # never copied
+        c = coding(js)
+        assert c["hash"] == packs.digest(c["text"]) and re.fullmatch(r"[0-9a-f]{16}", c["hash"])
+        body = {"pack": "coding", "chars": 1500, "hash": c["hash"]}
+        assert call(a, "POST", "/api/connect/copied", body)[0] == 200
+        ev = [e for e in EventLog(Vault(vroot)).iter_events()
+              if (e.get("payload") or {}).get("kind") == "pack_copied"]
+        assert len(ev) == 1 and ev[0]["kind"] == "log" and ev[0]["source"] == "self"
+        assert ev[0]["payload"] == {"kind": "pack_copied", **body} and ev[0]["id"] and ev[0]["ts"]
+        js = call(a, "GET", "/api/connect")[1]
+        assert not coding(js)["changed"] and not coding(js, 5000)["changed"]  # just copied
+        note(vroot, "me/core.md", "id: core\n",
+             "# Core\n\n## Core\n" + CORE + "- Tea, not coffee.\n")
+        js = call(a, "GET", "/api/connect")[1]
+        assert coding(js)["changed"] and "Tea, not coffee." in coding(js)["text"]
+        assert not coding(js, 5000)["changed"]  # that size was never copied
+        assert not any(s["changed"] for p in js["packs"] if p["id"] != "coding"
+                       for s in p["sizes"])
+        for bad in ({**body, "pack": "poetry"}, {**body, "chars": 2500},
+                    {**body, "chars": True}, {**body, "hash": "XYZ"},
+                    {**body, "hash": c["hash"][:15]}, {**body, "id": "x"},
+                    {**body, "source": "tutor"}, {"pack": "coding"}):
+            assert call(a, "POST", "/api/connect/copied", bad)[0] == 400, bad
+        assert len([e for e in EventLog(Vault(vroot)).iter_events()
+                    if (e.get("payload") or {}).get("kind") == "pack_copied"]) == 1
     finally:
         srv.shutdown()
         srv.server_close()
