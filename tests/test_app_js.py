@@ -1040,7 +1040,10 @@ SENDS = {
         "Download search model (about 150 MB, from huggingface.co)": [["/api/setup/embed", {}]],
         "Index my notes": [["/api/setup/index", {}]],
         "Set up Qwen 3.5 4B (downloaded)": [["/api/setup/model",
-                                             {"model": "4b", "runner": "ollama"}]]},
+                                             {"model": "4b", "runner": "ollama"}]],
+        "Stop watching: C:\\Papers <img src=x>": [["/api/import/watch/remove",
+                                                   {"path": "C:\\Papers <img src=x>"}]],
+        "Watch": [["/api/import/watch/add", {"path": "", "source": "docs", "tier": "cloud"}]]},
 }
 
 
@@ -1060,6 +1063,10 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     data = {"routes": _sweep_routes(root_committed, monkeypatch), "stream": [],
             "skip": ["Attach a file", "chat-file"],
             "sections": ["status", "connect", "llm", "browse", "vault", "chat", "setup"]}
+    data["routes"]["/api/setup"]["watched"]["rows"] = [  # R18: a watched folder's row
+        {"path": "C:\\Papers <img src=x>", "source": "zotero", "tier": "local", "missing": False,
+         "last": {"at": "2026-11-23T10:00:00", "line": "Zotero: read 1, imported 1"}}]
+    data["routes"]["/api/setup"]["watched"]["tiers"]["notes"] = "local"  # a kind sets its tier
     out = _run(node, tmp_path, "sweep", SWEEP, data)
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     S = out["sections"]
