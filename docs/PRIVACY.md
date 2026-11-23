@@ -28,6 +28,8 @@ Your vault is plain Markdown and JSONL in a folder you choose. Cortex needs no a
 
 Searches, topic filing (`cortex topics`), the dashboard, the Claude Code hooks and every tool run offline.
 
+`cortex doctor --security`, the security self-test, runs offline on a made-up vault in a temporary folder that it deletes afterwards; it never reads your vault, your notes or your settings.
+
 ## Where Cortex connects: the registry
 
 Every place in Cortex's code that can reach the network is listed in one registry, `src/cortex/egress.py`. `cortex doctor --privacy` prints its lines, and the app shows them under Status, **Where Cortex connects**:
