@@ -69,7 +69,7 @@ def _items(vault: Vault, lo: str, hi: str) -> list[tuple]:
     named = {i: re.compile(rf"(?<!\w){re.escape(t)}(?!\w)") for i, t in people.items()
              if len(t) >= 4}
     pages = chat._pages_in(vault, lo, hi, {"notes": True, "chats": True, "private": True})
-    for d, kind, id_, title, body, is_chat, private in pages:
+    for d, kind, id_, title, body, is_chat, private, _ in pages:
         if kind == "journal":
             js = [ln for ln in body.splitlines() if chat._JOURNAL_LINE.match(ln)]
             out += [(d, "journal", ln[2:].strip(), "", 1, "", private) for ln in js]

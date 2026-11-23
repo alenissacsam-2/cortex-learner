@@ -30,7 +30,7 @@ D3_HEADER = "// https://d3js.org v7.9.0 Copyright 2010-2023 Mike Bostock"
 KEYS = {"as_of", "day", "plans", "counts", "today", "plan_cleared", "first_run", "assessments",
         "mistakes", "graph", "details", "history", "vault_name", "pages", "owner", "clusters",
         "counts_by_kind", "loops", "follow_ups", "resurface", "you", "help", "brain",
-        "confidence", "today_ids", "studies", "imported", "leeches"}
+        "confidence", "today_ids", "studies", "imported", "leeches", "exam_suggestions"}
 ASSETS = Path(dashboard.__file__).parent / "assets"
 JS = (ASSETS / "dashboard.js").read_text(encoding="utf-8")
 # its header comment names the sinks it avoids; comments are not code

@@ -1420,7 +1420,7 @@
     return out;
   }
   /* R18: watched folders (cortex.watch); the app's periodic pass imports their new and changed files */
-  const WATCH_KINDS = { docs: 'Documents', notes: 'Notes', repos: 'Code projects', zotero: 'Zotero' };
+  const WATCH_KINDS = { docs: 'Documents', notes: 'Notes', repos: 'Code projects', calendar: 'Calendar', zotero: 'Zotero' };
   function watchedRows(wd) {
     const out = [row('Watched folders', wd.rows.length ? String(wd.rows.length) : 'none',
       'Cortex imports the new and changed files in these folders by itself, every 10 minutes while the app runs; files it has read are not read again until they change.')];

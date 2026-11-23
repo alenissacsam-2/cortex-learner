@@ -295,3 +295,64 @@ def test_an_unchanged_2000_file_folder_costs_a_stat_each(root_plain, tmp_path, m
         took.append(time.perf_counter() - t)
     assert r[0]["read"] == 0
     assert min(took) < 0.5, took
+
+
+def _cal(d: Path, name: str, *events: tuple[str, str, str]) -> Path:
+    """An .ics of (uid, YYYYMMDD, summary) all-day events, its mtime moved on each write."""
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    f.write_bytes(("BEGIN:VCALENDAR\n" + "".join(
+        f"BEGIN:VEVENT\nUID:{u}\nDTSTART;VALUE=DATE:{day}\nSUMMARY:{s}\n"
+        "ATTENDEE:mailto:friend@example.com\nDESCRIPTION:secret agenda\nEND:VEVENT\n"
+        for u, day, s in events) + "END:VCALENDAR\n").encode())
+    t = getattr(_cal, "t", 1_900_000_000_000_000_000) + 1_000_000_000
+    _cal.t = t
+    os.utime(f, ns=(t, t))
+    return f
+
+
+def test_a_watched_calendar_adds_new_events_and_never_rereads_an_unchanged_file(
+        root_plain, tmp_path, monkeypatch):
+    v, d = Vault(root_plain), tmp_path / "Calendars"
+    _cal(d, "uni.ics", ("a", "20261210", "DSA exam"))
+    _cal(d, "notes.txt", ("x", "20261210", "not a calendar"))
+    with pytest.raises(VaultError, match="is not a folder"):
+        watch.add(v, d / "notes.txt", "calendar")  # only an .ics file stands for its folder
+    w = watch.add(v, d / "uni.ics", "calendar", "normal")  # one file: its folder is watched
+    assert w["path"] == str(d.resolve()) and w["source"] == "calendar"
+    runs = []
+    real = sources.run
+    monkeypatch.setattr(sources, "run", lambda *a, **k: runs.append(a[1]) or real(*a, **k))
+    r = watch.run(v)[0]
+    assert r["read"] == 1 and r["line"].startswith("Calendar: read 1, imported 1")
+    page = (v.root / "resources" / "calendar-2026-12.md").read_text("utf-8")
+    assert "- 2026-12-10 all day · DSA exam" in page
+    assert "friend@" not in page and "secret agenda" not in page  # never attendees or notes
+    assert watch.run(v)[0]["read"] == 0 and len(runs) == 1  # unchanged: a stat, never a read
+    _cal(d, "uni.ics", ("a", "20261210", "DSA exam"), ("b", "20261215", "OS deadline"))
+    r = watch.run(v)[0]
+    assert r["read"] == 1 and "imported 1" in r["line"] and "duplicate 1" in r["line"]
+    page = (v.root / "resources" / "calendar-2026-12.md").read_text("utf-8")
+    assert page.count("DSA exam") == 1 and "- 2026-12-15 all day · OS deadline" in page
+    assert watch.watched(v)[0]["last"]["line"] == r["line"]
+
+
+def test_a_moved_calendar_event_keeps_its_old_line(root_plain, tmp_path):
+    """The shortcut in importers.calendar_source: lines carry no UID, so an event moved to
+    another day is a new line and its old one stays (a UID -> line store would fix it)."""
+    v, d = Vault(root_plain), tmp_path / "Cal"
+    _cal(d, "uni.ics", ("a", "20261210", "DSA exam"))
+    watch.add(v, d, "calendar", "normal")
+    watch.run(v)
+    _cal(d, "uni.ics", ("a", "20261212", "DSA exam"))
+    assert "imported 1" in watch.run(v)[0]["line"]
+    page = (v.root / "resources" / "calendar-2026-12.md").read_text("utf-8")
+    assert "- 2026-12-10 all day · DSA exam" in page and "- 2026-12-12 all day · DSA exam" in page
+
+
+def test_cli_watches_a_calendar(root_plain, tmp_path):
+    d = tmp_path / "Cal"
+    _cal(d, "uni.ics", ("a", "20261210", "DSA exam"))
+    out = runner.invoke(cli, ["watch", "add", str(d), "--source", "calendar", "--vault",
+                              str(root_plain)]).output
+    assert f"Watching {d.resolve()} as calendar" in out

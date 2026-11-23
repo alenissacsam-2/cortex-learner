@@ -93,6 +93,7 @@ class Item:
     key: str = ""  # what dedupe hashes when it is not `text` (a note: with its frontmatter)
     who: str = ""  # R3-6: the person the item is by or with, when the source knows (an author)
     summary: str = ""  # R3-6: the item's own summary, when it has one (a note's frontmatter)
+    aliases: list[str] = field(default_factory=list)  # R13d-2: a note's checked `aliases:`
 
 
 @dataclass
@@ -397,6 +398,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
                   "summary": first[:160]}
         if it.tags:
             fields["tags"] = list(it.tags)
+        if it.aliases:
+            fields["aliases"] = [scrub(a, src) for a in it.aliases]
         if hidden:
             fields["private"] = True
         origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
@@ -430,7 +433,7 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             continue
         # the owner's tags, links and status stay; the import's own keys move
         fields = {**(_fields(vault, old) or fields),
-                  **{k: fields[k] for k in ("title", "date", "summary")},
+                  **{k: fields[k] for k in ("title", "date", "summary", "aliases") if k in fields},
                   **({"private": True} if hidden else {})}
         text = _note_text(nid, fields, page)
         if cur == text:

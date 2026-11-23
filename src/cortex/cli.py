@@ -1203,7 +1203,7 @@ def watch_add_cmd(path: Annotated[Path | None, typer.Argument(
              "or leave it out to find your library.")] = None,
         source: Annotated[str, typer.Option(
             help="What it holds: docs (PDFs, Word, text), notes (.md/.txt), repos (your git "
-                 "projects) or zotero.")] = "docs",
+                 "projects), calendar (.ics files; or give one .ics file) or zotero.")] = "docs",
         tier: Annotated[str | None, typer.Option(
             help="Who may read its pages: private, normal or skip. Without it, the source's "
                  "last choice (or normal).")] = None,
