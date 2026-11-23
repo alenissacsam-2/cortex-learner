@@ -1,6 +1,6 @@
 [project]
 name = "cortex-learner"
-version = "0.4.1"
+version = "0.4.2"
 description = "A local-first second brain: Markdown + JSONL vault, MCP server, CLI and skill."
 requires-python = ">=3.12"
 license = "MIT"

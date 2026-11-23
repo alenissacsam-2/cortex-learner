@@ -1,4 +1,19 @@
 {
+  "0.4.2": {
+    "items": [
+      "An idle Cortex gives its memory back: its search models unload after 10 quiet minutes and load again when needed, so an idle Cortex uses under 200 MB instead of about 2.8 GB.",
+      "Codex CLI and Gemini CLI get your profile, preferences and rules on every prompt from their own hooks, as Claude Code does.",
+      "Lines added to your core, setup or teaching rules outside Cortex (in Obsidian, a synced folder or another program) wait in Review for Keep before any AI app sees them; what is there when you update is kept. A playbook an AI wrote waits for your OK, and a guess one app made about you reaches only that app until you approve it.",
+      "The local Chat finds more: pages linked to the best match, what held at a date you ask about (\"back in July\"), follow-ups on its last list (\"the second one\") and both halves of a two-part question. When it finds only noise, it says it found nothing.",
+      "Facts you state in imported chats and in the local Chat become guesses about you by themselves, the clearest ones with no model at all. Your own words still win.",
+      "Scanned PDFs are read with Windows' own offline OCR, imported documents keep their full text, you can ask Chat about a file, the Google activity import brings YouTube watch and search history, and a chat-export zip in Downloads gets a one-click card on Home.",
+      "Status lists every way data can leave Cortex, and study features show only if you study."
+    ],
+    "do": [
+      "Restart Claude once after updating.",
+      "Using Codex CLI or Gemini CLI? In Connect AI apps, press Apply… once to add Cortex's hooks, then restart it. In Codex, trust Cortex's hooks once under /hooks."
+    ]
+  },
   "0.4.1": {
     "items": [
       "Review no longer merges two different facts: \"reads news every morning\" and \"reads papers every morning\" both stay. Lines 0.4.0 merged by mistake are put back by themselves.",
