@@ -109,7 +109,8 @@ def test_forget_cli(root):
     r = cli.invoke(app, ["forget", "people/asha", "--vault", str(root)], input="y\n")
     assert r.exit_code == 0, r.output
     assert "removed the page; 1 voice samples; 1 voice drafts" in r.output, r.output
-    assert "git history" in r.output and 'chats safely: "Asha", "people/asha"' in r.output
+    assert "git history" in r.output and "too short" not in r.output.lower()
+    assert 'Every mention of "Asha" was redacted, including other people' in r.output
     assert not (root / "people" / "asha.md").exists()
     assert [json.loads(x)["id"] for x in
             (root / "voice/samples.jsonl").read_text(encoding="utf-8").splitlines()] == ["2"]

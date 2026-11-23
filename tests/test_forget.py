@@ -111,7 +111,8 @@ def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
     assert "removed the page; 3 events redacted" in out, out  # 2 changes, the close summary
     out = cli("browse", "forget", "--site", "lichess.org", "--vault", root)
     assert "forgot lichess.org:" in out and "deny_domains" in out
-    assert hits(root, home) == []
+    assert hits(root, home) == [], [(h, [ln for ln in (root.parent / h).read_text(
+        "utf-8", "replace").splitlines() if CANARY in ln][:3]) for h in hits(root, home)]
     assert git(root, "status", "--porcelain") == ""  # each forget is committed
     v = Vault(root)
     assert all(e.get("id") and e.get("ts") and e.get("kind") for e in EventLog(v).iter_events())
@@ -197,6 +198,99 @@ def test_app_forget_card_forgets_and_returns_the_receipt(root):
                 and b"writes python" in p.read_bytes().lower()]
     assert "Writes Rust" in (root / "me" / "preferences.md").read_text(encoding="utf-8")
     assert git(root, "status", "--porcelain") == ""
+
+
+def _texts_in(root, *texts):
+    """The files under the vault (but .git) and the chat exports holding one of `texts`."""
+    from cortex import chats
+
+    return sorted(p.name for base in (root, chats.export_root()) for p in base.rglob("*")
+                  if p.is_file() and ".git" not in p.relative_to(base).parts
+                  and any(t.lower().encode() in p.read_bytes().lower() for t in texts))
+
+
+def _said(root):
+    """The events and the live chat logs (a chat_turn writes no event), as one text."""
+    from cortex import chats
+
+    return json.dumps(list(EventLog(Vault(root)).iter_events())) + "".join(
+        p.read_text("utf-8") for p in chats.export_root().rglob("*.jsonl"))
+
+
+def test_a_common_title_sweeps_only_the_page_and_its_id(root, monkeypatch):
+    run = serve  # logs chats, as an owner app does
+
+    monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
+    got = {}
+
+    async def body(call):
+        got["add"] = await call("cortex_add", {"kind": "note", "title": "Python",
+                                               "fields": {"summary": "Snakes and scripts"}})
+        await call("cortex_log", {"kind": "chat_turn", "payload": {
+            "user": "I write Python every day", "gist": "noted"}})
+        await call("cortex_log", {"kind": "taught", "payload": {
+            "concept": "two-pointers", "summary": "Python slices meet in the middle"}})
+
+    run(root, body)
+    pid, v = got["add"]["id"], Vault(root)
+    idx = Index(v, Catalog.load(v))
+    idx.save_snapshot()
+    semantic.vectors(idx, FakeEmbed(), 4)
+    assert pid in semantic._read(root)
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "vectors")
+
+    out = cli("forget", pid, "--vault", root)
+    assert 'Too short or common to sweep safely: "Python"' in out, out
+    assert not list(root.glob(f"**/{pid}.md")) and pid not in semantic._read(root)
+    named = [e["payload"]["change"] for e in EventLog(Vault(root)).iter_events()
+             if e["kind"] == "change"]
+    assert named and all(c["id"] == forget.MARK for c in named)  # the events naming its id
+    said = _said(root)
+    assert "I write Python every day" in said and "Python slices meet in the middle" in said
+
+
+def test_a_forget_tag_of_one_word_takes_only_its_line(root):
+    run = serve  # logs chats, as an owner app does
+
+    (root / "me" / "preferences.md").write_text(  # "python" holds all its content words
+        "# Preferences\n\n## Coding\n- Python is it for me\n"
+        "- Uses tabs for indentation\n", encoding="utf-8")
+
+    async def body(call):
+        await call("cortex_log", {"kind": "chat_turn", "payload": {
+            "user": "I write Python every day", "gist": "x"}})
+        out = await call("cortex_prime", {"prompt": "//forget: python"})
+        assert out["tags"] == ["//forget forgot a line on me/preferences everywhere Cortex "
+                               "keeps it"]
+
+    run(root, body)
+    assert _texts_in(root, "python is it for me") == []
+    said = _said(root)
+    assert "I write Python every day" in said and "//forget: python" in said  # nothing else
+    assert "Uses tabs for indentation" in (root / "me" / "preferences.md").read_text("utf-8")
+
+
+def test_a_person_forget_redacts_every_mention_of_the_name(root):
+    run = serve  # logs chats, as an owner app does
+
+    from cortex import people
+
+    people.add(Vault(root), "Asha", {"relation": "friend"})
+
+    async def body(call):
+        p = await call("cortex_prime", {"prompt": "Asha and I went hiking"})
+        await call("cortex_log", {"kind": "chat_turn", "payload": {
+            "chat": p["chat"], "user": "Asha said hi to [[asha]]", "gist": "noted"}})
+
+    run(root, body)
+    assert _texts_in(root, "asha")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "people")
+    out = cli("forget", "people/asha", "--vault", root)
+    assert ('Every mention of "Asha" was redacted, including other people with that name.'
+            in out), out
+    assert _texts_in(root, "asha") == []
 
 
 def test_drop_takes_the_line_and_its_past(tmp_path):

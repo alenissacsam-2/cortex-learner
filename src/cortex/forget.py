@@ -31,8 +31,13 @@ Where a page's or line's text can sit, and how a forget clears it:
   Cursor, VS Code, Codex's AGENTS.md): rewritten through `targets.refresh_rules`, and the
   backup that rewrite makes is deleted (it holds only the old block beyond what the file
   keeps); older backups are named in `left` while they hold the text.
-Texts shorter than MIN_TEXT are not swept (too likely to hit other words), and in chats only
-texts of MIN_CHAT or more; the receipt names them. Copies in other words are not found.
+A page's id is never swept as a substring: only a string that equals it, or its link forms
+([[id]], [[id|...]], <folder>/<id>). A title, a line's text or a //forget's words are swept
+only when specific (`_texts`: MIN_CHAT characters, or MIN_TEXT and two words or more; from
+chats, MIN_CHAT); a person's name from MIN_TEXT everywhere, one word too, and the receipt
+says so. The receipt names what was left unswept. Copies in other words are not found.
+Each file is checked outside the vault lock and replaced under it, one at a time, so AI
+apps' writes (which wait 5 s for the lock) never wait for the whole sweep.
 """
 
 from __future__ import annotations
@@ -100,22 +105,23 @@ def page(vault: Vault, id: str, also: tuple[str, ...] = ()) -> dict:
     note = vault.read_path(path)
     rel = path.relative_to(vault.root).as_posix()
     title = str(note.fields.get("title") or "")
-    texts = {note.id, title, *also} | ({people.PREFIX + note.id} if kind == "person" else set())
+    texts, names = {title, *also}, {title} if kind == "person" else set()
+    refs = {rel.removesuffix(".md"): kind}  # people/<slug> for a person
     removed: dict = {}
-    with vault.lock():
-        chats = _chat_ledger(vault, note.id)
-        if kind == "person":
-            removed.update(people.drop_voice(vault, people.PREFIX + note.id))
-        removed["page"] = int(vault.remove(path))
-        if kind == "person":
-            relink.apply(vault, relink.people_fixes(vault))  # drop it from the hub
-        if chats:
-            removed["chats"] = _drop_chats(vault, chats)
-        removed.update(_sweep(vault, texts))
+    chats = _chat_ledger(vault, note.id)
+    if kind == "person":
+        removed.update(people.drop_voice(vault, people.PREFIX + note.id))
+    removed["page"] = int(vault.remove(path))
+    if kind == "person":
+        relink.apply(vault, relink.people_fixes(vault))  # drop it from the hub
+    if chats:
+        removed["chats"] = _drop_chats(vault, chats)
+    removed.update(_sweep(vault, texts, refs=refs, names=names))
     removed.update(_finish(vault))
     raw = str(note.fields.get("source") or "")
     return _receipt(f"{kind} page {rel}", removed, vault, [rel], texts,
-                    [raw] if raw.startswith("raw/") else [], chats, rules=_refresh_rules(vault))
+                    [raw] if raw.startswith("raw/") else [], chats, rules=_refresh_rules(vault),
+                    refs=refs, names=names)
 
 
 def claim(vault: Vault, page_: str | None, cid: str, also: tuple[str, ...] = ()) -> dict:
@@ -131,12 +137,11 @@ def claim(vault: Vault, page_: str | None, cid: str, also: tuple[str, ...] = ())
         gone[:] = got
         return new
 
-    with vault.lock():
-        vault.update_text(path, change)
-        texts = {claims._MARK.sub("", r["text"]).strip() for r in gone} | set(also)
-        hashes = {review.text_hash(r["text"]) for r in gone} | {
-            review.line_hash(r["line"]) for r in gone}
-        removed = {"lines": len(gone), **_sweep(vault, texts, hashes)}
+    vault.update_text(path, change)
+    texts = {claims._MARK.sub("", r["text"]).strip() for r in gone} | set(also)
+    hashes = {review.text_hash(r["text"]) for r in gone} | {
+        review.line_hash(r["line"]) for r in gone}
+    removed = {"lines": len(gone), **_sweep(vault, texts, hashes)}
     removed.update(_finish(vault))
     return _receipt(f"a line on me/{pg}", removed, vault, [f"me/{pg}.md"], texts,
                     rules=_refresh_rules(vault))
@@ -149,7 +154,7 @@ def browse(vault: Vault, rule, what: str) -> dict:
     from cortex.browse import sites
 
     removed = Counter(bf.purge(vault, rule))
-    removed.update(_finish(vault))  # Counter.update adds
+    removed.update({k: n for k, n in _finish(vault).items() if k != "index"})  # adds
     with sites.busy(vault, bf.FORGET_WAIT_S):
         removed["compacted"] += sum(_compact(vault.root / d) for d in BROWSE_DBS)
     left = ["Your browsers still hold their recent history: add it to browse.deny_domains (or "
@@ -195,15 +200,46 @@ def _chat_ledger(vault: Vault, pid: str) -> list[dict]:
 
 # ---- sweeping ---------------------------------------------------------------------------------
 
-def _pattern(texts, least: int) -> re.Pattern | None:
-    """Every text of `least` or more characters, whole (not inside a longer word or id), any
-    case, any run of whitespace between its words."""
-    words = sorted({" ".join(t.split()) for t in texts if len(" ".join(t.split())) >= least},
-                   key=len, reverse=True)
+def _texts(texts, names=()) -> tuple[set[str], set[str]]:
+    """(texts swept from Cortex's own files, from chats). A free text is swept only when it is
+    specific: MIN_CHAT characters, or MIN_TEXT and two words or more ("Python" alone would
+    hit years of chats); from chats, MIN_CHAT. A person's name (`names`) is swept everywhere
+    from MIN_TEXT, one word too: forgetting a person means every mention of them."""
+    def norm(t):
+        return " ".join(str(t).split())
+    names = {n for n in map(norm, names) if len(n) >= MIN_TEXT}
+    own = {t for t in map(norm, texts) if len(t) >= MIN_CHAT or (len(t) >= MIN_TEXT and " " in t)}
+    return own | names, {t for t in own if len(t) >= MIN_CHAT} | names
+
+
+def _pattern(texts, refs=None, exact: bool = True) -> re.Pattern | None:
+    """Each of `texts` whole (not inside a longer word or id), any case, any run of whitespace
+    between its words; each page in `refs` ({`<folder>/<id>`: kind}) never as a substring, only
+    in its link forms ([[id]], [[id|...]], [[id#...]], <folder>/<id>, and `<kind> <id>` as
+    session notes name it) and, with `exact`, as a whole string, case as written."""
     alts = [(r"(?<![\w-])" if re.match(r"[\w-]", t) else "") + r"\s+".join(map(
         re.escape, t.split(" "))) + (r"(?![\w-])" if re.search(r"[\w-]$", t) else "")
-        for t in words]
+        for t in sorted(filter(None, texts), key=len, reverse=True)]
+    for ref, kind in (refs or {}).items():
+        folder, _, pid = ref.rpartition("/")
+        f, i, k = re.escape(folder), re.escape(pid), re.escape(kind)
+        link = (rf"\[\[(?:{f}/)?{i}(?:[#|][^\]\n]*)?\]\]|(?<![\w.-]){f}/{i}(?:\.md)?(?![\w-])"
+                rf"|(?<![\w-]){k} {i}(?![\w-])")
+        alts.append(f"(?-i:{link}" + (rf"|\A{i}\Z" if exact else "") + ")")
     return re.compile("|".join(alts), re.I) if alts else None
+
+
+def _needles(texts, refs=(), hashes=()) -> list[str] | None:
+    """Casefolded words one of which every match holds as written in a file, so a file without
+    any is skipped unread (JSON escapes only quotes, backslashes, control and, from some
+    writers, non-ASCII characters); None (read every file) when a text has no such word."""
+    out = [*(r.rpartition("/")[2] for r in refs), *hashes]
+    for t in texts:
+        w = max(t.split(), key=len)
+        if not (w.isascii() and w.isprintable()) or '"' in w or "\\" in w:
+            return None
+        out.append(w)
+    return [n.casefold() for n in out]
 
 
 def _scrub(v, pat: re.Pattern | None, hashes=frozenset(), keep=frozenset()):
@@ -221,12 +257,15 @@ def _scrub(v, pat: re.Pattern | None, hashes=frozenset(), keep=frozenset()):
     return v
 
 
-def _lines(path: Path, fix) -> tuple[str, int] | None:
+def _lines(path: Path, fix, needles=None) -> tuple[str, int] | None:
     """Each line of a JSONL file through `fix` (a parsed object -> new object; an unparsable
-    line is passed as its text); (new text, lines changed), None when unreadable."""
+    line is passed as its text); (new text, lines changed), None when unreadable or when it
+    holds none of `needles` (`_needles`)."""
     try:
         text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
+        return None
+    if needles is not None and not any(n in text.casefold() for n in needles):
         return None
     out, n = [], 0
     for line in text.splitlines(keepends=True):
@@ -248,12 +287,28 @@ def _write(vault: Vault, path: Path, text: str) -> None:
     vault._atomic_write(path, text)  # a vault file or a chat transcript: temp file, os.replace
 
 
-def _sweep(vault: Vault, texts, hashes=frozenset()) -> dict:
-    """Every store's copies of `texts` (and `hashes`), under the vault lock; counts."""
+def _rewrite(vault: Vault, p: Path, fix, needles) -> int:
+    """A JSONL file of the vault through `_lines`: checked outside the vault lock (most files
+    hold nothing), then read again and replaced under it, so AI apps' writes wait for one
+    file at most, never the whole sweep. Lines changed."""
+    if not ((got := _lines(p, fix, needles)) and got[1]):
+        return 0
+    with vault.lock():
+        if (got := _lines(p, fix)) and got[1]:  # again: it may have grown meanwhile
+            _write(vault, p, got[0])
+            return got[1]
+    return 0
+
+
+def _sweep(vault: Vault, texts, hashes=frozenset(), refs=(), names=()) -> dict:
+    """Every store's copies of `texts` (those `_texts` keeps), `hashes` and the pages `refs`,
+    one file at a time; counts."""
     root, out = vault.root, {}
-    pat, chat_pat = _pattern(texts, MIN_TEXT), _pattern(texts, MIN_CHAT)
+    own, chat = _texts(texts, names)
+    pat, chat_pat = _pattern(own, refs), _pattern(chat, refs, exact=False)
     if pat is None and not hashes:
         return out
+    needles = _needles(own, refs, hashes)
 
     def event(ev):
         if not isinstance(ev, dict):
@@ -261,13 +316,14 @@ def _sweep(vault: Vault, texts, hashes=frozenset()) -> dict:
         return {k: v if k in KEEP else _scrub(v, pat, hashes, FOLD) for k, v in ev.items()}
 
     for p in sorted((root / "events").glob("*/*/*.jsonl")):
-        if (got := _lines(p, event)) and got[1]:
-            _write(vault, p, got[0])
-            out["events"] = out.get("events", 0) + got[1]
-    own = [*(root / f for f in OWN_FILES), *(p for d in OWN_DIRS for p in (root / d).rglob("*.md"))]
+        if n := _rewrite(vault, p, event, needles):
+            out["events"] = out.get("events", 0) + n
+    chat_needles = _needles(chat, refs)
+    mine = [*(root / f for f in OWN_FILES),
+            *(p for d in OWN_DIRS for p in (root / d).rglob("*.md"))]
     chat_pages = [*(root / CHAT_ARCHIVE).glob("*.md"), *_ledger_pages(vault)]
-    for p, use in [*((p, pat) for p in own), *((p, chat_pat) for p in dict.fromkeys(chat_pages))]:
-        if use is not None and p.is_file() and _sweep_page(vault, p, use):
+    for p, use in [*((p, pat) for p in mine), *((p, chat_pat) for p in dict.fromkeys(chat_pages))]:
+        if use is not None and p.is_file() and _sweep_page(vault, p, use):  # locks per page
             out["pages"] = out.get("pages", 0) + 1
     cache = root / ".cortex"
     for p in sorted(cache.rglob("*.json*")) if cache.is_dir() else []:
@@ -275,12 +331,14 @@ def _sweep(vault: Vault, texts, hashes=frozenset()) -> dict:
         if (p.suffix not in (".json", ".jsonl") or rel[0] in SKIP_CACHE
                 or p.name == "index-snapshot.json"):  # the snapshot is written again
             continue
-        local_chat = rel[:2] == ("browse", "chat")  # the local Chat's history: a chat
-        use = chat_pat if local_chat else pat
-        if _sweep_json(vault, p, use, hashes):
+        if rel[:2] == ("browse", "chat"):  # the local Chat's history: a chat
+            n = _sweep_json(vault, p, chat_pat, (), chat_needles)
+        else:
+            n = _sweep_json(vault, p, pat, hashes, needles)
+        if n:
             out["caches"] = out.get("caches", 0) + 1
     if chat_pat is not None:
-        swept = _sweep_transcripts(vault, chat_pat)
+        swept = _sweep_transcripts(vault, chat_pat, chat_needles)
         if swept:
             out["chats"] = len(swept)
             out["chat_state"] = _drop_state(vault, swept, mark=False)
@@ -303,24 +361,30 @@ def _sweep_page(vault: Vault, p: Path, pat: re.Pattern) -> bool:
     return vault.update_text(p, change)
 
 
-def _sweep_json(vault: Vault, p: Path, pat, hashes) -> bool:
+def _sweep_json(vault: Vault, p: Path, pat, hashes, needles) -> bool:
+    """One .cortex cache, as `_rewrite` does (a .json file whole)."""
     if pat is None and not hashes:
         return False
     if p.suffix == ".jsonl":
-        got = _lines(p, lambda o: _scrub(o, pat, hashes) if not isinstance(o, str) else (
-            pat.sub(MARK, o) if pat else o))
-        if not got or not got[1]:
+        return bool(_rewrite(vault, p, lambda o: _scrub(o, pat, hashes) if not isinstance(
+            o, str) else (pat.sub(MARK, o) if pat else o), needles))
+
+    def scrubbed():  # the new content, None when there is nothing to change
+        try:
+            raw = p.read_bytes().decode("utf-8")
+            if needles is not None and not any(n in raw.casefold() for n in needles):
+                return None
+            data = json.loads(raw)
+        except (OSError, ValueError):
+            return None
+        return None if (out := _scrub(data, pat, hashes)) == data else out
+
+    if scrubbed() is None:  # outside the lock: most caches hold nothing
+        return False
+    with vault.lock():
+        if (out := scrubbed()) is None:
             return False
-        _write(vault, p, got[0])
-        return True
-    try:
-        data = json.loads(p.read_bytes())
-    except (OSError, ValueError):
-        return False
-    new = _scrub(data, pat, hashes)
-    if new == data:
-        return False
-    _write(vault, p, json.dumps(new, ensure_ascii=False))
+        _write(vault, p, json.dumps(out, ensure_ascii=False))
     return True
 
 
@@ -358,13 +422,13 @@ def _chat_lock(vault: Vault):
                           "forget again in a minute.")
 
 
-def _sweep_transcripts(vault: Vault, pat: re.Pattern) -> list[str]:
+def _sweep_transcripts(vault: Vault, pat: re.Pattern, needles) -> list[str]:
     """Each copy of a text in the transcripts Cortex keeps, replaced; their state keys."""
     swept = []
     with _chat_lock(vault):
         for key, p in _transcripts():
             got = _lines(p, lambda o: _scrub(o, pat) if not isinstance(o, str) else pat.sub(
-                MARK, o))
+                MARK, o), needles)
             if got and got[1]:
                 # shortcut: a live log appended to during this rewrite loses that turn; a forget
                 # is rare and the next turn logs again
@@ -444,9 +508,10 @@ def _finish(vault: Vault) -> dict:
     from cortex.catalog import Catalog
     from cortex.index import Index
 
-    Index(vault, Catalog.load(vault)).save_snapshot()
-    return {"snapshot": 1, "vectors": semantic.prune(vault),
-            "compacted": sum(_compact(vault.root / d) for d in DBS)}
+    idx = Index(vault, Catalog.load(vault))
+    idx.save_snapshot()
+    return {"snapshot": 1, "vectors": semantic.prune(vault),  # VACUUM: its own DB lock only
+            "compacted": sum(_compact(vault.root / d) for d in DBS), "index": idx}
 
 
 def _compact(path: Path) -> bool:
@@ -479,9 +544,14 @@ REMOVED = (("page", "the page"), ("lines", "claim lines"), ("samples", "voice sa
 
 def _receipt(what: str, removed: dict, vault: Vault, paths: list[str], texts,
              raw: list[str] = (), chats_: list[dict] = (), extra: list[str] = (),
-             rules: list[str] = ()) -> dict:
+             rules: list[str] = (), refs=(), names=()) -> dict:
     root = vault.root
+    idx = removed.pop("index", None)
     removed = {**removed, "rules": len(rules)}
+    own, chat = _texts(texts, names)
+    pat = _pattern(own, refs)
+    notes = [f'Every mention of "{n}" was redacted, including other people with that name.'
+             for n in sorted(_texts((), names)[0])]
     left = list(extra)
     if (root / ".git").exists():
         spec = " ".join(f'--path "{p}"' for p in paths)
@@ -505,23 +575,28 @@ def _receipt(what: str, removed: dict, vault: Vault, paths: list[str], texts,
                         "~/.claude/projects; Cortex will not import it again.")
     left.append("AI apps keep what they were already sent: chats in Claude, ChatGPT and other "
                 "apps, and any memory they keep of their own.")
-    if held := _rules_left(texts):
+    if held := _rules_left(pat):
         left.append("AI apps' rules files, or the backups Cortex keeps beside each one it "
                     "changes (*.cortex-<date>.bak), that still hold it; delete the backups (and "
                     f"check the rules files) yourself: {', '.join(held)}.")
     if sync := next((s for s in SYNCED if s.lower() in str(root).lower()), None):
         left.append(f"The vault is in a {sync} folder: its version history and recycle bin may "
                     "keep old copies.")
-    if short := sorted({t.casefold(): t for t in sorted(texts, reverse=True)
-                        if t and len(" ".join(t.split())) < MIN_CHAT}.values()):
-        left.append("Too short to sweep from chats safely: " + ", ".join(
-            f'"{t}"' for t in short) + ".")
-    if mine := _mentions(vault, texts):
+
+    def quoted(ts):  # case variants once
+        return ", ".join(f'"{t}"' for t in sorted({t.casefold(): t for t in sorted(
+            ts, reverse=True)}.values()))
+    free = {" ".join(t.split()) for t in texts} - {""}
+    if short := free - own:
+        left.append(f"Too short or common to sweep safely: {quoted(short)}.")
+    if short := own - chat:
+        left.append(f"Too short to sweep from chats safely: {quoted(short)}.")
+    if mine := _mentions(vault, pat, idx):
         left.append("Your own pages that still mention it (Cortex leaves them as you wrote "
                     f"them): {', '.join(mine[:5])}" + (f" and {len(mine) - 5} more"
                                                        if len(mine) > 5 else "") + ".")
-    return {"what": what, "removed": {k: n for k, n in removed.items() if n}, "left": left,
-            "rules": list(rules)}
+    return {"what": what, "removed": {k: n for k, n in removed.items() if n}, "notes": notes,
+            "left": left, "rules": list(rules)}
 
 
 def _rule_files() -> list[Path]:
@@ -558,10 +633,10 @@ def _refresh_rules(vault: Vault) -> list[str]:
     return [r["file"] for r in rows]
 
 
-def _rules_left(texts) -> list[str]:
-    """The AI apps' rules files, and older backups Cortex made beside them, still holding one
-    of `texts`."""
-    if (pat := _pattern(texts, MIN_TEXT)) is None:
+def _rules_left(pat) -> list[str]:
+    """The AI apps' rules files, and older backups Cortex made beside them, still holding a
+    match of `pat`."""
+    if pat is None:
         return []
     out = []
     for f in _rule_files():
@@ -573,18 +648,18 @@ def _rules_left(texts) -> list[str]:
     return out
 
 
-def _mentions(vault: Vault, texts) -> list[str]:
-    """Pages Cortex does not write that still hold one of `texts`."""
-    pat = _pattern(texts, MIN_TEXT)
-    if pat is None:
+def _mentions(vault: Vault, pat, idx) -> list[str]:
+    """Pages Cortex does not write that still hold a match of `pat`, from the index `_finish`
+    built (no second parse of every page)."""
+    if pat is None or idx is None:
         return []
-    own = {vault.root / d for d in (*OWN_DIRS, CHAT_ARCHIVE, "browse")}
+    own = [vault.root / d for d in (*OWN_DIRS, CHAT_ARCHIVE, "browse")]
     out = []
-    for n in vault.iter_notes():
-        if not any(n.path.is_relative_to(d) for d in own) and (
-                pat.search(n.body) or pat.search(json.dumps(n.fields, default=str))):
-            out.append(n.path.relative_to(vault.root).as_posix())
-    return out
+    for p, i in idx._ids.items():
+        if (n := idx._notes.get(i)) and not any(p.is_relative_to(d) for d in own) and (
+                pat.search(n["body"]) or pat.search(json.dumps(n["fields"], default=str))):
+            out.append(p.relative_to(vault.root).as_posix())
+    return sorted(out)
 
 
 def lines(receipt: dict) -> list[str]:
@@ -592,5 +667,5 @@ def lines(receipt: dict) -> list[str]:
     got = [f"{n if n != 1 or k not in ('page', 'snapshot') else ''} {label}".strip()
            for k, label in REMOVED if (n := receipt["removed"].get(k))]
     out = [f"forgot {receipt['what']}: removed " + ("; ".join(got) if got else "nothing")]
-    out += [f"rewritten: {p}" for p in receipt.get("rules") or []]
+    out += [*(receipt.get("notes") or []), *(f"rewritten: {p}" for p in receipt.get("rules") or [])]
     return out + ["Cortex cannot remove:"] + [f"- {x}" for x in receipt["left"]]
