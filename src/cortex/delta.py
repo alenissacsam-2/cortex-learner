@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 
-from cortex import prime, xray
+from cortex import claims, prime, xray
 from cortex.index import SNAPSHOT, SNAPSHOT_SCHEMA, STOPWORDS, _plain, _wrap
 from cortex.vault import HEADING_RE, VaultError, is_private
 
@@ -44,8 +44,8 @@ def nudge(turn: int) -> str:
     return SAVE.format(n=max(1, turn - EVERY)) if turn > 1 and turn % EVERY == 0 else ""
 
 
-def _key(text: str) -> str:
-    return " ".join(text.removesuffix(_ASK).split())
+def _key(text: str) -> str:  # a served line carries no `(since …)` stamp (R13a)
+    return " ".join(claims.strip_since(text).removesuffix(_ASK).split())
 
 
 def claim_lines(vault, parts: list[str]) -> list[tuple[str, str]]:

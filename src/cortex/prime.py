@@ -117,7 +117,7 @@ def profile_summary(vault: Vault, today: str, served: dict | None = None,
 
     def label(ln: str) -> str:
         lab = labels.get(claims.strip_id(ln)[2:].strip()) if ln.startswith("- ") else None
-        return claims.strip_id(ln) + lab if lab else ln
+        return claims.strip_since(claims.strip_id(ln) + lab if lab else ln)
 
     # G6: template claim lines are held (`held_ids`) until Keep; free text has no Keep
     return "\n".join(label(ln) for ln in text.splitlines()
@@ -245,11 +245,12 @@ def claim_ids(vault: Vault) -> dict:
 
 
 def claim_items(vault: Vault, page: str, keep, served: dict, today: str, ids: dict | None = None,
-                mute: set[str] = frozenset()) -> list[tuple]:
+                mute: set[str] = frozenset(), use: dict | None = None) -> list[tuple]:
     """Per kept `## ` section of me/<page> (heading line, other lines, [(score, labelled list
-    line, labelled?, `^c-…` id or None)] best first); never `## Past`, `## Not me`, a line
-    whose own `(until …)` day is before `today` (agenda 4) or one whose id (`ids`) is muted.
-    On a review.GUARDED page a heading or line whose card key is muted (R5a) is left out."""
+    line, labelled?, `^c-…` id or None)] best first, ties by `use` (`use_order`), then newest
+    first); never `## Past`, `## Not me`, a line whose own `(until …)` day is before `today`
+    (agenda 4) or one whose id (`ids`) is muted. Lines lose their `(since …)` stamp (R13a). On
+    a review.GUARDED page a heading or line whose card key is muted (R5a) is left out."""
     note = me(vault, page)
     out = []
     guarded = page in review.GUARDED and mute
@@ -270,8 +271,10 @@ def claim_items(vault: Vault, page: str, keep, served: dict, today: str, ids: di
                 if cid in mute:
                     continue
                 label, score = served.get(key, ("", 0.5))
-                items.append((score, claims.strip_id(ln) + label, bool(label), cid))
-            items.sort(key=lambda x: -x[0])  # stable: ties stay newest first
+                items.append((score, claims.strip_since(claims.strip_id(ln)) + label,
+                              bool(label), cid))
+            # stable: ties stay newest first
+            items.sort(key=lambda x: (-x[0], -(use or {}).get(x[3], 0)))
             out.append((head, [ln for ln in lines if not ln.startswith("- ")], items))
     return out
 
@@ -455,7 +458,8 @@ def core_lines(vault: Vault, served: dict, today: str,
                withheld: set[str] = frozenset(), ids: dict | None = None,
                mute: set[str] = frozenset()) -> list[str]:
     """me/core.md's live lines the user wrote or confirmed (the ones `served` labels plain),
-    verbatim (claim id stripped) in page order, as many whole lines as fit CORE_MAX; [] with no
+    verbatim (claim id and `(since …)` stripped) in page order, as many whole lines as fit
+    CORE_MAX; [] with no
     page, a withheld or private page. Agent, exposed or relayed lines are never pinned, and a
     line whose id (`ids`) is muted in the X-ray is left out."""
     note = None if "core" in withheld else me(vault, "core")
@@ -463,7 +467,7 @@ def core_lines(vault: Vault, served: dict, today: str,
         return []
     out, size = [], 0
     for (page, sec, text), (label, _) in served.items():
-        line = f"- {text}"
+        line = f"- {claims.strip_since(text)}"
         if page != "core" or label or claims.expired(text, today) or (
                 ids or {}).get((page, sec, text)) in mute:
             continue
@@ -499,14 +503,16 @@ def similarity(prompt: str, texts: list[str]) -> list[float] | None:
 
 def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[str],
               withheld: set[str] = frozenset(), allow=None, ids: dict | None = None,
-              xs: dict | None = None, back: dict | None = None) -> list[list]:
+              xs: dict | None = None, back: dict | None = None,
+              use: dict | None = None) -> list[list]:
     """The preference, setup and personality lines as prime ranks them for `prompt`, best first:
     [-match, situational?, -served score, "- [Section] line", labelled?, "Section: text", id].
     Never a `pinned` line again, a `withheld` page, a section `allow(page, heading)` (an
     agent profile, access.scope_section) refuses, or an X-ray muted claim; X-ray pins lead.
     `ids` (claim_ids) and `xs` (xray.settings) are read when not given. R13b: of lines that
     rank equal, the one that came back latest (`back`: `^c-…` id -> review.reinforced's last
-    day) goes first, and one that never came back after it."""
+    day) goes first, and one that never came back after it; G5b-4: then, inside a section, the
+    more used (`use`: `use_order`)."""
     ids = claim_ids(vault) if ids is None else ids
     xs = xray.settings(vault) if xs is None else xs
     words = re.findall(r"\w+", prompt.lower())
@@ -519,7 +525,7 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
         if page in withheld:
             continue
         ok = keep if allow is None else (lambda h, k=keep, p=page: k(h) and allow(p, h))
-        for head, _, items in claim_items(vault, page, ok, served, today, ids, xs["mute"]):
+        for head, _, items in claim_items(vault, page, ok, served, today, ids, xs["mute"], use):
             name = head[3:].strip()
             for score, line, lab, cid in items:  # a section name match counts (my presentation)
                 bare = line[2:].removesuffix(" (ask)")
@@ -542,6 +548,15 @@ def pref_rows(vault: Vault, prompt: str, served: dict, today: str, pinned: list[
         rows.sort(key=lambda r: back.get(r[6], ""), reverse=True)
     rows.sort(key=lambda r: r[:3])
     return rows
+
+
+def use_order(vault: Vault, events, today: str, known: dict | None = None,
+              back: dict | None = None) -> dict[str, int]:
+    """G5b-4: {`^c-…` id: use bucket}: the log2 of how often a line was used before `today`
+    (review.use; `back`: its `reinforced` fold when the caller has it), so the calls of one day
+    leave prime's order as it was that morning."""
+    return {xray.claim(c): x["n"].bit_length()
+            for c, x in review.use(vault, events, today, known, back).items()}
 
 
 def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
@@ -580,10 +595,11 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
                     "contract") or rules[:1]
         put("Teaching contract (core)", "\n".join(lines), "me/teaching-contract",
             PRIME_CAPS["contract"], more(len(rules) - len(lines), "contract"))
-    back = {xray.claim(c): x["last"]
-            for c, x in review.reinforced(events, review.known_texts(vault)).items()}
+    known = review.known_texts(vault)
+    again = review.reinforced(events, known)  # once per prompt: R13b's `back` and the use order
+    back = {xray.claim(c): x["last"] for c, x in again.items()}
     rows = pref_rows(vault, prompt, served, local_day(now), pinned, withheld, allow,
-                     ids, xs, back)
+                     ids, xs, back, use_order(vault, events, local_day(now), known, again))
     # the prompt's Attempt first line follows Preferences (the owner's standing text first, so
     # it stays the same from chat to chat) and still comes out of the preferences cap
     problem = named_problem(vault, prompt)
@@ -605,7 +621,7 @@ def core(vault: Vault, prompt: str, events: list[dict], now: datetime,
     if xr is not None:
         heads = {b.split("\n", 1)[0][3:] for b in parts}
         xr["served"] = {"core": [c for (p, _, t), c in ids.items()
-                                 if p == "core" and f"- {t}" in pinned],
+                                 if p == "core" and f"- {claims.strip_since(t)}" in pinned],
                         "profile": ["me/profile"] * ("Profile" in heads),
                         "preferences": [r[6] for r in rows[:len(prefs)] if r[6]],
                         "contract": ["me/teaching-contract"] * (

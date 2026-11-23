@@ -13,6 +13,12 @@
   const SVGNS = 'http://www.w3.org/2000/svg';
   const SECTIONS = ['tonight', 'setup', 'chat', 'status', 'review', 'xray', 'connect', 'llm', 'browse', 'vault'];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // resolves once the page shows (now if it does): hidden (the tray, minimised), nothing polls
+  const shown = () => new Promise((r) => {
+    if (!document.hidden) { r(); return; }
+    const on = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', on); r(); } };
+    document.addEventListener('visibilitychange', on);
+  });
 
   /* ---- DOM helpers ---- */
   function h(tag, props, ...kids) {
@@ -281,6 +287,7 @@
         showJob(j);
         if (!j.running) { finish(j); break; }
         await sleep(600);
+        await shown();
       }
     } catch (e) { /* the app stopped: gone() said so */ } finally {
       polling = false;
@@ -2107,4 +2114,5 @@
   if (current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});  // the nav's count; no vault yet: none
   // the app starts the automatic history import by itself: the job line shows it within 15 s
   setInterval(() => { if (!dead && !document.hidden) poll(true); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!dead && !document.hidden) poll(true); });  // shown again: the job line at once
 })();

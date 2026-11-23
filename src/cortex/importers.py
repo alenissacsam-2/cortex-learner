@@ -422,6 +422,22 @@ def _summary(front: str) -> str:
     return next((v for k in ("summary", "description") if isinstance(v := fm.get(k), str)), "")
 
 
+def _aliases(front: str) -> list[str]:
+    """R13d-2: a note's `aliases:` (one string or a list of strings; any other value is
+    ignored), untrusted text: each stripped, one line of at most 80 characters, at most 20."""
+    from ruamel.yaml import YAML, YAMLError
+    try:
+        fm = YAML(typ="safe").load(front)
+    except (YAMLError, ValueError):
+        return []
+    a = fm.get("aliases") if isinstance(fm, dict) else None
+    a = [a] if isinstance(a, str) else a
+    if not isinstance(a, list) or not all(isinstance(x, str) for x in a):
+        return []
+    return [s for x in a if (s := x.strip()) and len(s) <= 80
+            and not any(c in s for c in "\r\n\x85  ")][:20]
+
+
 def report_line(label: str, r: dict) -> str:
     """The line every import ends with: counts read, imported, private, duplicate and
     skipped, with the reason for each skip; then the items the quality gate kept out
@@ -492,7 +508,8 @@ def note_item(name: str, size: int, mtime: float, read) -> sources.Item | str:
     return sources.Item(PurePosixPath(rel).stem, _day(mtime),
                         text[fm.end():] if fm else text, rel,
                         private=bool(fm and _is_private(fm.group(1))), key=text,
-                        summary=_summary(fm.group(1)) if fm else "")
+                        summary=_summary(fm.group(1)) if fm else "",
+                        aliases=_aliases(fm.group(1)) if fm else [])
 
 
 def _tier(private: bool, tier: str | None) -> sources.Audience:

@@ -5,6 +5,7 @@ server logged this chat's user turns and none of them says the line. No logged t
 stands; the owner's app click is never downgraded."""
 
 import json
+import re
 import time
 
 import anyio
@@ -111,7 +112,8 @@ def test_a_downgraded_goals_revise_says_it_is_saved_not_waiting(vault):
 
     out = serve(vault, body)
     assert out["changed"] is True and "waits" not in out["next"] and "(ask)" in out["next"]
-    assert "- Pass the Hyland OA ^c-" in (vault / "me" / "goals.md").read_text("utf-8")
+    goals = (vault / "me" / "goals.md").read_text("utf-8")  # R13a: a revise says since when
+    assert re.search(r"\n- Pass the Hyland OA \(since \d{4}-\d\d-\d\d\) \^c-", goals)
 
 
 def test_a_line_no_turn_says_is_downgraded(vault):
