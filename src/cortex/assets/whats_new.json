@@ -6,8 +6,7 @@
       "Lines added to your core, setup or teaching rules outside Cortex (in Obsidian, a synced folder or another program) wait in Review for Keep before any AI app sees them; what is there when you update is kept. A playbook an AI wrote waits for your OK, and a guess one app made about you reaches only that app until you approve it.",
       "The local Chat finds more: pages linked to the best match, what held at a date you ask about (\"back in July\"), follow-ups on its last list (\"the second one\") and both halves of a two-part question. When it finds only noise, it says it found nothing.",
       "Facts you state in imported chats and in the local Chat become guesses about you by themselves, the clearest ones with no model at all. Your own words still win.",
-      "Scanned PDFs are read with Windows' own offline OCR, imported documents keep their full text, you can ask Chat about a file, the Google activity import brings YouTube watch and search history, and a chat-export zip in Downloads gets a one-click card on Home.",
-      "Status lists every way data can leave Cortex, and study features show only if you study."
+      "Also new: scanned PDFs are read with Windows' own offline OCR; imported documents keep their full text; you can ask Chat about a file; the Google activity import brings YouTube watch and search history; a chat-export zip in Downloads gets a one-click card on Home; Status lists every way data can leave Cortex; and study features show only if you study."
     ],
     "do": [
       "Restart Claude once after updating.",
