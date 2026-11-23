@@ -237,6 +237,10 @@ Each run also depends on whether the PC was idle. In the after run it was idle f
 the import's private-vectors pass ran for its budget and held the copy until minute 9. In the
 before run it never ran.
 
+The after run came before review's scorer stopped restarting the clock (see below). In that
+run, its first pass, at minute 1, used the embedder too, which moved the drop about a minute
+later.
+
 A first after run, which trimmed only on an idle drop, stayed at 132-136 MB with no model
 after its minute-14 import. The end of a background run now trims too.
 
@@ -278,9 +282,9 @@ never keeps one loaded:
 - **A background use never restarts the idle clock.** `_Held.use(touch=False)` leaves the
   clock where a person's last use set it. A model no person used goes at the next idle check,
   even while background work runs every few minutes.
-- **The safety net never loads the main embedder by itself.**
-  `safety_net.background_tools()` gets `semantic.loaded_embedder()`, which returns an embed
-  function only while the main model is in memory. That function does not restart the clock.
+- **The safety net and review's scorer never load the main embedder by themselves.**
+  `safety_net.background_tools()` and `review._warm` get `semantic.loaded_embedder()`, which
+  returns an embed function only while the main model is in memory. That function does not restart the clock.
   If the model is dropped between that check and the embed, the call loads it again, and the
   next idle check drops it.
 - **The failure path is the same as before.** Before M3, a model whose files did not load
@@ -312,10 +316,11 @@ at the end of a background run that leaves no model (`background()`). Both call
 other programs can take them, and the next call faults back only the pages it touches. Private
 bytes do not change, and no tool's output or server-stamped field changes.
 
-**What is left.** `review._warm` is in `review.py`, which is R13's file. Once a person's use has
-set `_embedder`, it loads the main embedder again after an idle drop whenever it meets texts it
-has no vectors for. Those texts come from the review lines it reads or writes. That use restarts
-the idle clock as a person's use does.
+**Review's scorer follows the same rule.** `review._warm` serves the app's about-me tidy and
+Review. It used to take `_embedder` as meaning the model was loaded. So once a person's use had
+set it, the scorer loaded the embedder again after an idle drop and restarted its clock. Now it
+also uses `semantic.loaded_embedder()`. With no model in memory, it scores by words (Jaccard),
+as it already did when no model was set up.
 
 ## What is left (not changed here)
 

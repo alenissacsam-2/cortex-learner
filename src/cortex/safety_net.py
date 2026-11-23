@@ -557,9 +557,7 @@ def background_tools():
     it no longer than a person's last use would (M3: `semantic.loaded_embedder`)."""
     from cortex import semantic
     from cortex.browse import titles
-    e = semantic._embedder
-    return titles.may_run()[0], (e if e is not semantic._embed_real
-                                 else semantic.loaded_embedder())
+    return titles.may_run()[0], semantic.loaded_embedder()
 
 
 def cli_tools():

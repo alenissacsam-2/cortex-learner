@@ -226,10 +226,11 @@ def apart(a: str, b: str) -> bool:
 
 
 def _warm(texts: list[str]) -> list | None:
-    """Unit vectors of `texts` from the bge embedder, only if this process has it loaded
-    already: never imports cortex.semantic or loads a model. None when not warm or it fails."""
+    """Unit vectors of `texts` from the bge embedder, only while this process has it in memory
+    (`semantic.loaded_embedder`): never imports cortex.semantic, loads a model or restarts its
+    idle clock (M3). None when not in memory or it fails."""
     sem = sys.modules.get("cortex.semantic")
-    embed = getattr(sem, "_embedder", None)
+    embed = sem.loaded_embedder() if sem is not None else None
     if embed is None:
         return None
     try:

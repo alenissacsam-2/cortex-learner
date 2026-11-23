@@ -177,10 +177,13 @@ def _embed_quiet(texts) -> np.ndarray:
 
 
 def loaded_embedder():
-    """For background work that embeds only with a model already in memory (the safety net):
-    `_embed_quiet` while the main model is loaded, else None; never a load.
+    """For work that embeds only with a model already in memory (the safety net, review's
+    scorer): `_embed_quiet` while the main model is loaded, else None; never a load. An
+    `_embedder` other than the real model's (a test's) is returned as it is.
     shortcut: a drop between this check and the embed loads it again for that call (dropped at
     the next idle check, as its clock was not restarted)."""
+    if _embedder is not None and _embedder is not _embed_real:
+        return _embedder
     return _embed_quiet if _main.model else None
 
 

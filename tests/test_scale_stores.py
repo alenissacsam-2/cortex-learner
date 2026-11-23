@@ -321,6 +321,19 @@ def test_background_use_never_restarts_the_idle_clock(counted, monkeypatch):
     assert Counted.loads == 3 and semantic.drop_idle(time.monotonic() + 1) == []
 
 
+def test_review_scores_with_the_embedder_only_while_it_is_in_memory(counted):
+    """M3: review's scorer (the app's about-me tidy) uses the embedder only while it is in
+    memory, and that use keeps it no longer; after an idle drop it loads nothing and scores
+    by words."""
+    from cortex import review
+    used = semantic._main.used
+    _, cut = review.scorer(["likes spicy food", "enjoys spicy dishes"])
+    assert cut == review.COS and semantic._main.used == used  # in memory: the clock left alone
+    assert semantic.drop_idle(used + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    _, cut = review.scorer(["reads papers", "reads news every morning"])
+    assert cut == review.JACCARD and semantic._main.model is None and Counted.loads == 1
+
+
 def test_background_import_setup_loads_no_model(home, root, monkeypatch):
     """M3: inside background(), load_embedder loads nothing (the browse import asks for it
     every run); the first embed loads only the capped copy, which goes when the work ends,
