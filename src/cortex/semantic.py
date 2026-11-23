@@ -44,7 +44,7 @@ import numpy as np
 
 from cortex import vecstore
 from cortex.events import local_day
-from cortex.index import STOPWORDS, Index, _one_line
+from cortex.index import BM25, STOPWORDS, Index, _one_line, aliases
 from cortex.topics import is_hub, page_date, page_source
 
 log = logging.getLogger(__name__)
@@ -925,7 +925,7 @@ def _keyword(index: Index, query: str) -> dict[str, float]:
     terms = _terms(query)
     if not terms:
         return {}
-    rows = index.db.execute("SELECT id, bm25(fts, 0, 0, 10, 8, 3, 1) FROM fts WHERE fts MATCH ?",
+    rows = index.db.execute(f"SELECT id, {BM25} FROM fts WHERE fts MATCH ?",
                             (" OR ".join(terms),)).fetchall()
     s = {i: -b for i, b in rows}
     top = max(s.values(), default=0.0)
@@ -941,15 +941,20 @@ MENTIONED_BY = 8  # R3a: the pages saying a page's name that count as linked, be
 _WORD = re.compile(r"[\w-]+")  # a hyphenated id is one word: "dec-x" is not in "dec-x-v2"
 
 
-def _names(id: str, title: str) -> list[tuple[str, ...]]:
+def _names(id: str, title: str, also: list[str] = ()) -> list[tuple[str, ...]]:
     """The words a page is named by in other pages' text: its title without a trailing
     "(…)" ("Paper (PDF)" is said "Paper") and an id with a hyphen and a letter; a one-word
-    name only of 5+ characters."""
+    name only of 5+ characters. R13d: `also` (its `aliases:`) are names too, of 2+ characters
+    (an owner chose them: "IITH" names the page), matched as whole words like the rest."""
     out = []
     for name in (re.sub(r"\s*\([^)]*\)\s*$", "", title), id if "-" in id and re.search(
             r"[^\W\d_]", id) else ""):
         w = tuple(_WORD.findall(name.lower()))
         if (len(w) > 1 or (w and len(w[0]) >= 5)) and w not in out:
+            out.append(w)
+    for name in also:
+        w = tuple(_WORD.findall(name.lower()))
+        if len("".join(w)) >= 2 and w not in out:
             out.append(w)
     return out
 
@@ -977,6 +982,12 @@ def linked(index: Index, ids: list[str], quiet: dict[str, float] | None = None,
     def words(i: str) -> list[str]:
         return _WORD.findall(index._notes[i]["body"].lower())
 
+    def names(i: str) -> list[tuple[str, ...]]:
+        return _names(i, index._notes[i]["title"], aliases(index._notes[i]["fields"]))
+
+    def first(text: str) -> str:
+        return (m := _WORD.search(text.lower())) and m[0]
+
     count: dict[str, list] = {}  # id -> [links, first seed]
     for s, seed in enumerate(ids):
         if seed not in index._notes:
@@ -985,9 +996,10 @@ def linked(index: Index, ids: list[str], quiet: dict[str, float] | None = None,
         have = set(w)  # a name's first word must be here: skips _names for most pages
         got = [{n for n, _ in _neighbours(index, seed)},
                {i for i, n in index._notes.items()
-                if (i in have or ((m := _WORD.search(n["title"].lower())) and m[0] in have))
-                and any(_holds(w, name) for name in _names(i, n["title"]))},
-               {i for name in _names(seed, index._notes[seed]["title"])
+                if (i in have or first(n["title"]) in have
+                    or any(first(a) in have for a in aliases(n["fields"])))
+                and any(_holds(w, name) for name in names(i))},
+               {i for name in names(seed)
                 for i in _says(index, name) if i in index._notes and _holds(words(i), name)}]
         for i in set().union(*got):
             if i not in ids and i in index._notes and (quiet or {}).get(i) != 0 \
