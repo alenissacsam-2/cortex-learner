@@ -102,8 +102,11 @@ def test_doctor_security_prints_a_line_per_probe_and_exits_1_on_a_fail(monkeypat
 
 
 @pytest.mark.perf
-def test_the_red_team_takes_under_ten_seconds():
+def test_the_red_team_takes_under_eleven_seconds():
+    # measured 24 Nov, warm, at ~100% CPU from other suites: 8.0-9.6 s (P5 ~30%, P2 and P3
+    # ~20% each, prime/context over three apps ~35% in all). Idle was ~8.3 s before _vault took
+    # one lock for its ten writes (-0.2 s a vault), so ~7.5 s idle expected; the bound is ~1.5x
     redteam.run()  # imports warm
     t = time.monotonic()
     assert all(p.ok for p in redteam.run())
-    assert time.monotonic() - t < 10
+    assert time.monotonic() - t < 11

@@ -93,9 +93,10 @@ def _vault(root: Path) -> Vault:
     v = Vault(root)
     for name in SECTIONS:
         (root / name).mkdir(exist_ok=True)
-    v.write_text(root / ".cortex" / "config.yaml", "schema: 1\n")
-    for rel, text in ME_PAGES.items():
-        v.write_text(root / rel, text)
+    with v.lock():  # one lock for the ten writes: each lock file costs ~20 ms on Windows
+        v.write_text(root / ".cortex" / "config.yaml", "schema: 1\n")
+        for rel, text in ME_PAGES.items():
+            v.write_text(root / rel, text)
     return v
 
 
