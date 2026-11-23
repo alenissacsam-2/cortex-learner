@@ -3940,7 +3940,7 @@ BROWSE_SEARCH_DESC = ("Search the user's whole browsing archive, private pages i
 # P9: a guard against a mistaken config (a cloud app given the private flag), not a security
 # boundary: any client can send any name.
 CLOUD_CLIENTS = ("claude", "gemini", "chatgpt", "openai", "cursor", "copilot", "codex",
-                 "windsurf", "vscode", "code")
+                 "windsurf", "vscode", "code", "antigravity", "cline")
 
 
 def dry_prime(vault: Vault, client: str, prompt: str) -> dict:

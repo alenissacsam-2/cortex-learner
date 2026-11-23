@@ -361,6 +361,10 @@ def test_scope_bar_and_served_most_often(vault):
     # one matcher: scopes_for agrees with the rule the view shows
     assert profiles.scopes_for(data, "mystery-app") == frozenset(["core"])
     assert profiles.match(data, "Claude Code") == 0 and profiles.match(data, "") is None
+    # the coding apps' own MCP client names get the coding profile, not the core only
+    for name in ("windsurf-client", "Windsurf", "antigravity-client", "Cline", "opencode",
+                 "JetBrains-IU-copilot-intellij", "gemini-cli-mcp-client", "cursor-vscode"):
+        assert profiles.scopes_for(profiles.DEFAULT, name) == frozenset(profiles.CODING), name
 
 
 def test_dry_run_endpoint(vault):

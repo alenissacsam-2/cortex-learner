@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from cortex import localllm
+from cortex import access, localllm, profiles
 from cortex.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
@@ -1084,7 +1084,8 @@ def test_every_control_sends_once_shows_busy_and_says_what_happened(
     # Agent profiles: one checkbox per profile and scope, each saving the whole set once
     prof = {k: sent["connect"].pop(k) for k in list(sent["connect"])
             if k.startswith("pf-")}
-    assert len(prof) == 8 * 9 and all(  # profiles.DEFAULT's 7 plus `unknown`, 9 scopes each
+    rows = len(profiles.DEFAULT["profiles"]) + 1  # the default profiles plus `unknown`
+    assert len(prof) == rows * len(access.SCOPES) and all(
         len(v) == 1 and v[0][0] == "/api/profiles" and set(v[0][1]) == {"profiles", "unknown"}
         for v in prof.values()), prof
     assert sent == SENDS
