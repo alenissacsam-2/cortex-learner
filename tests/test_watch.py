@@ -146,7 +146,29 @@ def test_a_watched_document_is_keyed_by_its_path_in_the_folder(tmp_path):
     d = _notes(tmp_path / "Docs" / "sub", 1).parent.resolve()
     entries, _ = watch.walk(d, watch._norm(tmp_path / "vault"), watch.SUFFIXES["docs"])
     items = list(watch._source("docs", d, [e for _, e in entries.values()]).items())
-    assert [it.key for it in items] == ["docs sub/note0.md"]
+    assert [it.key for it in items] == [f"docs {watch._norm(d)} sub/note0.md"]
+
+
+def test_the_same_name_in_two_watched_folders_is_two_pages(root_plain, tmp_path):
+    v, a, b = Vault(root_plain), tmp_path / "A", tmp_path / "B"
+    for d, text in ((a, "Text of the first folder."), (b, "Text of the second folder.")):
+        d.mkdir()
+        (d / "notes.md").write_bytes(f"# Notes\n\n{text}\n".encode())
+        watch.add(v, d, "docs", "normal")
+    assert [r["read"] for r in watch.run(v)] == [1, 1]
+    pages = {n: (v.root / "resources" / f"{n}.md").read_text("utf-8")
+             for n in _resources(v, "docs")}
+    assert len(pages) == 2 and sum("first folder" in t for t in pages.values()) == 1
+    (a / "notes.md").write_bytes(b"# Notes\n\nThe first folder, edited.\n")
+    os.utime(a / "notes.md", ns=(1, 2_000_000_000_000_000_000))
+    r = watch.run(v)
+    assert "imported 0, updated 1" in r[0]["line"] and r[1]["read"] == 0
+    after = {n: (v.root / "resources" / f"{n}.md").read_text("utf-8")
+             for n in _resources(v, "docs")}
+    assert sorted(after) == sorted(pages)
+    assert [n for n in pages if pages[n] != after[n]] == [
+        n for n in pages if "first folder" in pages[n]]
+    assert any("The first folder, edited." in t for t in after.values())
 
 
 def test_at_most_per_pass_files_are_read_and_the_rest_next_time(root_plain, tmp_path,

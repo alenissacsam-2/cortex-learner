@@ -94,11 +94,12 @@ def _source(source: str, folder: Path, todo: list) -> sources.Source:
     if source == "zotero":
         from cortex import zotero
         return zotero.source(folder, todo)
-    if source == "docs":  # keyed by its path in the folder (`updates`): a changed document
-        src = more_sources.docs_source(folder, files=todo)  # rewrites its page
+    if source == "docs":  # keyed by the watched folder and its path in it (`updates`): a
+        src = more_sources.docs_source(folder, files=todo)  # changed document rewrites its page
+        at = f"docs {_norm(folder)} "
         return replace(src, items=lambda: (
             # a document's origin is its full path, a .md/.txt note's its name in the folder
-            replace(it, key="docs " + Path(folder, it.origin).relative_to(folder).as_posix())
+            replace(it, key=at + Path(folder, it.origin).relative_to(folder).as_posix())
             if isinstance(it, sources.Item) else it for it in src.items()))
     return {"notes": partial(importers.notes_source, files=todo),
             "repos": partial(more_sources.repos_source, repos=todo)}[source](folder)
