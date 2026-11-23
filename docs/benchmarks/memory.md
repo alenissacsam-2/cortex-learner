@@ -88,19 +88,115 @@ index build took 262 s against 209 s before. Builds are background work at low p
 `cortex model build` once; a short-lived build process could turn the arena back on (set
 `semantic.ARENA = True` before the model loads), since its arena dies with it.
 
+## M2: the idle app, hidden or minimised
+
+`uv run python scripts/memory_probe.py --app 60 [--hidden] --notes 300 --visits 3000` runs the
+desktop app on the made-up vault's Home and measures its six WebView2 processes for 60 s per
+window state. `--launch 13 [--hidden]` starts the app as the installer does (`launch.main`) on
+that vault, indexed with the real models, and prints the Python process's memory and the loaded
+search models each minute. Both use a temp HOME, a free port and a fake tray; neither writes the
+Run key nor runs LM Studio's CLI.
+
+**The cause of the CPU in the tray.** Closing the window hid it with WinForms' `Form.Hide`,
+which leaves WebView2's `IsVisible` true. The page stayed `visible`, so Home's 3D brain (its
+animation frames) and its 3 s poll ran on in the tray at 21-24% of a core: about 11% in the GPU
+process and 16% in the renderer. A minimised window was already reported hidden.
+
+**The fixes.**
+1. `desktop.py` hides the WebView2 control first, while the form still shows, and then the
+   form (`_hide`). WebView2 then sets `IsVisible` false and the page gets `visibilitychange`
+   (hidden). Showing shows the form first, then the control (`_show`).
+2. A minute later (`SLEEP_S`), still hidden, the page sleeps: `CoreWebView2.TrySuspendAsync()`
+   (`_sleep`). A window started hidden at login sleeps a minute after start. WebView2 pauses
+   the page's timers and lets Windows trim its processes, and wakes the page when the control
+   shows again. `MemoryUsageTargetLevel` is not set: suspending sets it to Low already, and
+   Microsoft's docs advise against mixing the two. On pywebview's other backends,
+   `win.hide()` and `win.show()` run as before.
+3. In `app.js`, the job poll waits while the page is hidden and the 15 s check skips. When the
+   page shows again, it refreshes once. Home (`dashboard.js`, `brain3d.js`) already paused its
+   poll and the brain while hidden; it never was hidden in the tray until now.
+
+WebView2's six processes, 60 s per state (57 s before):
+
+| window | before CPU | before ws MB | page | after CPU | after ws MB | page |
+|---|---:|---:|---|---:|---:|---|
+| shown (Home) | 26% | 465 | visible | 30-41% | 467 | visible |
+| hidden to the tray | 21-24% | 434 | visible | 0.3% | 413 | hidden |
+| still in the tray a minute later (asleep) | 21-24% | 434 | visible | 0.1% | 25 | hidden |
+| shown again (time to show) | 25% (0.06 s) | 440 | visible | 30% (0.03 s) | 195 | visible |
+| minimised | 0.2-0.9% | 426 | hidden | 0.2% | 204 | hidden |
+| started hidden (at login), after a minute | 1.0% | 385 | hidden | 1.3% | 23 | hidden |
+
+The CPU while shown is the brain drawing, which is unchanged. It moved between 24% and 41% from
+run to run with the machine's load. The WebView2 processes' private bytes stay about 216 MB
+while asleep: suspending trims their working set, not their commit.
+
+The Python process of an idle app, measured with `--launch 13`, ran with no job, the window
+hidden or shown, for 13 minutes. No search model was loaded at any minute. Its working set was
+164-172 MB. Its private bytes were 633 MB with 16 OpenBLAS threads (as 0.4.2 runs) and 250 MB
+with the cap below.
+
+**OpenBLAS.** `taint.cap_blas()` sets `OPENBLAS_NUM_THREADS=4` unless the user set it or
+`OMP_NUM_THREADS`, which OpenBLAS also reads. It runs before numpy loads, first thing in each
+entry point:
+- `cortex` (`taint.main`): the MCP server and every CLI command;
+- the app (`launch.main`);
+- the receiver (`launch.receiver`).
+
+The processes they start inherit it. The private bytes numpy commits at import, by thread count
+(the working set rises by about 12 MB in every case):
+
+| OpenBLAS threads | 16 (the default here) | 8 | 4 | 2 | 1 |
+|---|---:|---:|---:|---:|---:|
+| private MB | 492 | 235 | 107 | 42 | 10 |
+
+The probe above, run on 300 made-up notes (811 chunks), once with 16 threads and once with
+the cap. The models run on onnxruntime's own threads, not OpenBLAS, so the speeds stay within
+noise:
+
+| | 16 threads | 4 threads (the cap) |
+|---|---:|---:|
+| private bytes after `import cortex` | 523 MB | 137 MB |
+| private bytes, idle with every model loaded | 965 MB | 579 MB |
+| private bytes, idle with the models dropped | 639 MB | 255 MB |
+| working set, idle with the models dropped | 164 MB | 158 MB |
+| recall (12 of them, median) | 1,862 ms | 1,652 ms |
+| query embedding (median) | 12.9 ms | 13.3 ms |
+| index build (811 chunks) | 118 s | 104 s |
+
+**What M1 misses on a busy PC (not changed here).** The owner's installed 0.4.2 app had a
+726 MB working set and 1,184 MB of private bytes 15 minutes after it started. The idle probe
+shows that the app loads no model when nothing happens. On a PC in use, three things keep the
+memory high:
+- **OpenBLAS** accounts for about 490 MB of the private bytes. The cap above fixes it.
+- **The live browse import** runs every 10 minutes, the first time a minute after start. It
+  calls `semantic.load_embedder()` for its embed function, and that call loads the main
+  embedder (+169 MB working set) even though the import's embedding goes to the background
+  copy. The copy adds 115 MB when there are new visits. Imports run every 10 minutes and
+  `IDLE_UNLOAD` is also 10 minutes, so the copy is rarely dropped.
+- **The safety net** runs every 5 minutes while new chat pages wait. It uses the main embedder
+  whenever that is loaded (`safety_net.background_tools`), and each use restarts the idle
+  clock. While the owner chats with AI apps, the embedder is never dropped.
+
+Measured in one process: 47 MB working set, then 216 MB after `load_embedder()`, 331 MB after
+background embedding, and 108 MB after the drop.
+
+Possible fixes, all outside M2's files (`semantic.py`, `browse_serve.py`, `safety_net.py`):
+- `load_embedder()` returns the function without loading the model, since `_Held` loads it on
+  first use anyway;
+- background uses inside `semantic.background()`, which the net would also use, no longer
+  restart the idle clock;
+- or a shorter `IDLE_UNLOAD` in the app.
+
 ## What is left (not changed here)
 
-- **numpy's OpenBLAS commits about 490 MB of private bytes at import** (a buffer per thread,
-  16 threads here; working set +13 MB). With `OPENBLAS_NUM_THREADS=4` set before numpy loads
-  it is 107 MB. It counts against the commit limit, not the working set Task Manager shows by
-  default. It has to be set in the process's entry point, before any import of numpy.
 - **The index build's transient peak**, about 900 MB above the loaded model at a batch of 64
   long heads, lasts while the batch runs. Smaller batches for long texts would lower it, at
   some cost in speed without the arena (the table above).
-- **The app's WebView2 window** is separate processes, not Python: a hidden pywebview window on
-  a plain page had 6 `msedgewebview2.exe` children with about 330 MB working set and 150 MB
-  private bytes in all, before any of Cortex's own page (the 3D brain draws on the GPU process).
-  Nothing in Python changes it; only closing the web view while the window is hidden would.
+- **The app's WebView2 window** is separate processes, not Python. Since M2 its page sleeps a
+  minute after the window goes to the tray, which leaves a 25 MB working set. Its private bytes
+  stay about 216 MB. Only closing the web view while the window is hidden would free them, and
+  the next show would then load the page again.
 - **What stays after the drop** (186 MB working set): Python and the imported modules, the
   loaded onnxruntime and tokenizer libraries, the MCP core's catalog and index, the vector
   matrices kept for queries (`semantic._MEM`, `browse.vectors._MEM`: 4 bytes × 384 per chunk)

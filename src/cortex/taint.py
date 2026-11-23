@@ -206,8 +206,20 @@ def read_stdin() -> str:
         return ""
 
 
+BLAS_THREADS = "4"  # numpy's OpenBLAS commits ~32 MB per thread (docs/benchmarks/memory.md)
+
+
+def cap_blas() -> None:
+    """Every Cortex process's entry point, before numpy loads: OpenBLAS's threads capped at
+    BLAS_THREADS, unless the user set OPENBLAS_NUM_THREADS or OMP_NUM_THREADS (OpenBLAS reads
+    either). Processes Cortex starts inherit it."""
+    if not (os.environ.get("OPENBLAS_NUM_THREADS") or os.environ.get("OMP_NUM_THREADS")):
+        os.environ["OPENBLAS_NUM_THREADS"] = BLAS_THREADS
+
+
 def main() -> None:
     """The `cortex` console script."""
+    cap_blas()
     # R7: `--client codex|gemini` (cortex.app.targets writes it into those apps' hooks)
     client = sys.argv[3] if sys.argv[2:3] == ["--client"] and len(sys.argv) > 3 else None
     if sys.argv[1:2] == ["taint"]:
