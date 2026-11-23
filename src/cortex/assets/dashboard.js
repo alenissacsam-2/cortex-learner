@@ -1521,8 +1521,10 @@
     return s;
   }
   function examRow(a) {
-    const n = a.days_left;
-    return brow({ id: a.id, title: [a.company || a.id, a.kind].filter(Boolean).join(' · '), sub: fmtDay(a.date),
+    const n = a.days_left, name = a.company || a.title || a.id;
+    // the kind only when the name does not say it already: "DSA exam", but "Google · interview"
+    const kind = a.kind && !name.toLowerCase().includes(a.kind.toLowerCase()) ? a.kind : null;
+    return brow({ id: a.id, title: [name, kind].filter(Boolean).join(' · '), sub: fmtDay(a.date),
       right: el('span', 'kind', n === 0 ? 'today' : `${plural(n, 'day')} left`),
       prompt: a.kind === 'deadline' ? null : `/cortex mock ${a.id}`, brainId: a.id });
   }
@@ -1785,6 +1787,97 @@
     setInterval(loadPickup, 60000);
   }
 
+  /* R31: Add a date on the Exams and deadlines board (POST /api/home/date, an assessment page as
+     an AI app's cortex_add makes it), and calendar events that look like exams, each added in a
+     click. The open form is one element kept across renders, so a live update keeps its text. */
+  let dateForm = null;
+  async function addDate(body) {
+    const r = await api('/api/home/date', body);
+    toast(`Added: ${r.title} on ${fmtDay(r.date)}.`);
+    poll();  // the board shows the new row from the next data load
+  }
+  function dateOpener() {
+    const f = el('div', 'foot add-date');
+    const b = button('linkbtn', 'Add a date', openDateForm);
+    b.id = 'date-open';
+    f.append(b);
+    return f;
+  }
+  function closeDateForm() {
+    if (!dateForm) return;
+    const f = dateOpener();
+    dateForm.replaceWith(f);
+    dateForm = null;
+    f.firstChild.focus();
+  }
+  function openDateForm() {
+    const form = el('form', 'date-form');
+    form.noValidate = true;  // the server's words, in the toast, for every refusal
+    const field = (id, label, input) => {
+      const box = el('div', 'df-field'), lab = el('label', 'qc-label', label);
+      input.id = id;
+      lab.htmlFor = id;
+      box.append(lab, input);
+      return box;
+    };
+    const what = el('input'), when = el('input'), kind = el('select');
+    what.type = 'text';
+    what.required = true;
+    what.maxLength = 120;
+    what.placeholder = 'DSA exam';
+    what.autocomplete = 'off';
+    when.type = 'date';
+    when.required = true;
+    when.min = TODAY;
+    for (const [v, t] of [['exam', 'Exam'], ['deadline', 'Deadline']]) {
+      const o = el('option', null, t);
+      o.value = v;
+      kind.append(o);
+    }
+    const add = el('button', 'btn lit', 'Add'), acts = el('div', 'df-acts');
+    add.type = 'submit';
+    acts.append(add, button('btn', 'Cancel', closeDateForm));
+    const whatBox = field('date-what', 'What', what);
+    whatBox.classList.add('df-what');
+    form.append(whatBox, field('date-when', 'When', when), field('date-kind', 'Exam or deadline', kind), acts);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (add.disabled) return;
+      add.disabled = true;
+      try {
+        await addDate({ what: what.value, when: when.value, kind: kind.value });
+      } catch (err) {
+        add.disabled = false;
+        toast(err.message, 'error');
+        return;
+      }
+      closeDateForm();
+    });
+    form.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDateForm(); } });
+    const opener = $('date-open');
+    if (opener) opener.parentNode.replaceWith(form);
+    dateForm = form;
+    what.focus();
+  }
+  // the board's live extras: the suggestions under its rows, then the opener or the open form;
+  // returns what puts the focus back once the board is on the page
+  function dateExtras(b) {
+    const sug = D.exam_suggestions || [];
+    if (sug.length) b.body.append(el('h3', 'feed-subj', 'From your calendar'));
+    for (const s of sug) {
+      const word = s.kind === 'deadline' ? 'deadline' : 'exam';
+      const go = button('btn', `Add as ${word}`, async () => {
+        go.disabled = true;
+        try { await addDate({ what: s.title, when: s.day, kind: word }); } catch (e) { go.disabled = false; toast(e.message, 'error'); }
+      }, `Add as ${word}: ${s.title}`);
+      b.body.append(brow({ title: s.title, sub: fmtDay(s.day), right: go }));
+    }
+    if (!dateForm) { b.root.append(dateOpener()); return null; }
+    const act = dateForm.contains(document.activeElement) ? document.activeElement : null;
+    b.root.append(dateForm);
+    return act && (() => act.focus({ preventScroll: true }));
+  }
+
   let flicked = false;
   function renderHome() {
     const items = nextUp(), host = $('departures');
@@ -1851,8 +1944,10 @@
     $('lobe-line').textContent = `${D.pages.length.toLocaleString('en')} pages in ${plural(lobes, 'lobe')}`;
 
     const exams = (D.exams || D.assessments.filter((a) => isDay(a.date))).slice().sort((a, c) => a.days_left - c.days_left);
-    const examsBoard = STUDIES ? boardList(board('Exams and deadlines'), exams.map(examRow), 4,
+    const eb = STUDIES ? board('Exams and deadlines') : null;
+    const examsBoard = eb ? boardList(eb, exams.map(examRow), 4,
       'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']) : null;
+    const refocus = eb && LIVE ? dateExtras(eb) : null;  // the snapshot cannot add a date
     const loops = boardList(board('Open loops'), D.loops.map(loopRow), 5,
       "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']);
     const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
@@ -1869,6 +1964,7 @@
     if (!chatBoard) chatBoard = quickChat();
     for (const c of [...rowA.children]) if (c !== chatBoard) c.remove();
     rowA.prepend(...[feedBoard(), examsBoard].filter(Boolean));
+    if (refocus) refocus();
     if (!chatBoard.isConnected) rowA.append(chatBoard);
     rowB.className = 'home-row two';
     rowB.replaceChildren(loops, back);

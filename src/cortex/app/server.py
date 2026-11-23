@@ -324,7 +324,7 @@ class App:
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/export": self.export, "/api/vault/backup": self.backup,
             "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
-            "/api/home/check/answer": self.cold_answer,
+            "/api/home/check/answer": self.cold_answer, "/api/home/date": self.home_date,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
@@ -669,6 +669,64 @@ class App:
         if "error" in out:
             raise ValueError(out.get("message") or out["error"])
         return {"recorded": True}
+
+    DATE_KINDS = ("exam", "deadline")
+
+    def home_date(self, body: dict) -> dict:
+        """Home's Add a date (R31): an exam or deadline as an assessment page {title, date,
+        kind, outcome: pending}, written by cortex_add's own code path as an AI app's add is (an
+        `app_clicks` Cortex, the app as client, a session closed at once so `cortex undo` takes
+        it back), so the planner, Next up, Chat and the snapshot see it. Refused: a name empty
+        or over 120 characters, a date that is not real or before today, another kind, and the
+        same name on the same day (an assessment page already has it)."""
+        from datetime import date
+
+        from cortex.mcp_server import Cortex
+        from cortex.vault import Vault
+        what, when, kind = body.get("what"), body.get("when"), body.get("kind", "exam")
+        what = what.strip() if isinstance(what, str) else ""
+        if not what:
+            raise ValueError("Give it a name, such as DSA exam.")
+        if len(what) > 120:
+            raise ValueError("Keep the name to 120 characters.")
+        try:
+            day = date.fromisoformat(when) if isinstance(when, str) else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise ValueError("Pick a date.")
+        if day.isoformat() < self._today():
+            raise ValueError("That date has passed. Pick today or a later day.")
+        if kind not in self.DATE_KINDS:
+            raise ValueError("kind must be exam or deadline.")
+        root = self.need_root()
+        with self.reviewing:
+            v = Vault(root)
+            if any(str(n.fields.get("date") or "")[:10] == day.isoformat()
+                   and str(n.fields.get("title") or "").casefold() == what.casefold()
+                   for n in v.iter_notes("assessment")):
+                raise ValueError("That is on your board already.")
+            if self.core is None or self.core[0] != root:
+                core = Cortex(v)
+                core.app_clicks = True  # every write here is the user's own click
+                self.core = (root, core)
+            core = self.core[1]
+            client = core.sessions.client
+            core.sessions.client = "cortex-app"  # server-set, as grader.client always is
+            try:
+                core.session = core.sessions.start("ambient", None, "self")
+                core._reset()
+                # force: another day's page of the same name (last term's DSA exam) is no copy
+                out = core._call("cortex_add", core.cortex_add, {
+                    "kind": "assessment", "title": what, "force": True, "fields": {
+                        "date": day.isoformat(), "kind": kind, "outcome": "pending"}})
+            finally:
+                core.sessions.client = client
+                if core.sessions.current is not None:
+                    core.sessions.close(summary="Added a date in the Cortex app")
+        if "error" in out:
+            raise ValueError(out.get("message") or out["error"])
+        return {"id": out["id"], "title": what, "date": day.isoformat(), "kind": kind}
 
     def unlock(self, body: dict) -> dict:
         """The Private switch: Windows asks the user to verify (Windows Hello); private items
