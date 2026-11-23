@@ -868,16 +868,22 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
 
 @app.command("pack")
 @_errors
-def pack_cmd(name: Annotated[str, typer.Argument(help="general, coding or writing")],
+def pack_cmd(name: Annotated[str, typer.Argument(
+                 help="general, coding, writing, interview, research or review")],
+             chars: Annotated[int, typer.Option(
+                 "--chars", help="the most characters: 1500 or 5000")] = 1500,
              vault: VaultOpt = None) -> None:
     """Print a context pack to paste into a web chat (ChatGPT, Gemini): your pinned core, then
-    the pack's preference lines, at most 2,500 characters, never a private page."""
+    the pack's preference lines, at most 1,500 (or 5,000) characters, never a private page."""
     from cortex import packs
 
     if name not in packs.PACKS:
         typer.echo(f"error: the pack is one of {', '.join(packs.PACKS)}.", err=True)
         raise typer.Exit(2)
-    text = packs.pack(_vault(vault), name)
+    if chars not in packs.SIZES:
+        typer.echo("error: --chars is 1500 or 5000.", err=True)
+        raise typer.Exit(2)
+    text = packs.pack(_vault(vault), name, chars)
     if not text:
         typer.echo("Nothing to pack yet: add lines to me/core.md or me/preferences.md.",
                    err=True)
@@ -2430,6 +2436,24 @@ def eval_harvest_facts(file: Annotated[Path | None, typer.Option(
     typer.echo(f"polarity flips: {r['flips']} (target {t['flips']})")
     typer.echo(f"promotion facts not held for the Review: {r['held_missed']}")
     typer.echo("targets: met" if fh.meets(r) else "targets: NOT met")
+
+
+@eval_app.command("agent")
+@_errors
+def eval_agent(model: Annotated[bool, typer.Option(
+                   "--model", help="Also ask the local model you already loaded (Layer B, "
+                                   "three replies per case); never loads one.")] = False,
+               json_out: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False
+               ) -> None:
+    """R12: does each AI app get the right lines about you and none it must not? Builds ten
+    made-up vaults and checks what each app is served (Layer A, no model); --model also
+    checks a loaded local model's replies. Reads no vault of yours."""
+    from cortex import agent_eval
+
+    r = agent_eval.run(model=model)
+    typer.echo(json.dumps(r, indent=1) if json_out else agent_eval.summary(r))
+    if r["a_fail"]:
+        raise typer.Exit(1)
 
 
 @eval_app.command("all")
