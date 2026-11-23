@@ -308,6 +308,7 @@ class App:
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
             "/api/connect/path": self.connect_path,
+            "/api/connect/copied": self.pack_copied,
             "/api/profiles": self.profiles_set,
             "/api/llm/settings": self.llm_settings, "/api/llm/load": self.llm_load,
             "/api/llm/test": self.llm_test, "/api/llm/pull": self.llm_pull,
@@ -324,7 +325,7 @@ class App:
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/export": self.export, "/api/vault/backup": self.backup,
             "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
-            "/api/home/check/answer": self.cold_answer,
+            "/api/home/check/answer": self.cold_answer, "/api/home/date": self.home_date,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
@@ -441,15 +442,43 @@ class App:
         """Connect: the AI apps, plus (with a vault) the context packs for web chats and the
         per-agent profiles (plan v9 item 8)."""
         from cortex import access, packs, profiles
+        from cortex.events import EventLog
         extra = {}
         if self.entry() is not None:
             v = self._vault()
-            extra = {"packs": [{"id": n, "text": packs.pack(v, n)} for n in packs.PACKS],
+            events = list(EventLog(v).iter_events())  # read once for every pack
+            last = packs.copied(events)
+
+            def size(n, s, text):  # R32a: changed only when copied before and now different
+                h = packs.digest(text)
+                return {"chars": s, "text": text, "hash": h,
+                        "changed": (n, s) in last and last[(n, s)] != h}
+            extra = {"packs": [{"id": n, "sizes": [size(n, s, t) for s, t in
+                                                   packs.sized(v, n, events=events).items()]}
+                               for n in packs.PACKS],
                      "profiles": profiles.load(v), "scopes": list(access.SCOPES)}
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,
                 "skill_zip": str(_checkout() / "dist" / "cortex-skill.zip"),
                 "skill_zip_found": (_checkout() / "dist" / "cortex-skill.zip").is_file(),
                 "skill_url": skill_url(), **extra}
+
+    def pack_copied(self, body: dict) -> dict:
+        """R32a: the owner pressed Copy on a context pack; one log event, so Connect can say
+        when the pack changed since. Only pack, chars and hash come from the app."""
+        from cortex import packs
+        from cortex.events import EventLog
+        if not isinstance(body, dict) or set(body) != {"pack", "chars", "hash"}:
+            raise ValueError("send pack, chars and hash only.")
+        name, chars, h = body["pack"], body["chars"], body["hash"]
+        if not isinstance(name, str) or name not in packs.PACKS:
+            raise ValueError(f"pack must be one of {', '.join(packs.PACKS)}.")
+        if type(chars) is not int or chars not in packs.SIZES:
+            raise ValueError("chars must be 1500 or 5000.")
+        if not isinstance(h, str) or not re.fullmatch(r"[0-9a-f]{16}", h):
+            raise ValueError("hash must be 16 hex characters.")
+        EventLog(self._vault()).append(session="cli", kind="log", source="self", fields={
+            "payload": {"kind": "pack_copied", "pack": name, "chars": chars, "hash": h}})
+        return {"ok": True}
 
     def profiles_set(self, body: dict) -> dict:
         """The owner's per-agent profiles, saved from the app only (never from MCP input)."""
@@ -670,6 +699,64 @@ class App:
             raise ValueError(out.get("message") or out["error"])
         return {"recorded": True}
 
+    DATE_KINDS = ("exam", "deadline")
+
+    def home_date(self, body: dict) -> dict:
+        """Home's Add a date (R31): an exam or deadline as an assessment page {title, date,
+        kind, outcome: pending}, written by cortex_add's own code path as an AI app's add is (an
+        `app_clicks` Cortex, the app as client, a session closed at once so `cortex undo` takes
+        it back), so the planner, Next up, Chat and the snapshot see it. Refused: a name empty
+        or over 120 characters, a date that is not real or before today, another kind, and the
+        same name on the same day (an assessment page already has it)."""
+        from datetime import date
+
+        from cortex.mcp_server import Cortex
+        from cortex.vault import Vault
+        what, when, kind = body.get("what"), body.get("when"), body.get("kind", "exam")
+        what = what.strip() if isinstance(what, str) else ""
+        if not what:
+            raise ValueError("Give it a name, such as DSA exam.")
+        if len(what) > 120:
+            raise ValueError("Keep the name to 120 characters.")
+        try:
+            day = date.fromisoformat(when) if isinstance(when, str) else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise ValueError("Pick a date.")
+        if day.isoformat() < self._today():
+            raise ValueError("That date has passed. Pick today or a later day.")
+        if kind not in self.DATE_KINDS:
+            raise ValueError("kind must be exam or deadline.")
+        root = self.need_root()
+        with self.reviewing:
+            v = Vault(root)
+            if any(str(n.fields.get("date") or "")[:10] == day.isoformat()
+                   and str(n.fields.get("title") or "").casefold() == what.casefold()
+                   for n in v.iter_notes("assessment")):
+                raise ValueError("That is on your board already.")
+            if self.core is None or self.core[0] != root:
+                core = Cortex(v)
+                core.app_clicks = True  # every write here is the user's own click
+                self.core = (root, core)
+            core = self.core[1]
+            client = core.sessions.client
+            core.sessions.client = "cortex-app"  # server-set, as grader.client always is
+            try:
+                core.session = core.sessions.start("ambient", None, "self")
+                core._reset()
+                # force: another day's page of the same name (last term's DSA exam) is no copy
+                out = core._call("cortex_add", core.cortex_add, {
+                    "kind": "assessment", "title": what, "force": True, "fields": {
+                        "date": day.isoformat(), "kind": kind, "outcome": "pending"}})
+            finally:
+                core.sessions.client = client
+                if core.sessions.current is not None:
+                    core.sessions.close(summary="Added a date in the Cortex app")
+        if "error" in out:
+            raise ValueError(out.get("message") or out["error"])
+        return {"id": out["id"], "title": what, "date": day.isoformat(), "kind": kind}
+
     def unlock(self, body: dict) -> dict:
         """The Private switch: Windows asks the user to verify (Windows Hello); private items
         then show for PRIVATE_S, until the switch is pressed again or the window minimised."""
@@ -856,16 +943,26 @@ class App:
         r = self._live(body)
         v = self._vault()
         events = list(EventLog(v).iter_events())
-        forget = "forget" if any(c["id"] == r["id"] for x in tags.forget_cards(
-            v, events, self._today()) for c in x["candidates"]) else None
+        cards = [x["text"] for x in tags.forget_cards(v, events, self._today())
+                 if any(c["id"] == r["id"] for c in x["candidates"])]
+        forget = "forget" if cards else None
         card = forget or ("crowded" if any(x["id"] == r["id"] for x in review.crowded(
             v, review.live_rows(v, events, self._today()))[0]) else None)
         live = {x["id"]: x for x in claims.rows(v) if x["status"] == "live"}
-        return self._clicks([("cortex_patch", "cortex_patch", {
+        view = self._clicks([("cortex_patch", "cortex_patch", {
             "id": f"me/{live[cid]['page']}", "op": "retire", "target": cid,
             "user_confirmed": True}, card if n == 0 else None, forget)
             for n, cid in enumerate(self._line_group(r["id"]) if card is None else [r["id"]])
             if cid in live])
+        if not forget or r["id"] not in live:
+            return view
+        # R10: a //forget card's line then goes from every store; the answer carries the receipt
+        from cortex import forget as forget_
+        from cortex import session
+        mark = v.writes
+        receipt = forget_.claim(v, live[r["id"]]["page"], r["id"], also=tuple(cards))
+        session._commit(v, "cortex: forget a line", v.wrote_since(mark))
+        return {**self.review(), "receipt": receipt, "receipt_lines": forget_.lines(receipt)}
 
     def review_crowded_keep(self, body: dict) -> dict:
         """G7: Keep, on a line the X-ray shows cut for space in most primes: the X-ray's Pin
@@ -1954,6 +2051,21 @@ class App:
         finally:
             actions._commit(v, "watched folders")
 
+    def forget_due(self) -> list | None:
+        """R10: the //forget lines a prompt hook or cortex_prime retired and queued, swept from
+        every store (cortex.forget.run_due), in the periodic pass's thread when a vault is set
+        up and no job runs; committed. The receipts, or None when it did not run."""
+        from cortex import forget, session
+        from cortex.vault import Vault
+        if not self.entry() or self.jobs.running():
+            return None
+        v = Vault(self.root)
+        try:
+            return forget.run_due(v)
+        finally:
+            if v.writes:
+                session._commit(v, "cortex: forget a line", v.wrote_since(0))
+
     def cancel(self, body: dict) -> dict:
         if self.jobs.cur is not None and self.jobs.cur.running and self.jobs.cur.cancellable:
             self.jobs.cur.cancel()
@@ -2501,9 +2613,16 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
         app.stop.set()
         srv.shutdown()
 
+    def forget_due():  # R10: a //forget's sweep, queued by a hook or cortex_prime
+        try:
+            app.forget_due()
+        except Exception as e:  # noqa: BLE001  (the next pass tries again)
+            echo(f"cortex app: forgetting a //forget line failed ({type(e).__name__})")
+
     def auto():  # the live import: first after a minute, then every 10
         from cortex import browse_serve
         wait = browse_serve.AUTO_FIRST_S
+        forget_due()  # once at start, then with each pass
         while not app.stop.wait(wait):
             wait = browse_serve.AUTO_EVERY_S
             try:
@@ -2515,6 +2634,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
                 app.watch_auto()
             except Exception as e:  # noqa: BLE001  (the next pass tries again)
                 echo(f"cortex app: watched folders failed ({type(e).__name__})")
+            forget_due()
             try:  # the rollup pages after the import; a stamp check when nothing changed
                 if app.root is not None and (app.root / ".cortex").is_dir() \
                         and not app.jobs.running():

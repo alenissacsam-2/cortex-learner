@@ -394,6 +394,9 @@ READ_TOOLS = frozenset(f"cortex_{t}" for t in session_mod.READS)
 # the self-review pack); refused to a client whose profile lacks the `personal` scope
 PERSONAL_TOOLS = ("cortex_chats", "cortex_as_me", "cortex_reflect")
 KILLED_NEXT = "Tell the user the kill switch is on; they turn it off with `cortex kill --off`."
+# R12: an app whose profile holds no scope but core (profiles.DEFAULT's `unknown`) gets no page
+CORE_ONLY_NEXT = ("This app is not named in the user's Cortex profiles, so it gets only their "
+                  "pinned core; they can give it more in the Cortex app under Connect AI apps.")
 
 Verdict = Literal["correct", "partial", "wrong"]
 ItemType = Literal["recall", "application", "transfer"]
@@ -577,13 +580,27 @@ class Cortex:
         scopes = self._scopes()
         return None if scopes is None else (lambda p, h: access.scope_section(scopes, p, h))
 
-    def _index_withheld(self) -> set[str]:
-        """What the Index keeps out (find, recall, read): `_withheld`, and for a profiled client
-        every me/ page, since prime and context serve only its scopes' sections of them."""
+    def _index_withheld(self, index: Index | None = None) -> set[str]:
+        """What the Index keeps out (find, recall, read and every prime block): `_withheld`,
+        and for a profiled client every me/ page, since prime and context serve only its
+        scopes' sections of them, and each playbook whose own `scope:` its profile lacks
+        (access.scope_own, the Playbooks block's rule; R12). A core-only client gets no page
+        at all (fail closed, profiles.DEFAULT's `unknown`). `index`: the one asking."""
         out = self._withheld()
-        if self._scopes() is not None:
+        idx = index or self._index
+        if (scopes := self._scopes()) is not None:
             out |= {p.stem for p in self.vault.note_paths("me")}
+            books = getattr(idx, "playbook_scopes", {})
+            out |= {i for i, s in books.items() if not access.scope_own(scopes, s)}
+        if self._core_only() and idx is not None:
+            idx.save = False  # its empty view must not replace the vault's shared snapshot
+            out |= set(idx._ids.values())
         return out
+
+    def _core_only(self) -> bool:
+        """R12: this client's profile holds no scope but `core` (an app no profile names)."""
+        scopes = self._scopes()
+        return scopes is not None and scopes <= {"core"}
 
     @property
     def index(self) -> Index:
@@ -814,6 +831,8 @@ class Cortex:
         return {"client": self.sessions.client or "unknown", "model": self.session.model}
 
     def _next(self, default: str) -> str:
+        if self._core_only():
+            return f"{CORE_ONLY_NEXT} {default}"
         if self.pending:
             return f"{len(self.pending)} asked but not graded — grade them before moving on."
         if self.taught:
@@ -1287,6 +1306,8 @@ class Cortex:
     def cortex_read(self, id: str, sections: list[str] | None = None,
                     at: int | str | None = None, window: int | None = None,
                     ctx: Context | None = None) -> dict[str, Any]:
+        if self._core_only():  # R12: no page, raw source or people page either
+            return {"id": str(id), "text": None, "next": CORE_ONLY_NEXT}
         if str(id).startswith("raw/"):
             return self._read_raw(str(id))
         if str(id).startswith(people.PREFIX):  # V4: every people page, private or not
@@ -3919,7 +3940,7 @@ BROWSE_SEARCH_DESC = ("Search the user's whole browsing archive, private pages i
 # P9: a guard against a mistaken config (a cloud app given the private flag), not a security
 # boundary: any client can send any name.
 CLOUD_CLIENTS = ("claude", "gemini", "chatgpt", "openai", "cursor", "copilot", "codex",
-                 "windsurf", "vscode", "code")
+                 "windsurf", "vscode", "code", "antigravity", "cline")
 
 
 def dry_prime(vault: Vault, client: str, prompt: str) -> dict:

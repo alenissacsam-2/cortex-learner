@@ -852,16 +852,22 @@ def reflect_cmd(vault: VaultOpt = None) -> None:
 
 @app.command("pack")
 @_errors
-def pack_cmd(name: Annotated[str, typer.Argument(help="general, coding or writing")],
+def pack_cmd(name: Annotated[str, typer.Argument(
+                 help="general, coding, writing, interview, research or review")],
+             chars: Annotated[int, typer.Option(
+                 "--chars", help="the most characters: 1500 or 5000")] = 1500,
              vault: VaultOpt = None) -> None:
     """Print a context pack to paste into a web chat (ChatGPT, Gemini): your pinned core, then
-    the pack's preference lines, at most 2,500 characters, never a private page."""
+    the pack's preference lines, at most 1,500 (or 5,000) characters, never a private page."""
     from cortex import packs
 
     if name not in packs.PACKS:
         typer.echo(f"error: the pack is one of {', '.join(packs.PACKS)}.", err=True)
         raise typer.Exit(2)
-    text = packs.pack(_vault(vault), name)
+    if chars not in packs.SIZES:
+        typer.echo("error: --chars is 1500 or 5000.", err=True)
+        raise typer.Exit(2)
+    text = packs.pack(_vault(vault), name, chars)
     if not text:
         typer.echo("Nothing to pack yet: add lines to me/core.md or me/preferences.md.",
                    err=True)
@@ -1197,7 +1203,7 @@ def watch_add_cmd(path: Annotated[Path | None, typer.Argument(
              "or leave it out to find your library.")] = None,
         source: Annotated[str, typer.Option(
             help="What it holds: docs (PDFs, Word, text), notes (.md/.txt), repos (your git "
-                 "projects) or zotero.")] = "docs",
+                 "projects), calendar (.ics files; or give one .ics file) or zotero.")] = "docs",
         tier: Annotated[str | None, typer.Option(
             help="Who may read its pages: private, normal or skip. Without it, the source's "
                  "last choice (or normal).")] = None,
@@ -1839,16 +1845,19 @@ def undo(session_id: str, vault: VaultOpt = None) -> None:
 
         try:
             kept = []
+            # R10: only a forget's redaction changes a session's own event file later, so the
+            # session's undo still deletes it
+            own = lambda p: "events" in Path(p).parts and Path(p).stem == session_id  # noqa: E731
             if _git(v.root, "revert", "--no-commit", commit).returncode:
                 kept = [p for p in session_mod.unmerged_paths(v.root)  # a later commit overlapped
-                        if not any(p.endswith(q) for q in private)]
+                        if not any(p.endswith(q) for q in private) and not own(p)]
                 restore()
                 r = _git(v.root, "revert", "--no-commit", "-X", "ours", commit)
                 if r.returncode and not session_mod.unmerged_paths(v.root):
                     raise VaultError("invalid_argument", f"git revert failed: {r.stderr.strip()}")
             keep_private()
             for p in session_mod.unmerged_paths(v.root):  # modify/delete: keep HEAD's side
-                in_head = not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
+                in_head = not own(p) and not _git(v.root, "cat-file", "-e", f"HEAD:{p}").returncode
                 _git(v.root, *(("checkout", "HEAD", "--") if in_head else ("rm", "-qf", "--")),
                      p)
             if left := session_mod.unmerged_paths(v.root):
@@ -1922,16 +1931,17 @@ def mcp(vault: VaultOpt = None,
 @app.command()
 @_errors
 def forget(id: str, vault: VaultOpt = None) -> None:
-    """Delete a people page (people/<slug>) and the voice samples and drafts addressed to it."""
-    from cortex import people
+    """Forget a page (people/<slug>, a page id, a chat page) or one line of a me/ page
+    (me/<page>^c-xxxxx) everywhere Cortex keeps it: the page or line, the event log (its text
+    redacted, ids and grades kept), Cortex's own pages and caches, the chats it keeps, the
+    search snapshot and vectors. Prints a receipt, with what Cortex cannot remove."""
+    from cortex import forget as forget_
 
     v = _vault(vault)
-    if people.get(v, id) is None:
-        raise VaultError("unknown_id", f"No people page '{id}'; use the exact id people/<slug>.")
-    typer.confirm(f"Delete {id} and its voice samples and drafts?", abort=True)
-    out = people.forget(v, id)
-    typer.echo(f"deleted {id}.md, {out['samples']} samples, {out['drafts']} drafts")
-    typer.echo("git history still has the old page; rewrite history to remove it for good.")
+    typer.confirm(f"Forget {forget_.check(v, id)} everywhere Cortex keeps it? This cannot be "
+                  "undone.", abort=True)
+    for line in forget_.lines(forget_.forget(v, id)):
+        typer.echo(line)
 
 
 @app.command()
@@ -2410,6 +2420,24 @@ def eval_harvest_facts(file: Annotated[Path | None, typer.Option(
     typer.echo(f"polarity flips: {r['flips']} (target {t['flips']})")
     typer.echo(f"promotion facts not held for the Review: {r['held_missed']}")
     typer.echo("targets: met" if fh.meets(r) else "targets: NOT met")
+
+
+@eval_app.command("agent")
+@_errors
+def eval_agent(model: Annotated[bool, typer.Option(
+                   "--model", help="Also ask the local model you already loaded (Layer B, "
+                                   "three replies per case); never loads one.")] = False,
+               json_out: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False
+               ) -> None:
+    """R12: does each AI app get the right lines about you and none it must not? Builds ten
+    made-up vaults and checks what each app is served (Layer A, no model); --model also
+    checks a loaded local model's replies. Reads no vault of yours."""
+    from cortex import agent_eval
+
+    r = agent_eval.run(model=model)
+    typer.echo(json.dumps(r, indent=1) if json_out else agent_eval.summary(r))
+    if r["a_fail"]:
+        raise typer.Exit(1)
 
 
 @eval_app.command("all")
@@ -2995,15 +3023,18 @@ def browse_forget(site: Annotated[str | None, typer.Option(
         if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", host):
             raise VaultError("invalid_argument", "--site must be a domain like example.com.")
         rule, what = forget.Rule(hosts=(host,)), host
+    from cortex import forget as forget_
+
     v = _vault(vault)
-    c = forget.purge(v, rule)
+    r = forget_.browse(v, rule, what)
+    c = Counter(r["removed"])
     typer.echo(f"forgot {what}: {c['day_lines']} lines on {c['day_pages']} private day pages, "
                f"{c['site_keys']} site counts and {c['site_rows']} titles or searches, "
                f"{c['sites_removed']} site pages, {c['inbox_records']} saved extension visits, "
                f"{c['cache_sites'] + c['cache_descriptions']} local-model notes, "
-               f"{c['vectors']} search vectors")
-    typer.echo("next: add it to browse.deny_domains (or set the category to skip) so the next "
-               "import does not bring back what your browsers still hold")
+               f"{c['vectors']} search vectors, {c['compacted']} databases compacted")
+    for line in forget_.lines(r)[1:]:
+        typer.echo(line)
 
 
 @browse_app.command("serve")

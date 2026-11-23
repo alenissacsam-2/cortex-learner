@@ -26,6 +26,16 @@ DEFAULT = {
         {"match": "visualstudiocode", "scopes": CODING},  # VS Code (Copilot)'s client name
         {"match": "copilot", "scopes": CODING},
         {"match": "codex", "scopes": CODING},
+        # Gemini CLI names itself gemini-cli-mcp-client (prime_hook.CLIENTS); R12
+        {"match": "gemini-cli", "scopes": CODING},
+        # coding apps' MCP client names, from github.com/apify/mcp-client-capabilities (24 Nov):
+        # windsurf-client or Windsurf, antigravity-client, Cline, opencode, JetBrains-*-intellij
+        # (Zed's "Zed" is left out: a substring that short would match other apps' names)
+        {"match": "windsurf", "scopes": CODING},
+        {"match": "antigravity", "scopes": CODING},
+        {"match": "cline", "scopes": CODING},
+        {"match": "opencode", "scopes": CODING},
+        {"match": "jetbrains", "scopes": CODING},
     ],
     "unknown": ["core"],  # fail closed: an app no profile names gets the pinned core only
 }

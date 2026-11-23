@@ -202,10 +202,11 @@
   }
   // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast, or
   // runs `onFail` (e.g. selects the text so Ctrl+C copies it)
-  function copyBtn(text, failMsg, cls, withIcon, onFail) {
+  function copyBtn(text, failMsg, cls, withIcon, onFail, onOk) {
     const face = () => (withIcon ? [icon('copy'), 'Copy'] : ['Copy']);
     let timer;
     const b = btn('', () => Promise.resolve().then(() => navigator.clipboard.writeText(text())).then(() => {
+      if (onOk) onOk();
       clearTimeout(timer);
       b.replaceChildren(icon('check'), 'Copied');
       announce('Copied');
@@ -1059,20 +1060,42 @@
       d.packs ? packsBoard(d.packs) : null, d.profiles ? profilesBoard(d.profiles, d.scopes) : null);
   }
   // plan v9 item 8: context packs for web chats with no MCP; Copy, else the text is selected
-  const PACK_NAMES = { general: 'General', coding: 'Coding', writing: 'Writing' };
+  const PACK_NAMES = { general: 'General', coding: 'Coding', writing: 'Writing', interview: 'Interview', research: 'Research', review: 'Review' };
+  // R32a: role packs say what they hold; the others name their own preferences
+  const PACK_PREFS = { interview: 'career and communication preferences, for a job interview practice chat',
+    research: 'learning, project and communication preferences, for a research collaboration chat',
+    review: 'coding and communication preferences, for a code review chat' };
   function packsBoard(packs) {
     return board('Context packs', { note: 'for ChatGPT, Gemini and other web chats' }, ...packs.map((p) => {
       const name = PACK_NAMES[p.id] || p.id;
-      if (!p.text) return row(name, null, 'Nothing to pack yet: add lines to me/core.md or me/preferences.md.');
-      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, value: p.text, 'aria-label': `${name} pack text` });
+      if (!p.sizes.some((s) => s.text)) return row(name, null, 'Nothing to pack yet: add lines to me/core.md or me/preferences.md.');
+      let cur = p.sizes[0];  // 1,500 characters each time the page opens
+      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, 'aria-label': `${name} pack text` });
+      const count = h('span', { class: 'val' });
+      const stale = h('span', { class: 'sub stale' }, h('span', { class: 'stale-dot', 'aria-hidden': 'true' }), 'Changed since your last copy');
+      const sizeBtns = p.sizes.map((s) => {
+        const b = h('button', { class: 'chip', type: 'button' }, s.chars.toLocaleString('en-US'), h('span', { class: 'sr-only', text: ' characters' }));
+        b.addEventListener('click', () => { cur = s; show(); });
+        return b;
+      });
+      const show = () => {
+        area.value = cur.text;
+        count.textContent = `${cur.text.length.toLocaleString('en-US')} characters`;
+        stale.hidden = !cur.changed;
+        sizeBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(p.sizes[i] === cur)));
+      };
+      show();
       const what = h('details', { class: 'what' }, h('summary', { text: 'Show the text' }), area);
       const select = () => { what.open = true; area.focus(); area.select(); toast('Copy is blocked here; the text is selected, press Ctrl+C.'); };
+      const copied = () => { const s = cur; post('/api/connect/copied', { pack: p.id, chars: s.chars, hash: s.hash }, () => { s.changed = false; show(); }); };
       return h('div', { class: 'brow' },
         h('div', { class: 't' },
-          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: name }), h('span', { class: 'val', text: `${p.text.length.toLocaleString()} characters` })),
-          h('span', { class: 'sub', text: 'Your pinned core, then your ' + (p.id === 'general' ? 'preferences' : name.toLowerCase() + ' preferences') + '. Paste it at the start of a chat. Private pages are never in it.' }),
+          h('div', { class: 'line1' }, h('span', { class: 'ttl', text: name }), count),
+          h('span', { class: 'sub', text: 'Your pinned core, then your ' + (PACK_PREFS[p.id] || (p.id === 'general' ? 'preferences' : name.toLowerCase() + ' preferences')) + '. Paste it at the start of a chat. Private pages are never in it.' }),
+          stale,
+          h('div', { class: 'pack-size', role: 'group', 'aria-label': `${name} pack size` }, ...sizeBtns),
           what),
-        h('div', { class: 'acts' }, copyBtn(() => p.text, '', null, true, select)));
+        h('div', { class: 'acts' }, copyBtn(() => cur.text, '', null, true, select, copied)));
     }));
   }
   // plan v9 item 8: which scopes each AI app gets over MCP; saved at once, from this page only
@@ -1397,7 +1420,7 @@
     return out;
   }
   /* R18: watched folders (cortex.watch); the app's periodic pass imports their new and changed files */
-  const WATCH_KINDS = { docs: 'Documents', notes: 'Notes', repos: 'Code projects', zotero: 'Zotero' };
+  const WATCH_KINDS = { docs: 'Documents', notes: 'Notes', repos: 'Code projects', calendar: 'Calendar', zotero: 'Zotero' };
   function watchedRows(wd) {
     const out = [row('Watched folders', wd.rows.length ? String(wd.rows.length) : 'none',
       'Cortex imports the new and changed files in these folders by itself, every 10 minutes while the app runs; files it has read are not read again until they change.')];
@@ -1784,7 +1807,11 @@
       board('Lines you asked to forget', { note: String((d.forget || []).length) }, ...list((d.forget || []).flatMap((x) => {
         const n = kb('Dismiss', () => act('/api/review/forget/dismiss', { key: x.key }, 'Dismissed. Nothing was changed.'), null, `Dismiss: ${x.text}`);
         return [card(`//forget: ${x.text}`, x.candidates.length ? 'Retire the line you meant' : 'No line matched', null, [n[0]], { n }),
-          ...x.candidates.map((c) => { const r = retire(c); return card(c.text, where(c), null, [r[0]], { r }); })];
+          ...x.candidates.map((c) => {
+            // R10: retiring a //forget card's line sweeps it from every store; the receipt shows above Today's 5
+            const r = kb('Forget it', () => act('/api/review/retire', { id: c.id }, 'Forgotten everywhere Cortex keeps it. The receipt is at the top of Review.'), null, `Forget: ${c.text}`);
+            return card(c.text, where(c), null, [r[0]], { r });
+          })];
       }), 'Nothing to forget.')),
       board('Imported notes you edited', { note: String((d.imports || []).length) }, ...list((d.imports || []).map((x) => {
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
@@ -1794,7 +1821,10 @@
       'No line looks like an instruction to an AI.')),
       board('Changed outside Cortex', { note: String(outside.length) }, ...list(outside.map((x) => outsideCard(x)),
       'No line changed outside Cortex.')));
-    put('review', todayBoard(d, m), more);
+    // R10: the receipt of a //forget just done: what went from each store and what Cortex cannot remove
+    const receipt = (d.receipt_lines || []).length ? board('Forgotten', { note: 'receipt', id: 'forget-receipt' },
+      ...d.receipt_lines.map((t) => h('p', { class: 'pad ink-2' + (t.startsWith('- ') ? ' mono' : ''), text: t }))) : null;
+    put('review', receipt, todayBoard(d, m), more);
     cardsDrawn('review');
   }
 

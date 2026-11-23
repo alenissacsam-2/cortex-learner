@@ -136,3 +136,33 @@ def test_audience_of_study():
     assert audience_of_study(["c1", "c2"], {"c2"}) is L
     assert audience_of_study(["c1"], set(), note_private=True) is L
     assert audience_of_study([], {"c1"}) is C
+
+
+def test_exams_and_job_applications_have_a_scope(tmp_path):
+    """R12: assessments sit under learning and applications under career, so a coding or
+    unknown profile is not served them (profiles.withheld) and `all` still is."""
+    from cortex import access, profiles
+    from cortex.vault import Vault
+
+    assert access.scope_kind(frozenset({"learning"}), "assessment")
+    assert not access.scope_kind(frozenset(profiles.CODING), "assessment")
+    assert access.scope_kind(frozenset({"career"}), "application")
+    assert not access.scope_kind(frozenset({"core"}), "application")
+    assert access.scope_kind(None, "assessment") and access.scope_kind(None, "application")
+    v = Vault(tmp_path)
+    v.create_note("assessment", "apex-oa", {"title": "Apex OA"}, "# Apex OA\n")
+    v.create_note("application", "apex-sde", {"title": "Apex SDE"}, "# Apex SDE\n")
+    data = profiles.load(v)
+    for client in ("cursor-vscode", "Visual Studio Code", "codex-mcp-client", "random-agent"):
+        assert {"apex-oa", "apex-sde"} <= profiles.withheld(v, profiles.scopes_for(data, client))
+    assert not {"apex-oa", "apex-sde"} & profiles.withheld(
+        v, profiles.scopes_for(data, "claude-code"))
+
+
+def test_a_playbooks_own_scope():
+    from cortex import access
+
+    assert access.scope_own(None, "personal") and access.scope_own(frozenset({"core"}), None)
+    assert access.scope_own(frozenset({"core"}), "all")
+    assert access.scope_own(frozenset({"coding"}), "coding")
+    assert not access.scope_own(frozenset({"core"}), "coding")

@@ -150,7 +150,8 @@ def test_cli_private_refused_unless_turned_on(root, home, monkeypatch):
     assert seen[-1] == {"private": False}
 
 
-@pytest.mark.parametrize("name, refused", [("claude-ai", True), ("LM Studio", False)])
+@pytest.mark.parametrize("name, refused", [("claude-ai", True), ("antigravity-client", True),
+                                            ("Cline", True), ("LM Studio", False)])
 def test_private_search_refuses_cloud_clients(root, home, fake, name, refused):
     from mcp import Client
     from mcp.types import Implementation

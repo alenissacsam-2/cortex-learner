@@ -255,8 +255,9 @@ class Index:
                  withhold=None, save: bool = True):
         self.vault = vault
         self.save = save  # False (the app's dry run): never write the snapshot
-        # () -> ids kept out like hidden ones (so out of the snapshot too): a non-owner
-        # server's me/ pages not shared with work (mcp_server.Cortex._withheld)
+        # (this index) -> ids kept out like hidden ones (so out of the snapshot too): a non-owner
+        # server's me/ pages not shared with work, a profile's out-of-scope playbooks
+        # (mcp_server.Cortex._index_withheld)
         self.withhold = withhold
         self.catalog = catalog
         self.states: Mapping[str, Any] = states or {}
@@ -271,6 +272,9 @@ class Index:
         self._private: set[str] = set()
         self._flagged: set[str] = set()  # domains, areas, concepts with their own private: true
         self._hidden: set[str] = set()  # planner.hidden as of the last refresh
+        # playbook id -> its own `scope:` (None: all), parsed even while hidden, so `withhold`
+        # can keep out the ones a client's profile does not allow (access.scope_own)
+        self.playbook_scopes: dict[str, object] = {}
         self.dirty = False  # the snapshot on disk is behind this index
         self._snap = self._load_snapshot()  # relpath -> entry; read by the first refresh only
         self.refresh()
@@ -335,7 +339,7 @@ class Index:
                 self._add(note)
         # From the flags just indexed, not a second vault walk: that would cost ~3x per refresh.
         hidden = planner.hidden(self.vault, self.catalog, self._flagged) | (
-            self.withhold() if self.withhold else set())
+            self.withhold(self) if self.withhold else set())
         if hidden != self._hidden:  # privacy inherited or lifted: re-add those pages once
             changed = hidden ^ self._hidden
             self._hidden = hidden
@@ -422,6 +426,7 @@ class Index:
             return
         self._private.discard(id)
         self._flagged.discard(id)
+        self.playbook_scopes.pop(id, None)
         self._notes.pop(id, None)
         if (rowid := self._rowid.pop(id, None)) is not None:
             self.db.execute("DELETE FROM fts WHERE rowid = ?", (rowid,))
@@ -435,6 +440,11 @@ class Index:
             self._drop(note.id)
         if is_private(note) and note.kind in ("domain", "area", "concept"):
             self._flagged.add(note.id)
+        tags = note.fields.get("tags")  # prime.PLAYBOOK_TAG; kept for hidden pages too
+        if note.kind == "note" and "playbook" in (tags if isinstance(tags, list) else [tags]):
+            self.playbook_scopes[note.id] = note.fields.get("scope")
+        else:
+            self.playbook_scopes.pop(note.id, None)
         if is_private(note) or note.id in self._hidden:
             self._private.add(note.id)
             return
