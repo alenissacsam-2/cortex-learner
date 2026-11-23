@@ -140,6 +140,7 @@ def _no_real_reranker(monkeypatch):
     from cortex import semantic
 
     monkeypatch.setattr(semantic, "_reranker", None)
+    monkeypatch.setattr(semantic, "_ranker", semantic._Held(semantic._ranker.load))
     real = semantic.load_reranker
     monkeypatch.setattr(semantic, "load_reranker", lambda download=False, config=True: (
         real(download, config) if semantic._reranker is not None else None))
@@ -156,6 +157,8 @@ def _no_real_embedder(monkeypatch):
     # a source edit during the run must not turn every tool into restart_needed
     monkeypatch.setattr(mcp_server, "CODE_MTIME", float("inf"))
     monkeypatch.setattr(semantic, "_embedder", None)
+    for held in ("_main", "_capped"):  # a model an earlier test loaded is not this test's
+        monkeypatch.setattr(semantic, held, semantic._Held(getattr(semantic, held).load))
     real = semantic.load_embedder
     monkeypatch.setattr(semantic, "load_embedder", lambda download=False: (
         real(download) if semantic._embedder is not None else None))

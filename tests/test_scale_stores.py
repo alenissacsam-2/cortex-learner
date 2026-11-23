@@ -194,15 +194,18 @@ def test_a_store_migrated_by_an_earlier_version_only_renames_the_old_files(root)
 def test_background_embedding_uses_a_capped_model_at_low_priority(home, monkeypatch):
     import fastembed
 
+    arenas = []
+
     class Model:
-        def __init__(self, name, cache_dir=None, local_files_only=True, threads=None):
+        def __init__(self, name, cache_dir=None, local_files_only=True, threads=None,
+                     enable_cpu_mem_arena=True):
             self.threads = threads
+            arenas.append(enable_cpu_mem_arena)
 
         def embed(self, texts):
             return [np.full(4, self.threads or 0, np.float32) for _ in texts]
 
     monkeypatch.setattr(fastembed, "TextEmbedding", Model)
-    monkeypatch.setattr(semantic, "_bg_model", None)
     semantic.models_dir().mkdir(parents=True)
     embed = REAL_LOAD()
     assert embed(["x"])[0][0] == 0  # the full model
@@ -221,6 +224,68 @@ def test_background_embedding_uses_a_capped_model_at_low_priority(home, monkeypa
     assert embed(["x"])[0][0] == 0
     if k:
         assert got["prio"] == -1 and k.GetThreadPriority(k.GetCurrentThread()) == before
+    # neither copy keeps onnxruntime's CPU arena: it would hold the largest batch's peak
+    assert arenas == [False, False]
+
+
+class Counted:
+    """A fake fastembed model that counts its loads; `gate`, when set, holds every embed."""
+
+    loads = 0
+    gate: threading.Event | None = None
+    inside = threading.Event()
+
+    def __init__(self, threads=None):
+        type(self).loads += 1
+
+    def embed(self, texts):
+        self.inside.set()
+        if self.gate is not None:
+            self.gate.wait(10)
+        return [np.ones(4, np.float32) for _ in texts]
+
+
+@pytest.fixture
+def counted(monkeypatch):
+    monkeypatch.setattr(Counted, "loads", 0)
+    monkeypatch.setattr(Counted, "gate", None)
+    monkeypatch.setattr(semantic, "_text_embedding",
+                        lambda download=False, threads=None: Counted(threads))
+    semantic.models_dir().mkdir(parents=True)
+    return REAL_LOAD()
+
+
+def test_idle_models_are_dropped_and_load_again_on_the_next_call(counted):
+    embed = counted
+    with semantic.background():
+        embed(["x"])  # the capped copy
+    embed(["x"])
+    assert Counted.loads == 2
+    soon = time.monotonic() + semantic.IDLE_UNLOAD - 30
+    assert semantic.drop_idle(soon) == []  # used within IDLE_UNLOAD: kept
+    later = time.monotonic() + semantic.IDLE_UNLOAD + 1
+    assert semantic.drop_idle(later) == ["embedder", "background copy"]
+    assert semantic._main.model is None and semantic._capped.model is None
+    assert REAL_LOAD() is embed  # still set up: callers keep the same function
+    assert embed(["x", "y"]).shape == (2, 4) and Counted.loads == 3  # loaded again
+    assert semantic.drop_idle() == []  # just used
+
+
+def test_a_model_in_use_is_never_dropped(counted):
+    embed = counted
+    embed(["warm"])
+    Counted.inside.clear()
+    Counted.gate = threading.Event()
+    t = threading.Thread(target=lambda: embed(["slow"]))
+    t.start()
+    assert Counted.inside.wait(10)
+    try:
+        assert semantic.drop_idle(time.monotonic() + 10 * semantic.IDLE_UNLOAD) == []
+    finally:
+        Counted.gate.set()
+        t.join(10)
+    assert semantic.drop_idle(time.monotonic() + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    assert Counted.loads == 1
 
 
 # ---- site counts in the browsing store ----------------------------------------------------
