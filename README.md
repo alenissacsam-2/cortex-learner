@@ -1,5 +1,12 @@
 # Cortex
 
+[![Latest release](https://img.shields.io/github/v/release/alenissacsam-2/cortex-learner?label=release)](https://github.com/alenissacsam-2/cortex-learner/releases/latest)
+[![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)](#install)
+[![Works through MCP](https://img.shields.io/badge/MCP-Claude%20%7C%20Cursor%20%7C%20Codex%20%7C%20Gemini%20CLI-8A5700)](#using-it)
+[![License: MIT](https://img.shields.io/github/license/alenissacsam-2/cortex-learner)](LICENSE)
+
+**[Download Cortex for Windows](https://github.com/alenissacsam-2/cortex-learner/releases/latest/download/CortexSetup.exe)** (free, one file, no account)
+
 ![Cortex: a second brain on your own computer. Every AI app you use reads from it and adds to it. Nothing about you leaves your computer unless you turn it on.](docs/images/hero.png)
 
 *Every screenshot in this README shows the bundled sample vault of Sam, a made-up student, plus made-up demo data. None of it is a real person's.*
