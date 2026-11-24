@@ -43,7 +43,7 @@ REGISTRY: tuple[Egress, ...] = (
            "only when `cortex setup` asks to install the Claude Code plugin and you say yes"),
     Egress("app/targets.py", "github.com (through Claude Code)",
            "Claude Code's download of the Cortex plugin",
-           "only when you connect Claude Code in Connect AI apps"),
+           "when you connect Claude Code in Connect AI apps"),
     Egress("localllm.py", "localhost (Ollama or LM Studio)",
            "your question and the notes it needs, to the local model on this PC",
            "when you use Chat or a local-model feature", loopback=True),
@@ -57,6 +57,11 @@ REGISTRY: tuple[Egress, ...] = (
 
 
 def summary() -> list[str]:
-    """One plain line per destination off this PC."""
-    return [f"{e.dest}: {e.what}. {e.when[0].upper()}{e.when[1:]}."
-            for e in REGISTRY if not e.loopback]
+    """One plain line per destination off this PC and what goes there; two modules that start
+    the same download share its line, their `when`s joined."""
+    whens: dict[tuple[str, str], list[str]] = {}
+    for e in REGISTRY:
+        if not e.loopback:
+            whens.setdefault((e.dest, e.what), []).append(e.when)
+    return [f"{dest}: {what}. {(w := ', or '.join(ws))[0].upper()}{w[1:]}."
+            for (dest, what), ws in whens.items()]

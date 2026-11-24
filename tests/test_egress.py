@@ -151,6 +151,9 @@ def test_doctor_prints_where_cortex_connects():
 def test_summary_is_one_line_per_outside_destination():
     lines = egress.summary()
     outside = [e for e in egress.REGISTRY if not e.loopback]
-    assert len(lines) == len(outside) and all(isinstance(s, str) and s for s in lines)
+    assert len(lines) == len({(e.dest, e.what) for e in outside}) < len(outside)
+    assert all(isinstance(s, str) and s for s in lines) and len(set(lines)) == len(lines)
+    plugin = [s for s in lines if "Cortex plugin" in s]  # cli.py and app/targets.py: one line
+    assert len(plugin) == 1 and "you say yes, or when you connect Claude Code" in plugin[0]
     assert all(not e.dest.startswith("localhost") for e in outside)
     assert any(s.startswith("github.com") for s in lines)
