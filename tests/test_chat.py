@@ -922,7 +922,8 @@ def test_errors_are_events(vault, stream, monkeypatch):
     assert chat.SAID_NOTHING.format(model="m") in [e.get("s") for e in ev if e["t"] == "tok"]
     monkeypatch.setattr(semantic, "_embedder", None)
     _, ev = _turn(vault, None, "car motor", dead)
-    assert ev[0]["code"] == "not_set_up"
+    assert ev[0]["code"] == "not_set_up" and ev[0]["message"] == chat.NO_SEARCH_MODEL
+    assert "cortex model download" not in ev[0]["message"]
 
 
 class Silent(Stream):
@@ -1696,7 +1697,7 @@ def test_without_a_model_the_routed_half_is_shown_and_the_rest_says_why(vault, m
     events = []
     chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
                None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
-    assert "".join(e["s"] for e in events if e["t"] == "tok").endswith(semantic.NOT_SET_UP)
+    assert "".join(e["s"] for e in events if e["t"] == "tok").endswith(chat.NO_SEARCH_MODEL)
 
 
 def test_unrouted_halves_take_half_the_passages_each(vault, stream, monkeypatch):

@@ -123,6 +123,24 @@ def test_report_survives_missing_rows(fake_home, monkeypatch):
     assert "- Local model: off" in out and "- Browsing import: no" in out
 
 
+def test_status_warns_when_an_ai_app_names_the_old_vault(fake_home, monkeypatch):
+    """FX4: an app's Cortex entry still names the old vault folder (stale): the AI apps row
+    warns and opens Connect, and the report says it needs attention."""
+    from cortex import clients
+    home, vault = fake_home
+    monkeypatch.setattr(clients, "mcp_command", lambda: "cortex")
+    (home / ".codeium/windsurf").mkdir(parents=True)
+    targets.apply_all({"windsurf": True}, clients.server_entry("cortex", home / "old vault"))
+    apps = next(r for r in status.rows(vault) if r["id"] == "apps")
+    assert apps["state"] == "warn" and apps["action"] == {"go": "connect", "label": "Open"}
+    assert apps["detail"] == ("An AI app still uses your old vault folder. Open Connect AI apps "
+                              "and click Apply.")
+    assert "- AI apps: Needs attention" in status.report(vault)
+    targets.apply_all({"windsurf": True}, clients.server_entry("cortex", vault))
+    status.forget()
+    assert next(r for r in status.rows(vault) if r["id"] == "apps")["state"] == "ok"
+
+
 def test_route_is_a_read_only_get_and_equals_doctor_report(fake_home):
     home, vault = fake_home
     a = server.App(vault)

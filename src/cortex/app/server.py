@@ -63,6 +63,7 @@ STATIC = {"/": (None, "text/html; charset=utf-8"),
           "/capture": (ASSETS / "capture.html", "text/html; charset=utf-8"),
           "/capture.js": (ASSETS / "capture.js", _JS),
           "/dashboard.css": (ASSETS.parent / "dashboard.css", _CSS),
+          "/favicon.ico": (ASSETS.parent / "cortex.ico", "image/x-icon"),  # browsers ask unasked
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
 CAPTURE_MAX = 1000  # quick capture: a line's characters

@@ -145,6 +145,11 @@ def test_no_token_401_and_the_page_takes_it_from_the_url(app):
     assert call(app, "GET", f"/app.css?t={app.token}", token=False)[0] == 200
     js = (server.ASSETS / "app.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "insertAdjacentHTML" not in js
+    # FX4: the browser asks for /favicon.ico without the key: the app's icon, not a 401
+    st, _, body, r = call(app, "GET", "/favicon.ico", token=False)
+    assert st == 200 and body == (server.ASSETS.parent / "cortex.ico").read_bytes()
+    assert r.getheader("Content-Type") == "image/x-icon"
+    assert call(app, "GET", "/favicon.png", token=False)[0] == 401  # only that path
 
 
 def test_home_is_the_live_dashboard_and_manage_the_old_page(app):
