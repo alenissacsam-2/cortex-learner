@@ -4084,7 +4084,7 @@ def build_server(vault: Vault, role: str = "owner", excluded: str | None = None,
 
         # async so tools run on the event-loop thread, one at a time (the index is sqlite)
         async def tool(*, _name=name, _fn=fn, **kwargs):
-            if not await anyio.to_thread.run_sync(core._ready.wait, READY_WAIT):
+            if not await _until_ready(core):
                 return {"error": "vault_locked", "message": "Cortex is still indexing the "
                         "vault; try again in a minute.", "next": ERROR_NEXT["vault_locked"]}
             return core._call(_name, _fn, kwargs)
@@ -4187,6 +4187,19 @@ def _core_rules(core: Cortex, client: str) -> str:
     text = "\n".join(out) if len(out) > 1 else ""
     core._core_rules = (key, text)
     return text
+
+
+async def _until_ready(core: Cortex) -> bool:
+    """Wait up to READY_WAIT for the start-up index build; False when it is still running.
+    Polled on the event loop, not waited in a worker thread: when stdin closes, the SDK
+    cancels a call waiting here at once, while an AnyIO worker thread (not a daemon) stuck
+    in `_ready.wait` kept `cortex mcp` alive for up to READY_WAIT."""
+    end = anyio.current_time() + READY_WAIT
+    while not core._ready.is_set():
+        if anyio.current_time() >= end:
+            return False
+        await anyio.sleep(0.05)
+    return True
 
 
 def _warm_embedder() -> None:

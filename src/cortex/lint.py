@@ -16,15 +16,15 @@ from cortex.catalog import slugify
 from cortex.events import DAY_ROLLOVER
 from cortex.index import EDGE_KEYS, STOPWORDS, _edge_targets
 from cortex.people import PREFIX
-from cortex.relink import TOKEN_RE, _tgt
+from cortex.relink import TOKEN_RE, _hidden, _tgt
 from cortex.render import plain
 from cortex.vault import Vault, is_private
 
 MAX_FINDINGS = 30
 # Order before the cut: broken links first, unlinked mentions (the noisiest) last.
-SEVERITY = ("id_clash", "missing_link", "expired_claim", "merged_related", "orphan", "no_summary",
-            "weak_summary", "links_no_reason", "resource_no_covers", "stale_project", "long_note",
-            "old_fleeting", "unlinked_mention")
+SEVERITY = ("id_clash", "sync_conflict", "missing_link", "expired_claim", "merged_related",
+            "orphan", "no_summary", "weak_summary", "links_no_reason", "resource_no_covers",
+            "stale_project", "long_note", "old_fleeting", "unlinked_mention")
 KIND_CAP = {"unlinked_mention": 10, "weak_summary": 10}
 # RR-26: a summary is what search and prime show; one that only restates the title, or is a
 # few words, adds no words to be found by
@@ -73,6 +73,10 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
     for id, kinds in sorted(kinds_of.items()):
         if len(kinds) > 1 and not _is_private_id(notes, id):
             add("id_clash", id, f"used by {', '.join(kinds)}")
+
+    for copy, orig in _sync_copies(vault):
+        add("sync_conflict", plain(copy), f"a sync conflict copy of {plain(orig)}: open both, "
+            "keep what you want in the original, delete the copy")
 
     edges, inbound = {}, Counter()
     for n in notes:
@@ -144,6 +148,21 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
             shown[f["kind"]] += 1
             kept.append(f)
     return kept[:MAX_FINDINGS], dict(totals)
+
+
+def _sync_copies(vault: Vault) -> list[tuple[str, str]]:
+    """sync_copies.find, less the copies of a private page (relink._hidden on the copy or on
+    its original): their names are not reported either."""
+    from cortex import sync_copies
+
+    def hidden(rel: str) -> bool:
+        p = vault.root / rel
+        try:
+            return p.suffix == ".md" and p.is_file() and _hidden(
+                vault.root, p, p.read_bytes().decode("utf-8", errors="replace"))
+        except OSError:
+            return True
+    return [(c, o) for c, o in sync_copies.find(vault.root) if not (hidden(c) or hidden(o))]
 
 
 def _words(text) -> set[str]:

@@ -291,6 +291,24 @@ def check_me_pages(root: Path) -> tuple[str, str, str, str]:
     return "PASS", "me/ pages", f"{len(ME_PAGES)} present", ""
 
 
+SYNC_COPY_FIX = "Open both, keep what you want in the original, delete the copy."
+
+
+def check_sync_copies(root: Path) -> tuple[str, str, str, str]:
+    """WARN on a sync tool's conflict copies (sync_copies.find): a copied page is not read
+    (its edit lives only there); the event log reads each event once, copies included."""
+    from cortex import sync_copies
+
+    name = "Sync conflict copies"
+    found = [c for c, _ in sync_copies.find(root)]
+    if not found:
+        return "PASS", name, "none", ""
+    more = f" and {len(found) - 5} more" if len(found) > 5 else ""
+    return ("WARN", name, f"{len(found)} found: {', '.join(found[:5])}{more}",
+            f"{SYNC_COPY_FIX} Cortex does not read a copied page, so an edit made on the "
+            "other device is only in the copy.")
+
+
 def check_id_clashes(root: Path) -> tuple[str, str, str, str]:
     name = "Note ids unique across kinds"
     seen: dict[str, list[str]] = {}
