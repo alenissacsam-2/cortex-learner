@@ -1267,7 +1267,7 @@
   }
 
   /* Add your history: one card per source; each export source opens a three-step guide */
-  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'location', 'photos', 'spotify', 'voice-memos', 'browser'];
+  const CARDS = ['claude', 'chatgpt', 'gemini', 'perplexity', 'google-activity', 'notes', 'calendar', 'docs', 'repos', 'highlights', 'mail', 'selfchat', 'location', 'photos', 'spotify', 'voice-memos', 'anki', 'browser'];
   const CARD = {
     claude: 'Your claude.ai chats.', chatgpt: 'Your ChatGPT chats.', gemini: 'Your Gemini prompts, from Google Takeout.',
     perplexity: 'Perplexity threads, exported as Markdown.',
@@ -1283,6 +1283,7 @@
     photos: 'When you took photos, and in which albums: dates and folder names only, never the images.',
     spotify: 'Your Spotify years: hours, top artists, tracks and podcasts; nothing per play.',
     'voice-memos': 'Your recordings, transcribed on this computer; the audio never leaves it.',
+    anki: 'Your Anki decks: cards, reviews, how much you recall and the cards you keep forgetting.',
     browser: ['Browser history', 'The history your browsers keep on this computer.'],
   };
   const MAX_UPLOAD = 4 * 2 ** 30;
@@ -1350,7 +1351,7 @@
         h('div', { class: 'inline' }, btn('I have the file', () => { guide.step = 2; load('setup'); }, 'btn lit'))];
     }
     if (s === 2) {
-      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics,.csv,.pdf,.docx,.mbox', disabled: !!guide.busy });
+      const file = h('input', { type: 'file', id: 'imp-file', accept: '.zip,.json,.html,.md,.txt,.ics,.csv,.pdf,.docx,.mbox,.apkg,.colpkg', disabled: !!guide.busy });
       file.addEventListener('change', () => { if (file.files[0]) upload(file.files[0]); });
       const drop = h('div', { class: 'drop' }, h('strong', { text: guide.busy || 'Drop the file here' }),
         guide.busy && guide.sent ? [h('progress', { id: 'up-bar', max: guide.sent.total || 1, value: guide.sent.loaded, 'aria-label': 'Upload progress' }),
