@@ -47,15 +47,16 @@ def _hidden_words(vault: Vault) -> list[re.Pattern]:
 
 
 def lines(vault: Vault, scopes, now: datetime | None = None,
-          events: list[dict] | None = None) -> tuple[list[str], list[str]]:
+          events: list[dict] | None = None, withheld=frozenset()) -> tuple[list[str], list[str]]:
     """(core lines, preference lines) for a pack of `scopes` (None: all); `events`: the event
-    log, read here when not given (Connect reads it once for every pack)."""
+    log, read here when not given (Connect reads it once for every pack). `withheld`: bare ids of
+    me/ pages left out too (an MCP server's Cortex._withheld, R32b's resources)."""
     now = now or datetime.now(UTC)
     today = local_day(now)
     events = list(EventLog(vault).iter_events()) if events is None else events
     served = prime.served_claims(vault, events)
     private = {p for p in ("core", "setup", *access.SECTIONED)
-               if (n := prime.me(vault, p)) is not None and is_private(n)}
+               if (n := prime.me(vault, p)) is not None and is_private(n)} | set(withheld)
     # as prime.core: X-ray muted lines, and R3-3 held ones while their pair waits, stay out
     xs, ids = xray.settings(vault), prime.claim_ids(vault)
     xs = {**xs, "mute": xs["mute"] | prime.held(vault, events, today)}
@@ -69,12 +70,12 @@ def lines(vault: Vault, scopes, now: datetime | None = None,
 
 
 def sized(vault: Vault, name: str, now: datetime | None = None,
-          events: list[dict] | None = None) -> dict[int, str]:
+          events: list[dict] | None = None, withheld=frozenset()) -> dict[int, str]:
     """The `name` pack (PACKS) at each of SIZES, its lines read once: {size: text}; "" when
     nothing is recorded."""
     if name not in PACKS:
         raise ValueError(f"pack must be one of {', '.join(PACKS)}")
-    core, prefs = lines(vault, PACKS[name], now, events)
+    core, prefs = lines(vault, PACKS[name], now, events, withheld)
     return {size: _cut(name, core, prefs, size) for size in SIZES}
 
 

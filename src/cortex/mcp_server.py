@@ -4150,6 +4150,7 @@ def build_server(vault: Vault, role: str = "owner", excluded: str | None = None,
         server.middleware.append(warm)
         if role == "owner":
             server.middleware.append(core_rules)
+        _add_resources(server, core)
     return server
 
 
@@ -4200,6 +4201,110 @@ async def _until_ready(core: Cortex) -> bool:
             return False
         await anyio.sleep(0.05)
     return True
+
+
+# R32b: read-only MCP resources the person attaches to a chat by hand (an app's + or @ menu):
+# the pinned core and each pack (packs.PACKS) at both sizes. Static resources, not a URI
+# template: apps put resources/list in their attach menu, while a template's size would have to
+# be typed in. Nothing else (notes, pages, search stay tools that record what they serve).
+CORE_URI = "cortex://core"
+PACK_PURPOSE = {"general": "any chat", "coding": "coding chats", "writing": "writing chats",
+                "interview": "job interview practice", "research": "research chats",
+                "review": "code review chats"}
+RESOURCES = {CORE_URI: ("core", "Cortex: Core",
+                        "Your pinned core lines, as Cortex gives every chat first.")}
+for _n, _p in PACK_PURPOSE.items():
+    for _s in packs.SIZES:
+        _big = _s != packs.SIZES[0]
+        RESOURCES[f"cortex://pack/{_n}" + (f"/{_s}" if _big else "")] = (
+            f"pack-{_n}" + (f"-{_s}" if _big else ""),
+            f"Cortex: {_n.title()} pack" + (f" ({_s:,} characters)" if _big else ""),
+            f"What Cortex knows about you for {_p}, at most {_s:,} characters.")
+RESOURCE_EMPTY = "Nothing is recorded for this in Cortex yet."
+
+
+def _resource_uris(core: Cortex) -> list[str]:
+    """The resources this MCP client may read, by its tools' rules (R12): the core unless
+    Cortex._withheld holds me/core (private, outside the client's profile, or a reader's page
+    not shared with work), and a pack only when the client's profile scopes hold all of the
+    pack's (packs.PACKS; `general` needs every scope), so an app no profile names gets the core
+    only (CORE_ONLY_NEXT). A pack beyond the profile is not listed, never served cut."""
+    if core.excluded:
+        return []
+    core.over_mcp = True  # only MCP reaches a resource: the client's profile applies
+    scopes = core._scopes()
+    out = [] if "core" in core._withheld() else [CORE_URI]
+    return out + [u for u in RESOURCES if u.startswith("cortex://pack/") and (
+        scopes is None or ((s := packs.PACKS[u.split("/")[3]]) is not None and s <= scopes))]
+
+
+def _served_ids(vault: Vault, text: str) -> dict[str, list[str]]:
+    """The X-ray's served ids of a resource's text: the `^c-…` claim id of each list line,
+    by block (`core`, `preferences`). shortcut: a line is matched by its text, so a me/setup
+    line, which is no claim, is not listed; upgrade if packs.lines ever returns ids."""
+    ids: dict[str, tuple[str, str]] = {}
+    for (page, _, t), cid in prime.claim_ids(vault).items():
+        ids.setdefault(claims.strip_since(t), (page, cid))
+    out: dict[str, list[str]] = {}
+    for ln in text.splitlines():
+        body = ln[2:] if ln.startswith("- ") else None
+        hit = body is not None and (ids.get(body) or ids.get(body.partition("] ")[2]))
+        if hit:
+            out.setdefault("core" if hit[0] == "core" else "preferences", []).append(hit[1])
+    return out
+
+
+def _read_resource(core: Cortex, uri: str) -> str:
+    """One resource's text for this client (`_resource_uris`), wrapped as prime wraps note
+    text, and its X-ray row (tool `resource:<uri>`). Never written as a pack_copied event: an
+    attach is one chat's read, not text pasted into an app's standing instructions."""
+    from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
+
+    if (refused := core._gate("cortex_context", {})) is not None:  # a killed reader
+        raise ResourceError(refused["message"])
+    if uri not in _resource_uris(core):
+        raise ResourceNotFoundError(f"{uri} is not shared with this app; the user can give it "
+                                    "more in the Cortex app under Connect AI apps.")
+    v, now, held = core.vault, core._now(), core._withheld()
+    if uri == CORE_URI:
+        got = "\n".join(packs.lines(v, frozenset(("core",)), now, withheld=held)[0])
+        text = f"## {prime.CORE_HEAD}\n{_wrap('me/core', got)}" if got else ""
+    else:
+        _, _, _, name, *size = uri.split("/")
+        got = packs.sized(v, name, now, withheld=held)[int(size[0]) if size else packs.SIZES[0]]
+        text = _wrap(f"pack/{name}", got) if got else ""
+    xray.record(v, f"resource:{uri}", core.sessions.client, _served_ids(v, text), {},
+                len(text))
+    return text or RESOURCE_EMPTY
+
+
+def _add_resources(server: MCPServer, core: Cortex) -> None:
+    """Register RESOURCES on `server` and the middleware that names the client for them and
+    lists each client only its own (`_resource_uris`)."""
+    from mcp.server.mcpserver.resources import FunctionResource
+
+    def reader(uri: str):
+        async def read() -> str:  # async: on the event-loop thread, as the tools run
+            return _read_resource(core, uri)
+        return read
+
+    for uri, (name, title, desc) in RESOURCES.items():
+        server.add_resource(FunctionResource(uri=uri, name=name, title=title, description=desc,
+                                             mime_type="text/plain", fn=reader(uri)))
+
+    async def resources(ctx, call_next):
+        if ctx.method in ("resources/list", "resources/read"):
+            params = getattr(ctx.session, "client_params", None)
+            if name := getattr(getattr(params, "client_info", None), "name", None):
+                core.sessions.client = str(name)
+                core._seen(core.sessions.client)
+        out = await call_next(ctx)
+        if ctx.method == "resources/list" and isinstance(out, dict):  # the wire dict
+            ok = set(_resource_uris(core))
+            out["resources"] = [r for r in out.get("resources", []) if r.get("uri") in ok]
+        return out
+
+    server.middleware.append(resources)
 
 
 def _warm_embedder() -> None:
