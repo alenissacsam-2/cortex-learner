@@ -5,7 +5,9 @@ archive), which hold browsing the browsers have already forgotten. The SQLite st
 browsing store and the two vector stores, which take minutes to embed again) are copied by
 SQLite's own backup, a consistent snapshot, never the live file and its WAL. Left out: old
 backups, the old extension's pairing token (a leftover file), the local chat history
-(.cortex/browse/chat), lock files, the rebuilt dashboard and stray *.tmp files. A zip holds
+(.cortex/browse/chat), lock files, the rebuilt dashboard, stray *.tmp files and damaged stores
+moved aside (`quarantine.found`: no use restored, and the chat import's holds raw chat turns,
+private ones too). A zip holds
 private browsing: keep it as private as the vault. The last KEEP zips are kept.
 
 `private=False` (`cortex backup --no-private`) also leaves out what Claude and cloud apps may
@@ -24,6 +26,7 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from cortex import quarantine
 from cortex.vault import PRIVATE_BROWSE_DIR
 
 KEEP = 10  # owner's choice (verdict Q11 a)
@@ -62,7 +65,7 @@ def backup(root: Path, dest_dir: Path | None = None, private: bool = True) -> Pa
     skip_files = {tmp, dest, root / ".cortex" / "lock", root / ".cortex" / "dashboard.html",
                   browse / "lock", browse / "token",
                   *(Path(f"{db}{s}") for db in dbs for s in ("", "-wal", "-shm")),
-                  *(() if private else private_files(root)),
+                  *(() if private else private_files(root)), *quarantine.found(root),
                   # chat_import.STATE: raw text of imported chat turns, private ones too
                   *(() if private else (root / f".cortex/chat-import.sqlite{s}"
                                         for s in ("", "-wal", "-shm")))}

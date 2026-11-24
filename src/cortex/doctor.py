@@ -314,6 +314,22 @@ def check_sync_copies(root: Path) -> tuple[str, str, str, str]:
             "other device is only in the copy.")
 
 
+def check_damaged_stores(root: Path) -> list[tuple[str, str, str, str]]:
+    """One WARN naming the damaged stores Cortex moved aside (cortex.quarantine) and started
+    again; no row when there are none."""
+    from cortex import quarantine
+
+    names = [p.relative_to(root).as_posix() for p in quarantine.found(root)
+             if quarantine.STORE.fullmatch(p.name)]
+    if not names:
+        return []
+    return [("WARN", "Damaged databases moved aside", ", ".join(names),
+             "Cortex found these damaged (often a sync tool copying a database apart from its "
+             "-wal file), set them aside and started fresh ones: search vectors are built "
+             "again, chats are read again. Delete the copies (with their -wal and -shm files) "
+             "once recall and chat import work again.")]
+
+
 def check_id_clashes(root: Path) -> tuple[str, str, str, str]:
     name = "Note ids unique across kinds"
     seen: dict[str, list[str]] = {}
