@@ -889,7 +889,7 @@ def test_the_mind_mirror_shows_how_your_mind_changed(tmp_path, narrow):
     assert p["reader"] == "Preferences" and p["tipAfter"]
     themes = {t[0]: t[1:] for t in p["themes"]}
     assert set(themes) == {"night", "day"}
-    assert themes["night"][0] == "rgb(255, 176, 0)" and themes["day"][0] == "rgb(17, 17, 17)"
+    assert themes["night"][0] == "rgb(255, 176, 0)" and themes["day"][0] == "rgb(138, 87, 0)"
     for live, past, _ in themes.values():
         assert past != live and past not in ("rgba(0, 0, 0, 0)", "transparent")
     assert p["list"]["rows"] == 8 and p["list"]["lanes"] == 0
