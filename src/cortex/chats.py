@@ -554,6 +554,37 @@ def cowork_files() -> Iterator[Path]:
                 yield from d.glob("**/.claude/projects/*/*.jsonl")
 
 
+def codex_files() -> Iterator[Path]:
+    """OpenAI Codex CLI session rollouts: $CODEX_HOME (default ~/.codex)/sessions/YYYY/MM/DD/
+    rollout-<time>-<id>.jsonl (openai/codex codex-rs/rollout/src/lib.rs SESSIONS_SUBDIR and
+    rollout_file_name.rs, https://github.com/openai/codex). Shortcut: a cold rollout Codex
+    compressed (.jsonl.zst) or moved to archived_sessions/ is not read (the stdlib has no zstd
+    before Python 3.14); its page, if written before, stays."""
+    base = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    return (base / "sessions").glob("*/*/*/rollout-*.jsonl")
+
+
+def gemini_files() -> Iterator[Path]:
+    """Google Gemini CLI chat sessions: ($GEMINI_CLI_HOME or ~)/.gemini/tmp/<project>/chats/
+    session-*.jsonl, and a legacy session-*.json that has no .jsonl of the same name (Gemini CLI
+    copies one to the other when it is resumed) (google-gemini/gemini-cli packages/core/src/
+    services/chatRecordingService.ts and config/storage.ts,
+    https://github.com/google-gemini/gemini-cli). Sub-agent sessions (a folder under chats/)
+    and the other files in tmp/ are not read."""
+    base = Path(os.environ.get("GEMINI_CLI_HOME") or Path.home()) / ".gemini" / "tmp"
+    for p in base.glob("*/chats/session-*.json*"):
+        if p.suffix == ".jsonl" or p.suffix == ".json" and not p.with_suffix(".jsonl").exists():
+            yield p
+
+
+def copilot_files() -> Iterator[Path]:
+    """GitHub Copilot CLI sessions: $COPILOT_HOME (default ~/.copilot)/session-state/<session
+    id>/events.jsonl (https://docs.github.com/en/copilot/reference/copilot-cli-reference/
+    cli-config-dir-reference, `session-state/`)."""
+    base = Path(os.environ.get("COPILOT_HOME") or Path.home() / ".copilot")
+    return (base / "session-state").glob("*/events.jsonl")
+
+
 def _files() -> list[Path]:
     """Transcripts of both sources, newest mtime first, without the Claude Code one being
     written right now (G3)."""

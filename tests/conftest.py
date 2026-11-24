@@ -38,7 +38,9 @@ def _no_real_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: h))
     for var in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME"):  # clients.py, doctor.py
         monkeypatch.setenv(var, str(h / var))
-    for var in ("CORTEX_VAULT", "CLAUDE_PROJECT_DIR"):
+    # the other coding agents' homes (chats.codex_files...) follow Path.home() too
+    for var in ("CORTEX_VAULT", "CLAUDE_PROJECT_DIR", "CODEX_HOME", "GEMINI_CLI_HOME",
+                "COPILOT_HOME"):
         monkeypatch.delenv(var, raising=False)
     # git reads ~/.gitconfig from HOME; commits still need an identity
     for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
