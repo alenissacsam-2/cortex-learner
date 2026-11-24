@@ -266,6 +266,9 @@ class Index:
         self.db = sqlite3.connect(":memory:", check_same_thread=False)
         self.db.executescript(SCHEMA)
         self._stats: dict = {}  # path -> (mtime_ns, size)
+        # the last scan's str -> Path: a reused Path keeps its parsed parts and hash, which
+        # cost more than the scan itself to rebuild for every page on every call
+        self._paths: dict[str, Path] = {}
         self._ids: dict = {}  # path -> id it was indexed under
         self._notes: dict[str, dict] = {}  # id -> {kind, title, fields, body}
         self._rowid: dict[str, int] = {}  # id -> fts rowid: a delete by the UNINDEXED id scans
@@ -282,14 +285,21 @@ class Index:
     # ---- building ---------------------------------------------------------
 
     def _scan(self) -> dict:
-        out = {}
+        out, known, self._paths = {}, self._paths, {}
         for kind in self.vault.KIND_DIRS:
-            for path in self.vault.note_paths(kind):
-                if ID_RE.fullmatch(path.stem):
+            for e in self.vault.note_entries(kind):
+                if ID_RE.fullmatch(e.name[:-3]):  # the stem: note_entries ends each in .md
                     try:
-                        st = path.stat()
+                        # the listing's own data on Windows (a tenth of a stat per file); a
+                        # real stat on Linux and macOS.
+                        # shortcut: a file still open for writing on Windows may show its old
+                        # (mtime_ns, size) until it is closed; the first call after the close
+                        # re-reads it. Upgrade to os.stat per file if a writer that keeps
+                        # pages open appears.
+                        st = e.stat()
                     except OSError:
                         continue
+                    path = self._paths[e.path] = known.get(e.path) or Path(e.path)
                     out[path] = (kind, (st.st_mtime_ns, st.st_size))
         return out
 
