@@ -22,9 +22,9 @@ from cortex.vault import Vault, is_private
 
 MAX_FINDINGS = 30
 # Order before the cut: broken links first, unlinked mentions (the noisiest) last.
-SEVERITY = ("id_clash", "missing_link", "expired_claim", "merged_related", "orphan", "no_summary",
-            "weak_summary", "links_no_reason", "resource_no_covers", "stale_project", "long_note",
-            "old_fleeting", "unlinked_mention")
+SEVERITY = ("id_clash", "sync_conflict", "missing_link", "expired_claim", "merged_related",
+            "orphan", "no_summary", "weak_summary", "links_no_reason", "resource_no_covers",
+            "stale_project", "long_note", "old_fleeting", "unlinked_mention")
 KIND_CAP = {"unlinked_mention": 10, "weak_summary": 10}
 # RR-26: a summary is what search and prime show; one that only restates the title, or is a
 # few words, adds no words to be found by
@@ -73,6 +73,12 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
     for id, kinds in sorted(kinds_of.items()):
         if len(kinds) > 1 and not _is_private_id(notes, id):
             add("id_clash", id, f"used by {', '.join(kinds)}")
+
+    from cortex import sync_copies
+
+    for copy, orig in sync_copies.find_visible(vault)[0]:  # never a private page's
+        add("sync_conflict", plain(copy), f"a sync conflict copy of {plain(orig)}: open both, "
+            "keep what you want in the original, delete the copy")
 
     edges, inbound = {}, Counter()
     for n in notes:

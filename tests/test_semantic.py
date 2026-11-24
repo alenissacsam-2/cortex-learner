@@ -642,3 +642,23 @@ def test_explain_shows_the_weight_factors(root, monkeypatch):
     assert parts["gem-cars"]["weight"] == pytest.approx(0.6 * 1.12)
     assert parts["old-cars"]["factors"] == {"status": 0.5}
     assert parts["engines"]["factors"] == {} and parts["engines"]["weight"] == 1.0
+
+
+def test_models_load_from_cortex_models_never_fastembeds_temp_cache(home, monkeypatch):
+    """R29a: fastembed's default cache is under %TEMP%, which Windows cleans; both models are
+    read from (and downloaded into) ~/.cortex/models."""
+    import fastembed
+    from fastembed.rerank import cross_encoder
+
+    seen = []
+
+    class Model:
+        def __init__(self, name, cache_dir=None, **kw):
+            seen.append(cache_dir)
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", Model)
+    monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Model)
+    semantic._text_embedding()
+    semantic._cross_encoder()
+    want = str(home / ".cortex" / "models")
+    assert semantic.models_dir() == home / ".cortex" / "models" and seen == [want, want]
