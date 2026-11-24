@@ -164,6 +164,21 @@ CODING_CLIENTS = ("claudecode", "cursor", "codex", "visualstudiocode", "copilot"
 RESEARCH_LABELS = ("", "Zotero", "Documents", "Highlights", "Pocket", "Obsidian", "Notion",
                    "Notes")
 NEW_PAGES = 10  # Get started: a vault with fewer pages of its own is new
+# page id -> (its row's body, its import `Source:` label): a build reuses an unchanged page's
+# row and body, so `signals` scans each body once (the scan cost ~8 ms on 5k pages every build)
+_LABELS: dict[str, tuple[str, str]] = {}
+
+
+def _label(p: dict) -> str:
+    body = p["body"]
+    hit = _LABELS.get(p["id"])
+    if hit is not None and hit[0] is body:  # the same string object: the page did not change
+        return hit[1]
+    if len(_LABELS) > 100_000:  # many vaults in one process (tests): start again
+        _LABELS.clear()
+    x = ("Source: " in body and (m := _IMPORTED.search(body)) and m[1]) or ""
+    _LABELS[p["id"]] = (body, x)
+    return x
 
 
 def signals(pages: list[dict], events: list[dict], day: str, study: bool) -> dict:
@@ -175,25 +190,25 @@ def signals(pages: list[dict], events: list[dict], day: str, study: bool) -> dic
     link one. A fold over the page rows and events, never stored."""
     cut = (date.fromisoformat(day) - timedelta(days=RECENT_DAYS)).isoformat()
     out = dict.fromkeys(HOME_GROUPS, 0)
-    # a resource or chat page's group by its `Source:` label (`in` first: the regex over
-    # every body would cost the build ~20 ms on 5k pages)
-    by_label = {}
-    for p in pages:
-        if (res := p["kind"] == "resource") or p["source"]:
-            x = p["source"] or ("Source: " in p["body"] and (
-                m := _IMPORTED.search(p["body"])) and m[1]) or ""
-            if x in CODING_LABELS:
-                by_label[p["id"]] = "build"
-            elif res and x in RESEARCH_LABELS:
-                by_label[p["id"]] = "research"
-    found = {i for i, g in by_label.items() if g == "research"}
     by_kind = {**dict.fromkeys(STUDY_KINDS, "study"), **dict.fromkeys(BUILD_KINDS, "build")}
-    for p in pages:  # a plain loop: it runs over every page on each build (budget: 5 ms on 5k)
-        g = by_kind.get(k := p["kind"]) or by_label.get(p["id"]) or (
-            "research" if k == "note" and found and not found.isdisjoint(p["links"] or ())
-            else None)
-        if g:
-            out[g] += 2 if (p["date"] or p["updated"]) > cut else 1  # both ISO day strings
+    found, notes = set(), []  # research resources' ids; notes that may link one (counted after)
+    for p in pages:  # one plain pass: it runs over every page on each build
+        g = by_kind.get(k := p["kind"])
+        if g is None and ((res := k == "resource") or p["source"]):
+            x = p["source"] or _label(p)  # a resource or chat page's `Source:` label
+            if x in CODING_LABELS:
+                g = "build"
+            elif res and x in RESEARCH_LABELS:
+                g = "research"
+                found.add(p["id"])
+        if g is None:
+            if k == "note" and p["links"]:
+                notes.append(p)
+            continue
+        out[g] += 2 if (p["date"] or p["updated"]) > cut else 1  # both ISO day strings
+    for p in notes if found else ():
+        if not found.isdisjoint(p["links"]):
+            out["research"] += 2 if (p["date"] or p["updated"]) > cut else 1
     coding: dict[str, bool] = {}  # client name -> a coding app's, asked once per name
     for e in events:
         if (k := e.get("kind")) in STUDY_EVENTS:
