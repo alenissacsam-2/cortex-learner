@@ -25,7 +25,7 @@ It is for anyone who works with AI apps every day:
 - Your notes and chats stay on your computer, in a folder you choose.
 - No account and no telemetry.
 - No cloud AI model is used unless you turn one on. An AI app sees only what Cortex hands it.
-- Notes you mark private stay out of what AI apps get (a person's page is the one exception).
+- Notes you mark private stay out of what AI apps get. (One exception: an AI app that asks for a person's page by name gets it.)
 
 [Read the full Privacy section.](#privacy)
 
