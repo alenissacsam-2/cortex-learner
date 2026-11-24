@@ -431,7 +431,7 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
         news.start()
     if (default and current and Path(current).is_dir() and not in_temp_folder(current)
             and in_temp_folder(root)):  # a probe or a stray click must not take the vault over
-        warned.append(f"kept your vault {current}: {root} is a temporary folder, which Windows "
+        warned.append(f"Kept your vault {current}: {root} is a temporary folder, which Windows "
                       "can empty. Pick a folder outside Temp.")
     elif default or not current:
         did.append(f"pointer {_write_config(vault=str(root))}")

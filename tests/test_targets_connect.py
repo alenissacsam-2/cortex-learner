@@ -120,3 +120,25 @@ def test_registry_path_adds_only_new_entries(monkeypatch, tmp_path):
     same_b = (b.upper() if sys.platform == "win32" else b) + "\\"
     monkeypatch.setattr(session, "_registry_path", lambda: os.pathsep.join((a, same_b, c, c, "")))
     assert targets._env()["PATH"].split(os.pathsep) == [a, b, c]
+
+
+def test_a_connected_app_pointing_at_another_vault_is_stale(home, monkeypatch):
+    """FX1 6a: after Change folder, a JSON or Codex TOML entry still names the old vault:
+    describe marks it stale (Connect keeps it ticked, Apply re-points it); the same vault or
+    an unconnected app is not stale."""
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    moved = {**ENTRY, "args": ["mcp", "--vault", "D:\\new vault"]}
+    for d in (".codeium/windsurf", ".codex"):
+        (home / d).mkdir(parents=True)
+    rows = {r["id"]: r for r in targets.describe(ENTRY)}
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]  # not connected yet
+    targets.apply_all({"windsurf": True, "codex": True}, ENTRY)
+    rows = {r["id"]: r for r in targets.describe(ENTRY)}
+    assert rows["windsurf"]["connected"] and rows["codex"]["connected"]
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]
+    rows = {r["id"]: r for r in targets.describe(moved)}
+    assert rows["windsurf"]["stale"] and rows["codex"]["stale"]
+    targets.apply_all({"windsurf": True, "codex": True}, moved)  # Apply re-points both
+    rows = {r["id"]: r for r in targets.describe(moved)}
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]
+    assert "new vault" in (home / ".codeium/windsurf/mcp_config.json").read_text("utf-8")

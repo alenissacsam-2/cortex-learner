@@ -188,6 +188,8 @@ section { scroll-margin-top: calc(var(--hdr) + 48px); }  /* below the sticky hea
 .foot { padding: 8px 12px; color: var(--ink-2); font-size: 12.5px; border-top: 1px solid var(--rule); }
 .pad { padding: 12px 14px; }
 p.pad { margin: 0; }
+.report-text:empty { display: none; }  /* Status's report text, shown only when Copy is blocked */
+.report-text .help { margin: 0 0 6px; }
 
 /* status rows: state | what | action */
 .srow { grid-template-columns: 112px minmax(0, 1fr) auto; }
@@ -389,7 +391,9 @@ dialog.confirm h2 { margin: 0 0 10px; }
    button, Setup's bar runs under it */
 dialog.welcome {
   background: var(--panel); color: var(--ink); border: 1px solid var(--edge); border-radius: 2px;
-  padding: 0; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+  padding: 0; width: min(560px, calc(100vw - 32px)); max-width: none; overflow: auto;
+  /* held still between steps: a fixed width and top, so only its height changes */
+  margin: 10vh auto auto; max-height: calc(90vh - 16px); scrollbar-gutter: stable;
 }
 dialog.welcome::backdrop { background: var(--scrim); }
 .wg-top { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px 6px 18px;

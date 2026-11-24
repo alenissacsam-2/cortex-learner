@@ -140,9 +140,10 @@
   }
   /* toast: one message at a time; #toast-msg is the live region (role alert for an error).
      The card stays in the page, faded out, so the region is always there to announce. */
-  let toastTimer = null, toastEnd = 0, toastLeft = 0, toastOn = false, toastHeld = false;
+  let toastTimer = null, toastEnd = 0, toastLeft = 0, toastOn = false, toastHeld = false, toastAct = null;
   function toastHide() {
     clearTimeout(toastTimer);
+    if (toastAct) { toastAct.remove(); toastAct = null; }
     toastTimer = null;
     toastOn = false;
     $('toast').classList.remove('on');
@@ -154,10 +155,13 @@
     toastEnd = Date.now() + ms;
     toastTimer = setTimeout(toastHide, ms);
   }
-  function toast(msg, long, kind) {  // kind: 'error', 'ok' or none (info)
+  function toast(msg, long, kind, act) {  // kind: 'error', 'ok' or none (info); act: [label, fn], a button after the text
     const m = $('toast-msg');
     m.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     m.textContent = msg;
+    if (toastAct) toastAct.remove();
+    toastAct = act ? btn(act[0], () => { toastHide(); act[1](); }) : null;
+    if (toastAct) m.after(toastAct);
     $('toast').className = 'toast on' + (kind ? ' ' + kind : '');
     $('toast-x').hidden = false;
     toastOn = true;
@@ -337,9 +341,11 @@
       vaultChange.open = false;
       vaultChange.text = '';
       const r = j.result;
-      if (r.kept) toast((r.lines || []).find((l) => l.startsWith('kept your vault')) || 'Your vault stayed as it was.', true);
+      vaultChange.reconnect = !!r.reconnect;  // AI apps still name the old folder: Connect's Apply moves them
+      if (r.reconnect) toast(`Cortex now uses ${r.vault}. ${RECONNECT}`, true, null, ['Open Connect AI apps', () => show('connect', true)]);
       else toast.ok(`Cortex now uses ${r.vault}.`);
     }
+    else if (j.section === 'connect' && !jobFailed(j)) vaultChange.reconnect = false;
     else if (j.name === 'Start at login') toast.ok('The receiver now starts at login.');  // server.login's job name
     if (wg.mine) {  // the welcome guide's job ended: the step reads the new state
       Object.assign(wg, { mine: false, job: j });
@@ -518,11 +524,25 @@
       d.issue_url ? reportBoard(d.issue_url) : null);
   }
   /* Something not working?: the details come from the server (no paths or notes); nothing is sent from here */
+  // the text is fetched with the board, so the click only writes the clipboard (a fetch first
+  // can lose the click's focus); a blocked copy shows the text selected for Ctrl+C
   function reportBoard(url) {
+    let text = null;
+    const got = () => api('/api/status/report').then((r) => (text = r.text));
+    got().catch(() => {});  // the click asks again
+    const shown = h('div', { class: 'pad report-text' });
+    const fail = () => {
+      if (text == null) { toast.error('Copy failed: the details did not load. Try again.'); return; }
+      const area = h('textarea', { class: 'mono', readonly: true, rows: 8, 'aria-label': 'Problem report details' });
+      area.value = text;
+      shown.replaceChildren(h('p', { class: 'help', text: 'Select the text and press Ctrl+C.' }), area);
+      area.focus();
+      area.select();
+    };
     return board('Something not working?', {},
       row('Report a problem', null, 'Copy details, then paste them into the form. Nothing is sent until you submit it on GitHub.',
-        [copyBtn(() => api('/api/status/report').then((r) => r.text), 'Copy failed. Run cortex doctor --report in a terminal instead.', 'btn lit', false, null, null, 'Copy details'),
-          ext(url, 'Report on GitHub')]));
+        [copyBtn(() => text ?? got(), '', 'btn lit', false, fail, null, 'Copy details'),
+          ext(url, 'Report on GitHub')]), shown);
   }
   /* app.chat_import: past AI chats saved as chat pages every 5 minutes, no model (on by default) */
   function chatImportBoard(on) {
@@ -1219,7 +1239,8 @@
       const priv = t.private_offer ? h('input', { type: 'checkbox', id: 'pv-' + t.id, checked: t.private }) : null;
       if (priv) cb.priv = priv;
       const sub = !t.detected && !t.connected ? 'Not found on this computer.'
-        : t.connected ? 'Cortex is connected.' : 'Found on this computer; not connected.';
+        : t.stale ? 'Its Cortex entry is out of date (another folder or program). Apply updates it.'
+          : t.connected ? 'Cortex is connected.' : 'Found on this computer; not connected.';
       const what = h('details', { class: 'what' }, h('summary', { text: 'What this changes' }),
         t.files.length ? [h('p', { text: 'Files:' }), h('ul', { class: 'files' }, t.files.map((f) => h('li', { class: 'mono', text: f })))] : null,
         t.snippet ? [h('p', { text: t.commands ? 'Commands Cortex runs:' : 'The entry Cortex adds:' }), h('pre', { text: t.snippet })]
@@ -1781,7 +1802,8 @@
   }
   const noObsidian = (r) => { if (r.obsidian === false) toast('Obsidian is not installed, so it opened with this computer’s own app.', true); };
   // Change folder: the inline field in the Vault board (the same job Setup's Vault step runs)
-  const vaultChange = { open: false, text: '', focus: false, d: null };
+  const vaultChange = { open: false, text: '', focus: false, d: null, reconnect: false };
+  const RECONNECT = 'Your AI apps still use your old folder. Open Connect AI apps and click Apply to move them.';
   const VAULT_HELP = 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault. Your current vault stays where it is.';
   function openChange() { vaultChange.open = true; vaultChange.focus = true; renderVault(vaultChange.d); }
   function closeChange() { vaultChange.open = false; vaultChange.text = ''; renderVault(vaultChange.d); }
@@ -1812,6 +1834,10 @@
         h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'This vault is in a temporary folder' })),
           h('span', { class: 'sub', text: 'Windows can empty it at any time. Use Change folder to pick your real vault.' })),
         h('div', { class: 'acts' }, btn('Change folder', openChange, 'btn lit', { 'aria-label': 'Change folder: temporary vault' }))) : null,
+      vaultChange.reconnect ? h('div', { class: 'brow srow' }, stateCell('warn'),
+        h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Your AI apps still use your old folder' })),
+          h('span', { class: 'sub', text: 'Open Connect AI apps and click Apply to move them.' })),
+        h('div', { class: 'acts' }, btn('Open Connect AI apps', () => show('connect', true), 'btn lit'))) : null,
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
         h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
       row('Snapshot', null, 'One page of your notes and the 3D brain that opens without Cortex. Private items are never in it.',
@@ -2442,7 +2468,14 @@
   /* ---- the welcome guide: a first-run dialog, one step at a time. Every action is Setup's or
      Connect's own route and job; every state comes from /api/setup (`wg.d`) ---- */
   const WG_N = 6;
-  const wg = { step: 1, d: null, open: false, done: false, mine: false, job: null, path: null };
+  // mine: a job this guide started is running, from step `at` (only that step shows its line)
+  const wg = { step: 1, d: null, open: false, done: false, mine: false, job: null, at: 0, path: null };
+  async function wgJob(path, body) {
+    Object.assign(wg, { mine: true, job: null, at: wg.step });
+    const r = await job(path, body);
+    if (!r) wg.mine = false;  // refused (an empty path, say): no job of the guide's
+    return r;
+  }
   const wgConnected = (d) => d.connect.some((t) => t.connected);
   const WG_EXTRAS = [['embed', 'Search model', (d) => `Finds notes by meaning; ${d.embed.size}, once.`, (d) => d.embed.done],
     ['history', 'Your history', () => 'Old AI chats, notes and calendars.', (d) => d.history.done || Object.values(d.imports).some((x) => x.count)],
@@ -2487,7 +2520,7 @@
   // the job this guide started (the vault, a Connect): its line in the step, as the job line says it
   function wgJobLine() {
     const j = wg.job, p = h('p', { class: 'wg-job', id: 'wg-job', role: 'status' });
-    if (!j) return p;
+    if (!j || wg.at !== wg.step) return p;
     const r = j.result || {};
     if (j.running) p.textContent = `${j.name}… ${j.line || ''}`;
     else if (jobFailed(j)) { p.classList.add('bad'); p.textContent = `${j.name}: failed. ${j.error || (r.lines || [])[0] || ''}`; }
@@ -2508,7 +2541,7 @@
             const path = h('input', { type: 'text', id: 'wg-path', value: wg.path ?? (moved ? '' : d.vault.path || d.vault.default),
               placeholder: moved ? 'The folder’s new location' : null, spellcheck: 'false' });
             path.addEventListener('input', () => { wg.path = path.value; });
-            const use = () => { wg.mine = true; wg.job = null; return job('/api/setup/vault', { path: path.value }); };
+            const use = () => wgJob('/api/setup/vault', { path: path.value });
             path.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); use(); } });
             return [moved ? h('p', { class: 'help', text: `Cortex used ${d.vault.path}, which is not there any more. Type the folder’s new location, or a new folder to start an empty vault.` }) : null,
               h('div', { class: 'field' }, h('label', { for: 'wg-path', text: 'The folder for your notes' }),
@@ -2523,7 +2556,7 @@
             const want = { [t.id]: true };  // this app only: the others stay as they are
             return post('/api/connect/plan', { want }, (p) => {
               if (!p.rows.length) { toast('Nothing to change.'); return; }
-              confirmChanges(p.rows, () => { wg.mine = true; wg.job = null; job('/api/connect/apply', { want }); });
+              confirmChanges(p.rows, () => wgJob('/api/connect/apply', { want }));
             });
           };
           return [...(apps.length ? apps.map((t) => row(t.label, null, t.connected ? 'Connected.' : 'Found on this computer; not connected.',
@@ -2541,10 +2574,10 @@
         [h('div', { class: 'wg-tour' }, WG_TOUR.flatMap(([group, items]) => [h('h3', { text: group }),
           h('ul', {}, items.map(([s, name, what]) => h('li', {}, btn(name, () => wgGo(s), 'linkbtn', { 'aria-label': `Open ${name}` }), h('span', { text: what }))))]))]],
       ['Try it', 'Ask Cortex something about your notes. Chat answers on this computer and shows the pages it used.', false, (() => {
-        const q = h('input', { type: 'text', id: 'wg-q', spellcheck: 'true' });
+        // a new vault has the About you pages, so the example gets a real answer; empty sends it
+        const q = h('input', { type: 'text', id: 'wg-q', spellcheck: 'true', placeholder: 'For example: what do you know about me?' });
         const ask = () => {
-          const text = q.value.trim();
-          if (!text) { q.focus(); return; }
+          const text = q.value.trim() || 'What do you know about me?';
           wgClose();
           // a new chat with the question sent, as a Chat example fills the box and Enter sends it
           if (!chatS.busy) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0, pages: [], draft: text, focus: true, ask: true }); }
@@ -2574,6 +2607,7 @@
   }
   function wgMove(by) {
     wg.step = Math.min(WG_N, Math.max(1, wg.step + by));
+    if (!wg.mine) wg.job = null;  // a finished job's line belongs to the step that ran it
     wgDraw();
     if (wg.step >= 2 && wg.step <= 4) wgLoad();  // a step done elsewhere meanwhile shows Done
   }
@@ -2636,11 +2670,18 @@
   // once, from the quick look, while /api/setup loads for steps 2-4; a vault but no AI app
   // connected needs Setup's answer first
   if (want === 'welcome') wgOpen(1);
+  // by itself never over another open dialog (a confirm, say): once that one closes
+  const wgAuto = (d) => {
+    const other = [...document.querySelectorAll('dialog')].find((x) => x.open);
+    // fresh state then: that dialog may have connected an app
+    if (other) other.addEventListener('close', () => { if (!wg.open && !wg.done) wgAuto(); }, { once: true });
+    else wgOpen(1, d);
+  };
   api('/api/app/welcome').then((w) => {
     if (typeof w.welcome_done !== 'boolean' || w.welcome_done || wg.open) { wg.done = w.welcome_done === true; return null; }
-    if (!w.vault) return wgOpen(1);
+    if (!w.vault) return wgAuto();
     return api('/api/setup').then((d) => {
-      if (!wg.open && d.vault && !(d.connect_skipped || wgConnected(d))) wgOpen(1, d);
+      if (!wg.open && d.vault && !(d.connect_skipped || wgConnected(d))) wgAuto(d);
     });
   }).catch(() => {});
   idle();

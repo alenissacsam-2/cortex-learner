@@ -957,13 +957,15 @@ def describe(base: dict | None) -> list[dict]:
     """The rows of the Connect section: detection, state and what a change would touch.
     `private_offer`: the row may offer the --private opt-in (LM Studio, private_mcp on);
     `private`: its entry has --private now; `paste`: where packs.USE_TEXT goes in that app
-    (Copy instructions), "" when Cortex brings it in itself."""
+    (Copy instructions), "" when Cortex brings it in itself; `stale`: connected, but Apply
+    would change its MCP entry (it points at another vault folder): rules and hooks rows,
+    which the app refreshes anyway, do not count."""
     out, offer = [], private_mcp()
     for t in targets():
         lms = isinstance(t, LMStudio)
         row = {"id": t.id, "label": t.label, "detected": False, "connected": False,
                "files": [], "snippet": "", "note": getattr(t, "note", ""),
-               "private_offer": lms and offer, "private": False, "paste": ""}
+               "private_offer": lms and offer, "private": False, "paste": "", "stale": False}
         try:
             rules = [t.rule_path()] if isinstance(t, Rules) else []
             rules += [t.hook_path()] if isinstance(t, Hooks) and t.hook_path() not in t.paths() \
@@ -973,6 +975,11 @@ def describe(base: dict | None) -> list[dict]:
                        paste=getattr(t, "paste", ""))
             if base is not None:
                 row["snippet"] = t.snippet(base)
+                # Apply would change its entry (it names another vault, say): Connect says so
+                if row["connected"]:
+                    b = _base(t, "private" if row["private"] else True, base)
+                    row["stale"] = any(r["change"] not in ("none", "error") and not r["detail"]
+                                       for r in t.plan(True, b))
                 # Claude Code's plugin route shows the commands Cortex runs, not an entry
                 row["commands"] = isinstance(t, ClaudeCode) and t._plugin_route()
         except Exception as e:  # noqa: BLE001  (one broken config never hides the others)
