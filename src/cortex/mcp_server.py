@@ -4122,16 +4122,16 @@ def dry_prime(vault: Vault, client: str, prompt: str, every: bool = False,
     block and the context's `chars`. Nothing is written: no X-ray row, event, chat log, tag,
     session, index snapshot or vector cache, and the prompt is kept nowhere. `every`: with
     every scope, as the owner's own view (the X-ray's compare, R27b). `index`: a read-only
-    (save=False) Index to reuse across runs (R27b's compare); its withhold becomes this
-    client's, and the selection's refresh moves the pages that changes, as a privacy change
-    does."""
+    (save=False) Index to reuse across runs (the app's one for its dry runs and compares); its
+    withhold becomes this client's, and the selection's refresh moves the pages that changes,
+    from the rows it holds, as a privacy change does."""
     c = Cortex(vault, build=False)
     c.over_mcp = not every  # the client's profile applies, as over MCP
     c.sessions.client = None if client in ("", "unknown") else client
     if index is None:
         c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
-    else:  # _prime_select's refresh applies the new withhold
-        index.withhold, c._index = c._index_withheld, index
+    else:  # _prime_select's refresh applies the new withhold, under this run's catalog
+        index.withhold, index.catalog, c._index = c._index_withheld, c.catalog, index
     c._ready.set()
     parts, xr, _ = c._prime_select(prompt[:PRIME_PROMPT], save=False)
     return {**xr, "chars": len("\n\n".join(parts))}
