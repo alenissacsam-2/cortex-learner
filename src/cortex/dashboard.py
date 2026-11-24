@@ -396,9 +396,123 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         "resurface": [_plained(r, "title", "summary")
                       for r in loops.resurface(parsed, day, limit=5, events=events,
                                                created_of=created)],
-        "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0]},
+        "you": {"know": known, "unconfirmed": reflect.unconfirmed(vault, day)[0],
+                # R27a Mind Mirror: replaced lines and decisions, a fold (nothing stored)
+                "changes": changes(notes, events, private | hidden, day)},
         "help": _help(),
     }
+
+
+def _claim_rows(notes: dict, shut: set) -> tuple[dict, set]:
+    """({(page, claim id): row} of the live and past claims of every shown me/ page, the claim
+    ids of the private or hidden ones)."""
+    rows, closed = {}, set()
+    for n in notes["me"]:
+        got = claims.parse(n.id, n.body)
+        if n.id in shut or is_private(n):
+            closed |= {r["id"] for r in got}
+            continue
+        rows |= {(n.id, r["id"]): r for r in got if r["status"] in ("live", "past")}
+    return rows, closed
+
+
+def _chain(start, nxt: dict) -> list:
+    out, seen = [], set()
+    while start is not None and start not in seen:
+        seen.add(start)
+        out.append(start)
+        start = nxt.get(start)
+    return out
+
+
+def changes(notes: dict, events: list, shut: set, today: str) -> list[dict]:
+    """R27a Mind Mirror: each chain of versions, newest change first: {kind: line|decision,
+    page, versions: [{id, page, text, from, until, open_start, status}]}, oldest version first.
+    A line chain is a me/ claim and every line its `## Past` line points to (`→ ^id`, on its own
+    page first, else on another); a decision chain is a decision and the ones that replaced it
+    (chat_pages.replaced_by). Only chains with a past or retired version. A line starts on its
+    `(since …)` day, else the day of the first change event that wrote its id, else when the
+    one before it ended, else at its page's earliest known day (`open_start`). A pure fold over
+    pages and events; pages in `shut` and private pages never show, and a line that went on to
+    one ends as past, never retired."""
+    voided = {e.get("ref") for e in events if e.get("kind") == "void"}
+    wrote, first = {}, {}  # (page, claim id) -> first day written; page -> earliest day seen
+    for e in events:
+        pl = e.get("payload") if e.get("kind") == "change" else None
+        c = pl.get("change") if isinstance(pl, dict) else None
+        day = str(e.get("day") or "")
+        if not isinstance(c, dict) or e.get("id") in voided or not day:
+            continue
+        page = str(c.get("id"))
+        first[page] = min(first.get(page, day), day)
+        for cid in c["claim"] if isinstance(c.get("claim"), list) else [c.get("claim")]:
+            if isinstance(cid, str):
+                wrote[(page, cid)] = min(wrote.get((page, cid), day), day)
+    rows, closed = _claim_rows(notes, shut)
+    by_id, link, nxt = {}, {}, {}
+    for k in rows:
+        by_id.setdefault(k[1], k)
+    for k, r in rows.items():
+        if r["status"] == "past":
+            link[k] = until, to = claims.past_link(r["text"])
+            t = (k[0], to) if (k[0], to) in rows else by_id.get(to)
+            if to and t:
+                nxt[k] = t
+        for d in (claims.since(r["text"]), link.get(k, (None,))[0]):
+            if d:
+                first[k[0]] = min(first.get(k[0], d), d)
+    out = []
+    for head in rows.keys() - set(nxt.values()):
+        keys = _chain(head, nxt)
+        if len(keys) == 1 and rows[head]["status"] == "live":
+            continue
+        versions, prev = [], None
+        for n, k in enumerate(keys):
+            r, (until, to) = rows[k], link.get(k, (None, None))
+            start = claims.since(r["text"]) or wrote.get(k) or prev
+            status = ("live" if r["status"] == "live" else "past" if n < len(keys) - 1
+                      or to in closed else "retired")
+            versions.append({"id": k[1], "page": k[0], "text": plain(claims.bare(r["text"]), 300),
+                             "from": start or first.get(k[0]) or until or today,
+                             "open_start": start is None, "status": status})
+            versions[-1]["until"] = prev = None if status == "live" else max(
+                until or versions[-1]["from"], versions[-1]["from"])
+        out.append({"kind": "line", "page": keys[-1][0], "versions": versions})
+    out += _decision_changes(notes, shut)
+    out.sort(key=lambda c: (max(v["until"] or v["from"] for v in c["versions"]), c["page"],
+                            c["versions"][0]["id"]), reverse=True)
+    return out
+
+
+def _decision_changes(notes: dict, shut: set) -> list[dict]:
+    """`changes`' decision chains: a superseded or retired decision and the later shown one
+    that replaced it, in turn; a last one that holds no more is retired, on its file's day."""
+    decs = {n.id: n for n in notes["decision"] if n.id not in shut and not is_private(n)}
+    day = {i: topics.page_date(i, n.fields, n.body) for i, n in decs.items()}
+    bodies = sorted((day[i], i, n.body) for i, n in decs.items())
+    gone = {i for i, n in decs.items() if str(n.fields.get("status")) in ("superseded", "retired")}
+    nxt = {i: by for i in gone if (by := chat_pages.replaced_by(i, day[i], decs[i].body, bodies))}
+    out = []
+    for head in gone - set(nxt.values()):
+        ids, versions = _chain(head, nxt), []
+        for n, i in enumerate(ids):
+            known = day[i] or None
+            start = max(known or _file_day(decs[i]), versions[-1]["from"] if versions else "")
+            versions.append({"id": i, "page": i, "text": _title(decs[i]), "from": start,
+                             "open_start": known is None, "until": None,
+                             "status": "past" if n < len(ids) - 1
+                             else "retired" if i in gone else "live"})
+        for a, b in zip(versions, versions[1:], strict=False):
+            a["until"] = b["from"]
+        if versions[-1]["status"] == "retired":
+            versions[-1]["until"] = max(_file_day(decs[ids[-1]]), versions[-1]["from"])
+        out.append({"kind": "decision", "page": ids[-1], "versions": versions})
+    return out
+
+
+def _file_day(n) -> str:
+    """The Cortex day a page's file was last saved: the only day an undated decision has."""
+    return local_day(datetime.fromtimestamp(n.path.stat().st_mtime).astimezone())
 
 
 def _answer_secs(gaps: list[float]) -> int | None:

@@ -872,3 +872,117 @@ def test_a_hand_edited_stamp_skips_its_gap_not_the_dashboard(root):
     f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     det = dashboard.build_data(Vault(root), now=NOW)["details"]["two-pointers"]
     assert det.get("answer_secs") == 20
+
+
+# R27a Mind Mirror: chains of replaced lines and decisions in you.changes
+MARKED_UP = ("Reads [the docs](https://example.com/x) ![shot](http://example.com/i.png) "
+             "<b>first</b> (confirmed 2026-05-02) (until 2026-07-01) ^c-fffff")
+
+
+def _changed(root) -> dict:
+    """me/preferences (a revised, a retired and a marked-up line), a line revised onto another
+    page, a superseded decision chain, one replaced by a private decision, and private pages
+    with chains of their own; {(kind, first version id): chain} and the chain order."""
+    _note(root, "me", "preferences", {"id": '"preferences"'},
+          "# Preferences\n\n## Tools\n- Uses uv (since 2026-09-03) ^c-bbbbb\n\n## Past\n"
+          "- Uses Pipenv (until 2026-09-03 → ^c-bbbbb) ^c-aaaaa\n"
+          "- Drinks coffee (until 2026-10-01) ^c-ccccc\n"
+          f"- {MARKED_UP}\n")
+    _note(root, "me", "goals", {"id": '"goals"'},
+          "# Goals\n\n## Past\n- Wants to fly planes (until 2026-08-01 → ^c-ddddd) ^c-eeeee\n")
+    _note(root, "me", "setup", {"id": '"setup"'},
+          "# Setup\n\n## Plans\n- Wants to build robots ^c-ddddd\n")
+    _note(root, "me", "personality", {"id": '"personality"', "private": "true"},
+          "# Personality\n\n## Core\n- Secret new ^c-ggggg\n\n## Past\n"
+          "- Secret old (until 2026-09-01 → ^c-ggggg) ^c-hhhhh\n")
+    _note(root, "decisions", "db-sqlite", {"kind": "decision", "title": '"Use SQLite"',
+                                           "status": "superseded", "date": "2026-05-01"}, "x\n")
+    _note(root, "decisions", "db-postgres", {"kind": "decision", "title": '"Use Postgres"',
+                                             "status": "accepted", "date": "2026-08-20"},
+          "Replaces [[db-sqlite]].\n")
+    _note(root, "decisions", "secret-old", {"kind": "decision", "title": '"Secret old plan"',
+                                            "status": "superseded", "date": "2026-04-01",
+                                            "private": "true"}, "x\n")
+    _note(root, "decisions", "cache-redis", {"kind": "decision", "title": '"Cache in Redis"',
+                                             "status": "superseded", "date": "2026-03-01"}, "x\n")
+    _note(root, "decisions", "secret-cache", {"kind": "decision", "title": '"Secret cache"',
+                                              "status": "accepted", "date": "2026-06-01",
+                                              "private": "true"}, "Replaces [[cache-redis]].\n")
+    EventLog(Vault(root)).append(session="cli", kind="change", source="tutor",
+                                 now=datetime(2026, 6, 12, 8, 0, tzinfo=UTC), fields={
+                                     "payload": {"change": {"kind": "me", "id": "preferences",
+                                                            "claim": "c-aaaaa"}}})
+    got = dashboard.build_data(Vault(root), now=NOW)["you"]["changes"]
+    return {(c["kind"], c["versions"][0]["id"]): c for c in got}
+
+
+def test_a_revised_line_is_a_two_version_chain(root):
+    assert _changed(root)[("line", "c-aaaaa")] == {"kind": "line", "page": "preferences",
+                                                   "versions": [
+        {"id": "c-aaaaa", "page": "preferences", "text": "Uses Pipenv", "from": "2026-06-12",
+         "until": "2026-09-03", "open_start": False, "status": "past"},  # from its event
+        {"id": "c-bbbbb", "page": "preferences", "text": "Uses uv", "from": "2026-09-03",
+         "until": None, "open_start": False, "status": "live"}]}  # from its (since …)
+
+
+def test_a_retired_line_with_no_start_starts_at_its_pages_first_day(root):
+    # no since and no event: the page's earliest known day (the event that wrote c-aaaaa)
+    assert _changed(root)[("line", "c-ccccc")]["versions"] == [
+        {"id": "c-ccccc", "page": "preferences", "text": "Drinks coffee", "from": "2026-06-12",
+         "until": "2026-10-01", "open_start": True, "status": "retired"}]
+
+
+def test_a_chain_spans_two_pages(root):
+    c = _changed(root)[("line", "c-eeeee")]
+    assert c["page"] == "setup"
+    assert [(v["page"], v["text"], v["from"], v["until"], v["status"], v["open_start"])
+            for v in c["versions"]] == [
+        ("goals", "Wants to fly planes", "2026-08-01", "2026-08-01", "past", True),
+        ("setup", "Wants to build robots", "2026-08-01", None, "live", False)]  # the one before
+
+
+def test_a_superseded_decision_chain(root):
+    got = _changed(root)
+    assert got[("decision", "db-sqlite")] == {"kind": "decision", "page": "db-postgres",
+                                              "versions": [
+        {"id": "db-sqlite", "page": "db-sqlite", "text": "Use SQLite", "from": "2026-05-01",
+         "until": "2026-08-20", "open_start": False, "status": "past"},
+        {"id": "db-postgres", "page": "db-postgres", "text": "Use Postgres",
+         "from": "2026-08-20", "until": None, "open_start": False, "status": "live"}]}
+    # replaced by a private decision: it ends, retired, and the private one never shows
+    (redis,) = got[("decision", "cache-redis")]["versions"]
+    assert redis["status"] == "retired" and redis["until"] >= "2026-03-01"
+
+
+def test_private_pages_never_show_in_changes(root):
+    got = _changed(root)
+    text = json.dumps(list(got.values()))
+    for bad in ("Secret", "c-ggggg", "c-hhhhh", "secret-old", "secret-cache", "personality"):
+        assert bad not in text, bad
+    order = list(got)  # newest change first
+    assert order.index(("line", "c-ccccc")) < order.index(("line", "c-aaaaa")) \
+        < order.index(("line", "c-eeeee")) < order.index(("line", "c-fffff"))
+    assert ("line", "c-ddddd") not in got  # a live line nothing replaced is no change
+
+
+def test_change_text_is_plain_without_ids_or_stamps(root):
+    (v,) = _changed(root)[("line", "c-fffff")]["versions"]
+    assert v["text"] == "Reads the docs first"
+    assert v["until"] == "2026-07-01" and v["status"] == "retired"
+
+
+def test_an_undated_decision_starts_open_on_its_file_day(root):
+    _note(root, "decisions", "ui-tk", {"kind": "decision", "title": '"Use Tk"',
+                                       "status": "superseded"}, "x\n")
+    _note(root, "decisions", "ui-web", {"kind": "decision", "title": '"Use a web page"',
+                                        "status": "accepted", "date": "2099-01-01"},
+          "Replaces [[ui-tk]].\n")
+    (c,) = dashboard.build_data(Vault(root), now=NOW)["you"]["changes"]
+    tk, web = c["versions"]
+    file_day = dashboard._file_day(Vault(root).read("decision", "ui-tk"))
+    assert tk["open_start"] and tk["from"] == file_day and tk["until"] == "2099-01-01"
+    assert not web["open_start"] and web["status"] == "live"
+
+
+def test_no_changes_on_a_vault_without_history(root):
+    assert dashboard.build_data(Vault(root), now=NOW)["you"]["changes"] == []
