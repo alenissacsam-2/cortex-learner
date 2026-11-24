@@ -411,9 +411,10 @@ KIND = {"chats": ("a chat export", "the Claude, ChatGPT, Gemini or Perplexity ca
         "location": ("a location history", "the Location card"),
         "photos": ("a photo folder", "the Photos card"),
         "spotify": ("a Spotify export", "the Spotify card"),
-        "voice-memos": ("a folder of recordings", "the Voice memos card")}
+        "voice-memos": ("a folder of recordings", "the Voice memos card"),
+        "anki": ("Anki decks", "the Anki card")}
 TIERED = ("notes", "calendar", "docs", "repos", "highlights", "mail", "selfchat",
-          "location", "photos", "spotify", "voice-memos")  # imports that ask the tier
+          "location", "photos", "spotify", "voice-memos", "anki")  # imports that ask the tier
 OWN_CHECK = ("docs", "repos", "mail", "selfchat", "location", "photos",
              "spotify", "voice-memos")  # the source checks the path itself
 
@@ -592,6 +593,9 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
         job.say("importing")
         src = _source(kind, path, job)
         r = _readable(sources.run, v, src, t, False)
+        if kind == "anki":  # parent decks and concepts, once the pages exist
+            from cortex import anki
+            anki.link(v)
         _commit(v, kind)
         return {"ok": True, "kind": "import", "counts": {kind: r["imported"] + r["updated"]},
                 "lines": [f"{_found(r).replace('Found', 'Imported', 1)} Pages are in "

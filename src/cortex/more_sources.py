@@ -698,5 +698,12 @@ def zotero_source(path: Path | None) -> sources.Source:
     return zotero.source(path)
 
 
+def anki_source(path: Path) -> sources.Source:
+    """R22: Anki decks (cortex.anki); the caller runs `anki.link` after the import."""
+    from cortex import anki  # loaded only for an Anki import
+    return anki.source(path)
+
+
 SOURCE_OF = {"docs": docs_source, "repos": repos_source, "highlights": highlights_source,
-             **life_sources.SOURCE_OF, "zotero": zotero_source}  # Sources B, then R18
+             **life_sources.SOURCE_OF, "zotero": zotero_source,  # Sources B, then R18
+             "anki": anki_source}
