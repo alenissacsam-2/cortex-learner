@@ -226,9 +226,9 @@ const out = {};
     // Try it: what to do while Cortex cannot see the AI app, and the app's own Chat
     out.tryIt = stepOf('Try it').querySelectorAll('button').map((b) => b.textContent);
     // Connect: an empty file list is not shown; Claude Code's plugin route lists commands
-    DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', targets: [
-      { id: 'claude-desktop', label: 'Claude Desktop', detected: false, connected: false, files: [], snippet: '', note: '' },
-      { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install cortex', commands: true, note: '' }] };
+    DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', instructions: 'USE CORTEX', targets: [
+      { id: 'claude-desktop', label: 'Claude Desktop', detected: false, connected: false, files: [], snippet: '', note: '', paste: 'Paste into Claude.' },
+      { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install cortex', commands: true, note: '', paste: 'Paste into CLAUDE.md.' }] };
     // R32a: a pack's size switch moves the text, the count and the changed line; Copy records it
     DATA.routes['/api/connect'].packs = [{ id: 'interview', sizes: [
       { chars: 1500, text: 'short pack', hash: 'aaaaaaaaaaaaaaaa', changed: false },
@@ -237,7 +237,13 @@ const out = {};
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'connect').fire('click');
     await tick();
     out.whatLines = $('connect').querySelectorAll('details').filter((d) => d.querySelectorAll('p').length).map((d) => d.querySelectorAll('p').map((p) => p.textContent));
-    const prow = $('connect').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Interview');
+    // Copy instructions: only on a found app's row that needs a paste, with where to paste it
+    const pastes = $('connect').querySelectorAll('.trow').map((r) => [r.querySelector('.ttl').textContent,
+      r.querySelectorAll('.sub').map((s) => s.textContent), r.querySelectorAll('button').map((b) => b.textContent)]);
+    $('connect').querySelectorAll('button').find((b) => b.textContent === 'Copy instructions').fire('click');
+    await tick(); await tick();
+    out.paste = [pastes, clipboard.slice(-1)];
+    const prow =$('connect').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Interview');
     const pstate = () => [prow.querySelector('textarea').value, prow.querySelector('.val').textContent,
       prow.querySelector('.stale').hidden, prow.querySelector('.pack-size').querySelectorAll('button').map((b) => [b.textContent, b.getAttribute('aria-pressed')])];
     out.pack = [pstate()];
@@ -578,6 +584,10 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert "Open Chat" in out["tryIt"]
     assert out["whatLines"] == [["Files:", "Commands Cortex runs:"],  # found apps first
                                 ["Set up a vault first; the entry points at it."]]
+    assert out["paste"] == [[  # a found app needing a paste: its line and Copy instructions
+        ["Claude Code", ["Found on this computer; not connected.", "Paste into CLAUDE.md."],
+         ["Copy instructions"]],
+        ["Claude Desktop", ["Not found on this computer."], []]], ["USE CORTEX"]]
     sizes = lambda a, b: [["1,500 characters", a], ["5,000 characters", b]]  # noqa: E731
     assert out["pack"] == [
         ["short pack", "10 characters", True, sizes("true", "false")],

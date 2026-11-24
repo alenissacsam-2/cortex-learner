@@ -36,9 +36,9 @@ def hook(tool):
 
 def test_hooks_json_matcher():
     cfg = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-    assert cfg["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == "cortex session sweep || true"
+    assert cfg["hooks"]["SessionEnd"][0]["hooks"][0]["command"] == "cortex session sweep; exit 0"
     (post,) = cfg["hooks"]["PostToolUse"]
-    assert post["hooks"][0]["command"] == "cortex taint || true"
+    assert post["hooks"][0]["command"] == "cortex taint; exit 0"
     m = re.compile(post["matcher"])  # Claude Code tests it as an unanchored JS RegExp
     assert all(m.search(t) for t in OUTSIDE)
     assert not any(m.search(t) for t in [*LOCAL, "Read", "Bash", "Edit", "Grep"])

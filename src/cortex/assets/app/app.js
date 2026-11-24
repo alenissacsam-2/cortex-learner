@@ -1214,13 +1214,17 @@
         t.snippet ? [h('p', { text: t.commands ? 'Commands Cortex runs:' : 'The entry Cortex adds:' }), h('pre', { text: t.snippet })]
           : h('p', { text: 'Set up a vault first; the entry points at it.' }),
         t.note ? h('p', { text: t.note }) : null);
+      // apps whose own instructions Cortex cannot write: the "use Cortex every time" text to paste
+      const paste = t.paste && (t.detected || t.connected);
       return h('div', { class: 'brow trow' + (t.detected || t.connected ? '' : ' off') }, cb,
         h('div', { class: 't' },
           h('div', { class: 'line1' }, h('label', { class: 'ttl', for: 'cb-' + t.id, text: t.label }),
             t.connected ? h('span', { class: 'code-tag', text: 'Connected' }) : null),
           h('span', { class: 'sub', text: sub + (t.error ? ` ${t.error}` : '') }),
+          paste ? h('span', { class: 'sub', text: t.paste }) : null,
           priv ? h('label', { class: 'check' }, priv, h('span', { text: 'Include private browsing search (this computer only)' })) : null,
-          what));
+          what),
+        paste ? h('div', { class: 'acts' }, copyBtn(() => d.instructions, 'Copy failed; the text is in docs/CONNECT.md, and `cortex setup` prints it.', null, true, null, null, 'Copy instructions')) : null);
     });
     const found = d.targets.filter((t) => t.detected).length, on = d.targets.filter((t) => t.connected).length;
     const apply = () => {

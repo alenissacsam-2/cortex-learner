@@ -608,6 +608,8 @@ def test_connect_over_the_api(app, home, vault):
     _, js, _, _ = call(app, "GET", "/api/connect")
     rows = {r["id"]: r for r in js["targets"]}
     assert len(rows) == 13 and rows["cursor"]["detected"] and not rows["windsurf"]["detected"]
+    from cortex import packs  # CN: Copy instructions copies this, on rows saying where
+    assert js["instructions"] == packs.USE_TEXT and rows["cursor"]["paste"] == targets.PASTE_CURSOR
     assert str(vault.resolve()) in json.loads(rows["cursor"]["snippet"])[
         "mcpServers"]["cortex"]["args"]
     want = {"cursor": True, "windsurf": True}

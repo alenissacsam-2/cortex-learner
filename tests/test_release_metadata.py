@@ -33,6 +33,9 @@ def test_plugin_runs_only_cortex():
     hooks = load("plugin/hooks/hooks.json")["hooks"]
     commands = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
     assert commands and all(c.split()[0] == "cortex" for c in commands)
+    # Claude Code runs hooks in Git Bash, or in Windows PowerShell 5.1 when Git is missing (a
+    # new laptop): `||` does not parse there, `; exit 0` works in both and never blocks a prompt
+    assert all(c.endswith("; exit 0") and "|" not in c and "&" not in c for c in commands)
     for groups in hooks.values():
         for g in groups:  # the taint matcher excludes only Cortex and no-outside-text servers
             names = re.findall(r"mcp__\(([^)]*)\)__", g.get("matcher", ""))
