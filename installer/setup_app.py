@@ -25,6 +25,7 @@ import traceback
 from pathlib import Path
 
 import app_exe  # beside this file; PyInstaller bundles it
+import setup_progress as sp  # the window's pure parts, beside this file too
 
 EXE = "CortexSetup.exe"
 MARKER = "cortex-install.txt"  # uninstall deletes only a folder that holds this file
@@ -225,8 +226,8 @@ def wait_pid(pid: int, timeout: float = 60) -> None:
         k.CloseHandle(h)
 
 
-def processes() -> list[tuple[int, str]]:
-    """(pid, image path) of every process whose path this user may read."""
+def _snapshot() -> list[tuple[int, int]]:
+    """(pid, parent pid) of every process."""
     import ctypes
     from ctypes import wintypes as w
 
@@ -245,11 +246,24 @@ def processes() -> list[tuple[int, str]]:
     e.dwSize = ctypes.sizeof(Entry)
     ok = k.Process32FirstW(snap, ctypes.byref(e))
     while ok:
-        pids.append(e.th32ProcessID)
+        pids.append((e.th32ProcessID, e.th32ParentProcessID))
         ok = k.Process32NextW(snap, ctypes.byref(e))
     k.CloseHandle(snap)
+    return pids
+
+
+def parents() -> dict[int, int]:
+    """pid -> parent pid (the window counts cortex.exe's python.exe with it)."""
+    return dict(_snapshot()) if sys.platform == "win32" else {}
+
+
+def processes() -> list[tuple[int, str]]:
+    """(pid, image path) of every process whose path this user may read."""
+    import ctypes
+    from ctypes import wintypes as w
+    k = _kernel32()
     out = []
-    for pid in pids:
+    for pid, _ in _snapshot():
         h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
             continue
@@ -510,119 +524,480 @@ def ask_close(root, title: str, busy: list, verb: str, d: Path) -> bool:
     return bool(ok)
 
 
-def window(opts: argparse.Namespace, say_file) -> int:
-    import tkinter as tk
-    from tkinter import messagebox, scrolledtext, ttk
+# night colours from src/cortex/assets/app/app.css; rule is its amber .16 over the ground
+NIGHT = {"ground": "#0b0b0a", "panel": "#141412", "band": "#1b1a17", "ink": "#efe7d6",
+         "ink2": "#b9ab90", "ink3": "#958870", "lit": "#ffb000", "rule": "#322509",
+         "refresh": "#d0607f", "ok": "#1D9E75"}
+# the window (install has the About lines too) and the open log, in 96-dpi pixels
+SIZE, DETAILS = {"update": (560, 380), "install": (560, 420)}, 190
 
+
+def icon_path() -> Path | None:
+    """Cortex's .ico: beside the bundled payload (build.py), else the package's own."""
+    here = Path(__file__).resolve().parent
+    for p in (Path(getattr(sys, "_MEIPASS", here)) / "cortex.ico",
+              here.parent / "src" / "cortex" / "assets" / "cortex.ico"):
+        if p.is_file():
+            return p
+    return None
+
+
+def _dpi_aware() -> None:
+    """Per-monitor DPI awareness before the Tk root, so text is sharp; older Windows falls
+    back to system awareness, anything else to none."""
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+def _dark_title(root) -> None:
+    """A dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE: 20, 19 on early Windows 10)."""
+    import ctypes
+    try:
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        on = ctypes.c_int(1)
+        for attr in (20, 19):
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), 4) == 0:
+                return
+    except (AttributeError, OSError):
+        pass
+
+
+def _place(root, w: int, h: int) -> None:
+    """Centred, a little above the middle."""
+    x, y = (root.winfo_screenwidth() - w) // 2, (root.winfo_screenheight() - h) // 3
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+
+def _chrome(root, title: str) -> None:
+    root.title(title)
+    if ico := icon_path():
+        try:
+            root.iconbitmap(default=str(ico))  # never Tk's feather; dialogs get it too
+        except Exception:  # noqa: BLE001 - a broken icon must not stop setup
+            pass
+
+
+def _style(root, c: dict, ui: tuple, px):
+    from tkinter import ttk
+    st = ttk.Style(root)
+    st.theme_use("clam")  # the one built-in theme whose colours can all be set
+    st.configure(".", background=c["ground"], foreground=c["ink"], font=ui,
+                 bordercolor=c["rule"], focuscolor=c["ink"])
+    for name, bg, fg, hover, ring in (("Lit", c["lit"], c["ground"], "#ffc23d", c["ground"]),
+                                      ("Quiet", c["band"], c["ink"], "#26241f", c["ink"])):
+        st.configure(f"{name}.TButton", background=bg, foreground=fg, padding=(px(16), px(6)),
+                     bordercolor=bg, lightcolor=bg, darkcolor=bg, focuscolor=ring,
+                     focusthickness=1, relief="flat")
+        st.map(f"{name}.TButton", background=[("pressed", bg), ("active", hover)],
+               lightcolor=[("active", hover)], darkcolor=[("active", hover)],
+               bordercolor=[("focus", ring)])
+    st.configure("Link.TButton", background=c["ground"], foreground=c["ink2"],
+                 padding=(px(2), px(4)),
+                 bordercolor=c["ground"], lightcolor=c["ground"], darkcolor=c["ground"],
+                 focuscolor=c["ink2"], relief="flat")
+    st.map("Link.TButton", foreground=[("active", c["lit"])],
+           background=[("active", c["ground"])])
+    st.configure("Lit.Horizontal.TProgressbar", background=c["lit"], troughcolor=c["panel"],
+                 bordercolor=c["panel"], lightcolor=c["lit"], darkcolor=c["lit"],
+                 arrowsize=px(6))  # clam's bar thickness
+    st.configure("Failed.Horizontal.TProgressbar", background=c["refresh"],
+                 troughcolor=c["panel"], bordercolor=c["panel"], lightcolor=c["refresh"],
+                 darkcolor=c["refresh"], arrowsize=px(6))
+    st.configure("TEntry", fieldbackground=c["panel"], foreground=c["ink"],
+                 insertcolor=c["ink"], bordercolor=c["rule"], lightcolor=c["panel"],
+                 darkcolor=c["panel"], padding=(px(8), px(5)), selectbackground=c["lit"],
+                 selectforeground=c["ground"])
+    st.map("TEntry", bordercolor=[("disabled", c["rule"]), ("focus", c["lit"])],
+           fieldbackground=[("disabled", c["ground"])], foreground=[("disabled", c["ink3"])])
+    st.configure("Vertical.TScrollbar", background=c["band"], troughcolor=c["panel"],
+                 bordercolor=c["panel"], arrowcolor=c["ink3"], lightcolor=c["band"],
+                 darkcolor=c["band"])
+    # clam greys a disabled scrollbar (a short log) light: keep it dark
+    st.map("Vertical.TScrollbar", background=[("disabled", c["band"]), ("active", "#26241f")],
+           arrowcolor=[("disabled", c["ink3"])])
+    return st
+
+
+def window(opts: argparse.Namespace, say_file) -> int:
+    """Install and update in one dark window: the steps, a progress bar with the time, plain
+    status words, the log under Show details, and the in-use question and errors inside it."""
+    import tkinter as tk
+    from tkinter import ttk
+
+    _dpi_aware()
     root = tk.Tk()
     if opts.uninstall:
-        root.withdraw()
-        t = "Uninstall Cortex"
-        if not messagebox.askyesno(t, f"Remove Cortex from {opts.dir}?\n\n"
-                                   "Your vault (your notes) and your settings in ~/.cortex "
-                                   "are kept."):
-            return 1
-        if not opts.keep_ai_apps:
-            opts.keep_ai_apps = not messagebox.askyesno(
-                t, "Also remove Cortex from Claude and other AI apps?\n\nYes is best: without "
-                "Cortex installed, they would show a Cortex error each time they start.")
-        try:
-            if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall", opts.dir):
-                return 1
-            later = uninstall(opts.dir, opts, say_file)
-        except Exception as e:  # noqa: BLE001
-            say_file(traceback.format_exc())
-            messagebox.showerror(t, f"{e}\n\nThe full log is at {LOG}")
-            return 1
-        messagebox.showinfo(t, f"Cortex was removed.\n\n{KEPT}")
-        if later:  # after the message: this exe exits right away, so cmd can delete it
-            remove_later(opts.dir)
-        return 0
+        return uninstall_window(root, opts, say_file)
+    c, mode = NIGHT, "update" if opts.update else "install"
+    verb = "updated" if opts.update else "installed"
+    try:
+        version = version_of(wheel_in(payload_dir()))
+    except SetupError:
+        version = ""  # install() says what is missing
+    _chrome(root, "Updating Cortex" if opts.update else "Cortex setup")
+    scale = root.winfo_fpixels("1i") / 96
 
-    title, verb = ("Updating Cortex", "updated") if opts.update else ("Install Cortex", "installed")
-    root.title(title)
-    root.minsize(560, 420)
-    frame = ttk.Frame(root, padding=16)
-    frame.pack(fill="both", expand=True)
+    def px(n: float) -> int:
+        return round(n * scale)
+
+    w, h = px(SIZE[mode][0]), px(SIZE[mode][1])
+    wrap = px(SIZE[mode][0] - 48)
+    root.configure(bg=c["ground"])
+    root.resizable(False, False)
+    _place(root, w, h)
+    ui, small = ("Segoe UI", 10), ("Segoe UI", 9)
+    _style(root, c, ui, px)
+
+    def label(parent, text="", fg="ink", font=ui, **kw):
+        kw.setdefault("anchor", "w")
+        return tk.Label(parent, text=text, bg=kw.pop("bg", c["ground"]), fg=c[fg], font=font,
+                        justify="left", **kw)
+
+    main_ = tk.Frame(root, bg=c["ground"], width=w, height=h)
+    main_.pack(fill="x")
+    main_.pack_propagate(False)
+    head = tk.Frame(main_, bg=c["ground"])
+    head.pack(fill="x", padx=px(24), pady=(px(18), 0))
+    label(head, "Cortex", "lit", ("Segoe UI Semibold", 13)).pack(anchor="w")
+    label(head, ("Updating to " + version if version else "Updating Cortex") if opts.update
+          else f"Installing {sp.cortex(version)}", "ink2").pack(anchor="w")
+
+    foot = tk.Frame(main_, bg=c["ground"])
+    foot.pack(side="bottom", fill="x", padx=px(24), pady=(0, px(18)))
+    body = tk.Frame(main_, bg=c["ground"])
+    body.pack(fill="both", expand=True, padx=px(24), pady=(px(14), px(10)))
+
+    bar_row = tk.Frame(foot, bg=c["ground"])
+    bar_row.pack(fill="x")
+    bar = ttk.Progressbar(bar_row, style="Lit.Horizontal.TProgressbar", maximum=1000)
+    bar.pack(side="left", fill="x", expand=True)
+    clock = label(bar_row, "", "ink3", small, width=10, anchor="e")
+    clock.pack(side="right", padx=(px(12), 0))
+    status = label(foot, "", wraplength=wrap)
+    status.pack(fill="x", pady=(px(6), px(10)))
+    row = tk.Frame(foot, bg=c["ground"])
+    row.pack(fill="x")
+    toggle = ttk.Button(row, text="Show details", style="Link.TButton", takefocus=True)
+    toggle.pack(side="left")
+    actions = tk.Frame(row, bg=c["ground"])
+    actions.pack(side="right")
+
+    details = tk.Frame(root, bg=c["ground"])
+    log = tk.Text(details, height=1, bg=c["panel"], fg=c["ink2"], font=("Consolas", 9), bd=0,
+                  highlightthickness=0, wrap="word", padx=px(8), pady=px(6), state="disabled",
+                  insertbackground=c["ink"], selectbackground=c["lit"],
+                  selectforeground=c["ground"])
+    scroll = ttk.Scrollbar(details, orient="vertical", command=log.yview)
+    log.configure(yscrollcommand=scroll.set)
+    scroll.pack(side="right", fill="y")
+    log.pack(side="left", fill="both", expand=True)
+
+    def show_details(open_: bool | None = None) -> None:
+        open_ = not details.winfo_ismapped() if open_ is None else open_
+        if open_:
+            details.pack(fill="both", expand=True, padx=px(24), pady=(0, px(18)))
+        else:
+            details.pack_forget()
+        root.geometry(f"{w}x{h + px(DETAILS) * open_}")
+        toggle.configure(text="Hide details" if open_ else "Show details")
+    toggle.configure(command=show_details)
+
+    # ---- the body: steps, or the in-use question, or the error -----------------------------
+    rows: dict = {}
+    steps_panel = tk.Frame(body, bg=c["ground"])
     folder = tk.StringVar(value=str(opts.dir))
-    entry = ttk.Entry(frame, textvariable=folder)
-    if not opts.update:  # an update goes into the existing folder, without questions
-        ttk.Label(frame, text=ABOUT, wraplength=520, justify="left").pack(anchor="w")
-        ttk.Label(frame, text="Install folder:").pack(anchor="w", pady=(12, 2))
-        entry.pack(fill="x")
-    buttons = ttk.Frame(frame)
-    buttons.pack(fill="x", pady=8)
-    status = ttk.Label(frame, text="")
-    status.pack(anchor="w")
-    log = scrolledtext.ScrolledText(frame, height=12, state="disabled")
-    log.pack(fill="both", expand=True, pady=(4, 0))
-    lines: queue.Queue = queue.Queue()
+    entry = ttk.Entry(steps_panel, textvariable=folder)
+    if not opts.update:
+        label(steps_panel, ABOUT, "ink2", small, wraplength=wrap).pack(
+            fill="x", pady=(0, px(10)))
+    for key, text in sp.steps(mode, version):
+        r = tk.Frame(steps_panel, bg=c["ground"])
+        mark = label(r, "○", "ink3", ("Segoe UI Symbol", 10), width=2)
+        mark.pack(side="left")
+        name = label(r, text, "ink3")
+        name.pack(side="left", fill="x")
+        rows[key] = (r, mark, name)
+        r.pack(fill="x", pady=px(2))
+        if key == "folder":
+            entry.pack(fill="x", padx=(px(26), 0), pady=(px(2), px(6)))
+    if opts.update:
+        rows["close"][0].pack_forget()  # shown only when programs must close
+    shown = {"panel": None}
+
+    def swap(panel, expand: bool = True) -> None:
+        old = shown["panel"]
+        if old is panel:
+            return
+        if old is steps_panel:
+            old.pack_forget()  # kept: it comes back
+        elif old is not None:
+            old.destroy()
+        panel.pack(fill="both" if expand else "x", expand=expand, anchor="n")
+        shown["panel"] = panel
+
+    st = {"s": sp.start(mode, version), "failed": False, "t0": None, "t1": None}
     result = {"code": 1}
+    lines: queue.Queue = queue.Queue()
+
+    def paint() -> None:
+        s, order = st["s"], list(sp.SPANS[mode])
+        finished = s.fraction >= 1
+        for key, (_, mark, name) in rows.items():
+            i, cur = order.index(key), order.index(s.step)
+            if i < cur or (i == cur and finished):
+                mark.configure(text="✓", fg=c["ok"])
+                name.configure(fg=c["ink2"])
+            elif i == cur:
+                mark.configure(text="✕" if st["failed"] else "◐",
+                               fg=c["refresh"] if st["failed"] else c["lit"])
+                name.configure(fg=c["ink"])
+            else:
+                mark.configure(text="○", fg=c["ink3"])
+                name.configure(fg=c["ink3"])
+        bar["value"] = s.fraction * 1000
+        if not st["failed"]:
+            status.configure(text=s.status)
+
+    def tick() -> None:
+        if st["t0"] is not None:
+            clock.configure(text=sp.elapsed((st["t1"] or time.monotonic()) - st["t0"]))
+        root.after(500, tick)
 
     def say(line: str) -> None:
         say_file(line)
         lines.put(line)
 
-    def pump() -> None:
+    def drain() -> None:
         while not lines.empty():
+            line = lines.get()
             log.configure(state="normal")
-            log.insert("end", lines.get() + "\n")
+            log.insert("end", line + "\n")
             log.see("end")
             log.configure(state="disabled")
+            st["s"] = sp.progress(st["s"], line)
+        paint()
+
+    def pump() -> None:
+        drain()
         root.after(100, pump)
 
-    def done(err: str | None) -> None:
-        if err:
-            status.configure(text=f"Cortex was not {verb}.")
-            install_btn.configure(state="normal")
-            entry.configure(state="normal")
-            messagebox.showerror(title, f"{err}\n\nThe full log is at {LOG}")
-            return
-        result["code"] = 0
-        if opts.update:
-            open_app()
-            return
-        status.configure(text="Cortex is installed. Open it to finish setup.")
-        install_btn.pack_forget()
-        ttk.Button(buttons, text="Open Cortex", command=open_app).pack(side="left")
-        ttk.Button(buttons, text="Close", command=root.destroy).pack(side="left", padx=8)
+    keys = {"enter": None, "esc": None}
 
-    def work(d: Path) -> None:
-        err = None
-        try:
-            install(d, opts, say)
-        except SetupError as e:
-            err = str(e)
-        except Exception as e:  # noqa: BLE001
-            say_file(traceback.format_exc())
-            err = f"Something went wrong: {e}"
-        root.after(0, done, err)
+    def buttons(items: list, esc=None) -> dict:
+        """(text, command, lit) in order; Enter runs the lit one, Esc `esc`."""
+        for b in actions.winfo_children():
+            b.destroy()
+        keys.update(enter=None, esc=esc)
+        made = {}
+        for text, cmd, lit in items:
+            b = made[text] = ttk.Button(actions, text=text, command=cmd,
+                                        style="Lit.TButton" if lit else "Quiet.TButton")
+            b.pack(side="left", padx=(px(8), 0))
+            if lit:
+                keys["enter"] = cmd
+                b.focus_set()
+        return made
 
-    def start() -> None:
+    root.bind("<Return>", lambda _e: keys["enter"] and keys["enter"]())
+    root.bind("<Escape>", lambda _e: keys["esc"] and keys["esc"]())
+
+    def run_in_thread(fn, then) -> None:
+        def go():
+            try:
+                out = fn()
+            except Exception as e:  # noqa: BLE001 - a failed wait or close: the error panel
+                say_file(traceback.format_exc())
+                root.after(0, finished, f"Something went wrong: {e}")
+                return
+            root.after(0, then, out)
+        threading.Thread(target=go, daemon=True).start()
+
+    # ---- the flow -------------------------------------------------------------------------
+    def begin() -> None:
         if not opts.update:
             opts.dir = Path(folder.get()).expanduser().resolve()
-        if (busy := in_use(opts.dir)) and not ask_close(root, title, busy, "update", opts.dir):
-            status.configure(text=f"Cortex was not {verb}.")
-            return
-        install_btn.configure(state="disabled")
-        entry.configure(state="disabled")
-        status.configure(text=("Updating" if opts.update else "Installing")
-                         + "... this can take a few minutes.")
-        threading.Thread(target=work, args=(opts.dir,), daemon=True).start()
+            entry.configure(state="disabled")
+            root.focus_set()  # off the field, so its amber focus ring goes
+        st.update(failed=False, t0=st["t0"] or time.monotonic(), t1=None)
+        swap(steps_panel)
+        buttons([])
+        if opts.update and opts.wait_pid and not st.get("waited"):
+            st["waited"] = True
+            say(f"waiting for process {opts.wait_pid} (the Cortex app) to exit")
+            run_in_thread(wait_app, lambda _: check_busy())
+        else:
+            check_busy()
+
+    def wait_app() -> None:
+        wait_pid(opts.wait_pid)
+        for _ in range(10):  # its launcher, bin\cortex-app.exe, exits a moment later
+            if not in_use(opts.dir):
+                break
+            time.sleep(0.3)
+
+    def check_busy() -> None:
+        if busy := in_use(opts.dir):
+            ask_busy(busy)
+        else:
+            go()
+
+    def ask_busy(busy: list) -> None:
+        panel = tk.Frame(body, bg=c["ground"])
+        label(panel, "Cortex is in use. These programs must close first:").pack(fill="x")
+        for group in sp.group_in_use(busy, parents()):
+            label(panel, group, "ink2").pack(fill="x", padx=(px(16), 0), pady=(px(4), 0))
+        swap(panel)
+        st["t1"] = time.monotonic()
+        st["s"] = st["s"]._replace(status="Nothing is closed until you choose.")
+
+        def close_them() -> None:
+            st["t1"] = None
+            swap(steps_panel)
+            if "close" in rows:
+                rows["close"][0].pack(fill="x", pady=px(2), before=rows["install"][0])
+            buttons([])
+            n = len(busy)
+            say(f"closing {n} program{'s' * (n != 1)} that use Cortex: "
+                + "; ".join(f"{path} (process {pid})" for pid, path in busy))
+            # only those still running from the folder; install() checks again
+            run_in_thread(lambda: terminate([pid for pid, _ in busy], opts.dir),
+                          lambda _: go())
+
+        def cancel() -> None:
+            swap(steps_panel)
+            st["s"] = st["s"]._replace(status=f"Cortex was not {verb}.")
+            paint()
+            if not opts.update:
+                entry.configure(state="normal")
+            buttons([("Update" if opts.update else "Install", begin, True),
+                     ("Close", root.destroy, False)], esc=root.destroy)
+
+        buttons([("Close them and continue", close_them, True), ("Cancel", cancel, False)],
+                esc=cancel)
+
+    def go() -> None:
+        def work():
+            try:
+                install(opts.dir, opts, say)
+            except SetupError as e:
+                return str(e)
+            except Exception as e:  # noqa: BLE001
+                say_file(traceback.format_exc())
+                return f"Something went wrong: {e}"
+            return None
+        run_in_thread(work, finished)
+
+    def finished(err: str | None) -> None:
+        drain()  # the lines install() said before it returned
+        st["t1"] = time.monotonic()
+        if err:
+            return failed(err)
+        result["code"] = 0
+        if opts.update:
+            start_app(opts.dir)
+            say("opened the Cortex app")
+            buttons([("Close", root.destroy, True)], esc=root.destroy)
+            root.after(3000, root.destroy)
+        else:
+            buttons([("Open Cortex", open_app, True), ("Close", root.destroy, False)],
+                    esc=root.destroy)
+
+    def failed(err: str) -> None:
+        st["failed"] = True
+        paint()
+        status.configure(text="")
+        panel = tk.Frame(body, bg=c["panel"])
+        tk.Frame(panel, bg=c["refresh"], width=px(3)).pack(side="left", fill="y")
+        inner = tk.Frame(panel, bg=c["panel"])
+        inner.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(12))
+        label(inner, f"Cortex was not {verb}.", "refresh", ("Segoe UI Semibold", 10),
+              bg=c["panel"]).pack(fill="x")
+        label(inner, err, "ink", bg=c["panel"], wraplength=wrap - px(34)).pack(
+            fill="x", pady=(px(4), 0))
+        label(inner, f"The full log is at {LOG}", "ink3", small, bg=c["panel"],
+              wraplength=wrap - px(34)).pack(fill="x", pady=(px(6), 0))
+        swap(panel, expand=False)
+        bar.configure(style="Failed.Horizontal.TProgressbar")
+        made: dict = {}
+
+        def copy_log() -> None:
+            try:
+                text = LOG.read_text(encoding="utf-8")
+            except OSError:
+                text = log.get("1.0", "end")
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            made["Copy log"].configure(text="Copied")
+
+        def again() -> None:  # a folder that cannot hold Cortex: pick another one
+            entry.configure(state="normal")
+            st["s"] = sp.start(mode, version)
+            st.update(failed=False, t0=None, t1=None)
+            clock.configure(text="")
+            bar.configure(style="Lit.Horizontal.TProgressbar")
+            swap(steps_panel)
+            paint()
+            buttons([("Install", begin, True), ("Cancel", root.destroy, False)],
+                    esc=root.destroy)
+            entry.focus_set()
+
+        items = [("Try again", again, True)] if not opts.update else []
+        items += [("Copy log", copy_log, False), ("Close", root.destroy, opts.update)]
+        made.update(buttons(items, esc=root.destroy))
 
     def open_app() -> None:
         start_app(opts.dir)
         root.destroy()
 
-    install_btn = ttk.Button(buttons, text="Update" if opts.update else "Install", command=start)
-    install_btn.pack(side="left")
-    install_btn.focus_set()
-    root.bind("<Return>", lambda _e: str(install_btn["state"]) == "normal" and start())
+    swap(steps_panel)
+    paint()
     if opts.update:
-        root.after(200, start)
+        root.after(200, begin)
+    else:
+        buttons([("Install", begin, True), ("Cancel", root.destroy, False)], esc=root.destroy)
+        entry.focus_set()
+        entry.icursor("end")
+    _dark_title(root)
     pump()
+    tick()
     root.mainloop()
     return result["code"]
+
+
+def uninstall_window(root, opts: argparse.Namespace, say_file) -> int:
+    """Uninstall keeps Windows' own questions (message boxes), with Cortex's icon."""
+    from tkinter import messagebox
+
+    root.withdraw()
+    _chrome(root, "Uninstall Cortex")
+    t = "Uninstall Cortex"
+    if not messagebox.askyesno(t, f"Remove Cortex from {opts.dir}?\n\n"
+                               "Your vault (your notes) and your settings in ~/.cortex "
+                               "are kept."):
+        return 1
+    if not opts.keep_ai_apps:
+        opts.keep_ai_apps = not messagebox.askyesno(
+            t, "Also remove Cortex from Claude and other AI apps?\n\nYes is best: without "
+            "Cortex installed, they would show a Cortex error each time they start.")
+    try:
+        if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall", opts.dir):
+            return 1
+        later = uninstall(opts.dir, opts, say_file)
+    except Exception as e:  # noqa: BLE001
+        say_file(traceback.format_exc())
+        messagebox.showerror(t, f"{e}\n\nThe full log is at {LOG}")
+        return 1
+    messagebox.showinfo(t, f"Cortex was removed.\n\n{KEPT}")
+    if later:  # after the message: this exe exits right away, so cmd can delete it
+        remove_later(opts.dir)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -634,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
         if sys.stdout is not None:
             print(line)
 
-    if opts.wait_pid:
+    if opts.wait_pid and (opts.quiet or not opts.update):  # the update window waits itself
         say_file(f"waiting for process {opts.wait_pid} (the Cortex app) to exit")
         wait_pid(opts.wait_pid)
         for _ in range(10):  # its launcher, bin\cortex-app.exe, exits a moment later
