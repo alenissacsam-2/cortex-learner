@@ -55,6 +55,9 @@ _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 STATIC = {"/": (None, "text/html; charset=utf-8"),
           "/manage": (ASSETS / "index.html", "text/html; charset=utf-8"),
           "/app.css": (ASSETS / "app.css", _CSS), "/app.js": (ASSETS / "app.js", _JS),
+          # quick capture's box (the desktop app's hotkey): its own small page
+          "/capture": (ASSETS / "capture.html", "text/html; charset=utf-8"),
+          "/capture.js": (ASSETS / "capture.js", _JS),
           "/dashboard.css": (ASSETS.parent / "dashboard.css", _CSS),
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
@@ -295,6 +298,7 @@ class App:
         self.reviewing = threading.Lock()  # one Review click at a time
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
+                    "/api/app/hotkey": self.hotkey,
                     "/api/home": self.home, "/api/home/version": self.home_version,
                     "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
                     "/api/home/check": self.cold_check, "/api/import/pickup": self.pickup,
@@ -349,6 +353,7 @@ class App:
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
             "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
+            "/api/app/hotkey": self.hotkey_set, "/api/capture/hide": self.capture_hide,
             "/api/review/approve": self.review_approve, "/api/review/dismiss": self.review_dismiss,
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
@@ -2297,6 +2302,27 @@ class App:
         from cortex.app import desktop
         return desktop.save_notify(body)
 
+    def hotkey(self) -> dict:
+        """Quick capture's key: the choice, the choices, and whether another app holds it
+        (`taken`). `desktop`: false in the browser app, which has no hotkey."""
+        from cortex.app import desktop
+        h = self.desktop.hotkey if self.desktop is not None else None
+        return {"desktop": h is not None, "key": desktop.hotkey_setting(),
+                "choices": [{"key": k, "label": v[2] if v else "Off"}
+                            for k, v in desktop.HOTKEYS.items()],
+                "taken": bool(h and h.taken)}
+
+    def hotkey_set(self, body: dict) -> dict:
+        from cortex.app import desktop
+        desktop.save_hotkey(body)
+        if self.desktop is not None:
+            self.desktop.change_hotkey()  # registered again now, no restart
+        return self.hotkey()
+
+    def capture_hide(self, body: dict) -> dict:
+        """The capture box's Esc, a saved line, or the box losing focus."""
+        return {"hidden": self.desktop is not None and self.desktop.hide_box()}
+
 
 # ---- HTTP -----------------------------------------------------------------------------------
 
@@ -2392,7 +2418,7 @@ def _handler(app: App):
                     data = dashboard.render_live(key).encode()
                 else:
                     data = path.read_bytes()
-                if url.path == "/manage":
+                if url.path in ("/manage", "/capture"):
                     data = data.replace(b"{{T}}", key.encode()) \
                         .replace(b"{{REOPEN}}", reopen().encode())
                 self._send(200, data, ctype)

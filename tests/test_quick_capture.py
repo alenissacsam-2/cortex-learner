@@ -2,12 +2,15 @@
 (a //tag, a link, a journal line), and the desktop app's hotkey thread registers the key with a
 fake user32 (never a real global hotkey). Made-up vaults and a temp home only."""
 
+import threading
+import time
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from test_app import _serve, call
 
 from cortex import dates
+from cortex.app import desktop, server
 from cortex.events import EventLog, local_day
 from cortex.vault import Vault
 
@@ -136,3 +139,109 @@ def test_a_bad_key_is_refused(app):
     assert code == 401 and journal(app.root) == ""
     code, _, _, _ = call(app, "POST", "/api/capture", {"text": "hello"}, token=False)
     assert code == 401 and journal(app.root) == ""
+
+
+# ---- the hotkey (a fake user32: conftest's _no_real_hotkey) -----------------------------------
+SPACE = (desktop.MOD_CONTROL | desktop.MOD_ALT | desktop.MOD_NOREPEAT, desktop.VK_SPACE)
+
+
+def test_the_hotkey_setting_and_its_default(home):
+    assert desktop.hotkey_setting() == "ctrl+alt+space"
+    for k in ("win+alt+space", "ctrl+alt+k", "off"):
+        assert desktop.save_hotkey({"hotkey": k}) == k and desktop.hotkey_setting() == k
+    desktop._merge_app(lambda a: {**a, "hotkey": "alt+f4"})  # hand-edited: the default
+    assert desktop.hotkey_setting() == "ctrl+alt+space"
+    desktop._merge_app(lambda a: {**a, "notify": {"jobs": False}})
+    for bad in ({}, {"hotkey": "ctrl+x"}, {"hotkey": 3}):
+        with pytest.raises(ValueError):
+            desktop.save_hotkey(bad)
+    assert desktop.notify_settings()["jobs"] is False  # the app block's other keys kept
+
+
+def test_the_hotkey_thread_registers_presses_re_registers_and_unregisters(
+        home, _no_real_hotkey):
+    u, pressed = _no_real_hotkey, threading.Event()
+    h = desktop.Hotkey(pressed.set)
+    h.start()
+    assert h.thread.name == "cortex-hotkey" and h.thread.daemon
+    assert u.calls == [("register", *SPACE)]
+    assert h.label() == "Ctrl+Alt+Space" and not h.taken
+    u.press()
+    assert pressed.wait(5)
+    desktop.save_hotkey({"hotkey": "ctrl+alt+k"})
+    h.change()  # no restart: unregistered, then the new key
+    assert u.calls[1:] == [("unregister",), ("register", SPACE[0], desktop.VK_K)]
+    assert h.label() == "Ctrl+Alt+K"
+    desktop.save_hotkey({"hotkey": "off"})
+    h.change()
+    assert u.calls[-1] == ("unregister",) and h.label() is None and not h.taken
+    desktop.save_hotkey({"hotkey": "ctrl+alt+space"})
+    h.change()
+    assert u.registered
+    h.stop()  # Quit: WM_QUIT, the loop ends and unregisters
+    assert not h.thread.is_alive() and u.calls[-1] == ("unregister",) and not u.registered
+
+
+def test_a_key_another_app_holds_is_taken_and_nothing_breaks(home, _no_real_hotkey):
+    u = _no_real_hotkey
+    u.held.add(SPACE)
+    h = desktop.Hotkey(lambda: None)
+    h.start()
+    assert h.taken and h.label() is None and h.thread.is_alive()
+    d = desktop.Desktop(None, "http://x")
+    d.hotkey = h
+    assert d.capture_label() == "Quick capture"
+    desktop.save_hotkey({"hotkey": "win+alt+space"})
+    d.change_hotkey()
+    assert not h.taken and d.capture_label() == "Quick capture (Win+Alt+Space)"
+    h.stop()
+    assert not u.registered
+
+
+class Box:
+    def __init__(self):
+        self.calls = []
+
+    def show(self):
+        self.calls.append("show")
+
+    def hide(self):
+        self.calls.append("hide")
+
+
+def test_the_settings_api_and_the_box(app, _no_real_hotkey):
+    code, out, _, _ = call(app, "GET", "/api/app/hotkey")
+    assert code == 200 and out["desktop"] is False and out["key"] == "ctrl+alt+space"
+    assert [c["key"] for c in out["choices"]] == list(desktop.HOTKEYS)
+    assert out["choices"][-1] == {"key": "off", "label": "Off"} and out["taken"] is False
+    assert call(app, "POST", "/api/capture/hide", {})[1] == {"hidden": False}  # browser app
+    _no_real_hotkey.held.add((SPACE[0], desktop.VK_K))
+    d = desktop.Desktop(app, "http://x")
+    d.box, d.hotkey = Box(), desktop.Hotkey(d.capture)
+    d.hotkey.start()
+    app.desktop = d
+    code, out, _, _ = call(app, "POST", "/api/app/hotkey", {"hotkey": "ctrl+alt+k"})
+    assert code == 200 and out["desktop"] is True and out["key"] == "ctrl+alt+k"
+    assert out["taken"] is True and desktop.hotkey_setting() == "ctrl+alt+k"
+    assert call(app, "POST", "/api/app/hotkey", {"hotkey": "nope"})[0] == 400
+    assert call(app, "POST", "/api/app/hotkey", {"hotkey": "off"}, token=False)[0] == 401
+    desktop.save_hotkey({"hotkey": "ctrl+alt+space"})
+    d.change_hotkey()
+    _no_real_hotkey.press()  # the hotkey shows the box
+    for _ in range(500):
+        if d.box.calls:
+            break
+        time.sleep(0.01)
+    assert d.box.calls == ["show"]
+    assert call(app, "POST", "/api/capture/hide", {})[1] == {"hidden": True}
+    assert d.box.calls == ["show", "hide"]
+    d.hotkey.stop()
+
+
+def test_the_capture_page_takes_the_key_and_keeps_the_csp(app):
+    code, _, raw, r = call(app, "GET", f"/capture?t={app.token}", token=False)
+    assert code == 200 and app.token.encode() in raw and b"{{T}}" not in raw
+    assert r.getheader("Content-Security-Policy") == server.CSP
+    code, _, raw, _ = call(app, "GET", "/capture", token=False)
+    assert code == 200 and app.token.encode() not in raw  # no key without the key
+    assert call(app, "GET", "/capture.js", token=False)[0] == 200
