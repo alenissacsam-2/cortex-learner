@@ -28,6 +28,8 @@ The Claude desktop **Chat tab** gets the same tools but no automatic prime, so t
 
 **Gemini CLI.** Connecting Gemini CLI also adds Cortex's hooks to `~/.gemini/settings.json`: the same prime on your first real message (`BeforeAgent`), only new lines after that, your `//` lines saved, the prime served again after `/clear` or a resumed chat, and a web fetch, a web search or another server's MCP tool marking outside text. By default Gemini CLI gets the coding profile, as Cursor does. Removing Gemini CLI takes out only Cortex's hooks.
 
+**Zed, Cline (VS Code), GitHub Copilot CLI and JetBrains Junie** can be connected under **Connect AI apps** too; each gets only the MCP entry (no rules file or hooks). Zed's `settings.json` allows comments, which Cortex cannot rewrite safely, so a Zed file with comments is left alone and the row shows the snippet to paste into `context_servers`. Cline, Copilot CLI and Junie are shown only when their folder exists.
+
 **Cursor** has hooks too, but its prompt hook can only allow or block a message, not add to it, so Cursor still relies on its rules file to call `cortex_prime`.
 
 ---
@@ -471,6 +473,12 @@ For everyone: tell Cortex about you in any chat (`//fact: I'm on the payments te
 | Name | Meaning |
 |---|---|
 | **Vault** | Your Cortex folder (Markdown notes + event logs); also opens in Obsidian |
+| **AI app** | A chat or coding tool that runs an AI model, such as Claude, Cursor or VS Code |
+| **MCP** | The standard way AI apps plug into tools; Cortex is one such tool |
+| **Chat** | The chat in the Cortex app that answers from your own data with a model on your computer |
+| **Review** | The app's short daily list of things only you can decide, at most five cards |
+| **Home** | The Cortex app's first page: what is next, what you did, and a quick chat box |
+| **Local model** | An AI model that runs on your computer (through Ollama or LM Studio), so nothing is sent out; optional |
 | **Prime** | The context a chat gets about you from your first message |
 | **Session** | One chat's batch of changes; closes by itself and is committed to git |
 | **Ambient** | A session the chat opened automatically, not a `/cortex` study session |
