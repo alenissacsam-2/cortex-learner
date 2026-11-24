@@ -405,6 +405,11 @@ ItemType = Literal["recall", "application", "transfer"]
 _norm_answer = norm_answer  # old name, kept importable
 
 
+# R26: cortex_find(kind="timeline") lists these kinds (and its anchor, of any kind)
+TIMELINE_KINDS = ("journal", "note", "resource", "decision", "project", "loop", "concept")
+TIMELINE_DAYS, TIMELINE_MAX = 3, 12
+
+
 def _find_out(hits: list[dict]) -> dict:
     """cortex_find's result: ids, kinds and states as data; titles, summaries, snippets and
     loop fields (note text) as one `<untrusted_note id="find">` block, one line per hit."""
@@ -1172,14 +1177,72 @@ class Cortex:
                                            else "") + ": not recorded in Cortex is not the "
                 f"same as never happened. {more}")
 
+    def _timeline(self, query: str, limit: int | None, since: str | None, until: str | None,
+                  source: str | None) -> dict[str, Any]:
+        """R26: the pages from the days around one page, oldest first. The anchor is `query`
+        as a page id (cortex_read's rule), else find's top hit for the words, and only a page in
+        this client's index; the window is its day ±TIMELINE_DAYS, a bound each that since/until
+        override (one alone also stretches the other to a window's width); at most TIMELINE_MAX, the
+        nearest the anchor kept. Index pages only (so what find serves this client), dated as
+        the since/until filter dates them (`_day_of`, `_keep`)."""
+        self._keep(since, until, source)  # bad input raises before any lookup
+        cap = TIMELINE_MAX if limit is None else max(1, min(TIMELINE_MAX, int(limit)))
+        idx, q = self.index, (query or "").strip()
+        try:
+            aid = idx._resolve(q) if q else None
+        except VaultError:
+            aid = None
+        if aid is None and q:
+            aid = next((h["id"] for h in idx.find(q, None, 1, syntax=True)), None)
+        if aid not in idx._notes:  # a page this client may not see answers as no anchor
+            return {**_find_out([]), "next": self._next(
+                "No page matched to centre a timeline on; pass a page id from a cortex_find or "
+                "cortex_recall hit as query.")}
+        paths = {i: p for p, i in idx._ids.items()}
+        day = self._day_of(aid, idx._notes[aid], paths.get(aid))
+        if not day and not (since and until):
+            return {**_find_out([]), "next": self._next(
+                f"[[{aid}]] has no date; pass since and until (YYYY-MM-DD) for the window.")}
+        at = datetime.fromisoformat(day or since)
+
+        def shift(d: str, days: int) -> str:
+            return (datetime.fromisoformat(d) + timedelta(days=days)).date().isoformat()
+
+        lo, hi = since or shift(day, -TIMELINE_DAYS), until or shift(day, TIMELINE_DAYS)
+        # one bound given: the other is the anchor's, or a window's width past the given one
+        if since and not until:
+            hi = max(hi, shift(since, 2 * TIMELINE_DAYS))
+        if until and not since:
+            lo = min(lo, shift(until, -2 * TIMELINE_DAYS))
+        by_source = self._keep(None, None, source)
+        rows = [(d, i, n) for i, n in idx._notes.items()
+                if (n["kind"] in TIMELINE_KINDS or i == aid)
+                and (by_source is None or by_source(i))
+                and (d := self._day_of(i, n, paths.get(i))) and lo <= d <= hi]
+        o = at.toordinal()
+        rows.sort(key=lambda r: (r[1] != aid, abs(datetime.fromisoformat(r[0]).toordinal() - o),
+                                 r[0], r[1]))
+        rows = sorted(rows[:cap], key=lambda r: (r[0], r[1]))
+        lines = [f"{'▸' if i == aid else '-'} {d} · {n['kind']} · [[{i}]] · "
+                 + " ".join(str(n["title"]).split()) for d, i, n in rows]
+        return {"hits": [{"id": i, "kind": n["kind"], "day": d, **({"anchor": True} if i == aid
+                                                                  else {})} for d, i, n in rows],
+                "text": _wrap("find", "\n".join(lines)) if rows else "",
+                "next": self._next(f"Pages from {lo} to {hi}, oldest first" + (
+                    f"; ▸ marks [[{aid}]]" if rows and aid in {r[1] for r in rows} else "")
+                    + ". Call cortex_read on an id for details.")}
+
     def cortex_find(self, query: str = "", kind: Literal[
             "concept", "area", "domain", "mistake", "problem", "assessment", "application",
             "resource", "note", "project", "decision", "journal", "loop", "due",
-            "ready", "weak", "resurface"] | None = None,
+            "ready", "weak", "resurface", "timeline"] | None = None,
             limit: int | None = None, since: str | None = None, until: str | None = None,
             source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
         if kind == "resurface":  # ideas due to be shown again; query is not used
             return self._resurface(3 if limit is None else limit)
+        if kind == "timeline":
+            self._refresh_index()
+            return self._timeline(query, limit, since, until, source)
         limit = 8 if limit is None else limit
         self._refresh_index()
         keep = self._keep(since, until, source)
@@ -3825,7 +3888,9 @@ DESCRIPTIONS = {
                    "kind=resurface: "
                    "ideas (permanent notes, decisions, summarised resources) due to be shown "
                    "again, most overdue first (limit, default 3; query unused); record what you "
-                   "showed with cortex_log(kind=resurfaced). Use it for exact words, names, "
+                   "showed with cortex_log(kind=resurfaced). kind=timeline: pages from the "
+                   "days around one page, in date order (query: its id or words that find it; "
+                   "±3 days unless since/until; at most 12). Use it for exact words, names, "
                    "kinds, dates or a list; cortex_recall finds by meaning, cortex_context "
                    "gives a topic's overview.",
     "cortex_recall": "What the user knows or thinks about something: pages similar in meaning "

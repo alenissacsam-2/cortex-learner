@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from cortex.mcp_server import Cortex
 from cortex.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
+REAL_LOAD = semantic.load_embedder  # before the autouse fixture wraps it
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
 
@@ -106,6 +108,32 @@ def test_cache_reembeds_only_changed_pages_and_drops_deleted(root, idx):
     stored = semantic._read(root)
     assert "gearbox" not in stored and "hidden" not in stored
     assert len(stored) == n_pages - 1
+
+
+def test_an_idle_server_drops_its_model_and_answers_the_same_after(root, monkeypatch):
+    """M3: once the idle thread drops the last model, an idle `cortex mcp` empties its working
+    set (`_trim`); its next recall loads the model again and answers as before (fake model)."""
+    loads, trims, real_trim = [], [], semantic._trim
+
+    class Model:
+        def __init__(self):
+            loads.append(1)
+
+        def embed(self, texts):
+            return list(FakeEmbed()(list(texts)))
+
+    monkeypatch.setattr(semantic, "_text_embedding", lambda download=False, threads=None: Model())
+    monkeypatch.setattr(semantic, "load_embedder", REAL_LOAD)
+    monkeypatch.setattr(semantic, "_trim", lambda: trims.append(1))
+    semantic.models_dir().mkdir(parents=True)
+    c = Cortex(Vault(root))
+    first = c.cortex_recall("vehicle")["hits"]
+    assert loads == [1] and ids(first)[0] == "engines"
+    assert semantic.idle_pass() == [] and trims == []  # just used: kept
+    assert semantic.idle_pass(time.monotonic() + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    assert trims == [1] and semantic._main.model is None
+    assert c.cortex_recall("vehicle")["hits"] == first and len(loads) == 2
+    real_trim()  # the real call (Windows: EmptyWorkingSet) runs without error
 
 
 def test_without_the_model_it_falls_back_to_keyword_and_says_so(idx, tmp_path, monkeypatch):
