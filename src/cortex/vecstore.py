@@ -10,8 +10,9 @@ the table), an `epoch` made with the file and two counters a reader polls as its
 `gen` (each row carries the gen it was saved at, so a reader fetches only the newer rows) and
 `dels` (a delete bumps it; a reader then drops the ids that went). A deleted row is overwritten
 (secure_delete) and the WAL checkpointed, so a forgotten page leaves nothing behind. A
-disposable cache: an unreadable file is removed and started again. Written by SQLite's
-transactions, not cortex.vault's temp files, as cortex.browse.store.
+disposable cache: a damaged file (unreadable, or failing the first open's quick_check in a
+process) is moved aside by cortex.quarantine and started again; its pages are embedded again.
+Written by SQLite's transactions, not cortex.vault's temp files, as cortex.browse.store.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
+
+from cortex import quarantine
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +43,8 @@ _UPSERT = ("INSERT INTO vecs VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPD
            "starts = excluded.starts, vecs = excluded.vecs, gen = excluded.gen "
            "WHERE excluded.manifest != vecs.manifest "
            "OR (excluded.full, excluded.n) > (vecs.full, vecs.n)")
-SUFFIXES = ("", "-wal", "-shm")
+SUFFIXES = quarantine.SUFFIXES
+COLS = ["id", "manifest", "full", "n", "starts", "vecs", "gen"]  # the vecs table, as _DDL makes it
 
 
 def _open(path: Path) -> sqlite3.Connection:
@@ -50,6 +54,7 @@ def _open(path: Path) -> sqlite3.Connection:
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("PRAGMA secure_delete=ON")  # a forgotten page's row is overwritten
         con.executescript(_DDL)
+        quarantine.check(con, path, "vecs", COLS)  # once per process
         if get_meta(con, "epoch") is None:
             with tx(con):
                 con.execute("INSERT OR IGNORE INTO meta VALUES ('epoch', ?)",
@@ -60,20 +65,25 @@ def _open(path: Path) -> sqlite3.Connection:
     return con
 
 
-def connect(path: Path, create: bool = True) -> sqlite3.Connection:
-    """The store at `path`, made when missing; an unreadable one is removed and made again.
-    With `create` False (a reader) an unreadable one raises sqlite3.DatabaseError instead."""
+def connect(path: Path, create: bool = True, vault=None) -> sqlite3.Connection:
+    """The store at `path`, made when missing; a damaged one (`quarantine.torn`) is moved
+    aside through `vault` (the vault holding `path` when None) and made again. With `create`
+    False (a reader) a damaged one raises sqlite3.DatabaseError instead, as does one that
+    cannot be moved (held open by another program)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         return _open(path)
     except sqlite3.DatabaseError as e:
-        if not create or isinstance(e, sqlite3.OperationalError):  # locked, no access: not torn
+        if not create or not quarantine.torn(e):  # locked, busy, no access: not damaged
             raise
-        log.warning("vector store %s unreadable (%s): starting it again", path.name,
-                    type(e).__name__)
-        for s in SUFFIXES:
-            Path(f"{path}{s}").unlink(missing_ok=True)
+        if not heal(path, e, vault):
+            raise
         return _open(path)
+
+
+def heal(path: Path, e: BaseException, vault=None) -> bool:
+    """Move the damaged store at `path` aside (`quarantine.heal`); False when it stayed."""
+    return quarantine.heal(path, e, "its pages are embedded again", vault)
 
 
 @contextmanager
