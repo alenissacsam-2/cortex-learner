@@ -1967,6 +1967,9 @@
       return [h('div', { class: 'field' }, h('label', { for: id, text: `What would ${g.client} get for this prompt?` }),
         h('div', { class: 'inline' }, input, show)), out];
     };
+    // R27b: an answer that lands after a redraw (a job's end, a second load) has lost its box;
+    // a fresh render draws it from the kept state
+    const fresh = (box, draw) => (document.body.contains(box) ? draw() : load('xray'));
     // R27b (C2): which served line a surprising reply came from; matched by the server with no
     // model, the reply kept nowhere. Text and results survive a redraw, as the dry run's do
     const trace = (g, k) => {
@@ -1992,7 +1995,7 @@
           ...(r.hits.length ? r.hits.map((x) => hit(now(x)))
             : [note(`None of what Cortex gave ${g.client} recently matches this reply. The reply may come from the app's own memory or the model itself.`)])] : []));
       };
-      const go = () => post('/api/xray/trace', { client: g.name, text: area.value }, (r) => { st.r = r; draw(); });
+      const go = () => post('/api/xray/trace', { client: g.name, text: area.value }, (r) => { st.r = r; fresh(out, draw); });
       const run = btn('Trace', go);
       const sync = () => { st.text = area.value; run.disabled = !area.value.trim(); };
       area.addEventListener('input', sync);
@@ -2003,7 +2006,7 @@
         area, h('div', { class: 'inline' }, run)), out];
     };
     // R27b (G5b-5): an app that pulled many pages through find, recall or read in 15 minutes
-    const wide = (g) => (g.wide ? [row(`${g.client} read ${g.wide.n} pages in 15 minutes on ${g.wide.day}. Chats rarely need that many. If you didn't ask for it, narrow what it reads above, or remove the app under Connect.`,
+    const wide = (g) => (g.wide ? [row(`${g.client} read ${g.wide.n} pages in 15 minutes on ${g.wide.day}. Chats rarely need that many. If you didn't ask for it, narrow what it reads below, or remove the app under Connect.`,
       null, null, [btn('Got it', () => act('/api/xray/ack', { client: g.name, end: g.wide.end }, 'Hidden until it reads that widely again.'),
         null, { 'aria-label': `Got it: ${g.client} read ${g.wide.n} pages` })])] : []);
     // R27b (G5b-7): two apps' dry runs side by side, and the scopes each one's profile withholds
@@ -2015,7 +2018,7 @@
       const go = () => post('/api/xray/compare', { prompt: input.value, a: xrayCmp.a, b: xrayCmp.b }, (r) => {
         const name = (n) => apps.find((g) => g.name === n).client;
         xrayCmp.r = { ...r, an: name(xrayCmp.a), bn: name(xrayCmp.b) };
-        draw();
+        fresh(out, draw);
       });
       const show = btn('Show', go);
       const sync = () => { xrayCmp.prompt = input.value; show.disabled = !input.value.trim() || xrayCmp.a === xrayCmp.b; };

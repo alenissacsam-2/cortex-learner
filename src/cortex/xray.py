@@ -221,7 +221,8 @@ def view(vault: Vault) -> dict:
     Per app also its raw `name` ("" when it sent none), the `scopes` its profile gives it
     (cortex.profiles), that profile's `match` as `rule` (None: it gets `unknown`), the other
     apps here the same rule covers (`shared`), and the OFTEN pages and lines served to it most
-    often (`often`, with a `count`; me/ pages, which no one pins or mutes, left out). Also the
+    often (`often`, with a `count`; me/ pages, which no one pins or mutes, and READS rows'
+    hits left out). Also the
     owner's `profiles`, their cap and `all_scopes` (access.SCOPES), for the scope bar's own
     save through /api/profiles. R27b: `wide`, the app's broad-read window (`wide`) not yet
     said Got it to, else None."""
@@ -238,7 +239,9 @@ def view(vault: Vault) -> dict:
     rule = {c: profiles.match(data, n) for c, n in names.items()}
 
     def often(rs: list[dict]) -> list[dict]:
-        n = Counter(i for r in rs if isinstance(r.get("served"), dict)
+        # what prime and context served, which Pin and Mute act on; never a search's hits
+        n = Counter(i for r in rs if r.get("tool") not in READS
+                    and isinstance(r.get("served"), dict)
                     for ids in r["served"].values()
                     if isinstance(ids, list) for i in ids
                     if isinstance(i, str) and not i.startswith("me/"))

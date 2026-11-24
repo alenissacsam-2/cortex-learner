@@ -195,6 +195,57 @@ def test_find_recall_and_read_record_ids_only(vault):
     assert "dr-rao" not in json.dumps(view)
 
 
+def test_find_shapes_never_break_the_tool(vault, monkeypatch):
+    v = Vault(vault)
+    c = Cortex(v)
+    c.sessions.client = "cursor"
+    c.cortex_find(kind="resurface")
+    c.cortex_find("engines", kind="timeline")
+    monkeypatch.setattr(Cortex, "_resurface", lambda self, limit: {
+        "items": [{"title": "x"}, "y", {"id": 7}, {"id": "pasta"}], "next": ""})
+    assert c.cortex_find(kind="resurface")["items"][0] == {"title": "x"}
+    rs = xray.rows(v)
+    assert [r["tool"] for r in rs] == ["cortex_find"] * 3
+    assert all(isinstance(i, str) for r in rs for ids in r["served"].values() for i in ids)
+    assert rs[-1]["served"] == {"found": ["pasta"]}
+
+
+def test_served_most_often_counts_first_calls_only(vault):
+    v = Vault(vault)
+    xray.record(v, "cortex_prime", "cursor", {"related": ["engines"]}, {}, 1)
+    for _ in range(3):  # Mute does nothing for a search's hits: they never lead this list
+        xray.record(v, "cortex_find", "cursor", {"found": ["pasta", "engines"]}, {}, 1)
+    xray.record(v, "cortex_read", "cursor", {"read": ["pasta"]}, {}, 1)
+    (g,) = xray.view(v)["clients"]
+    assert [(x["id"], x["count"]) for x in g["often"]] == [("engines", 1)]
+    assert len(g["calls"]) == 5  # the searches and reads still list
+
+
+def test_old_guesses_judge_by_the_first_calls_not_older_reads(root):
+    from test_review import ago
+    from test_review_auto import commit, page, past, tidy
+    from test_time_salience import _guess
+
+    (root / ".cortex").mkdir(exist_ok=True)
+    page(root, "preferences", ["Uses Vim"])
+    commit(root)
+    _guess(root, "preferences", "Uses Vim", 31)
+
+    def ring(*rows):
+        (root / xray.RING).write_text("".join(json.dumps({
+            "ts": f"{d}T12:00:00Z", "tool": tool, "client": "cursor", "served": {},
+            "trimmed": {}, "chars": 1}) + "\n" for d, tool in rows), encoding="utf-8")
+
+    # finds reach 45 days back, first calls only 20: a guess older than those may have
+    # been served by a first call the ring has dropped
+    ring((ago(45), "cortex_find"), (ago(20), "cortex_prime"))
+    assert tidy(root) == {"moved": 0, "retired": 0}
+    assert "Uses Vim" not in past(root, "preferences")
+    ring((ago(45), "cortex_prime"), (ago(20), "cortex_prime"))
+    assert tidy(root) == {"moved": 0, "retired": 0, "guesses": 1}
+    assert "Uses Vim" in past(root, "preferences")
+
+
 def test_reads_are_capped_apart(vault, monkeypatch):
     monkeypatch.setattr(xray, "CAP", 3)
     monkeypatch.setattr(xray, "READ_CAP", 2)
@@ -438,7 +489,7 @@ def test_the_trace_compare_and_warning_page(tmp_path):
     assert out["boards"] == ["Pinned and muted", "Compare two apps", "Claude Code",
                              "mystery-app"]
     said = ("Claude Code read 64 pages in 15 minutes on 2026-11-23. Chats rarely need that "
-            "many. If you didn't ask for it, narrow what it reads above, or remove the app "
+            "many. If you didn't ask for it, narrow what it reads below, or remove the app "
             "under Connect.")
     assert out["warn"] == [said, ["Got it"], "Got it: Claude Code read 64 pages"]
     assert out["firstOther"] == []

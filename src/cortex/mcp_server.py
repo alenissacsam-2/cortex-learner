@@ -410,6 +410,13 @@ TIMELINE_KINDS = ("journal", "note", "resource", "decision", "project", "loop", 
 TIMELINE_DAYS, TIMELINE_MAX = 3, 12
 
 
+def _hit_ids(hits) -> list[str]:
+    """R27b: the string ids among a tool's hits, for its X-ray row; any other shape is skipped,
+    so the X-ray never breaks the tool."""
+    return [h["id"] for h in hits if isinstance(h, dict) and isinstance(h.get("id"), str)] \
+        if isinstance(hits, list) else []
+
+
 def _find_out(hits: list[dict]) -> dict:
     """cortex_find's result: ids, kinds and states as data; titles, summaries, snippets and
     loop fields (note text) as one `<untrusted_note id="find">` block, one line per hit."""
@@ -1240,9 +1247,8 @@ class Cortex:
             source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
         out = self._find(query, kind, limit, since, until, source)
         # R27b: the X-ray keeps the ids it returned (never the query), for the broad-read flag
-        xray.record(self.vault, "cortex_find", self.sessions.client, {"found": [
-            h["id"] for h in out.get("hits") or out.get("items") or ()]}, {},
-            len(out.get("text") or ""))
+        xray.record(self.vault, "cortex_find", self.sessions.client, {"found": _hit_ids(
+            out.get("hits") or out.get("items"))}, {}, len(str(out.get("text") or "")))
         return out
 
     def _find(self, query: str, kind: str | None, limit: int | None, since: str | None,
@@ -1329,7 +1335,7 @@ class Cortex:
             out["checks"] = self._checks(sentences)
             out["next"] = CHECK_NEXT
         xray.record(self.vault, "cortex_recall", self.sessions.client,  # R27b: ids only
-                    {"recalled": [h["id"] for h in hits]}, {}, len(out["text"]))
+                    {"recalled": _hit_ids(hits)}, {}, len(str(out.get("text") or "")))
         return out
 
     def _quiet(self) -> dict[str, float]:
@@ -1419,7 +1425,7 @@ class Cortex:
                                   else "Use it as context; cite it as [[id]] where it helps.")
                                  + on)
         xray.record(self.vault, "cortex_read", self.sessions.client,  # R27b: ids only
-                    {"read": [out["id"]]}, {}, len(out.get("text") or ""))
+                    {"read": _hit_ids([out])}, {}, len(str(out.get("text") or "")))
         return out
 
     def _similar(self, id: str) -> list[dict]:
@@ -3250,7 +3256,8 @@ class Cortex:
         X-ray saw all of: its oldest call is on or before the guess's day.
         shortcut: a busy owner's ring (xray.CAP calls) may never reach 30 days back, and then
         nothing retires; a per-day fold of served ids if that matters."""
-        ring = [str(r.get("ts")) for r in xray.rows(self.vault)]
+        ring = [str(r.get("ts")) for r in xray.rows(self.vault)  # R27b: find, recall and read
+                if r.get("tool") not in xray.READS]  # rows reach further back (READ_CAP)
         if self._tidy_state().get("guesses") == day or not ring:
             return []
         try:
