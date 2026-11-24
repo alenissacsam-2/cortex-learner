@@ -9,6 +9,7 @@ never served over MCP, never on the dashboard, never logged."""
 
 from __future__ import annotations
 
+import builtins
 import json
 import math
 import re
@@ -807,7 +808,7 @@ def picked_pages(vault: Vault, ids, sources: dict) -> list[dict]:
     file's (`_page_passages`, up to askfile.CHUNK_MAX characters each); an id Chat may not
     read now (`_may_read`) is dropped before any page is read."""
     ids = [*dict.fromkeys(i for i in ids if isinstance(i, str))][:PICKED] \
-        if isinstance(ids, list) else []
+        if isinstance(ids, builtins.list) else []  # chat.list shadows the builtin
     if not ids:
         return []
     with _INDEX_LOCK:
