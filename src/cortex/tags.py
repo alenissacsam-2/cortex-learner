@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import date
 
-from cortex import claims, review
+from cortex import claims, dates, review
+from cortex.chats import drop_private
 from cortex.events import EventLog, local_day
 from cortex.render import plain
 from cortex.vault import VaultError, scan_secrets
@@ -48,9 +50,10 @@ def promo(text: str) -> bool:
 
 def find(text: str) -> list[tuple[str, str]]:
     """(tag, text) of each `//pref:`, `//fact:` or `//forget:` in a user turn, in order; the
-    text runs to the end of its line, whitespace collapsed; an empty one is skipped."""
+    text runs to the end of its line, whitespace collapsed; an empty one is skipped. A
+    `<private>` span is dropped first, so a tag inside one is never saved."""
     out: list[tuple[str, str]] = []
-    for m in TAG.finditer(text or ""):
+    for m in TAG.finditer(drop_private(text or "")):
         item = (m.group(1).lower(), " ".join(m.group(2).split())[:MAX_CHARS])
         if item[1] and item not in out:
             out.append(item)
@@ -75,6 +78,10 @@ def apply(core, items, said: bool = True, forget_said: bool = True,
         if core.log.has_key(k):  # before _call, which would open a session for nothing
             continue
         ok = said and (forget_said or tag != "forget")
+        # "yesterday" as of the turn's own day (an import's is old); no day, no pin, and
+        # cortex_patch never pins a tag itself (mcp_server._pin_day: `tagged`)
+        if tag in PAGES and day:
+            text = dates.pin(text, date.fromisoformat(day))
         out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": ok,
                                                      "key": k})
         if "error" in out:

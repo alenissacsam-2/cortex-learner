@@ -13,7 +13,7 @@ import logging
 import re
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from importlib.metadata import version as _version
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -29,6 +29,7 @@ from cortex import (
     access,
     chats,
     claims,
+    dates,
     delta,
     learning_eval,
     levels,
@@ -147,6 +148,29 @@ ADD_FIELDS = {
     # SPEC §0 U7: open loops; never in levels or the planner
     "loop": {"loop_type", "status", "due", "date", "related", "summary", "private"},
 }
+# L1: durable statements whose relative dates are pinned on write (dates.pin): cortex_add's
+# title and summary, cortex_patch's appended or revised lines, journal lines
+PIN_KINDS = frozenset({"me", "note", "decision", "loop", "journal"})
+
+
+def _pin_day(core) -> date | None:
+    """Today for dates.pin (the day events are stamped with), or None when today is not the
+    day the words were written, since a wrong day is worse than none: old chats (a harvest
+    bundle, fact_harvest's session), the owner's clicks in the app (Approve of a line proposed
+    days ago) and a //tag (tags.apply pins it as of its own turn's day, or not at all)."""
+    if (core.app_clicks or core.tagged or core.sessions.harvesting
+            or getattr(core.session, "mode", None) == "harvest"):
+        return None
+    return date.fromisoformat(local_day(core._now()))
+
+
+def _unprivate(v):
+    """A field value with its `<private>` spans dropped (chats.drop_private), in lists too."""
+    if isinstance(v, str):
+        return chats.drop_private(v)
+    return [_unprivate(x) for x in v] if isinstance(v, list) else v
+
+
 # the §2 table's non-optional fields, written on every new wiki page
 WIKI_DEFAULTS = {
     "resource": {"resource_type": "other", "status": "queued", "covers": [], "related": []},
@@ -2666,7 +2690,7 @@ class Cortex:
         return tags.act(self, tag, text, said and not self.session.exposed)
 
     def _log_journal(self, p: dict) -> dict[str, Any]:
-        text = " ".join(str(p.get("text") or "").split())
+        text = " ".join(chats.drop_private(str(p.get("text") or "")).split())  # L1
         if not text:
             raise invalid("journal needs payload.text.")
         for name in ("mood", "energy"):
@@ -2686,6 +2710,8 @@ class Cortex:
             if d != day:
                 text, hhmm = f"{text} (added {day})", "—"
                 day = d
+        if _pin_day(self):  # L1: as of the line's own day (a backdated line's, not today's)
+            text = dates.pin(text, date.fromisoformat(day))
         self.vault.append_journal(day, hhmm, text)
         hint = self.sessions.note("journal", change={"tool": "journal"})
         return {"recorded": 1, "display_line": f"Journal {day}: logged",
@@ -2861,6 +2887,7 @@ class Cortex:
                      click: Annotated[ElicitationResult[_Yes], Resolve(_ask_click)] = None,
                      ) -> dict[str, Any]:
         kind, nid = self._note_ref(id)
+        text = chats.drop_private(text)  # L1: a <private> span is never written
         # dogfood r4 #3: target defaults to "" so a missing one gets these messages, not pydantic's
         if op in PATCH_TARGET and not target.strip():
             raise invalid(f"{op} needs target: {PATCH_TARGET[op]}.")
@@ -2891,7 +2918,7 @@ class Cortex:
         # the owner's clicks (the app, Cortex's own dialog) are never downgraded
         if (user_confirmed and said != "yes" and not self.app_clicks and kind == "me"
                 and nid in claims.PAGES and op in ("append_to_section", "revise")
-                and (why := self._unsaid(text))):
+                and (why := self._unsaid(dates.unpin(text)))):  # a pinned day was not typed
             if op == "revise" and nid in CONFIRM_PAGES:  # its unconfirmed path: a new line waits
                 cid = claims.resolve(self.vault, target, local_day(self._now()))
                 section = next((r["section"] for r in claims.rows(self.vault)
@@ -2908,6 +2935,9 @@ class Cortex:
                 out["next"] = (f"Saved now but unconfirmed ({why}): AI apps see it marked (ask) "
                                "until the user confirms it; say so in one line and go on.")
             return out
+        if op in ("append_to_section", "revise") and kind in PIN_KINDS and (
+                today := _pin_day(self)):  # L1, after R3-2's check of the typed words
+            text = dates.pin(text, today)
         claim_page = kind == "me" and nid in claims.PAGES
         contract = kind == "me" and nid == "teaching-contract"
         if contract and not self.app_clicks:  # E2: only Approve in the Cortex app applies a rule
@@ -3609,7 +3639,13 @@ class Cortex:
                    fields: dict[str, Any] | None = None, raw_text: str | None = None,
                    force: bool = False, key: str | None = None,
                    ctx: Context | None = None) -> dict[str, Any]:
-        fields = dict(fields or {})
+        # L1: a <private> span is never written; relative dates get their day
+        title, raw_text = _unprivate(title), _unprivate(raw_text)
+        fields = {k: _unprivate(v) for k, v in (fields or {}).items()}
+        if kind in PIN_KINDS and (today := _pin_day(self)):
+            title = dates.pin(title, today)
+            if isinstance(fields.get("summary"), str):
+                fields["summary"] = dates.pin(fields["summary"], today)
         if areas and kind != "concept":
             raise invalid("Only a concept takes areas.")
         if raw_text is not None and kind != "resource":

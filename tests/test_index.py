@@ -246,6 +246,33 @@ def test_refresh_edit_and_delete(vault, idx):
     assert idx.refresh() == 0
 
 
+def test_a_page_deleted_between_the_scan_and_its_read_is_skipped(vault, idx, monkeypatch):
+    """L1: a page the scan listed but gone before its read (a sync, an editor's save) costs
+    no refresh: the other changed page is indexed, the gone one is out, the next refresh
+    drops its stat and the one after has nothing to do."""
+    gone, kept = vault.root / "problems" / "lc-1.md", vault.root / "problems" / "lc-167.md"
+    gone.write_text(gone.read_text(encoding="utf-8").replace("Hash map", "Zebra map"),
+                    encoding="utf-8")
+    kept.write_text(kept.read_text(encoding="utf-8") + "- Quokka trick.\n", encoding="utf-8")
+    for p in (gone, kept):
+        _bump(p)
+    real = Index._scan
+
+    def scan_then_delete(self):
+        out = real(self)
+        gone.unlink()
+        return out
+
+    monkeypatch.setattr(Index, "_scan", scan_then_delete)
+    idx.refresh()
+    monkeypatch.setattr(Index, "_scan", real)
+    assert ids(idx.find("quokka")) == ["lc-167"]
+    assert idx.find("zebra") == [] and idx.find("hash") == []
+    with pytest.raises(VaultError):
+        idx.read("lc-1")
+    assert idx.refresh() == 1 and idx.refresh() == 0
+
+
 @pytest.mark.parametrize("flag", ["true", "yes", '"True"', "on", "1"])
 def test_refresh_note_turning_private(vault, idx, flag):
     p = vault.root / "problems" / "lc-1.md"
@@ -317,13 +344,13 @@ def _page(vault, rel, front, body):
 def _aliased(vault):
     _page(vault, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
           "# K-Graph\n\nA learner model.")
-    _page(vault, "people/iit-hyderabad.md",
-          "title: IIT Hyderabad\nkind: person\nprivate: false\naliases: IITH\n",
-          "# IIT Hyderabad\n\nMy college.")
+    _page(vault, "people/northwest-tech.md",
+          "title: Northwest Tech\nkind: person\nprivate: false\naliases: NWTU\n",
+          "# Northwest Tech\n\nMy college.")
     _page(vault, "people/ana.md", "title: Ana\nkind: person\naliases: [Zorbina]\n",
           "# Ana\n\nA friend.")  # a people page is private unless it says private: false
     _page(vault, "notes/mentions.md", "title: Mentions\n",
-          "# Mentions\n\nCortex and IITH, said in passing.")
+          "# Mentions\n\nCortex and NWTU, said in passing.")
     _page(vault, "notes/hidden.md", "title: Hidden\nprivate: true\naliases: [Zorblax]\n",
           "# Hidden\n\nA secret.")
 
@@ -332,7 +359,7 @@ def test_an_alias_finds_any_page_kind_as_its_title_does(vault):
     _aliased(vault)
     idx = Index(vault, Catalog.load(vault))
     assert ids(idx.find("Cortex"))[0] == "k-graph"  # a list alias, ranked over a mention
-    assert ids(idx.find("iith"))[0] == "iit-hyderabad"  # one string, any case
+    assert ids(idx.find("nwtu"))[0] == "northwest-tech"  # one string, any case
     assert ids(idx.find("K-Graph"))[0] == "k-graph"  # the title still
     assert idx.title_matches("Cortex", "project") == ["k-graph"]
     # a private page's alias does not reveal it
@@ -348,12 +375,12 @@ def test_aliases_hold_after_a_snapshot_load(vault):
     idx = Index(vault, Catalog.load(vault))
     assert idx._parsed == 0  # every page came from the snapshot
     assert ids(idx.find("Cortex"))[0] == "k-graph"
-    assert ids(idx.find("IITH"))[0] == "iit-hyderabad"
+    assert ids(idx.find("NWTU"))[0] == "northwest-tech"
     assert idx.find("Zorblax") == []
 
 
 def test_aliases_are_read_as_a_list_or_one_string():
     from cortex.index import aliases
     assert aliases({"aliases": ["Cortex", " ", None, "KG "]}) == ["Cortex", "KG"]
-    assert aliases({"aliases": "IITH"}) == ["IITH"]
+    assert aliases({"aliases": "NWTU"}) == ["NWTU"]
     assert aliases({}) == [] and aliases({"aliases": None}) == []

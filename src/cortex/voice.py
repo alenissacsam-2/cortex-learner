@@ -15,6 +15,7 @@ from statistics import median
 
 from ulid import ULID
 
+from cortex.chats import drop_private
 from cortex.events import local_day
 from cortex.vault import invalid, scan_secrets
 
@@ -37,6 +38,7 @@ def check_audience(audience) -> str:
 def _text(text) -> str:
     if not isinstance(text, str) or not text.strip() or len(text) > TEXT_MAX:
         raise invalid(f"text must be the message itself, 1 to {TEXT_MAX:,} characters.")
+    text = drop_private(text)  # a private span is never saved, nor refused as a secret
     scan_secrets(text)
     return text
 
