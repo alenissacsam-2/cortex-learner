@@ -758,6 +758,9 @@ class ClaudeCode:
         return out + [r for r in self.json.remove() if r["change"] != "none"]
 
 
+CLINE_ID = "saoudrizwan.claude-dev"  # Cline's VS Code extension id (publisher.name)
+
+
 def _vscode_user() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming",
@@ -765,6 +768,51 @@ def _vscode_user() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Code" / "User"
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config", "Code", "User")
+
+
+def _zed_dir() -> Path:
+    """Zed's config folder, as zed-industries/zed crates/paths/src/paths.rs `config_dir` builds
+    it: %APPDATA%\\Zed on Windows, ~/.config/zed on macOS, $XDG_CONFIG_HOME/zed on Linux."""
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming", "Zed")
+    if sys.platform == "darwin":
+        return Path.home() / ".config" / "zed"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config", "zed")
+
+
+ZED_NOTE = ("Zed's settings have comments, so Cortex will not edit them. Paste this into "
+            "context_servers.")
+
+
+class Zed(JsonTarget):
+    """Zed: `context_servers.cortex` in settings.json. That file is JSONC (comments, trailing
+    commas), which Cortex cannot round-trip, so a file `load_json` refuses is left alone and the
+    row shows the snippet to paste (as for VS Code's mcp.json, with Zed's wording).
+    Docs: https://zed.dev/docs/ai/mcp"""
+
+    def __init__(self):
+        super().__init__("zed", "Zed", lambda: _zed_dir() / "settings.json",
+                         key="context_servers", home=_zed_dir)
+
+    @staticmethod
+    def _note(e: ValueError) -> ValueError:
+        return ValueError(ZED_NOTE) if "not plain JSON" in str(e) else e
+
+    def plan(self, add: bool, base: dict | None = None) -> list[dict]:
+        return [{**r, "detail": self._note(ValueError(r["detail"])).args[0]}
+                if r["change"] == "error" else r for r in super().plan(add, base)]
+
+    def apply(self, base: dict) -> list[dict]:
+        try:
+            return super().apply(base)
+        except ValueError as e:
+            raise self._note(e) from None
+
+    def remove(self) -> list[dict]:
+        try:
+            return super().remove()
+        except ValueError as e:
+            raise self._note(e) from None
 
 
 PRIVATE = "--private"
@@ -823,6 +871,23 @@ def targets() -> list:
                    lambda: h() / ".codeium" / "windsurf" / "mcp_config.json"),
         LMStudio(),
         Codex(),
+        Zed(),
+        # Cline in VS Code: globalStorage/<extension id>/settings/cline_mcp_settings.json, key
+        # mcpServers: https://docs.cline.bot/mcp/configuring-mcp-servers and github.com/cline/cline
+        # apps/vscode/src/core/storage/disk.ts (getMcpSettingsFilePath)
+        JsonTarget("cline", "Cline (VS Code)",
+                   lambda: _vscode_user() / "globalStorage" / CLINE_ID / "settings"
+                   / "cline_mcp_settings.json",
+                   home=lambda: _vscode_user() / "globalStorage" / CLINE_ID),
+        # Copilot CLI: ~/.copilot/mcp-config.json; a stdio server is type "local" with tools:
+        # https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
+        JsonTarget("copilot-cli", "GitHub Copilot CLI",
+                   lambda: h() / ".copilot" / "mcp-config.json", home=lambda: h() / ".copilot",
+                   extra={"type": "local", "tools": ["*"]}),
+        # Junie, user scope ~/.junie/mcp/mcp.json, key mcpServers:
+        # https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html
+        JsonTarget("junie", "JetBrains Junie", lambda: h() / ".junie" / "mcp" / "mcp.json",
+                   home=lambda: h() / ".junie"),
     ]
 
 
