@@ -125,6 +125,9 @@ class Source:
     # could not read) keeps the report from counting pages as gone from the folder
     by_origin: bool = False
     walk_errors: list = field(default_factory=list)
+    # G5b-10 (notes: loops.from_notes): called (vault, item, page id, private, report) for each
+    # item page written or rewritten, never in a dry run
+    made: Callable[[Vault, Item, str, bool, dict], None] | None = None
     vault: Vault | None = None  # set by `run`, for items that need it (voice memos' prompt)
 
 
@@ -318,7 +321,8 @@ def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
     (pages rewritten by a source that `updates` or `by_origin`), `unreadable` (quality-gate
     reason -> count: the items `unreadable` kept out, for every source) and, for a `by_origin`
     source, `gone` (earlier pages whose file was not in this walk: counted, never deleted, and
-    not counted when the walk had errors)."""
+    not counted when the walk had errors), and the counts a `made` hook adds (notes: `loops`,
+    `loops_over`, `loops_unsafe`)."""
     r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
          "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value,
          "unreadable": {}}
@@ -411,6 +415,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
         if old is None:
             if not dry_run:
                 vault.create_note("resource", nid, fields, page)
+                if src.made:
+                    src.made(vault, it, nid, hidden, r)
             continue
         cur = old.read_text("utf-8", errors="replace")
         if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
@@ -445,6 +451,8 @@ def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> 
             vault.update_text(old, lambda cur, t=text, was=was: cur if (
                 src.by_origin and untouched(cur) is False) or (
                 src.keeps_edits and _edited(cur, was)) else t)
+            if src.made:
+                src.made(vault, it, nid, hidden, r)
 
 
 SUMMARY_CHARS = 200

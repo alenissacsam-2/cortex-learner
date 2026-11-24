@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
 
-from cortex import chats, render, sources
+from cortex import chats, loops, render, sources
 from cortex.events import local_day
 from cortex.vault import Vault, VaultError, truthy
 
@@ -456,7 +456,9 @@ def _aliases(front: str) -> list[str]:
 def report_line(label: str, r: dict) -> str:
     """The line every import ends with: counts read, imported, private, duplicate and
     skipped, with the reason for each skip; then the items the quality gate kept out
-    (sources.unreadable), when any: ". Skipped 3 as unreadable (2 garbled, 1 link list)"."""
+    (sources.unreadable), when any: ". Skipped 3 as unreadable (2 garbled, 1 link list)"; then
+    a notes import's loops (loops.from_notes), when any: "; 3 open loops from TODO lines; 7
+    more TODO lines were not made loops"."""
     why = {k: n for k, n in r.get("reasons", {}).items() if n}
     reasons = f" ({', '.join(f'{n:,} {k}' for k, n in why.items())})" if why else ""
     updated = f", updated {r['updated']:,}" if r.get("updated") else ""
@@ -465,9 +467,13 @@ def report_line(label: str, r: dict) -> str:
     bad = {k: r["unreadable"][k] for k in sources.UNREADABLE if r.get("unreadable", {}).get(k)}
     gate = (f". Skipped {sum(bad.values()):,} as unreadable ("
             f"{', '.join(f'{n:,} {k}' for k, n in bad.items())})") if bad else ""
+    made, over = r.get("loops", 0), r.get("loops_over", 0)
+    todo = (f"; {made:,} open loop{'s' * (made != 1)} from TODO lines" if made else "") + (
+        f"; {over:,} more TODO line{'s were' if over != 1 else ' was'} not made "
+        f"{'loops' if over != 1 else 'a loop'}" if over else "")
     return (f"{label}: read {r['read']:,}, imported {r['imported']:,}{updated}, private "
             f"{r['private']:,}, duplicate {r['duplicate']:,}{gone}, skipped "
-            f"{sum(why.values()):,}{reasons}{gate}")
+            f"{sum(why.values()):,}{reasons}{gate}{todo}")
 
 
 def _clean(name: str) -> str:
@@ -482,8 +488,9 @@ def notes_source(path: Path, flavor: str | None = None, files: list | None = Non
     private (any truthy `private`, a `private` tag, or frontmatter that does not parse) is a
     private item. Dedupe hashes the whole text, frontmatter too; RR-18: a changed note rewrites
     its page (by its path, `From:`) when that page is as the import wrote it, else comes in as
-    a new page (`sources.Source.by_origin`). `files`: `_files` entries already walked (a
-    watched folder's changed ones)."""
+    a new page (`sources.Source.by_origin`). A recent note's TODO: and Action: lines become
+    open loops (loops.from_notes). `files`: `_files` entries already walked (a watched folder's
+    changed ones)."""
     errors: list[OSError] = []
     files = _files(path, errors=errors) if files is None else files
     names = [n.replace("\\", "/") for n, *_ in files]
@@ -498,7 +505,7 @@ def notes_source(path: Path, flavor: str | None = None, files: list | None = Non
 
     return sources.Source("notes", LABELS[flavor], "folder", items, prefix=flavor,
                           skips=("not a note", "over 5 MB", "not UTF-8 text"), by_origin=True,
-                          walk_errors=errors)
+                          walk_errors=errors, made=loops.from_notes())
 
 
 def _day(ts: float) -> str:
@@ -535,12 +542,14 @@ def import_notes(vault: Vault, path: Path, flavor: str | None = None, dry_run: b
                  private: bool = False, tier: str | None = None) -> dict:
     """`notes_source` through `sources.run`: one resource page per new note, every one private
     with `private` (or `tier` "private"). A note whose text was imported before is skipped and a
-    changed one updates its page (see notes_source), so re-importing is safe."""
+    changed one updates its page (see notes_source), so re-importing is safe. `loops` and
+    `loops_over`: the open loops its TODO lines made, and those past loops.MAX_LOOPS."""
     src = notes_source(path, flavor)
     r = sources.run(vault, src, _tier(private, tier), dry_run)
     return {"source": src.prefix, "new": r["imported"], "same": r["duplicate"],
             "skipped": sum(r["reasons"].values()), **{k: r[k] for k in REPORT},
-            "updated": r["updated"], "gone": r.get("gone")}
+            "updated": r["updated"], "gone": r.get("gone"), "loops": r.get("loops", 0),
+            "loops_over": r.get("loops_over", 0)}
 
 
 def _events(text: str):
