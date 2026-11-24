@@ -565,7 +565,7 @@ def _horizon_days(vault: Vault, sources: dict) -> list[str]:
     undated), the private browse names and the switches."""
     from cortex import home  # lazy: home pulls in the dashboard
 
-    key = (home.version(vault), _private_names(vault),
+    key = (home.version(vault), _private_names(vault) if sources.get("private") else (),
            tuple(sorted((k, bool(v)) for k, v in sources.items())))
     hit = _HORIZON.get(vault.root)
     if hit and hit[0] == key:

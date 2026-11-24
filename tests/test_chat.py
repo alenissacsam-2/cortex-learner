@@ -1507,6 +1507,9 @@ def test_a_future_date_does_not_narrow_the_search(vault, stream, monkeypatch):
         asked.append(kw["between"])
         return real(v, q, k, **kw)
     monkeypatch.setattr(ask, "_passages", passages)
+    # a page from yesterday, so the range is not answered at once as holding nothing
+    note(vault.root, "notes/yesterday.md", "kind: note\ntitle: Yesterday\ndate: 2026-11-17\n",
+         "# Yesterday\n\nCar motors.")
     _turn(vault, None, "explain car motors for tomorrow's exam", s.runner())
     _turn(vault, None, "what did I read about car motors yesterday?", s.runner())
     assert asked == [None, ("2026-11-17", "2026-11-17")]

@@ -1284,7 +1284,7 @@ const out = { errors };
     btns[0].fire('click');
     await tick();
     out.openedNew = [fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path),
-      c.querySelector('.chip').getAttribute('aria-pressed'), btns[0].getAttribute('aria-pressed')];
+      c.querySelector('.chip').getAttribute('aria-pressed'), c.querySelector('.chat-conflict button').getAttribute('aria-pressed')];
     out.titleIsText = c.querySelector('.chat-conflict').querySelectorAll('*').every((n) => ['BUTTON'].includes(n.tagName));
     btns[1].fire('click');
     await tick();
@@ -1296,7 +1296,7 @@ const out = { errors };
       { role: 'user', text: 'and?' },
       { role: 'assistant', text: 'Half an ans', model: 'm', stopped: true, certainty: 'thin' },
     ] };
-    DATA.routes['/api/chat/list'] = { chats: [{ id: '01KA0000000000000000000000', title: 'Jobs', updated: new Date().toISOString(), count: 2 }] };
+    DATA.routes['/api/chat'] = { ...DATA.routes['/api/chat'], chats: [{ id: '01KA0000000000000000000000', title: 'Jobs', updated: new Date().toISOString(), count: 2 }] };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
     await tick();
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
