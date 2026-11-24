@@ -1736,7 +1736,10 @@
     const unsafeCard = (x, id) => {
       const r = kb('Keep it out', () => act('/api/review/retire', { id: x.id }, 'Kept out: the line moved to Past.'), null, `Keep it out: ${x.text}`);
       const y = kb('Keep it', () => act('/api/review/unsafe/keep', { key: x.key }, 'Kept. AI apps get the line again.'), null, `Keep it: ${x.text}`);
-      return card(x.text, `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`, null, [r[0], y[0]], { r, y }, id);
+      // G5b-6: a command to run that an AI app wrote
+      const said = x.command ? `An AI app wrote this line in me/${x.page}, and it holds a command to run: ${x.what}. AI apps don't get it until you keep it.`
+        : `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`;
+      return card(x.text, said, null, [r[0], y[0]], { r, y }, id);
     };
     // R5a: a line on me/core, me/setup or the teaching contract Cortex did not write; AI apps get it only after Keep
     const outsideCard = (x, id) => {
