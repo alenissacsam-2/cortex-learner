@@ -61,6 +61,7 @@ class Text extends Node {
 }
 class Element extends Node {
   constructor(tag) { super(); this.tagName = tag.toUpperCase(); this.attributes = {}; this.listeners = {}; this.dataset = {}; this.hidden = false;
+    this.style = { setProperty: (k, v) => { this.style[k] = v; } };
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(this.tagName)) this.value = '';
     if (this.tagName === 'INPUT') this.checked = false; }
   get className() { return this.attributes.class || ''; }
@@ -478,13 +479,13 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["hidden"] == {s: s != "setup" for s in out["hidden"]}
     assert out["wordmark"] == 1
     assert setup["order"] == ["vault", "connect", "embed", "history", "llm"]
+    # the "(optional)" moved out of the title into its own "Optional" label (U1)
     assert out["steps"] == ["Vault", "Connect AI apps", "Search model",
-                            "Add your history (optional)", "Local model (optional)", "Try it"]
+                            "Add your history", "Local model", "Try it"]
     # one step at a time: the vault is done (collapsed, check mark), Connect is current and
     # the only one expanded, the rest wait collapsed under "Later"
     assert out["expanded"] == ["Connect AI apps"]
-    assert out["bandNotes"][0].startswith("✓ ")  # [1] is the NEXT dot-matrix cell
-    assert out["bandNotes"][2:] == ["Later"] * 4
+    assert out["bandNotes"] == ["Done", "", "", "", "", ""]  # U1: no "Later", no NEXT mark
     # the upload: raw octet-stream XHR with the key, the name URL-encoded; the bar moves in place
     x = out["xhr"]
     assert (x["method"], x["url"]) == ("POST", "/api/import/upload")
@@ -627,6 +628,127 @@ def test_a_command_that_failed_shows_as_failed(tmp_path):
                                     "Job: stopped: needs the search model"]
 
 
+def test_the_job_line_is_hidden_when_idle_and_shown_when_a_job_runs(tmp_path):
+    """U1: idle() gives the line the `idle` class (visually hidden, still a live region) and
+    the text "Nothing running."; a running job drops the class."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    js = APP_JS.read_text(encoding="utf-8")
+    fns = "".join(re.search(rf"\n  function {f}\(\w*\) \{{.*?\n  \}}\n", js, re.S)[0]
+                  for f in ("showJob", "stepText", "idle"))
+    script = tmp_path / "idle.cjs"
+    script.write_text(
+        "const el = () => { const cls = new Set(); return { cls, classList: { "
+        "remove: (...c) => c.forEach((x) => cls.delete(x)), "
+        "add: (...c) => c.forEach((x) => cls.add(x)) }, "
+        "style: { setProperty() {} }, textContent: '', hidden: false }; };\n"
+        "const els = {};\nconst $ = (id) => els[id] || (els[id] = el());\n"
+        "let hideTimer;\n" + fns
+        + "idle();\nconst a = [$('jobline').cls.has('idle'), $('job-name').textContent, "
+          "$('job-line').textContent];\n"
+          "showJob({ name: 'Import', running: true, seconds: 9, line: 'reading' });\n"
+          "console.log(JSON.stringify([...a, $('jobline').cls.has('idle'), "
+          "$('jobline').cls.has('running')]));\n", encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [True, "Nothing running.", "", False, True]
+
+
+def test_the_sidebar_and_the_narrow_select_group_the_same_sections():
+    """U1: three groups, each a heading (a plain <p>) and a role=group named by it; the
+    select repeats them as optgroups; every data-s is kept."""
+    html = (server.ASSETS / "index.html").read_text(encoding="utf-8")
+    nav = re.search(r'<nav class="side".*?</nav>', html, re.S)[0]
+    groups = re.findall(r'<p class="side-head" id="([\w-]+)">([^<]+)</p>\s*'
+                        r'<div class="side-group" role="group" aria-labelledby="\1">(.*?)</div>',
+                        nav, re.S)
+    names = [(head, re.findall(r">([^<>\n]+)(?:<span|</)", body)) for _, head, body in groups]
+    assert names == [
+        ("Every day", ["Home", "Tonight", "Chat", "Review"]),
+        ("Your setup", ["Setup", "Connect AI apps", "Local model", "Browsing"]),
+        ("Check", ["Status", "Agent X-ray", "Dashboard and vault"])]
+    assert re.findall(r'data-s="(\w+)"', nav) == [
+        "tonight", "chat", "review", "setup", "connect", "llm", "browse", "status", "xray", "vault"]
+    sel = re.search(r'<select class="section-select".*?</select>', html, re.S)[0]
+    opts = re.findall(r'<optgroup label="([^"]+)">(.*?)</optgroup>', sel, re.S)
+    assert [(a, re.findall(r'value="(\w+)"', b)) for a, b in opts] == [
+        ("Every day", ["home", "tonight", "chat", "review"]),
+        ("Your setup", ["setup", "connect", "llm", "browse"]),
+        ("Check", ["status", "xray", "vault"])]
+
+
+SETUP_PROBE = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors, runs: [] };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    for (const v of DATA.variants) {
+      DATA.routes['/api/setup'] = v;
+      nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+      await tick();
+      nav.querySelectorAll('button').find((b) => b.dataset.s === 'setup').fire('click');
+      await tick();
+      const bar = $('setup').querySelector('.setup-bar'), steps = $('setup').querySelectorAll('.step');
+      out.runs.push({ text: $('setup').querySelector('.prog-text').textContent,
+        now: bar.getAttribute('aria-valuenow'), max: bar.getAttribute('aria-valuemax'), pct: bar.childNodes[0].style['--pct'],
+        marks: $('setup').querySelectorAll('.step-mark').map((m) => m.textContent + (m.className.includes('done') ? ' done' : '')),
+        notes: steps.map((b) => b.querySelector('.band-note').textContent),
+        optional: steps.map((b) => (b.querySelector('.step-opt') || { textContent: '' }).textContent),
+        descs: $('setup').querySelectorAll('.step-d').map((m) => m.textContent),
+        current: steps.filter((b) => b.className.includes('current')).map((b) => b.querySelector('h2').textContent) });
+    }
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_setup_shows_numbered_steps_with_progress(root_committed, tmp_path, monkeypatch):
+    """U1: "N of 6 done" and a bar, a number or a check per step, one plain line per step,
+    "Optional" beside the optional ones, "Done" on the right of a finished step."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    base = routes["/api/setup"]
+    base["connect"] = [{"id": "x", "label": "X", "detected": True, "connected": False}]
+    base["imports"] = {}
+
+    def variant(*done):
+        v = json.loads(json.dumps(base))
+        v["vault"]["done"] = "vault" in done
+        v["embed"]["done"] = "embed" in done
+        v["history"]["done"] = "history" in done
+        v["test"]["done"] = "llm" in done
+        v["connect"][0]["connected"] = "connect" in done
+        return v
+
+    out = _run(node, tmp_path, "setup", SETUP_PROBE, {
+        "routes": routes, "stream": [],
+        "variants": [variant(), variant("vault", "connect"),
+                     variant("vault", "connect", "embed", "history", "llm")]})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    zero, two, five = out["runs"]
+    assert (zero["text"], zero["now"], zero["max"], zero["pct"]) == ("0 of 6 done", "0", "6", "0%")
+    assert zero["marks"] == ["1", "2", "3", "4", "5", "6"] and zero["notes"] == [""] * 6
+    assert (two["text"], two["now"], two["pct"]) == ("2 of 6 done", "2", "33%")
+    assert two["marks"] == ["✓ done", "✓ done", "3", "4", "5", "6"]
+    assert two["notes"] == ["Done", "Done", "", "", "", ""]
+    assert two["current"] == ["Search model"]
+    assert two["optional"] == ["", "", "", "Optional", "Optional", ""]
+    assert two["descs"][0] == "The folder where your notes live."
+    assert two["descs"][2].startswith("Find notes by meaning. A download of ")
+    assert two["descs"][5] == "Ask a first question and see what Cortex knows."
+    # Try it never gets a check (Cortex cannot see the AI app's chats), so all five real steps
+    # done reads "5 of 6"
+    assert five["text"] == "5 of 6 done" and five["marks"][:5] == ["✓ done"] * 5
+    assert five["marks"][5] == "6" and five["current"] == ["Try it"]
+
+
 def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):
     """A job with `progress` (server.Job.progress) reads "Step 3 of 5 · checking titles ·
     42% · about 2 min left" and fills its bar to the overall share; without, the moving bar."""
@@ -697,7 +819,7 @@ def test_a_job_the_page_did_not_start_shows_with_cancel(root_committed, tmp_path
     out = _run(node, tmp_path, "busy", BUSY,
                {"routes": _sweep_routes(root_committed, monkeypatch), "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["before"] == "Nothing running"
+    assert out["before"] == "Nothing running."  # U1: the idle text is for screen readers only
     assert out["after"] == {"name": "Importing new history", "cancel": True,
                             "line": "chrome/Default: 120 visits read",
                             "toast": "Wait: Importing new history is still running."}
@@ -1242,6 +1364,104 @@ def test_chat_attaches_a_file_shows_its_line_saves_removes_and_names_it_in_sourc
     assert out["saved"][0].startswith("notes.pdf, 12 pages Saved as Notes")
     assert out["saved"][1] == ["Open the page in Obsidian", "Remove notes.pdf"]
     assert out["removed"] == [[{"id": "f1"}], ""]
+
+
+EVIDENCE = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    const ev = (o) => JSON.stringify(o) + '\n';
+    const log = $('chat-log');
+    const ask = async (q, ...events) => {
+      DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'An answer [1].' }) + events.map(ev).join('')];
+      $('chat-input').value = q;
+      $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+      await tick();
+      const bots = log.querySelectorAll('.msg').filter((m) => m.className === 'msg bot');
+      return bots[bots.length - 1];
+    };
+    const lines = (b) => b.querySelectorAll('.chat-evidence').map((p) => p.textContent);
+    const src = [{ n: 1, path: 'me/new.md', title: 'New job', kind: 'note', at: 0, len: 10 }];
+    const done = { t: 'done', seconds: 1 };
+    const hz = { first: '2024-01', last: '2026-11', months: ['2024-01', '2026-11'] };
+    const clash = [{ old: { path: 'me/old.md', title: 'Old job', day: '2026-01-05' }, new: { path: 'me/new.md', title: 'New job', day: '2026-03-12' } }];
+    out.exact = lines(await ask('a', { t: 'src', sources: src, certainty: 'exact', horizon: hz }, done));
+    out.grounded = lines(await ask('b', { t: 'src', sources: [...src, { ...src[0], n: 2, path: 'me/b.md' }, { ...src[0], n: 3, path: 'me/c.md' }], certainty: 'grounded' }, done));
+    const thin = await ask('c', { t: 'src', sources: src, certainty: 'thin', horizon: hz }, done);
+    out.thin = lines(thin);
+    out.thinStrong = thin.querySelector('.chat-evidence').querySelector('strong').textContent;
+    out.none = lines(await ask('d', { t: 'src', sources: [], searched: [], certainty: 'none', horizon: hz }, done));
+    out.noneNoHorizon = lines(await ask('e', { t: 'src', sources: [], searched: [], certainty: 'none' }, done));
+    out.old = lines(await ask('f', { t: 'src', sources: src }, done));  // an answer saved before the rail: no line
+    // a conflict: the newer page is a source pill's passage; the older opens by its path
+    DATA.routes['/api/chat/passage'] = { path: 'me/new.md', title: 'New job', kind: 'note', heading: '', text: 'Joined Acme' };
+    const c = await ask('g', { t: 'src', sources: src, certainty: 'grounded', conflicts: clash }, done);
+    out.conflict = lines(c);
+    const btns = c.querySelectorAll('.chat-conflict button');
+    out.conflictBtns = btns.map((b) => b.textContent);
+    btns[0].fire('click');
+    await tick();
+    out.openedNew = [fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path),
+      c.querySelector('.chip').getAttribute('aria-pressed'), c.querySelector('.chat-conflict button').getAttribute('aria-pressed')];
+    out.titleIsText = c.querySelector('.chat-conflict').querySelectorAll('*').every((n) => ['BUTTON'].includes(n.tagName));
+    btns[1].fire('click');
+    await tick();
+    out.openedOld = fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path).slice(-1);
+    // a saved answer re-renders it
+    DATA.routes['/api/chat/get?id=01KA0000000000000000000000'] = { id: '01KA0000000000000000000000', messages: [
+      { role: 'user', text: 'jobs?' },
+      { role: 'assistant', text: 'He changed jobs [1].', model: 'm', sources: src, certainty: 'thin', horizon: { first: '2024-01', last: '2026-11' }, conflicts: clash },
+      { role: 'user', text: 'and?' },
+      { role: 'assistant', text: 'Half an ans', model: 'm', stopped: true, certainty: 'thin' },
+    ] };
+    DATA.routes['/api/chat'] = { ...DATA.routes['/api/chat'], chats: [{ id: '01KA0000000000000000000000', title: 'Jobs', updated: new Date().toISOString(), count: 2 }] };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    $('chat-side').querySelectorAll('.chat-open')[0].fire('click');
+    await tick();
+    out.saved = lines($('chat-log').querySelectorAll('.msg')[1]);
+    out.stopped = lines($('chat-log').querySelectorAll('.msg')[3]);  // a stopped answer shows nothing
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_chat_evidence_line_says_certainty_horizon_and_what_replaced_what(
+        root_committed, tmp_path, monkeypatch):
+    """P3: a finished answer gets one quiet line under its sources (certainty in words; the span of
+    the data only when thin or none) and a line per recorded change whose two titles open their
+    passages; nothing while streaming or on a stopped answer; a saved answer shows it again."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/chat"]["chats"] = []
+    out = _run(node, tmp_path, "evidence", EVIDENCE, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["exact"] == ["Exact: counted or quoted from your pages"]  # no horizon when exact
+    assert out["grounded"] == ["From 3 of your pages"]
+    assert out["thin"] == ["Thin: check the sources · Your data covers Jan 2024 to Nov 2026"]
+    assert out["thinStrong"] == "Thin"
+    assert out["none"] == ["No record · Your data covers Jan 2024 to Nov 2026"]
+    assert out["noneNoHorizon"] == ["No record"]
+    assert out["old"] == []
+    assert out["conflict"] == ["From 1 of your pages",
+                               "Changed: New job (12 Mar 2026) replaces Old job (5 Jan 2026)"]
+    assert out["conflictBtns"] == ["New job", "Old job"] and out["titleIsText"]
+    assert out["openedNew"] == [["/api/chat/passage?path=me%2Fnew.md&at=0&len=10"], "true", "true"]
+    assert out["openedOld"] == ["/api/chat/passage?path=me%2Fold.md&at=0&len=0"]
+    assert out["stopped"] == []
+    assert out["saved"] == ["Thin: check the sources · Your data covers Jan 2024 to Nov 2026",
+                            "Changed: New job (12 Mar 2026) replaces Old job (5 Jan 2026)"]
 
 
 HIST = HARNESS[:HARNESS.index("const out = {};")] + r"""

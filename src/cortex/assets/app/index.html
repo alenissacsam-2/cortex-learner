@@ -14,17 +14,23 @@
 <header class="top" id="top">
   <div class="brand"><span id="wordmark"></span><span class="greet">Set up and manage Cortex</span></div>
   <select class="section-select" id="section-select" aria-label="Section">
-    <option value="home">Home</option>
-    <option value="tonight">Tonight</option>
-    <option value="setup">Setup</option>
-    <option value="chat">Chat</option>
-    <option value="status">Status</option>
-    <option value="review" id="review-option">Review</option>
-    <option value="xray">Agent X-ray</option>
-    <option value="connect">Connect AI apps</option>
-    <option value="llm">Local model</option>
-    <option value="browse">Browsing</option>
-    <option value="vault">Dashboard and vault</option>
+    <optgroup label="Every day">
+      <option value="home">Home</option>
+      <option value="tonight">Tonight</option>
+      <option value="chat">Chat</option>
+      <option value="review" id="review-option">Review</option>
+    </optgroup>
+    <optgroup label="Your setup">
+      <option value="setup">Setup</option>
+      <option value="connect">Connect AI apps</option>
+      <option value="llm">Local model</option>
+      <option value="browse">Browsing</option>
+    </optgroup>
+    <optgroup label="Check">
+      <option value="status">Status</option>
+      <option value="xray">Agent X-ray</option>
+      <option value="vault">Dashboard and vault</option>
+    </optgroup>
   </select>
   <div class="hright">
     <button class="icon-btn" id="theme" type="button"></button>
@@ -41,17 +47,26 @@
 </div>
 <div class="shell" id="shell">
   <nav class="side" aria-label="Sections">
-    <a href="/">Home</a>
-    <button type="button" data-s="tonight">Tonight</button>
-    <button type="button" data-s="setup">Setup</button>
-    <button type="button" data-s="chat">Chat</button>
-    <button type="button" data-s="status">Status</button>
-    <button type="button" data-s="review">Review<span class="badge" id="review-badge" hidden></span></button>
-    <button type="button" data-s="xray">Agent X-ray</button>
-    <button type="button" data-s="connect">Connect AI apps</button>
-    <button type="button" data-s="llm">Local model</button>
-    <button type="button" data-s="browse">Browsing</button>
-    <button type="button" data-s="vault">Dashboard and vault</button>
+    <p class="side-head" id="side-day">Every day</p>
+    <div class="side-group" role="group" aria-labelledby="side-day">
+      <a href="/">Home</a>
+      <button type="button" data-s="tonight">Tonight</button>
+      <button type="button" data-s="chat">Chat</button>
+      <button type="button" data-s="review">Review<span class="badge" id="review-badge" hidden></span></button>
+    </div>
+    <p class="side-head" id="side-setup">Your setup</p>
+    <div class="side-group" role="group" aria-labelledby="side-setup">
+      <button type="button" data-s="setup">Setup</button>
+      <button type="button" data-s="connect">Connect AI apps</button>
+      <button type="button" data-s="llm">Local model</button>
+      <button type="button" data-s="browse">Browsing</button>
+    </div>
+    <p class="side-head" id="side-check">Check</p>
+    <div class="side-group" role="group" aria-labelledby="side-check">
+      <button type="button" data-s="status">Status</button>
+      <button type="button" data-s="xray">Agent X-ray</button>
+      <button type="button" data-s="vault">Dashboard and vault</button>
+    </div>
   </nav>
   <main id="main">
     <section id="s-tonight" hidden tabindex="-1">
@@ -61,7 +76,7 @@
     </section>
     <section id="s-setup" hidden tabindex="-1">
       <h1 tabindex="-1">Setup</h1>
-      <p class="lede">Get Cortex working on this computer, one step at a time. Finished steps show ✓; every step can be skipped and done later.</p>
+      <p class="lede">Get Cortex working on this computer, one step at a time. Every step can be skipped and done later.</p>
       <div id="setup"></div>
     </section>
     <section id="s-chat" hidden tabindex="-1">

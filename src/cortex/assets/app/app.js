@@ -304,8 +304,8 @@
   function idle() {
     $('jobline').classList.remove('running', 'ok', 'bad', 'ended', 'determinate');
     $('jobline').classList.add('idle');
-    $('job-name').textContent = 'Nothing running';
-    $('job-line').textContent = 'Long actions show their progress here, one at a time.';
+    $('job-name').textContent = 'Nothing running.';
+    $('job-line').textContent = '';
     $('job-time').textContent = '';
     $('job-cancel').hidden = true;
   }
@@ -621,6 +621,23 @@
     return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Sources' }),
       sources.map((s) => pill(s, `${s.n} · ${s.title || s.path}`)));
   }
+  // the evidence line under the sources of a finished answer (certainty, the span of the data when
+  // thin or none) and a line for each page that replaced another; plain words, never colour alone
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthYear = (ym) => { const [y, mo] = String(ym).split('-'); return MON[mo - 1] ? `${MON[mo - 1]} ${y}` : String(ym); };
+  const dayText = (d) => { const [y, mo, da] = String(d || '').split('-'); return MON[mo - 1] && da ? `${Number(da)} ${MON[mo - 1]} ${y}` : ''; };
+  function evidenceRows(m, live, pageLink) {
+    if (live || m.stopped || !m.certainty) return [];
+    const c = m.certainty, hz = m.horizon;
+    const head = c === 'exact' ? ['Exact: counted or quoted from your pages']
+      : c === 'grounded' ? [`From ${(m.sources || []).length} of your pages`]
+        : c === 'thin' ? [h('strong', { text: 'Thin' }), ': check the sources'] : ['No record'];
+    if ((c === 'thin' || c === 'none') && hz && hz.first && hz.last) head.push(` · Your data covers ${monthYear(hz.first)} to ${monthYear(hz.last)}`);
+    const day = (s) => (dayText(s.day) ? ` (${dayText(s.day)})` : '');
+    return [h('p', { class: 'chat-evidence' }, ...head),
+      ...(m.conflicts || []).map((x) => h('p', { class: 'chat-evidence chat-conflict' }, 'Changed: ', pageLink(x.new),
+        `${day(x.new)} replaces `, pageLink(x.old), day(x.old)))];
+  }
   // the facts Cortex computed (chat_facts), above the model's words: exactly as counted
   const FACT_NOUN = { notes: 'notes', chats: 'saved AI chats', journal: 'journal lines', browsing: 'visits', study: 'study events' };
   const FACT_SRC = { notes: 'notes', chats: 'chats', journal: 'journal', browsing: 'browsing', study: 'study' };
@@ -672,6 +689,7 @@
   function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage, unquoted}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
+    const extra = {};  // a conflict's page that is not one of the sources, by path
     const open = async (s) => {
       if (s.kind === 'file') return;  // its text is not kept: the pill names the page
       if (shown === s) { shown = p = null; draw(live); return; }
@@ -705,7 +723,14 @@
       const copy = !streaming && m.text ? h('div', { class: 'msg-acts' }, copyBtn(() => m.text.replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, ''),
         'Copy failed; select the answer and copy it.', 'btn quiet', true)) : '';
       const cov = m.coverage;  // what the model read of what the search found
+      // a conflict's page opens as a source pill does (the same object when it is one)
+      const pageLink = (x) => {
+        const s = [...(m.sources || []), ...(m.searched || [])].find((y) => y.path === x.path)
+          || (extra[x.path] = extra[x.path] || { path: x.path, kind: 'note', at: 0, len: 0 });
+        return h('button', { class: 'linkbtn', type: 'button', 'aria-pressed': String(shown === s), text: x.title || x.path, onclick: () => open(s) });
+      };
       el.replaceChildren(who, m.facts ? factsBox(m.facts) : '', body, copy, sourceRow(m.sources, m.searched, open, shown) || '',
+        ...evidenceRows(m, streaming, pageLink),
         shown ? passageView(shown, p, () => open(shown)) : '',
         cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched}${cov.more ? '+' : ''} match${cov.matched === 1 && !cov.more ? '' : 'es'}`
           + (cov.also && cov.also.length ? ` · also searched: ${cov.also.join(', ')}` : '') }) : '',
@@ -1090,7 +1115,10 @@
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'facts') m.facts = ev.facts;
-          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || []; }
+          else if (ev.t === 'src') {
+            m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || [];
+            m.certainty = ev.certainty; m.horizon = ev.horizon; m.conflicts = ev.conflicts || [];
+          }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }
@@ -2198,12 +2226,18 @@
     if (id === 'connect' && was !== on) return post('/api/setup/skip', { skipped: on }, () => load('setup'));
     return load('setup');
   }
-  function step(id, title, done, summary, body, first) {
+  const STEP_DESC = { vault: 'The folder where your notes live.', connect: 'Let Claude, Cursor and others read and add to it.',
+    history: 'Old AI chats, notes and calendars.', llm: 'A small AI on this computer for Chat.', finish: 'Ask a first question and see what Cortex knows.' };
+  let stepIds = [];  // Setup's steps in order, for the numbers
+  function step(id, name, done, body, first, desc) {
     const cur = id === first;
+    const title = name.replace(' (optional)', ''), optional = title !== name;
     const collapsed = !cur && !opened.has(id);  // one step at a time: the current one, plus any the user opened
-    const band = h('div', { class: 'band' }, h('h2', { text: title }),
-      h('span', { class: 'band-note' }, done ? h('span', { class: 'done-mark', text: '✓ ' }) : null,
-        done ? summary || 'Done' : skipped.has(id) ? 'Skipped' : cur ? dm('NEXT', 2, 'Next') : 'Later'),
+    const mark = h('span', { class: 'step-mark' + (done ? ' done' : ''), 'aria-hidden': 'true', text: done ? '✓' : String(stepIds.indexOf(id) + 1) });
+    const band = h('div', { class: 'band' }, mark,
+      h('div', { class: 'step-t' }, h('h2', { text: title }), optional ? h('span', { class: 'step-opt', text: 'Optional' }) : null,
+        h('p', { class: 'step-d', text: desc || STEP_DESC[id] })),
+      h('span', { class: 'band-note' }, done ? 'Done' : skipped.has(id) ? 'Skipped' : null),
       collapsed ? btn(done ? 'Edit' : 'Open', () => { opened.add(id); return id === 'connect' ? skip(id, false) : load('setup'); }, 'band-btn',
         { 'aria-label': `${done ? 'Edit' : 'Open'}: ${title}` })
         : !done && id !== 'finish' && !skipped.has(id) ? btn('Skip', () => { opened.delete(id); return skip(id, true); }, 'band-btn', { 'aria-label': `Skip: ${title}` })
@@ -2217,6 +2251,7 @@
       history: d.history.done || Object.values(d.imports).some((x) => x.count), llm: d.test.done };
     if (d.connect_skipped) skipped.add('connect'); else skipped.delete('connect');
     const first = d.order.find((k) => !done[k] && !skipped.has(k)) || 'finish';
+    stepIds = [...d.order, 'finish'];
     const rn = d.runner, md = d.model;
     if (!pick.model) pick.model = md.recommend;
     if (!pick.runner) pick.runner = rn.ollama.found || rn.ollama.serving ? 'ollama' : rn.lmstudio.found ? 'lmstudio' : 'ollama';
@@ -2225,7 +2260,7 @@
     // moved: the config names a folder that is gone; ask, never prefill (that would make a new, empty vault)
     const moved = d.vault.moved, gi = d.git;
     const path = h('input', { type: 'text', id: 'vault-path', value: moved ? '' : d.vault.path || d.vault.default, placeholder: moved ? 'The folder’s new location' : null, 'aria-label': 'Vault folder', spellcheck: 'false' });
-    const sVault = step('vault', 'Vault', d.vault.done, d.vault.path, [
+    const sVault = step('vault', 'Vault', d.vault.done, [
       moved ? row('Did you move your vault?', null, `Cortex used ${d.vault.path}, which is not there any more. Paste the folder’s new location below, or a new folder to start an empty vault.`, null) : null,
       h('div', { class: 'field' }, h('label', { for: 'vault-path', text: 'The folder for your notes' }),
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
@@ -2234,12 +2269,13 @@
         gi.install.run ? [btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})), ext(gi.install.license, 'License')] : [ext(gi.install.page, 'Get Git')]) : null], first);
 
     const e = d.embed;
-    const sEmbed = step('embed', 'Search model', e.done, 'downloaded', [
+    const sEmbed = step('embed', 'Search model', e.done, [
       row('Find notes by meaning', e.done ? 'downloaded' : 'not downloaded',
         'Without it, search matches words only. It downloads once, works offline, then indexes your notes.',
         [e.done ? null : btn(`Download search model (${e.size}, from ${e.source})`, () => job('/api/setup/embed', {}), 'btn lit')]),
       row('Index my notes', e.indexed ? `indexed ${e.indexed}` : 'not yet', 'Reads every note once so search by meaning can find it. Safe to stop and run again.',
-        [btn('Index my notes', () => job('/api/setup/index', {}), 'btn', { disabled: !(e.done && d.vault.done) })])], first);
+        [btn('Index my notes', () => job('/api/setup/index', {}), 'btn', { disabled: !(e.done && d.vault.done) })])], first,
+      `Find notes by meaning. A download of ${e.size}, once.`);
 
     const inst = rn.install;
     const start = (id, name) => btn('Start', () => job('/api/setup/start', { runner: id }), 'btn lit', { 'aria-label': `Start: ${name}` });
@@ -2273,7 +2309,7 @@
     const haveIt = pick.runner === 'ollama' ? m.have.ollama : m.have.lmstudio;
     const runnerOk = runners.find((x) => x[0] === pick.runner)[2];
     const src = pick.runner === 'ollama' ? 'ollama.com' : 'LM Studio’s catalogue';
-    const sLlm = step('llm', 'Local model (optional)', done.llm, d.test.model, [
+    const sLlm = step('llm', 'Local model (optional)', done.llm, [
       ...runnerRows,
       row('This computer', md.hardware.label, 'The size a model can use well depends on this.'),
       h('div', { class: 'opts' }, opts),
@@ -2289,24 +2325,28 @@
         confirmChanges(p.rows, () => job('/api/connect/apply', { want }));
       });
     };
-    const sConnect = step('connect', 'Connect AI apps', done.connect, names(on), [
+    const sConnect = step('connect', 'Connect AI apps', done.connect, [
       row(todo.length ? `Found: ${names(todo)}` : 'No other AI app found', null,
         'This is what lets Claude and your other AI apps know you. Cortex adds itself to each app’s settings; you see the exact files first, and each one is backed up.',
         todo.length ? [btn(`Connect ${names(todo)}`, connectFound, 'btn lit', { disabled: !d.vault.done })]
           : on.length ? null : [ext('https://claude.ai/download', 'Get Claude Desktop')]),
       row('Choose apps one by one', null, 'Add or remove single apps, and see what each change does.', [btn('Open Connect AI apps', () => show('connect', true))])], first);
 
-    const sHistory = step('history', 'Add your history (optional)', done.history, 'added',
+    const sHistory = step('history', 'Add your history (optional)', done.history,
       d.vault.done ? historyBoard(d) : [note('Set up the vault first.')], first);
 
-    const sFinish = step('finish', 'Try it', false, '', [
+    const sFinish = step('finish', 'Try it', false, [
       h('div', { class: 'pad' }, h('p', { class: 'ink-2', text: on.length ? `Restart ${names(on)} first, so it loads Cortex.${on.some((t) => t.id === 'claude-desktop') ? ' ' + RESTART_DESKTOP : ''} Then try these in Claude:` : 'Connect an AI app first (above) and restart it. Then try these in Claude:' }),
         h('ol', { class: 'how' }, d.first_prompts.map((x) => h('li', {}, h('code', { text: x })))),
         h('p', { class: 'help', text: 'This step never gets a check mark: Cortex cannot see your chats in Claude. When Claude answers one of these using Cortex, you are set.' })),
       row('Chat', null, 'Or ask about your notes here, with a model on this computer.', [btn('Open Chat', () => show('chat', true))]),
       row('Browsing', null, 'Bring in your browser history, privately.', [btn('Open', () => show('browse', true))])], first);
     const steps = { vault: sVault, embed: sEmbed, connect: sConnect, history: sHistory, llm: sLlm };
-    put('setup', ...d.order.map((k) => steps[k]), sFinish);
+    const n = d.order.filter((k) => done[k]).length, total = stepIds.length;
+    const fill = h('span', {});
+    fill.style.setProperty('--pct', `${Math.round(100 * n / total)}%`);
+    const bar = h('div', { class: 'setup-bar', role: 'progressbar', 'aria-label': 'Setup progress', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(n) }, fill);
+    put('setup', h('div', { class: 'setup-prog' }, bar, h('span', { class: 'prog-text', text: `${n} of ${total} done` })), ...d.order.map((k) => steps[k]), sFinish);
   }
 
   const RENDER = { tonight: renderTonight, setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };

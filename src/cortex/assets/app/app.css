@@ -91,10 +91,9 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
   font-size: 12.5px; min-height: 38px;
 }
 .job-name { font-weight: 600; white-space: nowrap; color: var(--lit); }
-/* idle: the line recedes to a hairline; a running job lights it */
-.jobline.idle { border-bottom-color: var(--rule); }
-.jobline.idle .job-name { font-weight: 400; color: var(--ink-2); }
-.jobline.idle .job-line { color: var(--ink-3); }
+/* idle: no space, still a live region that announces the next job (the .sr-only pattern) */
+.jobline.idle { position: absolute; width: 1px; height: 1px; min-height: 0; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .job-line { color: var(--ink-2); min-width: 0; flex: 1; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
 .job-time { color: var(--ink-3); white-space: nowrap; }
@@ -118,10 +117,15 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
   display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; max-width: 1440px;
   margin: 0 auto; padding: 20px 24px 64px; align-items: start;
 }
-.side {
-  position: sticky; top: calc(var(--hdr) + 58px); display: flex; flex-direction: column;
+.side { position: sticky; top: calc(var(--hdr) + 58px); display: flex; flex-direction: column; }
+/* the idle job line takes no space, so the sticky nav sits 38px higher than while a job shows */
+body:has(.jobline.idle) :is(.side, .chat-side) { top: calc(var(--hdr) + 20px); }
+.side-group {
+  display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--rule); border-radius: 2px;
 }
+.side-head { margin: 0 0 4px 2px; font-size: 12px; color: var(--ink-3); }
+.side-group + .side-head { margin-top: 14px; }
 .side button, .side a {
   border: 0; border-bottom: 1px solid var(--rule); background: none; text-align: left;
   padding: 0 12px; min-height: 40px; color: var(--ink-2);
@@ -302,6 +306,27 @@ td.n, th.n { text-align: right; }
 /* setup steps */
 .step.collapsed > :not(.band) { display: none; }
 .step.current { border-color: var(--edge); }
+/* numbered steps: the progress line, then a marker, title and one plain line per step */
+.setup-prog { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; color: var(--ink-2); font-size: 12.5px; }
+.setup-bar { flex: 1; max-width: 360px; height: 4px; background: var(--edge); border-radius: 2px; overflow: hidden; }
+.setup-bar > span { display: block; height: 100%; width: var(--pct, 0%); background: var(--lit); }
+.step-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--edge); font-size: 12px; line-height: 1; color: var(--ink-2); }
+.step.current .step-mark { border: 2px solid var(--lit); color: var(--lit); font-weight: 600; }
+.step-mark.done { background: var(--ok-ink); border-color: var(--ok-ink); color: var(--ground); }
+.step-t { min-width: 0; }
+.step .band-note { flex: none; }  /* "Done" never shrinks to "D..." on a narrow screen */
+.step-t h2 { display: inline; }
+.step-opt { margin-left: 8px; font-size: 12px; color: var(--ink-3); }
+.step-d { margin: 0; font-size: 12.5px; color: var(--ink-2); font-weight: 400; }
+:root[data-theme="day"] .step-mark, :root[data-theme="day"] .step-d { color: var(--band-ink); }
+:root[data-theme="day"] .step-opt { color: var(--ink-2); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .step-mark, :root:not([data-theme]) .step-d { color: var(--band-ink); }
+  :root:not([data-theme]) .step-opt { color: var(--ink-2); }
+}
+:root[data-theme="day"] .step-mark.done { color: var(--ground); }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) .step-mark.done { color: var(--ground); } }
 .done-mark { color: var(--solid); font-weight: 600; }
 /* day: --solid is 2.3:1 on the yellow step band; this green is 5.3:1 there, 7.6:1 on white */
 :root[data-theme="day"] .done-mark { color: #08603f; }
@@ -442,6 +467,10 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .fx-chip { display: inline-flex; gap: 6px; align-items: baseline; font-variant-numeric: tabular-nums; }
 .fx-cov, .cov { color: var(--ink-3); font-size: 12px; margin: 6px 0 0; }
 .cov.qflag { color: var(--learning); }
+.chat-evidence { color: var(--ink-2); font-size: 12px; margin: 6px 0 0; }
+.chat-evidence strong { color: var(--ink); font-weight: 600; }
+.chat-conflict { margin-top: 2px; }
+.chat-conflict .linkbtn { font-size: inherit; min-height: 0; }
 /* the exact passage a source stands for */
 .passage { max-width: 78ch; margin-top: 8px; padding: 8px 12px; background: var(--panel);
   border: 1px solid var(--edge); border-radius: 2px; }
