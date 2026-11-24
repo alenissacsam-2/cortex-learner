@@ -1332,6 +1332,25 @@ def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tm
     assert out["ok"] and (systemp / "first" / ".cortex").is_dir()
 
 
+def test_change_folder_leaves_another_installs_start_at_login_alone(
+        app, vault, tmp_path, monkeypatch, _no_real_run_key):
+    """A login entry this Cortex did not make for the old folder (another install's receiver,
+    or another vault) is never re-pointed by a vault move: a test copy once took over the
+    owner's real entry this way."""
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    logins = []
+    monkeypatch.setattr(actions, "login", lambda job, root, on: logins.append((root, on)))
+    theirs = r'"C:\Program Files\Other\cortex-receiver.exe" --vault "D:\TheirVault"'
+    _no_real_run_key[status.LOGIN_TASK] = theirs
+    call(app, "POST", "/api/setup/vault", {"path": str(tmp_path / "moved")})
+    job = wait_job(app)
+    assert job["error"] is None and logins == []
+    assert _no_real_run_key[status.LOGIN_TASK] == theirs
+    assert not status.login_is_for(vault)
+    _no_real_run_key[status.LOGIN_TASK] = status.login_command(vault)
+    assert status.login_is_for(vault)
+
+
 def test_change_folder_asks_to_move_connected_apps_and_moves_start_at_login(
         app, vault, tmp_path, home, monkeypatch, _no_real_run_key):
     """FX1 6b/6c: after a real vault change the job says `reconnect` while an app still

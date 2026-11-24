@@ -384,6 +384,18 @@ def receiver_exe() -> str:
     return str(gui) if gui.is_file() else str(cortex)
 
 
+def login_is_for(root: Path) -> bool:
+    """Whether the entry that starts the receiver at login is the one this Cortex made for
+    `root` (the same receiver and vault): only then may a vault move re-point it. Another
+    install's entry, or one a test copy of Cortex did not make, is left alone."""
+    if (f := login_file()) is not None:
+        try:
+            return f.read_text(encoding="utf-8") == login_text(root)
+        except OSError:
+            return False
+    return run_get() == login_command(root)
+
+
 def login_command(root: Path) -> str:
     """The Run value: the receiver for `root`, as `cortex browse serve --vault <root>` runs."""
     exe = receiver_exe()

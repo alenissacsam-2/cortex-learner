@@ -2509,7 +2509,8 @@ def test_change_folder_asks_to_move_connected_apps(root_committed, tmp_path, mon
     assert out["toast"] == [f"Cortex now uses D:\\New. {msg}", "Open Connect AI apps"]
     assert out["row"] == ["Open Connect AI apps and click Apply to move them.",
                           ["Open Connect AI apps"]]
-    assert out["connect"] == [True, "Its Cortex entry is out of date (another folder or program). Apply updates it.", True]
+    stale = "Its Cortex entry is out of date (another folder or program). Apply updates it."
+    assert out["connect"] == [True, stale, True]
     assert out["after"] is True
 
 

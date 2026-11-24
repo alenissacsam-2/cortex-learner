@@ -2193,9 +2193,10 @@ class App:
             self.root = root
             if old is None or Path(old).resolve() == root:
                 return out
-            # FX1 6: the vault moved. Start at login is Cortex's own: it follows at once. AI
-            # apps' configs are the owner's: Connect re-points them after a confirm.
-            if status.login_task()["exists"]:
+            # FX1 6: the vault moved. Start at login is Cortex's own: it follows at once, but
+            # only the entry this Cortex made for the old folder (never another install's).
+            # AI apps' configs are the owner's: Connect re-points them after a confirm.
+            if status.login_is_for(Path(old)):
                 try:
                     actions.login(job, root, True)
                     out["lines"].append("Start at login now uses the new folder.")
