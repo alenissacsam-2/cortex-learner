@@ -119,7 +119,7 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
 }
 .side { position: sticky; top: calc(var(--hdr) + 58px); display: flex; flex-direction: column; }
 /* the idle job line takes no space, so the sticky nav sits 38px higher than while a job shows */
-body:has(.jobline.idle) .side { top: calc(var(--hdr) + 20px); }
+body:has(.jobline.idle) :is(.side, .chat-side) { top: calc(var(--hdr) + 20px); }
 .side-group {
   display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--rule); border-radius: 2px;
