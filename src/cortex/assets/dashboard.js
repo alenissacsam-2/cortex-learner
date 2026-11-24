@@ -2433,6 +2433,125 @@
   /* ---- You ---- */
   const TIER_ROWS = [['you confirmed', ['confirmed', 'typed', 'legacy'], false],
     ['a chat relayed (ask)', ['agent'], true], ['a chat saved (ask)', ['exposed'], true]];
+  /* Mind Mirror (R27a): each line about you or decision and what replaced it, one lane per
+     chain on a month axis. The list view is its table, and the narrow screen's default. */
+  const MM = { all: false, list: null, SHOWN: 8, LANE: 36, AXIS: 22, END: 56, MIN_TEXT: 48 };
+  const fullDay = (s) => `${fmtDay(s)} ${s.slice(0, 4)}`;
+  const mmRange = (v) => `${v.open_start ? 'an unknown day' : fullDay(v.from)} to ${v.until ? fullDay(v.until) : 'now'}`;
+  const mmTitle = (id) => (PAGES.has(id) ? PAGES.get(id).title : id);
+  const utcDay = (s) => new Date(dayNum(s) * 864e5);
+  function mindMirror() {
+    const chains = (D.you && D.you.changes) || [];
+    if (MM.list === null) MM.list = window.matchMedia('(max-width: 559px)').matches;
+    const toggle = chains.length ? button('band-btn', '', () => { hideTip(); MM.list = !MM.list; draw(); }) : null;
+    const b = board('Lines and decisions you replaced',
+      { note: chains.length ? plural(chains.length, 'change') : '', action: toggle });
+    if (!chains.length) {
+      b.body.append(el('p', 'empty', 'Nothing has changed yet. When you revise a line about you or replace a decision, both versions show here.'));
+      return b.root;
+    }
+    const foot = el('div', 'foot');
+    b.root.append(foot);
+    let width = 0;
+    function draw(expanded) {
+      toggle.textContent = MM.list ? 'Show as a timeline' : 'Show as a list';
+      const shown = MM.all ? chains : chains.slice(0, MM.SHOWN);
+      b.body.replaceChildren(MM.list ? mmList(shown) : mmLanes(shown, chains, width));
+      foot.replaceChildren();
+      if (shown.length < chains.length) {
+        foot.append(button('linkbtn', `Show all ${chains.length}`, () => { MM.all = true; draw(true); }));
+      }
+      foot.hidden = !foot.childNodes.length;
+      const next = expanded && b.body.querySelector('.mm-first');
+      if (next) next.focus();  // the button that had focus is gone: the first row it showed takes it
+    }
+    draw();
+    new ResizeObserver(() => {
+      const w = b.body.clientWidth;
+      if (w && w !== width) { width = w; if (!MM.list) draw(); }
+    }).observe(b.body);
+    return b.root;
+  }
+  function mmList(shown) {
+    const ul = el('ul', 'mm-list');
+    shown.forEach((c, i) => {
+      const li = el('li'), first = i === MM.SHOWN ? ' mm-first' : '';
+      li.append(PAGES.has(c.page) ? button('linkbtn' + first, mmTitle(c.page), () => openReader(c.page))
+        : el('span', null, mmTitle(c.page)));
+      li.append(el('div', 'mm-chain', c.versions.map((v) =>
+        `${v.text} (${mmRange(v)}${v.status === 'retired' ? ', retired' : ''})`).join(' → ')));
+      ul.append(li);
+    });
+    return ul;
+  }
+  function mmLanes(shown, all, W) {
+    const box = el('div', 'mm');
+    box.style.height = (MM.AXIS + shown.length * MM.LANE) + 'px';
+    const x0 = 4, x1 = W - 24 - MM.END;  // .mm's side margins
+    if (x1 - x0 < 40) return box;  // not laid out yet: the resize observer draws it
+    const hi = utcDay(TODAY), first = Math.min(...all.flatMap((c) => c.versions.map((v) => dayNum(v.from))));
+    const lo = d3.utcMonth.floor(new Date(Math.min(first * 864e5, +d3.utcMonth.offset(hi, -1))));
+    const x = d3.scaleUtc().domain([lo, hi]).range([x0, x1]).clamp(true);
+    const months = Math.max(1, d3.utcMonth.count(lo, hi));
+    const step = [1, 2, 3, 4, 6, 12].find((k) => (x1 - x0) * k / months >= 56) || 12;
+    x.ticks(d3.utcMonth.every(step)).forEach((t, i) => {
+      const tick = el('div', 'mm-tick');
+      tick.style.left = x(t) + 'px';
+      tick.append(el('span', null, MON[t.getUTCMonth()] + (i === 0 || t.getUTCMonth() === 0 ? ' ' + t.getUTCFullYear() : '')));
+      tick.setAttribute('aria-hidden', 'true');
+      box.append(tick);
+    });
+    shown.forEach((c, li) => {
+      const lane = el('div', 'mm-lane');
+      lane.style.top = (MM.AXIS + li * MM.LANE) + 'px';
+      let end = -Infinity;
+      c.versions.forEach((v, vi) => {
+        const a = Math.max(x(utcDay(v.from)), end + 2), z = Math.max(v.until ? x(utcDay(v.until)) : x1, a + 4);
+        const bar = el('div', 'mm-bar ' + (v.status === 'live' ? 'live' : 'past') + (v.open_start ? ' open' : '')
+          + (li === MM.SHOWN && vi === 0 ? ' mm-first' : ''));
+        Object.assign(bar.style, { left: a + 'px', width: (z - a) + 'px' });
+        bar.tabIndex = 0;
+        bar.setAttribute('role', 'button');
+        const span = `from ${mmRange(v)}${v.status === 'retired' ? ', then retired' : ''}`;
+        bar.setAttribute('aria-label', `${v.text}, ${span}, on ${mmTitle(v.page)}`);
+        const tipParts = () => [el('div', null, v.text), el('div', 'k', span), el('div', 'k', mmTitle(v.page))];
+        bar.addEventListener('mouseenter', (e) => showTip(e, tipParts()));
+        bar.addEventListener('mousemove', moveTip);
+        bar.addEventListener('mouseleave', hideTip);
+        bar.addEventListener('focus', () => { const r = bar.getBoundingClientRect(); showTipAt(r.left, r.bottom, tipParts()); });
+        bar.addEventListener('blur', hideTip);
+        bar.addEventListener('click', () => { hideTip(); openReader(v.page); });
+        bar.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          hideTip();
+          openReader(v.page);
+        });
+        lane.append(bar);
+        if (z - a >= MM.MIN_TEXT) {
+          const t = el('div', 'mm-text', v.text);
+          Object.assign(t.style, { left: a + 'px', width: (z - a) + 'px' });
+          t.setAttribute('aria-hidden', 'true');
+          lane.append(t);
+        }
+        end = z;
+      });
+      const last = c.versions[c.versions.length - 1].status;
+      if (last === 'retired') {
+        const cap = el('div', 'mm-cap');
+        cap.style.left = (end + 1) + 'px';
+        lane.append(cap);
+      }
+      if (last === 'live' || last === 'retired') {
+        const tag = el('span', 'mm-end', last === 'live' ? 'now' : 'retired');
+        tag.style.left = (end + 6) + 'px';
+        tag.setAttribute('aria-hidden', 'true');
+        lane.append(tag);
+      }
+      box.append(lane);
+    });
+    return box;
+  }
   function renderYou() {
     const host = $('view-you'), know = D.you.know || { pages: [], total: { tiers: {} } };
     host.append(el('h1', null, NAME || 'You'));
@@ -2483,6 +2602,8 @@
     kb.body.append(box);
     grid.append(wait.root, kb.root);
     host.append(grid);
+
+    host.append(el('h2', null, 'How your mind changed'), mindMirror());
 
     host.append(el('h2', null, 'Your pages'));
     const g2 = el('div', 'you-grid');

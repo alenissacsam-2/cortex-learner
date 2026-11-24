@@ -192,6 +192,22 @@ def since(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_PAST_LINK = re.compile(r"\(until (\d{4}-\d\d-\d\d)(?:\s*→\s*\^(c-[a-z2-7]{5}))?\s*\)")
+
+
+def past_link(text: str) -> tuple[str | None, str | None]:
+    """R27a: a `## Past` line's (until day, the id it points to with `→ ^id`), the last stamp
+    move_to_past wrote; (None, None) without one, and no id for a retired line."""
+    m = ([None, *_PAST_LINK.finditer(text)])[-1]
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def bare(text: str) -> str:
+    """A claim line's words as written: no ids and no `(until …)`, `(since …)` or
+    `(confirmed …)`-style stamps."""
+    return " ".join(_ANY_ID.sub("", _MARK.sub("", ID_TAIL.sub("", text))).split())
+
+
 def strip_since(line: str) -> str:
     """A served line without its `(since …)` stamp: rules files and tool text carry no dates,
     so the clients' prompt caches keep hitting."""

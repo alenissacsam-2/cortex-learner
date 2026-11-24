@@ -196,26 +196,32 @@ def _names(text: str, i: str) -> bool:
     return re.search(rf"(?<![\w-]){re.escape(i)}(?![\w-])", text) is not None
 
 
+def replaced_by(i: str, d: str, body: str, decs: list) -> str | None:
+    """The id of the decision that replaced decision `i` (dated `d`, its page text `body`), of
+    `decs` [(day, id, body)]: a later one whose page names `i`, else one `i`'s page names; None.
+    Chat's decisions and the dashboard's Mind Mirror (R27a) both use it."""
+    later = [(d2, i2, b2) for d2, i2, b2 in decs if i2 != i and d2 >= d]
+    by = next((x for x in later if _names(x[2], i)), None) or next(
+        (x for x in later if _names(body, x[1])), None)
+    return by[1] if by else None
+
+
 def _decisions(q: dict, every: list, sources: dict) -> dict:
     from cortex import chat_facts
 
     match = chat_facts._matcher(chat_facts.words(q["term"]))[0]
     decs = sorted(((_day(i, n), i, n) for i, n, _ in every if n["kind"] == "decision"),
                   key=lambda x: (x[0], x[1]))
+    bodies, node = [(d, i, n["body"]) for d, i, n in decs], {i: n for _, i, n in decs}
     rows = []
     for d, i, n in reversed(decs):  # newest first
         if not match(f"{n['title']}\n{n['body']}"):
             continue
         status = str(n["fields"].get("status") or "")
-        by = None
-        if status in ("superseded", "retired"):
-            # a later decision whose page names this one, else one this page names
-            later = [(d2, i2, n2) for d2, i2, n2 in decs if i2 != i and d2 >= d]
-            by = next((x for x in later if _names(x[2]["body"], i)), None) or next(
-                (x for x in later if _names(n["body"], x[1])), None)
+        by = replaced_by(i, d, n["body"], bodies) if status in ("superseded", "retired") else None
         rows.append({"id": i, "title": _title(i, n), "day": d, "status": status,
                      "replaced": status in ("superseded", "retired"),
-                     "replaced_by": _title(by[1], by[2]) if by else None})
+                     "replaced_by": _title(by, node[by]) if by else None})
     return _out(q, every, rows, sources)
 
 

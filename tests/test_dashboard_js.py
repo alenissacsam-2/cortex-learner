@@ -103,6 +103,8 @@ setTimeout(() => {
   await send('Page.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: fs.readFileSync(cfg.helpers, 'utf8') });
   await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+  // a headless page is not focused, so focus() fires no focus event unless this says it is
+  if (cfg.focus) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   if (cfg.narrow) await send('Emulation.setDeviceMetricsOverride', { width: cfg.narrow, height: 812, deviceScaleFactor: 1, mobile: false });
   const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
@@ -171,6 +173,12 @@ setTimeout(() => {
     out.stem.smallLegend = await ev("__T.go('brain').then(() => [document.getElementById('legend-toggle').getAttribute('aria-expanded'), document.getElementById('legend').hidden, localStorage.getItem('cortex.legend')])");
   }
   if (cfg.probe) { await load(); cur = 'probe'; out.probe = await ev(cfg.probe); }  // a test's own script
+  for (const [expr, file] of cfg.shots || []) {  // pictures after the probe: [setup expression, png]
+    cur = 'shot ' + file;
+    await ev(expr);
+    const s = await send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(file, Buffer.from(s.result.data, 'base64'));
+  }
   if (cfg.live) {  // the page as loaded: move the camera, let the test add a note, watch
     cur = 'live';
     const before = await ev('__L.before()');
@@ -727,6 +735,166 @@ def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
     assert "study" not in T  # an empty vault does not study: no Study tab
     assert any("Import your chats or notes" in x for x in T["library"])
     assert any("No topics yet" in x for x in T["brain list"])
+    assert ("Nothing has changed yet. When you revise a line about you or replace a decision, "
+            "both versions show here.") in T["you"]  # R27a Mind Mirror's empty state
+
+
+# R27a Mind Mirror on the You tab: lanes, a bar's tooltip and Enter, Show all, the list view,
+# both themes; under 560 px the list first, and no sideways scroll either way
+MIRROR_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), $ = (id) => document.getElementById(id);
+  const until = async (f) => { for (let i = 0; i < 100 && !f(); i++) await sleep(30); };
+  await __T.go('you');
+  const v = $('view-you'), out = { width: innerWidth };
+  out.heads = [...v.querySelectorAll('h2')].map((h) => h.textContent);
+  const board = [...v.querySelectorAll('h2')].find((h) => h.textContent === 'How your mind changed').nextElementSibling;
+  const toggle = board.querySelector('.band .band-btn');
+  const lanes = () => board.querySelectorAll('.mm-lane').length, rows = () => board.querySelectorAll('.mm-list li').length;
+  const over = () => document.documentElement.scrollWidth > innerWidth;
+  const inside = () => [...board.querySelectorAll('.mm-bar, .mm-end')].every((e) => {
+    const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
+  out.band = [board.querySelector('.band h2').textContent, board.querySelector('.band-note').textContent];
+  if (innerWidth < 560) {
+    out.narrow = { rows: rows(), lanes: lanes(), toggle: toggle.textContent, overflow: over() };
+    toggle.click();
+    await until(() => lanes());
+    Object.assign(out.narrow, { after: lanes(), overflowAfter: over(), inside: inside() });
+    return out;
+  }
+  await until(() => lanes());
+  out.toggle = toggle.textContent;
+  out.lanes = lanes();
+  out.ends = [...board.querySelectorAll('.mm-end')].map((e) => e.textContent);
+  out.caps = board.querySelectorAll('.mm-cap').length;
+  out.open = board.querySelectorAll('.mm-bar.open').length;
+  out.ticks = [...board.querySelectorAll('.mm-tick')].map((t) => t.textContent);
+  out.labels = [...board.querySelectorAll('.mm-text')].map((t) => t.textContent);
+  out.labelInk = getComputedStyle(board.querySelector('.mm-text')).color;
+  const bar = [...board.querySelectorAll('.mm-bar')].find((e) => e.getAttribute('aria-label').startsWith('Uses Pipenv'));
+  out.bar = [bar.tabIndex, bar.getAttribute('role'), bar.getAttribute('aria-label')];
+  bar.focus();
+  await sleep(40);
+  out.tip = $('tip').hidden ? null : [...$('tip').children].map((e) => e.textContent);
+  bar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(60);
+  out.reader = $('reader').hidden ? null : $('reader').querySelector('h2').textContent;
+  out.tipAfter = $('tip').hidden;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await sleep(40);
+  const ink = (sel) => getComputedStyle(board.querySelector(sel)).backgroundColor;
+  const theme = () => [document.documentElement.dataset.theme, ink('.mm-bar.live'), ink('.mm-bar.past'),
+    getComputedStyle(document.documentElement).getPropertyValue('--lit').trim()];
+  out.themes = [theme()];
+  $('theme').click();
+  await sleep(40);
+  out.themes.push(theme());
+  $('theme').click();
+  toggle.click();
+  await until(() => rows());
+  out.list = { rows: rows(), lanes: lanes(), toggle: toggle.textContent,
+    chain: [...board.querySelectorAll('.mm-chain')].map((e) => e.textContent).find((t) => t.includes('Pipenv')) };
+  const more = () => [...board.querySelectorAll('.foot button')].map((x) => x.textContent);
+  out.more = more();
+  board.querySelector('.foot button').click();
+  await sleep(40);
+  out.all = { rows: rows(), more: more(), footHidden: board.querySelector('.foot').hidden,
+    focusFirst: document.activeElement.classList.contains('mm-first') };
+  toggle.click();
+  await until(() => lanes());
+  out.allLanes = lanes();
+  out.overflow = over();
+  out.inside = inside();
+  return out;
+})()
+"""  # noqa: E501  (JavaScript)
+# the board in view with a bar focused (its tooltip shown), in the theme named
+MIRROR_SHOT = r"""
+(async () => {
+  if (document.documentElement.dataset.theme !== 'THEME') document.getElementById('theme').click();
+  await new Promise((r) => setTimeout(r, 100));
+  const live = document.querySelector('.mm-bar.live');
+  live.focus();
+  const top = live.closest('.board').previousElementSibling.getBoundingClientRect().top;  // its h2
+  window.scrollBy(0, top - document.getElementById('top').getBoundingClientRect().bottom - 8);
+  live.blur();
+  live.focus();  // its tooltip again, where the bar is now
+  await new Promise((r) => setTimeout(r, 100));
+})()
+"""
+
+
+def _mirror_vault(tmp_path) -> Path:
+    """A vault with 11 changes: a revised line (its start from an event), nine retired lines
+    (unknown starts) and a superseded decision."""
+    from cortex.events import EventLog
+
+    root = tmp_path / "mirror"
+    (root / "me").mkdir(parents=True)
+    (root / "decisions").mkdir()
+    (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
+    old = "".join(f"- Old habit {i} [link](https://example.com) (until 2026-{i % 9 + 1:02}-15) "
+                  f"^c-{'abcdefghi'[i]}aaaa\n" for i in range(9))
+    (root / "me" / "preferences.md").write_text(
+        '---\nid: "preferences"\n---\n# Preferences\n\n## Tools\n'
+        "- Uses uv for every Python project (since 2026-09-03) ^c-zzzzz\n\n## Past\n"
+        f"- Uses Pipenv (until 2026-09-03 → ^c-zzzzz) ^c-yyyyy\n{old}", encoding="utf-8")
+    (root / "decisions" / "db-sqlite.md").write_text(
+        '---\nkind: decision\ntitle: "Use SQLite"\nstatus: superseded\ndate: 2026-05-01\n---\nx\n',
+        encoding="utf-8")
+    (root / "decisions" / "db-postgres.md").write_text(
+        '---\nkind: decision\ntitle: "Use Postgres"\nstatus: accepted\ndate: 2026-08-20\n---\n'
+        "Replaces [[db-sqlite]].\n", encoding="utf-8")
+    EventLog(Vault(root)).append(
+        session="cli", kind="change", source="tutor", now=datetime(2026, 6, 12, 8, 0, tzinfo=UTC),
+        fields={"payload": {"change": {"kind": "me", "id": "preferences", "claim": "c-yyyyy"}}})
+    return root
+
+
+@pytest.mark.parametrize("narrow", [None, 375])
+def test_the_mind_mirror_shows_how_your_mind_changed(tmp_path, narrow):
+    page = tmp_path / "mirror.html"
+    page.write_text(dashboard.snapshot(Vault(_mirror_vault(tmp_path)), now=NOW), encoding="utf-8")
+    shots = [] if narrow else [[MIRROR_SHOT.replace("THEME", t), str(tmp_path / f"mirror-{t}.png")]
+                               for t in ("night", "day")]
+    out = _run(tmp_path, page, probe=MIRROR_PROBE, shots=shots, focus=True,
+               **({"narrow": narrow} if narrow else {}))
+    assert out["errors"] == []
+    p = out["probe"]
+    heads = p["heads"]  # after the first grid, its board's band, then Your pages
+    i = heads.index("How your mind changed")
+    assert heads[i - 1:i + 3] == ["How well Cortex knows you", "How your mind changed",
+                                  "Lines and decisions you replaced", "Your pages"]
+    assert p["band"] == ["Lines and decisions you replaced", "11 changes"]
+    if narrow:  # under 560 px: the list first; the timeline fits the page too
+        assert p["narrow"] == {"rows": 8, "lanes": 0, "toggle": "Show as a timeline",
+                               "overflow": False, "after": 8, "overflowAfter": False,
+                               "inside": True}
+        return
+    assert p["toggle"] == "Show as a list" and p["lanes"] == 8
+    assert "now" in p["ends"] and "retired" in p["ends"] and p["caps"] == p["ends"].count("retired")
+    assert p["open"] >= 1  # the retired habits' starts are unknown: a dashed left edge
+    assert p["ticks"][0].endswith(" 2026") and "Jun" in p["ticks"]
+    assert "Uses uv for every Python project" in p["labels"] and "Old habit 8 link" in p["labels"]
+    assert not any("http" in x or "^c-" in x or "(until" in x for x in p["labels"])
+    assert p["labelInk"] != "rgb(255, 176, 0)"  # the secondary text ink, never the bar's
+    assert p["bar"] == [0, "button", "Uses Pipenv, from 12 Jun 2026 to 3 Sep 2026, on Preferences"]
+    assert p["tip"] == ["Uses Pipenv", "from 12 Jun 2026 to 3 Sep 2026", "Preferences"]
+    assert p["reader"] == "Preferences" and p["tipAfter"]
+    themes = {t[0]: t[1:] for t in p["themes"]}
+    assert set(themes) == {"night", "day"}
+    assert themes["night"][0] == "rgb(255, 176, 0)" and themes["day"][0] == "rgb(17, 17, 17)"
+    for live, past, _ in themes.values():
+        assert past != live and past not in ("rgba(0, 0, 0, 0)", "transparent")
+    assert p["list"]["rows"] == 8 and p["list"]["lanes"] == 0
+    assert p["list"]["toggle"] == "Show as a timeline"
+    assert p["list"]["chain"] == ("Uses Pipenv (12 Jun 2026 to 3 Sep 2026) → Uses uv for every "
+                                  "Python project (3 Sep 2026 to now)")
+    assert p["more"] == ["Show all 11"]
+    assert p["all"] == {"rows": 11, "more": [], "footHidden": True, "focusFirst": True}
+    assert p["allLanes"] == 11 and not p["overflow"] and p["inside"]
+    for t in ("night", "day"):
+        assert (tmp_path / f"mirror-{t}.png").stat().st_size > 10_000
 
 
 NO_STUDY_PROBE = r"""
