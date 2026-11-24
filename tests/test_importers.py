@@ -37,7 +37,8 @@ REPORT = importers.REPORT
 
 def _counts(r: dict) -> dict:
     """The importer's own counts, without the shared import-report keys."""
-    return {k: v for k, v in r.items() if k not in (*REPORT, "updated", "gone")}
+    return {k: v for k, v in r.items()
+            if k not in (*REPORT, "updated", "gone", "loops", "loops_over")}
 
 
 def _notion_zip(tmp_path) -> Path:
