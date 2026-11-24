@@ -151,7 +151,7 @@ def _npz_write(vault: Vault, cache: dict, dim: int, sig: str | None = None,
 
 def _connect(vault: Vault, dim: int):
     """The store for `dim` (other settings empty it and its signature)."""
-    con = vecstore.connect(vault.root / CACHE)
+    con = vecstore.connect(vault.root / CACHE, vault=vault)
     try:
         if vecstore.prepare(con, _want(dim)):
             with vecstore.tx(con):
@@ -270,7 +270,7 @@ def prune(vault: Vault) -> int:
 
     root, n, files, kept = vault.root, 0, None, NPZ + legacy.DONE
     if (root / CACHE).is_file():
-        with closing(vecstore.connect(root / CACHE)) as con:
+        with closing(vecstore.connect(root / CACHE, vault=vault)) as con:
             if have := vecstore.manifests(con):
                 files = _files(vault)
                 n = vecstore.delete(con, [p for p, h in have.items()

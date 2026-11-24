@@ -27,6 +27,7 @@ SUFFIXES = ("", "-wal", "-shm")  # a store's file and its WAL sidecars
 STORE = re.compile(r".+\.damaged-\d{8}T\d{6}Z")  # a moved-aside store (its sidecars add -wal...)
 DIRS = (".cortex", ".cortex/browse")  # where the stores live
 _CHECKED: set[str] = set()  # stores that passed `check` in this process
+_STUCK: set[str] = set()  # stores `heal` could not move: not tried again in this process
 
 
 class Damaged(sqlite3.DatabaseError):
@@ -95,14 +96,19 @@ def move_aside(path: Path, vault=None) -> Path:
 
 
 def heal(path: Path, e: BaseException, what: str, vault=None) -> bool:
-    """Move a damaged store aside (`move_aside`) and log one warning; False (with a warning)
-    when it could not be moved, so the caller keeps raising `e`."""
+    """Move a damaged store aside (`move_aside`) and log one warning; False when it could not
+    be moved, so the caller keeps raising `e`. A store that could not be moved (held open, on
+    Windows) is not tried again in this process: one warning, not one a call."""
     from cortex.vault import VaultError
 
+    if str(path) in _STUCK:
+        return False
     try:
         dst = move_aside(path, vault)
     except (OSError, VaultError) as err:
-        log.warning("%s is damaged (%s) and could not be moved aside: %s", path.name, e, err)
+        _STUCK.add(str(path))
+        log.warning("%s is damaged (%s) and could not be moved aside: %s; Cortex tries again "
+                    "when it next starts", path.name, e, err)
         return False
     log.warning("%s was damaged (%s): moved aside as %s and started again; %s. Delete the "
                 "copy once things work again (`cortex doctor` names it).", path.name, e,

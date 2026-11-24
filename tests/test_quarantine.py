@@ -25,6 +25,7 @@ def new_process(monkeypatch):
     """What a fresh process starts with: no vectors in memory, no store checked yet."""
     monkeypatch.setattr(semantic, "_MEM", {})
     monkeypatch.setattr(quarantine, "_CHECKED", set())
+    monkeypatch.setattr(quarantine, "_STUCK", set())
 
 
 def header(p):  # unreadable from the first byte: SQLITE_NOTADB at open
@@ -69,18 +70,16 @@ def test_a_damaged_vector_store_is_moved_aside_and_recall_works_after(root, monk
     assert row[0] == "WARN" and row[2] == f".cortex/{copy.name}" and "Delete" in row[3]
 
 
-def test_a_damaged_chat_import_state_is_moved_aside_with_its_wal(root):
+def test_a_damaged_chat_import_state_is_moved_aside(root):
     p = root / chat_import.STATE
     p.parent.mkdir(exist_ok=True)
     header(p)
-    (root / f"{chat_import.STATE}-wal").write_bytes(b"old frames")
     with closing(chat_import.State(Vault(root))) as st:
         assert st.sigs() == {}
         st.put("k", (1, 2), {"offset": 3})
-    found = quarantine.found(root)
-    assert all(c.name.startswith("chat-import.sqlite.damaged-") for c in found)
-    assert sorted(c.name.endswith("-wal") for c in found) == [False, True]
-    assert (root / chat_import.STATE).is_file()
+    (copy,) = quarantine.found(root)
+    assert copy.name.startswith("chat-import.sqlite.damaged-")
+    assert copy.read_bytes().startswith(b"this is not") and (root / chat_import.STATE).is_file()
     (row,) = doctor.check_damaged_stores(root)
     assert row[2].startswith(".cortex/chat-import.sqlite.damaged-") and "-wal" not in row[2]
 
@@ -97,11 +96,35 @@ def test_a_store_held_open_stays_whole_and_the_error_stands(root, monkeypatch, c
             raise VaultError("vault_locked", "held open")
         move(self, src, dst)
     monkeypatch.setattr(Vault, "move", stuck)
-    with caplog.at_level(logging.WARNING), pytest.raises(sqlite3.DatabaseError):
-        vecstore.connect(db)
+    with pytest.raises(VaultError):  # the store moved, its WAL stuck: the store comes back
+        quarantine.move_aside(db)
     assert db.read_bytes().startswith(b"this is not") and quarantine.found(root) == []
     assert (root / f"{semantic.CACHE}-wal").read_bytes() == b"frames"
+    with caplog.at_level(logging.WARNING):
+        assert not quarantine.heal(db, sqlite3.DatabaseError("x"), "y")
     assert any("could not be moved aside" in r.getMessage() for r in caplog.records)
+
+
+def test_a_store_that_cannot_be_moved_is_tried_once_per_process(root, monkeypatch, caplog):
+    new_process(monkeypatch)
+    db = root / semantic.CACHE
+    db.parent.mkdir(exist_ok=True)
+    header(db)
+    tries, move = [], Vault.move
+
+    def stuck(self, src, dst):
+        tries.append(src)
+        raise VaultError("vault_locked", "held open")
+    monkeypatch.setattr(Vault, "move", stuck)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):  # recall still answers, by keyword and this call's embeddings
+            semantic.vectors(index(root), FakeEmbed(), 4)
+    assert len(tries) == 1 and db.read_bytes().startswith(b"this is not")
+    assert sum("could not be moved aside" in r.getMessage() for r in caplog.records) == 1
+    new_process(monkeypatch)  # the next start tries again
+    monkeypatch.setattr(Vault, "move", move)
+    semantic.vectors(index(root), FakeEmbed(), 4)
+    assert len(quarantine.found(root)) == 1
 
 
 def test_a_forget_deletes_the_damaged_copies_and_backup_leaves_them_out(root):
