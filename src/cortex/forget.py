@@ -23,10 +23,13 @@ Where a page's or line's text can sit, and how a forget clears it:
   re-import skips it);
 - the search index: in memory only (rebuilt per process); its snapshot
   (.cortex/index-snapshot.json) is written again from the pages as they are now;
-- vectors (.cortex/vectors.db and its .npz backup): the rows of pages that went or changed
-  (`semantic.prune`);
+- vectors (.cortex/vectors.db): the rows of pages that went or changed (`semantic.prune`);
+  the old .npz the store was read from is deleted when it holds such a row;
 - the SQLite stores (vectors.db, chat-import.sqlite; with a browse forget also the browse
   store and its vectors): secure_delete, WAL checkpoint(TRUNCATE), VACUUM;
+- damaged stores moved aside (`cortex.quarantine`, `<store>.damaged-<stamp>` and sidecars):
+  deleted, not pruned: a damaged file cannot be pruned reliably, and the live store is
+  rebuilt from the pages (vectors) or the transcripts (chat import), so nothing else is lost;
 - the AI apps' rules files whose Cortex block carries the pinned core (cortex.app.targets:
   Cursor, VS Code, Codex's AGENTS.md): rewritten through `targets.refresh_rules`, and the
   backup that rewrite makes is deleted (it holds only the old block beyond what the file
@@ -542,15 +545,16 @@ def _scrub_state(vault: Vault, pat: re.Pattern) -> int:
 
 def _finish(vault: Vault) -> dict:
     """The index snapshot written again from the pages as they are, the vectors of pages that
-    went or changed deleted, the SQLite stores compacted."""
-    from cortex import semantic
+    went or changed deleted, the SQLite stores compacted, damaged copies of them deleted."""
+    from cortex import quarantine, semantic
     from cortex.catalog import Catalog
     from cortex.index import Index
 
     idx = Index(vault, Catalog.load(vault))
     idx.save_snapshot()
     return {"snapshot": 1, "vectors": semantic.prune(vault),  # VACUUM: its own DB lock only
-            "compacted": sum(_compact(vault.root / d) for d in DBS), "index": idx}
+            "compacted": sum(_compact(vault.root / d) for d in DBS),
+            "damaged": sum(vault.remove(p) for p in quarantine.found(vault.root)), "index": idx}
 
 
 def _compact(path: Path) -> bool:
@@ -578,6 +582,7 @@ REMOVED = (("page", "the page"), ("lines", "claim lines"), ("samples", "voice sa
            ("caches", "cache files swept"), ("chats", "chat transcripts swept or deleted"),
            ("chat_state", "chat import records"), ("vectors", "search vectors"),
            ("snapshot", "search snapshot written again"), ("compacted", "databases compacted"),
+           ("damaged", "files of damaged database copies deleted"),
            ("rules", "AI apps' rules files rewritten (the Cortex block)"))
 
 
