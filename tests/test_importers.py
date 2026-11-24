@@ -37,7 +37,8 @@ REPORT = importers.REPORT
 
 def _counts(r: dict) -> dict:
     """The importer's own counts, without the shared import-report keys."""
-    return {k: v for k, v in r.items() if k not in (*REPORT, "updated", "gone")}
+    return {k: v for k, v in r.items()
+            if k not in (*REPORT, "updated", "gone", "loops", "loops_over")}
 
 
 def _notion_zip(tmp_path) -> Path:
@@ -474,7 +475,7 @@ def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypat
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     src = tmp_path / "MyNotes"
     src.mkdir()
-    (src / "Campus.md").write_text("---\naliases: [IITH, ' Hyderabad campus ', '']\n---\n"
+    (src / "Campus.md").write_text("---\naliases: [NWTU, ' Northwest campus ', '']\n---\n"
                                    "Hostel and mess notes.\n", "utf-8")
     (src / "Lab.md").write_text("---\naliases: Kandi lab\n---\nLab bench notes.\n", "utf-8")
     (src / "Bad.md").write_text("---\naliases: {a: 1}\n---\nOdd front matter.\n", "utf-8")
@@ -485,8 +486,8 @@ def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypat
                                    "utf-8")
     v = Vault(root_plain)
     importers.import_notes(v, src, "obsidian")
-    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["IITH",
-                                                                       "Hyderabad campus"]
+    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["NWTU",
+                                                                       "Northwest campus"]
     assert v.read("resource", "obsidian-lab").fields["aliases"] == ["Kandi lab"]
     assert "aliases" not in v.read("resource", "obsidian-bad").fields
     assert "aliases" not in v.read("resource", "obsidian-mixed").fields
@@ -495,10 +496,10 @@ def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypat
     assert secret.fields["private"] is True and secret.fields["aliases"] == ["Zorblat"]
     assert "aliases" not in secret.body
     c = Cortex(v)
-    assert [h["id"] for h in c.cortex_find("IITH")["hits"]][:1] == ["obsidian-campus"]
+    assert [h["id"] for h in c.cortex_find("NWTU")["hits"]][:1] == ["obsidian-campus"]
     assert [h["id"] for h in c.cortex_find("Kandi")["hits"]][:1] == ["obsidian-lab"]
     assert "obsidian-secret" not in json.dumps(c.cortex_find("Zorblat"))
-    (src / "Campus.md").write_text("---\naliases: [IIT Hyderabad]\n---\n"
+    (src / "Campus.md").write_text("---\naliases: [Northwest Tech]\n---\n"
                                    "Hostel and mess notes.\n", "utf-8")
     assert importers.import_notes(v, src, "obsidian")["updated"] == 1
-    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["IIT Hyderabad"]
+    assert v.read("resource", "obsidian-campus").fields["aliases"] == ["Northwest Tech"]

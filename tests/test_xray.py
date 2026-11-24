@@ -172,7 +172,8 @@ const out = { errors };
     out.boards = $('xray').querySelectorAll('h2').map((x) => x.textContent);
     out.rows = $('xray').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
       r.querySelectorAll('button').map((b) => b.textContent)]);
-    const boards = () => $('xray').querySelectorAll('.board').slice(1);
+    const boards = () => $('xray').querySelectorAll('.board').slice(1)
+      .filter((b) => !b.className.split(' ').includes('xray-compare'));  // R27b: its own test
     out.chips = boards().map((b) => b.querySelectorAll('.chip').map((c) => [c.textContent,
       c.getAttribute('aria-pressed'), c.getAttribute('aria-disabled'), c.getAttribute('title')]));
     out.help = boards().map((b) => b.querySelectorAll('.help').map((x) => x.textContent));
@@ -238,7 +239,7 @@ def test_the_xray_page(tmp_path):
                    "/api/xray/dryrun": dry, "/api/profiles": {"profiles": profiles},
                    "/api/status": status, "/api/review": {"count": 0}}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    assert out["boards"] == ["Pinned and muted", "Claude Code", "mystery-app"]
+    assert out["boards"] == ["Pinned and muted", "Compare two apps", "Claude Code", "mystery-app"]
     assert out["rows"] == [["a private page", ["Unmute"]],
                            ["<b>Engines</b>", ["Pin", "Mute"]],  # served most often
                            ["<b>Engines</b>", ["Pin", "Mute"]],  # text, never markup
@@ -253,8 +254,11 @@ def test_the_xray_page(tmp_path):
         ["Set by the rule for apps named “claude”, shared with Claude Desktop."],
         ["No rule names this app, so it gets what “Any other app” gets. Changing a chip adds "
          "a rule for “mystery-app”."]]
-    assert out["labels"] == ["What would Claude Code get for this prompt?",
-                             "What would mystery-app get for this prompt?"]
+    assert out["labels"] == ["Prompt", "First app", "Second app",
+                             "What would Claude Code get for this prompt?",
+                             "Paste a reply from Claude Code that surprised you",
+                             "What would mystery-app get for this prompt?",
+                             "Paste a reply from mystery-app that surprised you"]
     assert out["toast"] == "Saved. mystery-app reads: core, coding."
     assert (out["emptyDisabled"], out["typedDisabled"]) == (True, False)
     heading = "Dry run · 420 characters · nothing was sent or logged"

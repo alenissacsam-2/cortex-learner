@@ -1789,9 +1789,9 @@ def test_linked_pages_are_named_either_way_but_not_by_a_rollup(vault):
 def _aliased(vault):
     note(vault.root, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
          "# K-Graph\n\nThe learner model I build.")
-    note(vault.root, "people/iit-hyderabad.md",
-         "title: IIT Hyderabad\nkind: person\nprivate: false\naliases: IITH\n",
-         "# IIT Hyderabad\n\nMy college.")
+    note(vault.root, "people/northwest-tech.md",
+         "title: Northwest Tech\nkind: person\nprivate: false\naliases: NWTU\n",
+         "# Northwest Tech\n\nMy college.")
     note(vault.root, "notes/ml.md", "title: Machine learning\naliases: [AI]\n",
          "# Machine learning\n\nModels from data.")
     note(vault.root, "notes/c-lang.md", "title: The C language\naliases: [C]\n", "# C\n\nPointers.")
@@ -1804,11 +1804,11 @@ def test_an_alias_names_a_page_for_the_links_arm(vault):
     aliases find the pages that say them; a private page's alias reveals nothing."""
     _aliased(vault)
     note(vault.root, "notes/week.md", "title: Week\n",
-         "# Week\n\nShipped Cortex; IITH exams; read about AI and C; Zorblax.")
+         "# Week\n\nShipped Cortex; NWTU exams; read about AI and C; Zorblax.")
     note(vault.root, "notes/said.md", "title: Said\n", "# Said\n\nShe said AIML, maybe Cortexes.")
     idx = _index(vault)
     got = semantic.linked(idx, ["week"])
-    assert {"k-graph", "iit-hyderabad", "ml"} <= set(got)
+    assert {"k-graph", "northwest-tech", "ml"} <= set(got)
     assert "c-lang" not in got and "hidden" not in got  # one character; private
     assert semantic.linked(idx, ["said"]) == []  # "AIML", "Cortexes" are not the words
     assert "week" in semantic.linked(idx, ["k-graph"])  # the page's alias found where said
@@ -1818,8 +1818,8 @@ def test_chat_finds_a_page_by_its_alias(vault):
     _aliased(vault)
     assert "projects/k-graph.md" in _paths(
         ask._passages(vault, "how is Cortex going?", 8, sources=ask.SOURCES))
-    assert "people/iit-hyderabad.md" in _paths(
-        ask._passages(vault, "what about iith", 8, sources=ask.SOURCES))
+    assert "people/northwest-tech.md" in _paths(
+        ask._passages(vault, "what about nwtu", 8, sources=ask.SOURCES))
     assert "notes/hidden.md" not in _paths(  # with Chat's private switch off
         ask._passages(vault, "Zorblax plan", 8, sources={**ask.SOURCES, "private": False}))
 

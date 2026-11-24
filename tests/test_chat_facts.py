@@ -486,10 +486,10 @@ def test_a_page_is_found_by_its_alias(vault):
     """R13d-2: an `aliases:` name finds a note's page as its title does; a private note's
     alias only under the private switch."""
     note(vault.root, "notes/campus.md", "title: Campus life\ndate: 2026-11-10\n"
-         "aliases: [IITH]\n", "# Campus life\n\nHostel notes from IITH.")
+         "aliases: [NWTU]\n", "# Campus life\n\nHostel notes from NWTU.")
     note(vault.root, "notes/zorb.md", "title: Night list\ndate: 2026-11-10\nprivate: true\n"
          "aliases: [Zorblat]\n", "# Night list\n\nZorblat things.")
-    f = chat_facts.facts(vault, _route("tell me everything about iith"), ALL_ON)
+    f = chat_facts.facts(vault, _route("tell me everything about nwtu"), ALL_ON)
     assert f["page"]["id"] == "campus" and f["page"]["title"] == "Campus life"
     assert chat_facts.facts(vault, _route("tell me everything about zorblat"),
                             ALL_ON)["page"]["id"] == "zorb"

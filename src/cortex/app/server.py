@@ -366,7 +366,8 @@ class App:
             "/api/review/promote/pin": self.review_promote_pin,
             "/api/review/promote/later": self.review_promote_later,
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
-            "/api/xray/dryrun": self.xray_dryrun,
+            "/api/xray/dryrun": self.xray_dryrun, "/api/xray/trace": self.xray_trace,
+            "/api/xray/compare": self.xray_compare, "/api/xray/ack": self.xray_ack,
             "/api/tonight/undo": self.tonight_undo}
 
     def touch(self) -> None:
@@ -1296,6 +1297,47 @@ class App:
         v = self._vault()
         got = dry_prime(v, client, prompt)
         return xray.present(v, got["served"], got["trimmed"], got["chars"])
+
+    @staticmethod
+    def _xray_client(body: dict, key: str = "client") -> str:
+        c = body.get(key)
+        if not isinstance(c, str) or len(c) > 100:
+            raise ValueError("client must be an AI app's name, at most 100 characters.")
+        return c
+
+    def xray_trace(self, body: dict) -> dict:
+        """R27b: which of what Cortex gave one AI app lately a pasted reply echoes
+        (xray.trace, local words only). The reply is never written or logged: not here, not in
+        an X-ray row or event, and an error answers with its type or our own message only."""
+        from cortex import xray
+        client, text = self._xray_client(body), body.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > xray.TRACE_MAX:
+            raise ValueError(f"Paste a reply of at most {xray.TRACE_MAX:,} characters.")
+        return xray.trace(self._vault(), client, text)
+
+    def xray_compare(self, body: dict) -> dict:
+        """R27b: two AI apps' dry runs for one prompt and what each one's profile withholds
+        (xray.compare). Nothing is written or logged, the prompt included."""
+        from cortex import xray
+        a, b, prompt = self._xray_client(body, "a"), self._xray_client(body, "b"), \
+            body.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 2000:
+            raise ValueError("Type a prompt of at most 2,000 characters.")
+        if (a or "unknown") == (b or "unknown"):
+            raise ValueError("Pick two different apps.")
+        return xray.compare(self._vault(), prompt, a, b)
+
+    def xray_ack(self, body: dict) -> dict:
+        """R27b: Got it on an app's broad-read warning; like Pin and Mute, only this click sets
+        it (xray.ack)."""
+        from cortex import xray
+        client, end = self._xray_client(body), body.get("end")
+        if not isinstance(end, str) or len(end) > 40:
+            raise ValueError("end must be the warning's time.")
+        v = self._vault()
+        with self.reviewing:
+            xray.ack(v, client, end)
+        return self.xray()
 
     def chat_settings_get(self) -> dict:
         from cortex import chat
