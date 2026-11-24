@@ -987,3 +987,16 @@ def test_an_undated_decision_starts_open_on_its_file_day(root):
 
 def test_no_changes_on_a_vault_without_history(root):
     assert dashboard.build_data(Vault(root), now=NOW)["you"]["changes"] == []
+
+
+@pytest.mark.parametrize("name", ["dashboard.css", "app/app.css"])
+def test_day_theme_blocks_match_and_hold_no_airport_yellow(name):
+    # LM: the system light mode and the Day button give the same tokens; no saturated yellow slab
+    css = (ASSETS / name).read_text(encoding="utf-8")
+    media = re.search(r"prefers-color-scheme: light\) \{\s*:root:not\(\[data-theme\]\) \{(.*?)\}",
+                      css, re.S).group(1)
+    day = re.search(r':root\[data-theme="day"\] \{(.*?)\}', css, re.S).group(1)
+    norm = lambda s: re.sub(r"\s+", " ", s).strip()  # noqa: E731
+    assert norm(media) == norm(day)
+    assert "--band: #efe7d4" in day
+    assert "#ffd200" not in css.lower()

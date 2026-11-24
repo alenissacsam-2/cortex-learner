@@ -10,18 +10,18 @@
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --ground: #f6f5f0; --panel: #ffffff; --band: #ffd200; --band-ink: #111111;
-    --rule: rgba(17, 17, 17, .14); --lit: #111111; --unlit: #e8d27a;
-    --ink: #141414; --ink-2: #4a4740; --ink-3: #6a665c;
-    --edge: rgba(17, 17, 17, .3); --scrim: rgba(17, 17, 17, .4);
+    --ground: #ebe8e1; --panel: #f8f6f1; --band: #efe7d4; --band-ink: #7a4d00;
+    --rule: rgba(70, 50, 10, .16); --lit: #8a5700; --unlit: #e3d6b4;
+    --ink: #1f1c17; --ink-2: #4d473c; --ink-3: #6b6457;
+    --edge: rgba(70, 50, 10, .32); --scrim: rgba(31, 28, 23, .4);
     --refresh: #993556; --ok-ink: #08603f; color-scheme: light;
   }
 }
 :root[data-theme="day"] {
-  --ground: #f6f5f0; --panel: #ffffff; --band: #ffd200; --band-ink: #111111;
-  --rule: rgba(17, 17, 17, .14); --lit: #111111; --unlit: #e8d27a;
-  --ink: #141414; --ink-2: #4a4740; --ink-3: #6a665c;
-  --edge: rgba(17, 17, 17, .3); --scrim: rgba(17, 17, 17, .4);
+  --ground: #ebe8e1; --panel: #f8f6f1; --band: #efe7d4; --band-ink: #7a4d00;
+  --rule: rgba(70, 50, 10, .16); --lit: #8a5700; --unlit: #e3d6b4;
+  --ink: #1f1c17; --ink-2: #4d473c; --ink-3: #6b6457;
+  --edge: rgba(70, 50, 10, .32); --scrim: rgba(31, 28, 23, .4);
   --refresh: #993556; --ok-ink: #08603f; color-scheme: light;
 }
 :root {
@@ -338,7 +338,7 @@ td.n, th.n { text-align: right; }
 :root[data-theme="day"] .step-mark.done { color: var(--ground); }
 @media (prefers-color-scheme: light) { :root:not([data-theme]) .step-mark.done { color: var(--ground); } }
 .done-mark { color: var(--solid); font-weight: 600; }
-/* day: --solid is 2.3:1 on the yellow step band; this green is 5.3:1 there, 7.6:1 on white */
+/* day: --solid is 3.1:1 on the panel; this green is 7.1:1 there, 6.2:1 on the sand band */
 :root[data-theme="day"] .done-mark { color: #08603f; }
 @media (prefers-color-scheme: light) { :root:not([data-theme]) .done-mark { color: #08603f; } }
 /* a section being fetched again keeps its old boards, dimmed (after a beat, so a quick answer never flickers) */
