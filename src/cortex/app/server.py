@@ -40,6 +40,8 @@ WATCH_S = 5  # seconds between idle checks
 WARM_STATUS = True  # `start` asks Status's slow probes at once (tests turn it off: conftest)
 PIGGYBACK = True  # C8: a fact-harvest pass after each Chat turn (tests turn it off: conftest)
 MAX_BODY = 64 * 1024
+PICTURE = "/api/brain/picture"  # Save picture: a PNG in base64, so it has its own body cap
+PICTURE_MAX = 8 * 1024 * 1024  # decoded bytes
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
 UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox",
@@ -325,6 +327,7 @@ class App:
             "/api/browse/process": self.process, "/api/browse/selftest": self.selftest,
             "/api/browse/scan": self.scan, "/api/browse/import": self.history_import,
             "/api/vault/export": self.export, "/api/vault/backup": self.backup,
+            PICTURE: self.brain_picture,
             "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
             "/api/home/check/answer": self.cold_answer, "/api/home/date": self.home_date,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
@@ -1818,6 +1821,41 @@ class App:
             return {"ok": True, "path": str(dest)}
         return self.jobs.start("Exporting a snapshot", "vault", run)
 
+    def brain_picture(self, body: dict) -> dict:
+        """Save picture: the brain page's PNG (`png`, base64; `day`, the page's day, names it).
+        The desktop app asks where to save it (Downloads first) and writes it there; the browser
+        app answers `download` and the page saves it itself. Never written anywhere else."""
+        import base64
+        import binascii
+        bad = ValueError("That picture could not be saved.")
+        b64 = body.get("png")
+        if not isinstance(b64, str) or len(b64) > (PICTURE_MAX + 2) // 3 * 4:
+            raise bad
+        try:
+            png = base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise bad from None
+        if not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) > PICTURE_MAX:
+            raise bad
+        win = self.desktop.win if self.desktop is not None else None
+        if win is None:
+            return {"download": True}
+        day = body.get("day")
+        if not (isinstance(day, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)):
+            day = time.strftime("%Y-%m-%d")
+        import webview
+        got = win.create_file_dialog(webview.FileDialog.SAVE, directory=str(exports.downloads()),
+                                     save_filename=f"cortex-brain-{day}.png",
+                                     file_types=("PNG picture (*.png)",))
+        if not got:
+            return {"cancelled": True}
+        dest = Path(got if isinstance(got, str) else got[0])
+        try:
+            dest.write_bytes(png)  # the owner's chosen file, outside the vault
+        except OSError:  # a read-only folder, a full disk
+            raise bad from None
+        return {"saved": dest.name}
+
     def backup(self, body: dict) -> dict:
         root = self.need_root()
         return self.jobs.start("Backing up the vault", "vault",
@@ -2350,7 +2388,7 @@ def _handler(app: App):
             except ValueError:
                 self._send(411, {"error": "length"})
                 return
-            if not 0 <= n <= MAX_BODY:
+            if not 0 <= n <= (PICTURE_MAX * 3 // 2 if path == PICTURE else MAX_BODY):
                 self.close_connection = True
                 self._send(413, {"error": "too large"})
                 return
