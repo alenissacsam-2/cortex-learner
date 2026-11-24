@@ -114,6 +114,15 @@ def test_report_holds_no_path_user_name_or_notes(fake_home):
     assert "Python 3." in out
 
 
+def test_report_survives_missing_rows(fake_home, monkeypatch):
+    home, vault = fake_home
+    monkeypatch.setattr(status, "rows", lambda root: [
+        {"id": "vault", "label": "Vault", "state": "ok", "value": "x"}])
+    out = status.report(vault)
+    assert "- Vault: Ready" in out and "- Search model: off" in out
+    assert "- Local model: off" in out and "- Browsing import: no" in out
+
+
 def test_route_is_a_read_only_get_and_equals_doctor_report(fake_home):
     home, vault = fake_home
     a = server.App(vault)

@@ -733,13 +733,14 @@ def report(root: Path | None) -> str:
     rs = rows(root)
     by = {r["id"]: r for r in rs}
     state = {"ok": "Ready", "off": "Off"}
-    runner = (by["llm"]["value"] or "").split(",")[0].strip()
+    llm, embed, hist = by.get("llm", {}), by.get("embed", {}), by.get("history", {})
+    runner = (llm.get("value") or "").split(",")[0].strip()
     lines = [f"Cortex {update.current()} ({'CortexSetup.exe' if doctor.installer() else 'uv'})",
              f"{platform.system()} {platform.release()} (build {platform.version()}), "
              f"Python {platform.python_version()}", "", "Status:"]
     lines += [f"- {r['label']}: {state.get(r['state'], 'Needs attention')}" for r in rs]
     lines += ["", "Optional parts:",
-              f"- Search model: {'on' if by['embed']['state'] == 'ok' else 'off'}",
-              f"- Local model: {(runner or 'on') if by['llm']['state'] != 'off' else 'off'}",
-              f"- Browsing import: {'no' if by['history']['state'] == 'off' else 'yes'}"]
+              f"- Search model: {'on' if embed.get('state') == 'ok' else 'off'}",
+              f"- Local model: {(runner or 'on') if llm.get('state', 'off') != 'off' else 'off'}",
+              f"- Browsing import: {'yes' if hist.get('state', 'off') != 'off' else 'no'}"]
     return redact("\n".join(lines), root)
