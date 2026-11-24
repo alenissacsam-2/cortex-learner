@@ -773,6 +773,7 @@ const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome' && f.
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
     await tick();
     out.boot = state();
+    out.reviews = fetched.filter((f) => f.path === '/api/review').length;  // the nav's count, only with a vault
     if (DATA.walk) {
       $('wg-skip').fire('click');  // Skip for now: closed, recorded once
       await tick();
@@ -915,6 +916,7 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
     welcome["welcome_done"] = True  # finished or skipped before: never by itself again
     out = _run(node, tmp_path, "welcome2", WELCOME, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["boot"]["open"] is False
+    assert out["reviews"] == 1  # a vault: the nav's Review count is asked for
 
     # Setup done (an app connected): not by itself; #welcome opens it
     welcome["welcome_done"] = False
@@ -930,6 +932,7 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
     welcome["vault"] = False
     out = _run(node, tmp_path, "welcome5", WELCOME, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["boot"] == step1
+    assert out["reviews"] == 0  # FX3 8: no vault, no /api/review (it would answer 400)
 
 
 WG_FIX = HARNESS[:HARNESS.index("const out = {};")] + r"""
@@ -965,6 +968,13 @@ const line = () => ($('wg-job') || { textContent: null }).textContent;
     await new Promise((r) => setTimeout(r, 1000));  // the running job's poll sleeps 600 ms first
     await tick();
     out.step2 = line();
+    // a refused job (a temp folder): the server's message once, in the toast; the lines say failed
+    const msg = 'That folder is inside Windows\' temporary folder. Pick another.';
+    DATA.routes['/api/job'] = { seq: 4, job: { name: 'Setting up the vault', section: 'setup', running: false, seconds: 1, error: msg, result: null } };
+    wgBtn('Use this folder').fire('click');
+    await tick();
+    const shown = [$('toast-msg').textContent, $('job-name').textContent, $('job-line').textContent, line()];
+    out.refusal = { shown, times: shown.filter((t) => t.includes(msg)).length };
     $('wg-next').fire('click'); await tick();
     out.step3 = line();
     // step 6: the example is the placeholder, and an empty Ask sends it
@@ -972,7 +982,14 @@ const line = () => ($('wg-job') || { textContent: null }).textContent;
     out.placeholder = $('wg-q').getAttribute('placeholder');
     wgBtn('Ask').fire('click');
     await tick();
+    // a typed question: sent, then the field is empty
+    $('welcome-open').fire('click'); await tick();
+    for (let i = 0; i < 5; i++) { $('wg-next').fire('click'); await tick(); }
+    $('wg-q').value = 'what do I know?';
+    wgBtn('Ask').fire('click');
+    await tick();
     out.sent = fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body.text);
+    out.cleared = $('wg-q').value;
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
   console.log(JSON.stringify(out));
@@ -986,7 +1003,8 @@ def test_the_welcome_guide_waits_for_dialogs_keeps_job_lines_to_their_step_and_h
     """FX1 2, 4, 7, 8: the guide does not open over another dialog (it opens once that one
     closes); a refused vault POST leaves no guide job, so an unrelated job never writes into
     it; step 2's job line is not shown on step 3; step 6's placeholder holds an example that
-    an empty Ask sends."""
+    an empty Ask sends. FX3 2, 3: a failed job's message shows once (the toast; the job line
+    and the guide's line say only "failed"); Ask empties the field it sent."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -1003,8 +1021,12 @@ def test_the_welcome_guide_waits_for_dialogs_keeps_job_lines_to_their_step_and_h
     assert out["overConfirm"] is False and out["afterConfirm"] is True
     assert out["refused"] == ""
     assert out["step2"] == "Setting up the vault: done." and out["step3"] == ""
+    msg = "That folder is inside Windows' temporary folder. Pick another."
+    assert out["refusal"] == {"times": 1, "shown": [msg, "Setting up the vault: failed", "",
+                                                    "Setting up the vault: failed."]}
     assert out["placeholder"] == "For example: what do you know about me?"
-    assert out["sent"] == ["What do you know about me?"]
+    assert out["sent"] == ["What do you know about me?", "what do I know?"]
+    assert out["cleared"] == ""
 
 
 def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):
@@ -1431,7 +1453,7 @@ SENDS = {
         "Open folder: Vault": [["/api/open", {"what": "folder"}]],
         "Export snapshot": [["/api/vault/export", {}]],
         "Back up vault": [["/api/vault/backup", {}]],
-        "Run doctor": [["/api/vault/doctor", {}]],
+        "Check for problems": [["/api/vault/doctor", {}]],
         "Save: History": [["/api/vault/git", {"enabled": True, "private_browsing": False}]]},
     "chat": {
         "Delete chat: Heaps": [["/api/chat/delete", {"id": CHAT_ID}]],
@@ -2474,7 +2496,9 @@ const row = () => $('vault').querySelectorAll('.brow').find((r) => (r.querySelec
     DATA.routes['/api/connect'].targets = [{ id: 'windsurf', label: 'Windsurf', detected: true, connected: true, stale: true, files: [], snippet: 'x', note: '', paste: '' }];
     row().querySelectorAll('button')[0].fire('click');
     await tick();
-    out.connect = [!$('s-connect').hidden, $('connect').querySelector('.trow').querySelector('.sub').textContent, $('cb-windsurf').checked];
+    const tag = $('connect').querySelector('.trow').querySelector('.code-tag');
+    out.connect = [!$('s-connect').hidden, $('connect').querySelector('.trow').querySelector('.sub').textContent, $('cb-windsurf').checked,
+      tag.textContent, tag.className];
     // Connect's Apply done: the row goes
     DATA.routes['/api/job'] = { seq: 9, job: { name: 'Connecting AI apps', section: 'connect', running: false, seconds: 1, error: null, result: { ok: true, rows: [] } } };
     DATA.routes['/api/connect/plan'] = { rows: [{ id: 'windsurf', label: 'Windsurf', op: 'add', file: 'f', change: 'update', detail: '' }] };
@@ -2510,8 +2534,55 @@ def test_change_folder_asks_to_move_connected_apps(root_committed, tmp_path, mon
     assert out["row"] == ["Open Connect AI apps and click Apply to move them.",
                           ["Open Connect AI apps"]]
     stale = "Its Cortex entry is out of date (another folder or program). Apply updates it."
-    assert out["connect"] == [True, stale, True]
+    # FX3 4: its tag says Out of date (warn colour), never Connected beside that line
+    assert out["connect"] == [True, stale, True, "Out of date", "code-tag warn"]
     assert out["after"] is True
+
+
+LABELS = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const go = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };
+const rowOf = (box, title) => $(box).querySelectorAll('.brow').find((r) => (r.querySelector('.ttl') || {}).textContent === title);
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    await go('status');
+    out.status = $('status').querySelectorAll('.count').map((c) => c.textContent);
+    out.statusDm = $('status').querySelectorAll('.acts').some((a) => a.querySelector('svg'));
+    await go('vault');
+    out.vault = rowOf('vault', 'Notes').querySelector('.count').textContent;
+    const health = rowOf('vault', 'Health');
+    out.health = [health.querySelector('.sub').textContent, health.querySelectorAll('button').map((b) => b.textContent)];
+    await go('connect');
+    out.profiles = $('connect').querySelectorAll('.ttl').map((t) => t.textContent).filter((t) => t.startsWith('Apps '));
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_note_counts_are_labelled_and_labels_are_plain(root_committed, tmp_path, monkeypatch):
+    """FX3 6, 7: the vault's note count reads "N notes" in words on Status and on Dashboard and
+    vault (no lone dot-matrix number); the Health row says what it checks in plain words and
+    its button is Check for problems; Agent profiles say what the match does (a name that
+    contains the text, profiles.match)."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    n = routes["/api/vault"]["notes"]
+    out = _run(node, tmp_path, "labels", LABELS, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    words = f"{n:,} note{'' if n == 1 else 's'}"
+    assert out["status"] == [words] and out["statusDm"] is False
+    assert out["vault"] == words
+    assert out["health"] == ["Checks that Cortex and your notes folder are working, and finds "
+                             "common problems.", ["Check for problems"]]
+    assert out["profiles"][0] == "Apps whose name contains “claude”"
+    assert all(t.startswith("Apps whose name contains “") for t in out["profiles"])
 
 
 def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp_path,
