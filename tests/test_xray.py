@@ -4,6 +4,7 @@ the owner's Pin and Mute (prime and context obey them; only the app sets them)."
 
 import json
 import shutil
+import time
 from datetime import UTC, datetime
 
 import anyio
@@ -335,6 +336,156 @@ def test_dry_run_writes_nothing(vault, home, monkeypatch):
     for client in ("claude-ai", "cursor", "mcp", "", "unknown"):
         dry_prime(v, client, PROMPT + " //note remember this")
     assert files() == before
+
+
+def _withheld_pages(root):
+    """_aperture, plus a private browsing page and a playbook only `personal` may get."""
+    _aperture(root)
+    note(root, "browse/browse-private-2026-11-20.md", "id: browse-private-2026-11-20\n"
+         "title: Private browsing\nprivate: true\n", "# Private browsing\n\nCar motor racing.")
+    note(root, "notes/race-steps.md", "title: Race day steps\nkind: note\ntags: [playbook]\n"
+         "scope: personal\nsummary: car motor racing\n", "# Race day steps\n\nCar motor race.")
+
+
+def _ids(d):
+    return {i for part in ("served", "trimmed") for b in d[part].values() for i in b}
+
+
+def _same(a, b):
+    return (_blocks(a["served"]), _blocks(a["trimmed"]), a["chars"]) == (
+        _blocks(b["served"]), _blocks(b["trimmed"]), b["chars"])
+
+
+def test_a_shared_index_serves_each_client_what_a_fresh_one_does(vault):
+    """One read-only index across alternating clients (all scopes, core only, coding): each
+    run equals a fresh index's and a real cortex_prime's, and nothing one client may get is
+    left in the index for the next."""
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+    _withheld_pages(vault)
+    v = Vault(vault)
+    shared = Index(v, Catalog.load(v), save=False)
+    personal = claim_id(vault, "Weekend motor racing fan.")
+    try:
+        for client in ("claude-ai", "mcp", "cursor", "claude-ai", "cursor", "mcp", "claude-ai"):
+            c = Cortex(v)
+            c.over_mcp, c.sessions.client = True, client
+            ctx = c.cortex_prime(PROMPT)["context"]
+            real = xray.rows(v)[-1]
+            got, fresh = dry_prime(v, client, PROMPT, index=shared), dry_prime(v, client, PROMPT)
+            assert _same(got, fresh), client
+            assert (_blocks(got["served"]), _blocks(got["trimmed"]), got["chars"]) == (
+                real["served"], real["trimmed"], len(ctx)), client
+            ids = _ids(got)
+            assert not ids & {"secret-motor", "browse-private-2026-11-20"}, client  # private
+            if client == "claude-ai":  # every scope: the journal, the playbook, the line
+                assert {"2026-11-20", "race-steps", personal} <= ids
+            else:  # core only, or coding: none of them, whoever ran before
+                assert not ids & {"2026-11-20", "race-steps", personal}, client
+            if client == "mcp":
+                assert not set(_blocks(got["served"])) & {"profile", "preferences", "related"}
+    finally:
+        shared.db.close()
+
+
+def test_a_shared_index_sees_pages_added_edited_and_deleted(vault):
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+    v = Vault(vault)
+    shared = Index(v, Catalog.load(v), save=False)
+    try:
+        for client in ("claude-ai", "mcp"):  # its withhold switches between the edits too
+            dry_prime(v, client, PROMPT, index=shared)
+        assert "pasta" not in _ids(dry_prime(v, "claude-ai", PROMPT, index=shared))
+        note(vault, "notes/turbo.md", "title: Turbo\n", "# Turbo\n\nA car motor turbo.")
+        note(vault, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA car motor kitchen recipe.")
+        dry_prime(v, "mcp", PROMPT, index=shared)
+        got = dry_prime(v, "claude-ai", PROMPT, index=shared)
+        assert "turbo" in _ids(got) and _same(got, dry_prime(v, "claude-ai", PROMPT))
+        assert "kitchen recipe" in shared._notes["pasta"]["body"]  # the edit, by its stat
+        (vault / "notes/turbo.md").unlink()
+        got = dry_prime(v, "claude-ai", PROMPT, index=shared)
+        assert "turbo" not in _ids(got) and _same(got, dry_prime(v, "claude-ai", PROMPT))
+    finally:
+        shared.db.close()
+
+
+def test_a_shared_index_writes_nothing(vault, home, monkeypatch):
+    from cortex import index
+    from cortex.catalog import Catalog
+    _withheld_pages(vault)
+    v = Vault(vault)
+    c = Cortex(v)
+    c.sessions.client = "claude-ai"
+    c.cortex_prime(PROMPT)  # the caches a real call makes exist now
+    c._call("cortex_log", c.cortex_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
+    c.sessions.close(summary="test")  # an events file
+    monkeypatch.setattr(index, "SNAPSHOT_MIN", 0)  # any refresh would save the snapshot
+
+    def files():
+        return {p: p.read_bytes() for d in (vault, home) for p in d.rglob("*") if p.is_file()}
+
+    before = files()
+    shared = index.Index(v, Catalog.load(v), save=False)
+    try:
+        for client in ("claude-ai", "mcp", "cursor", "", "unknown", "claude-ai"):
+            dry_prime(v, client, PROMPT + " //note remember this", index=shared)
+        assert not shared.save  # a core-only run never turns saving back on
+    finally:
+        shared.db.close()
+    assert files() == before
+
+
+def test_the_app_keeps_one_dry_run_index_and_lets_it_go(vault, monkeypatch):
+    from cortex.app import server
+    _aperture(vault)
+    srv, app = _serve(vault)
+    try:
+        body = {"client": "claude-ai", "prompt": PROMPT}
+        first = call(app, "POST", "/api/xray/dryrun", body)[1]
+        held = app.dry_index[1]
+        assert call(app, "POST", "/api/xray/dryrun", {**body, "client": "mcp"})[0] == 200
+        assert call(app, "POST", "/api/xray/compare", {"prompt": PROMPT, "a": "claude-ai",
+                                                       "b": "cursor"})[0] == 200
+        assert app.dry_index[1] is held  # one index for dry runs and compares
+        assert call(app, "POST", "/api/xray/dryrun", body)[1] == first
+        assert not app.drop_dry()  # used just now
+        assert app.drop_dry(time.monotonic() + server.DRY_IDLE_S + 1)  # idle: it goes
+        assert app.dry_index is None
+        call(app, "POST", "/api/xray/dryrun", body)
+        assert app.dry_index is not None and app.dry_index[1] is not held
+        monkeypatch.setattr(app, "root", vault.parent)  # another vault open: it goes
+        assert app.drop_dry() and app.dry_index is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.slow
+@pytest.mark.perf
+def test_dry_runs_on_a_shared_index_stay_quick_on_5k_notes(tmp_path, capsys):
+    from test_home import _big
+
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+    root = tmp_path / "big"
+    _big(root)
+    v = Vault(root)
+    shared = Index(v, Catalog.load(v), save=False)
+    took = []
+    try:
+        for client in ("claude-ai", "unknown", "claude-ai", "unknown"):  # the first builds
+            t = time.perf_counter()
+            dry_prime(v, client, PROMPT, index=shared)
+            took.append(time.perf_counter() - t)
+    finally:
+        shared.db.close()
+    with capsys.disabled():
+        print("\nX-ray dry runs on a shared index, 5k notes: " + ", ".join(
+            f"{c} {s:.2f} s" for c, s in zip(("claude-ai", "unknown") * 2, took, strict=True)))
+    # ~0.5-1.0 s each here (a fresh index per run: ~1.3 s for claude-ai, ~6 s for unknown);
+    # the bound guards against a regression
+    assert max(took[1:]) < 1.5
 
 
 def test_scope_bar_and_served_most_often(vault):

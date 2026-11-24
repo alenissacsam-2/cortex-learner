@@ -480,12 +480,12 @@ def _not_given(vault: Vault, scopes, full: dict | None, run: dict,
     return [s for s in SCOPES if s in names]
 
 
-def compare(vault: Vault, prompt: str, a: str, b: str) -> dict:
+def compare(vault: Vault, prompt: str, a: str, b: str, index=None) -> dict:
     """What a new chat's cortex_prime would serve the apps named `a` and `b` (the view's
     `name`s) for `prompt` (mcp_server.dry_prime), each as `present` shows a call plus its
     `withheld` scopes (`_not_given`, against a run with every scope: the other app's when its
     profile has them all, else one more run). Nothing is written or logged, the prompt
-    included."""
+    included. `index`: the app's shared read-only Index (kept open), else one of its own."""
     from cortex import claims, profiles
     from cortex.catalog import Catalog
     from cortex.index import Index
@@ -499,12 +499,14 @@ def compare(vault: Vault, prompt: str, a: str, b: str) -> dict:
         return scopes[n] is not None and scopes[n] <= {"core"}
 
     every = [n for n in (a, b) if scopes[n] is None or "all" in scopes[n]]
-    index = Index(vault, Catalog.load(vault), save=False)
+    own = index is None
+    index = Index(vault, Catalog.load(vault), save=False) if own else index
     try:
         full = None if every else dry_prime(vault, "", prompt, every=True, index=index)
         runs = {n: dry_prime(vault, n, prompt, index=index) for n in sorted((a, b), key=last)}
     finally:
-        index.db.close()
+        if own:
+            index.db.close()
     full = runs[every[0]] if every else full
     lines = {claim(r["id"]): r for r in claims.rows(vault)}
     _, blocks, _ = _items(vault, index)  # its flags: no second vault walk
