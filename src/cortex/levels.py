@@ -5,6 +5,7 @@ Nothing here is stored: every state is recomputed from the event log on demand.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
@@ -535,18 +536,60 @@ def calibration(events: Iterable[dict],
     return out
 
 
+# F1, in memory only, one vault at a time (a server has one; tests make hundreds), each slot
+# replaced whole by one assignment:
+# "replay": (every input of the last whole-log fold, that fold). The inputs are the vault root,
+#   the event files' stat keys, problem_concepts, today and high_retention; our own writes and
+#   edits outside Cortex change a stat key, so the next call folds again.
+# "problems": ((the vault root, its problem files' (path, mtime_ns, size)), problem_concepts)
+_LAST: dict[str, tuple] = {}
+
+
 def replay(vault, today: str | None = None, events: Iterable[dict] | None = None,
            high_retention: set[str] | None = None,
            ) -> tuple[dict[str, ConceptState], dict[str, MistakeState]]:
     """Fold the vault's event log (or `events`); problem primaries come from problems/*.md."""
     today = today or _events.local_day(datetime.now(UTC))
-    events = EventLog(vault).iter_events() if events is None else events
-    return fold(events, today, problem_concepts(vault), high_retention)
+    if events is not None:
+        return fold(events, today, problem_concepts(vault), high_retention)
+    log = EventLog(vault)
+    # keys are read before the files: a change in between only makes the next call miss
+    key = (vault.root, log.signature(), problem_concepts(vault), today,
+           frozenset(high_retention or ()))
+    hit = _LAST.get("replay")
+    if hit is None or hit[0] != key:
+        hit = _LAST["replay"] = (key, fold(log.iter_events(), today, key[2], high_retention))
+    return _own(hit[1][0]), _own(hit[1][1])
+
+
+def _own(states: dict) -> dict:
+    """A copy the caller may change (new state objects, their own lists, dicts and sets): the
+    cache keeps its states as folded. A fraction of deepcopy's cost; the field types are pinned
+    by tests/test_replay_cache.py so a new mutable kind cannot slip past."""
+    out = {}
+    for k, st in states.items():
+        st = out[k] = copy.copy(st)
+        for name, v in vars(st).items():
+            if isinstance(v, (list, dict, set)):
+                setattr(st, name, copy.copy(v))
+    return out
 
 
 def problem_concepts(vault) -> dict[str, list[str]]:
     """problem id -> its concept ids, primary first (the rest earn `also` credit)."""
     from cortex.index import _edge_targets  # index imports levels
 
-    return {note.id: cs for note in vault.iter_notes("problem")
-            if (cs := _edge_targets(note.fields.get("concepts") or []))}
+    files = []
+    for e in vault.note_entries("problem"):  # the listing's data, as Index._scan reads it
+        try:
+            st = e.stat()  # before the parse: a change after it misses next time
+        except OSError:
+            continue
+        files.append((e.path, st.st_mtime_ns, st.st_size))
+    sig = (vault.root, files)
+    hit = _LAST.get("problems")
+    if hit is None or hit[0] != sig:
+        hit = _LAST["problems"] = (sig, {
+            note.id: cs for note in vault.iter_notes("problem")
+            if (cs := _edge_targets(note.fields.get("concepts") or []))})
+    return {k: list(v) for k, v in hit[1].items()}  # the caller's own copy
