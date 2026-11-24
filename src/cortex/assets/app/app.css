@@ -385,6 +385,42 @@ dialog.confirm {
 dialog.confirm::backdrop { background: var(--scrim); }
 dialog.confirm h2 { margin: 0 0 10px; }
 .ractions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+/* the welcome guide: one step at a time over the app; the band holds the count and the close
+   button, Setup's bar runs under it */
+dialog.welcome {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--edge); border-radius: 2px;
+  padding: 0; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+}
+dialog.welcome::backdrop { background: var(--scrim); }
+.wg-top { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px 6px 18px;
+  background: var(--band); color: var(--band-ink); }
+.wg-count { font-size: 12.5px; font-weight: 600; }
+.wg-top .icon-btn { margin-left: auto; }
+.wg-top .icon-btn:hover { border-color: var(--band-ink); }
+.wg-bar { max-width: none; border-radius: 0; }
+dialog.welcome h2 { margin: 20px 18px 8px; font-size: 18px; }
+.wg-body { padding: 0 18px; }
+.wg-lead { margin: 0 0 14px; color: var(--ink-2); max-width: 64ch; }
+.wg-sub { margin: 0; font-weight: 600; font-size: 13px; }
+.wg-body .brow { padding-left: 0; padding-right: 0; }
+.wg-body .field { padding: 4px 0 8px; border-bottom: 0; }
+.wg-body > .help { color: var(--ink-3); font-size: 12.5px; margin: 10px 0 0; }
+.wg-ok { margin: 0; display: flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; }
+.wg-ok .mono { overflow-wrap: anywhere; }
+.wg-job { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.wg-job:empty { display: none; }
+.wg-job.bad { color: var(--refresh); }
+.wg-tour h3 { margin: 14px 0 2px; font-size: 12.5px; color: var(--ink-3); }
+.wg-tour h3:first-child { margin-top: 0; }
+.wg-tour ul { list-style: none; margin: 0; padding: 0; }
+.wg-tour li { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 12px; align-items: baseline;
+  padding: 2px 0; color: var(--ink-2); font-size: 13px; }
+.wg-tour .linkbtn { justify-self: start; text-align: left; font-size: 13px; }
+@media (max-width: 480px) { .wg-tour li { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 4px 0; } }
+.wg-nav { display: flex; align-items: center; gap: 8px; margin-top: 18px; padding: 12px 18px 14px;
+  border-top: 1px solid var(--rule); }
+.wg-nav .linkbtn { margin-right: auto; }
+.wg-nav .btn { padding: 6px 16px; font-size: 13px; }
 .chg { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 2px 10px; padding: 6px 0;
   border-bottom: 1px solid var(--rule); font-size: 12.5px; }
 .chg:last-child { border-bottom: 0; }

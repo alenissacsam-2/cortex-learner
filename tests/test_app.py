@@ -367,6 +367,26 @@ def test_lands_on_setup_until_the_vault_and_an_app_or_a_skipped_connect(app, mon
     assert call(app, "GET", "/api/status")[1]["land"] == "status"
 
 
+def test_the_welcome_guide_is_done_once_and_keeps_the_other_app_keys(app):
+    """WG: Finish, Skip, Esc or close posts welcome_done: true into config.yaml's `app:` (the
+    other keys kept); only true is accepted, and /api/setup reports it."""
+    from cortex import taint
+
+    taint.write_config({"app": {"other": 1, "first_run_hidden": True}})
+    assert call(app, "GET", "/api/setup")[1]["welcome_done"] is False
+    # the page's quick look at boot: no probes, just the flag and whether a vault is set up
+    assert call(app, "GET", "/api/app/welcome")[1] == {"welcome_done": False, "vault": True}
+    for bad in ({"welcome_done": False}, {"welcome_done": "yes"}, {},
+                {"welcome_done": True, "other": 2}):
+        assert call(app, "POST", "/api/app/welcome", bad)[0] == 400, bad
+    assert taint.config()["app"] == {"other": 1, "first_run_hidden": True}
+    assert call(app, "POST", "/api/app/welcome", {"welcome_done": True})[1] == {
+        "welcome_done": True}
+    assert taint.config()["app"] == {"other": 1, "first_run_hidden": True, "welcome_done": True}
+    assert call(app, "GET", "/api/setup")[1]["welcome_done"] is True
+    assert call(app, "GET", "/api/app/welcome")[1]["welcome_done"] is True
+
+
 def test_llm_board_shows_a_refused_config(app):
     """R5 F4: the Local model page reads `localllm.status`, so a cloud model says why."""
     from cortex import taint
