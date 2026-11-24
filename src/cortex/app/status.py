@@ -351,6 +351,28 @@ def login_task() -> dict:
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def test_copy() -> bool:
+    """Whether this Cortex runs with a home folder that is not the signed-in user's profile (a
+    test, screenshot or demo copy with USERPROFILE moved to a temp folder): such a copy never
+    changes the Windows settings the real install owns (the Run values, Task Scheduler)."""
+    if sys.platform != "win32":
+        return False
+    try:  # set by Windows at sign-in, whatever this process's environment says
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as k:
+            real = winreg.QueryValueEx(k, "USERPROFILE")[0]
+    except (ImportError, OSError):
+        return False
+    return os.path.normcase(os.path.realpath(real)) != os.path.normcase(
+        os.path.realpath(Path.home()))
+
+
+def _no_test_copy() -> None:
+    if test_copy():
+        raise OSError("this copy of Cortex runs with a test home folder, so it leaves Windows' "
+                      "start-up settings alone")
+
+
 def run_get(name: str = LOGIN_TASK) -> str | None:  # tests replace run_get/set/delete (conftest)
     import winreg
     try:
@@ -361,12 +383,14 @@ def run_get(name: str = LOGIN_TASK) -> str | None:  # tests replace run_get/set/
 
 
 def run_set(value: str, name: str = LOGIN_TASK) -> None:
+    _no_test_copy()
     import winreg
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
         winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
 
 
 def run_delete(name: str = LOGIN_TASK) -> None:
+    _no_test_copy()
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
@@ -514,7 +538,7 @@ def rows(root: Path | None) -> list[dict]:
                     "state": "ok" if v["ok"] and not hot else "warn",
                     "value": v["path"], "count": v["notes"],
                     "detail": (TEMP_VAULT if hot else
-                               f"{v['notes']} notes; last indexed {v['last_index'] or 'not yet'}"
+                               f"Last indexed {v['last_index'] or 'not yet'}."
                                if v["ok"] else "This folder is not a Cortex vault yet."),
                     "action": _go("vault", "Change folder") if hot else
                     None if v["ok"] else _go("setup", "Set up")})

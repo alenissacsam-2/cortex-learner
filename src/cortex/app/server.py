@@ -2187,6 +2187,7 @@ class App:
 
     def setup_vault(self, body: dict) -> dict:
         path = body.get("path")
+        wizard.vault_path(path)  # a refused folder: one plain message (400), no failed job
 
         def run(job):
             old = self.root

@@ -274,7 +274,8 @@ def test_the_badge_and_the_review_page(tmp_path):
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
-        "routes": {"/api/review": view, "/api/status": status}, "stream": []})
+        "routes": {"/api/review": view, "/api/status": status,
+                   "/api/app/welcome": {"vault": "V", "welcome_done": True}}, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["badge"] == ["1", False, "Review (1)"]  # D4: only Today's 5 cards left
     assert out["boards"] == ["Forgotten", "Today’s 5", "Waiting for your approval",

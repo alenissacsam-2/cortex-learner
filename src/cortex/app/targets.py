@@ -901,6 +901,23 @@ class LMStudio(JsonTarget):
         return isinstance(e, dict) and PRIVATE in (e.get("args") or [])
 
 
+class Antigravity(JsonTarget):
+    """Antigravity (the editor, the app and its `agy` CLI) reads ~/.gemini/config/
+    mcp_config.json (antigravity.google/docs/mcp). Before 2.0 the editor read
+    ~/.gemini/antigravity/mcp_config.json: an entry there still counts as connected, so Connect
+    shows it out of date until Apply writes the new file, and remove cleans both."""
+
+    def __init__(self):
+        super().__init__("antigravity", "Antigravity",
+                         lambda: Path.home() / ".gemini" / "config" / "mcp_config.json")
+
+    def all_paths(self) -> list[Path]:
+        return [*self.paths(), Path.home() / ".gemini" / "antigravity" / "mcp_config.json"]
+
+    def detect(self) -> bool:
+        return any(p.parent.is_dir() for p in self.all_paths())
+
+
 def _base(t, value, base: dict | None) -> dict | None:
     """The entry for target `t` given its `want` value: `base`, plus --private only for LM
     Studio's "private" while browse.private_mcp is on (plan_all refuses it otherwise)."""
@@ -916,8 +933,7 @@ def targets() -> list:
         ClaudeDesktop(),
         ClaudeCode(),
         Gemini(),
-        JsonTarget("antigravity", "Antigravity",
-                   lambda: h() / ".gemini" / "antigravity" / "mcp_config.json"),
+        Antigravity(),
         RuleJson("cursor", "Cursor", lambda: h() / ".cursor" / "mcp.json",
                  rule=lambda: h().joinpath(*CURSOR_RULE), head=CURSOR_HEAD,
                  client="cursor-vscode", paste=PASTE_CURSOR),

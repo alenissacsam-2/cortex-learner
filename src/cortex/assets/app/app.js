@@ -701,7 +701,7 @@
     const c = m.certainty, hz = m.horizon;
     const head = c === 'exact' ? ['Exact: counted or quoted from your pages']
       : c === 'grounded' ? [`From ${(m.sources || []).length} of your pages`]
-        : c === 'thin' ? [h('strong', { text: 'Thin' }), ': check the sources'] : ['No record'];
+        : c === 'thin' ? [h('strong', { text: 'Thin' }), ': check the sources'] : ['Nothing on record'];
     if ((c === 'thin' || c === 'none') && hz && hz.first && hz.last) head.push(` · Your data covers ${monthYear(hz.first)} to ${monthYear(hz.last)}`);
     const day = (s) => (dayText(s.day) ? ` (${dayText(s.day)})` : '');
     return [h('p', { class: 'chat-evidence' }, ...head),

@@ -1731,8 +1731,8 @@ def test_chat_evidence_line_says_certainty_horizon_and_what_replaced_what(
     assert out["grounded"] == ["From 3 of your pages"]
     assert out["thin"] == ["Thin: check the sources · Your data covers Jan 2024 to Nov 2026"]
     assert out["thinStrong"] == "Thin"
-    assert out["none"] == ["No record · Your data covers Jan 2024 to Nov 2026"]
-    assert out["noneNoHorizon"] == ["No record"]
+    assert out["none"] == ["Nothing on record · Your data covers Jan 2024 to Nov 2026"]
+    assert out["noneNoHorizon"] == ["Nothing on record"]
     assert out["old"] == []
     assert out["conflict"] == ["From 1 of your pages",
                                "Changed: New job (12 Mar 2026) replaces Old job (5 Jan 2026)"]

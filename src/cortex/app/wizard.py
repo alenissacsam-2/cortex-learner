@@ -262,11 +262,11 @@ TEMP_REFUSED = ("That folder is inside Windows' temporary folder, which Windows 
                 "time. Pick a folder outside it, such as one in Documents.")
 
 
-def make_vault(job, path: str) -> tuple[Path, dict]:
-    """`cortex init` on the chosen folder (it becomes the default vault). A temp folder is
-    refused before anything is made there while a real vault exists; a first setup may use it
-    (Status warns)."""
-    from cortex import cli, taint
+def vault_path(path) -> Path:
+    """The folder `make_vault` would set up, or ValueError in plain words. A temp folder is
+    refused while a real vault exists; a first setup may use it (Status warns). The app checks
+    this before the job starts, so a refused folder is one message, not a failed job too."""
+    from cortex import taint
     from cortex.vault import in_temp_folder
     if not isinstance(path, str) or not path.strip():
         raise ValueError("Choose a folder for the vault.")
@@ -280,6 +280,14 @@ def make_vault(job, path: str) -> tuple[Path, dict]:
     if (current and Path(current).is_dir() and not in_temp_folder(current)
             and in_temp_folder(root)):
         raise ValueError(TEMP_REFUSED)
+    return root
+
+
+def make_vault(job, path: str) -> tuple[Path, dict]:
+    """`cortex init` on the chosen folder (it becomes the default vault), refused as
+    `vault_path` says before anything is made there."""
+    from cortex import cli
+    root = vault_path(path)
     job.say(f"setting up {root}")
     did, skipped, warned = cli._init(root, default=True)
     from cortex import doctor
