@@ -5,6 +5,7 @@
       "Installing and updating look like Cortex now: one window with each step, a progress bar and plain words. If another program is still using Cortex, it asks you inside the window.",
       "Change your vault folder from Dashboard and vault. A vault in a temporary folder gets a warning, and Cortex never swaps the vault you use for one.",
       "Something not working? Status has Copy details (versions and what is on or off, never your notes or file paths) and a button to report it on GitHub. In a terminal: cortex doctor --report.",
+      "Connect AI apps works on a new laptop: Claude Code's hooks run without Git Bash, an app you install later is found without restarting Cortex, and apps that need it get Copy instructions, the short text that makes them use Cortex in every chat. docs/CONNECT.md walks through each app.",
       "Agent X-ray's dry run is quick after the first run: it reuses what it already read."
     ],
     "do": [
