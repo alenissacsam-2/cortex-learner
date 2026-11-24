@@ -23,9 +23,12 @@ def main() -> None:
     shutil.rmtree(stage, ignore_errors=True)
     payload = stage / "payload"
     subprocess.run([uv, "build", "--wheel", "--out-dir", str(payload)], cwd=ROOT, check=True)
-    # uv.lock's versions, so every install of this exe gets the same dependencies (-c at install)
-    subprocess.run([uv, "export", "--frozen", "--no-dev", "--no-emit-project", "--no-hashes",
-                    "--quiet", "-o", str(payload / "constraints.txt")], cwd=ROOT, check=True)
+    # uv.lock's versions, so every install of this exe gets the same dependencies (-c at install);
+    # the extras' too, so `cortex model download --voice` pins av and ctranslate2 (a constraint
+    # never installs anything by itself)
+    subprocess.run([uv, "export", "--frozen", "--no-dev", "--all-extras", "--no-emit-project",
+                    "--no-hashes", "--quiet", "-o", str(payload / "constraints.txt")],
+                   cwd=ROOT, check=True)
     shutil.copy2(uv, payload / "uv.exe")
     # the Chat skill, beside the exe: the release attaches it as cortex-skill.zip
     sys.path.insert(0, str(ROOT / "scripts"))
