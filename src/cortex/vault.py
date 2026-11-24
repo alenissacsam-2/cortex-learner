@@ -414,16 +414,31 @@ class Vault:
             raise VaultError("invalid_argument", f"{p.name} cannot be parsed: {e}") from e
 
     def note_paths(self, kind: str) -> list[Path]:
-        """The .md files of a kind folder. browse/ is read recursively (the site pages sit in
-        browse/sites/<category>/) except its private/ subfolder, which is never read."""
-        folder = self.root / self.KIND_DIRS[kind]
-        if kind != "browse":
-            return [p for d in self.dirs(kind) if (f := self.root / d).is_dir()
-                    for p in f.glob("*.md")]
-        if not folder.is_dir():
-            return []
-        hidden = self.root / PRIVATE_BROWSE_DIR
-        return [p for p in folder.rglob("*.md") if not p.is_relative_to(hidden)]
+        """The .md files of a kind folder (note_entries)."""
+        return [Path(e.path) for e in self.note_entries(kind)]
+
+    def note_entries(self, kind: str) -> Iterator[os.DirEntry]:
+        """The directory entries of a kind folder's .md files: the one folder rule of
+        note_paths and the index's scan. browse/ is read recursively (the site pages sit in
+        browse/sites/<category>/) except its private/ subfolder, which is never entered."""
+        deep = kind == "browse"
+        hidden = os.path.normcase(self.root / PRIVATE_BROWSE_DIR)
+        todo = [str(self.root / d) for d in reversed(
+            (self.KIND_DIRS[kind],) if deep else self.dirs(kind))]
+        while todo:
+            try:
+                with os.scandir(todo.pop()) as it:
+                    entries = list(it)
+            except OSError:  # no such folder (yet), or not a folder
+                continue
+            sub = []
+            for e in entries:
+                if os.path.normcase(e.name).endswith(".md"):  # as glob: any case on Windows
+                    yield e
+                if deep and e.is_dir(follow_symlinks=False) and os.path.normcase(
+                        e.path) != hidden:
+                    sub.append(e.path)
+            todo += reversed(sub)
 
     def iter_notes(self, kind: str | None = None) -> Iterator[Note]:
         kinds = [kind] if kind else list(self.KIND_DIRS)

@@ -277,6 +277,11 @@ class EventLog:
         out.sort(key=lambda e: (e["ts"], e["id"]))
         return iter(out)
 
+    def signature(self) -> tuple:
+        """Every event file with its (ino, mtime_ns, size): while it is equal, so is
+        iter_events(). Statting the files reads (and caches) any that changed."""
+        return tuple((path, p.key) for path, p in self._files("*/*/*.jsonl"))
+
     def _files(self, pattern: str) -> list[tuple[Path, _Parsed]]:
         """The up-to-date parses of the files matching `pattern`."""
         out = []
