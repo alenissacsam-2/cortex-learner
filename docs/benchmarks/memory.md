@@ -339,3 +339,10 @@ as it already did when no model was set up.
   the index build, 21 MB by the app home; nothing big was left from a build to release.
   (In that run the steps were slow enough that the idle thread itself dropped the embedder and
   the reranker while the background copy worked, 82 MB, and the next search loaded them again.)
+
+## F1: the per-call refresh of find, read and recall
+
+On test_home's made-up 5k-note vault (quiet PC, median of 15), a warm `cortex_find` took 576 ms
+before (the refresh 558 ms: `current_states` 248 ms, the index's stat pass 256 ms) and 90 ms after
+(the refresh 72 ms: `current_states` 9 ms from the cached fold, the scan 53 ms from `os.scandir`'s
+listing); `tests/test_replay_cache.py` holds it under 0.3 s.
