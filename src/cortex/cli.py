@@ -688,6 +688,11 @@ def _setup_code(ask) -> None:
         return
     cmds = [["plugin", "marketplace", "add", src], ["plugin", "install", "cortex@cortex"]]
     claude = shutil.which("claude")
+    if src == REPO and session_mod.git_exe() is None:  # Claude Code clones the repo with git
+        from cortex.app.wizard import GIT_PAGE
+        typer.echo("Claude Code needs Git to download the Cortex plugin from GitHub. Install Git "
+                   f"from {GIT_PAGE}, open a new terminal, then run `cortex setup` again.")
+        return
     # runs `claude` itself only once a published repo is chosen; a checkout path is printed
     if claude and "<" not in REPO and ask("Install the Claude Code plugin with `claude`?"):
         for c in cmds:
@@ -715,6 +720,8 @@ def _desktop_change(p: Path, entry: dict, dry_run: bool = False) -> str:
 
 
 def _setup_desktop(configs: list[Path], entry: dict, ask) -> None:
+    from cortex.app import targets
+
     if not configs:
         typer.echo("Claude desktop: no config folder found. Open Settings > Developer > Edit "
                    "Config and add this under \"mcpServers\":")
@@ -740,6 +747,15 @@ def _setup_desktop(configs: list[Path], entry: dict, ask) -> None:
     typer.echo("Fully quit Claude desktop (tray or menu bar > Quit) and open it again. For "
                f"/cortex in Chat, upload cortex-skill.zip from {zip_from} under Settings > "
                "Capabilities > Skills.")
+    _paste_text("Chat has no hooks, so Claude uses Cortex in every chat only when its "
+                "instructions say so. " + targets.PASTE_DESKTOP)
+
+
+def _paste_text(where: str) -> None:
+    """Print packs.USE_TEXT (the app's Copy instructions) with where to paste it."""
+    from cortex import packs
+    typer.echo(f"\n{where} The text:\n")
+    typer.echo(packs.USE_TEXT)
 
 
 @app.command(hidden=True)  # the uninstaller's step; people use Connect AI apps in the app

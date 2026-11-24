@@ -30,8 +30,19 @@ from cortex._proc import NO_WINDOW
 NAME = "cortex"
 
 
+def _env() -> dict:
+    """This process's environment with PATH as the registry holds it now appended
+    (session._registry_path): an app installed after Cortex started, such as Claude Code or
+    Git, is found by Cortex and by the commands it runs, without restarting Cortex."""
+    from cortex import session
+    env = dict(os.environ)
+    if extra := session._registry_path():
+        env["PATH"] = os.pathsep.join(p for p in (env.get("PATH", ""), extra) if p)
+    return env
+
+
 def _which(cmd: str) -> str | None:  # tests replace this: never the real `claude`
-    return shutil.which(cmd)
+    return shutil.which(cmd, path=_env().get("PATH"))
 
 
 def _run(args: list[str], timeout: float = 300) -> tuple[bool, str]:
@@ -39,7 +50,7 @@ def _run(args: list[str], timeout: float = 300) -> tuple[bool, str]:
     try:
         r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
-                           creationflags=NO_WINDOW)
+                           creationflags=NO_WINDOW, env=_env())
     except (OSError, subprocess.SubprocessError) as e:
         return False, str(e)
     return r.returncode == 0, (r.stdout + r.stderr).strip()[-2000:]
@@ -372,13 +383,25 @@ def refresh_rules(base: dict | None) -> list[dict]:
 
 # ---- connectors ---------------------------------------------------------------------------
 
+# where to paste packs.USE_TEXT (Connect's Copy instructions, `cortex setup`) in apps whose own
+# instructions Cortex does not write; docs/CONNECT.md has the sources
+PASTE_DESKTOP = ("Paste into Claude: Settings → Your Claude → Instructions (older versions: "
+                 "Settings → Account → Instructions for Claude), so every chat uses Cortex.")
+PASTE_CODE = ("Without the plugin nothing brings Cortex into each chat by itself: paste into "
+              "~/.claude/CLAUDE.md, which Claude Code reads in every project.")
+PASTE_CURSOR = ("Cortex's rule file reaches only your home folder. For every project, paste "
+                "into Cursor's User Rules (Customize → Rules; older versions: Cursor Settings "
+                "→ Rules).")
+PASTE_COPILOT = "Paste into ~/.copilot/copilot-instructions.md, which Copilot CLI reads everywhere."
+
 
 class JsonTarget:
-    """An app whose MCP servers live in one JSON object, `<key>.cortex`."""
+    """An app whose MCP servers live in one JSON object, `<key>.cortex`. `paste`: where the
+    owner pastes packs.USE_TEXT in that app, when Cortex cannot put it there itself."""
 
     def __init__(self, id: str, label: str, path, *, key: str = "mcpServers", home=None,
-                 extra: dict | None = None, note: str = ""):
-        self.id, self.label, self.key, self.note = id, label, key, note
+                 extra: dict | None = None, note: str = "", paste: str = ""):
+        self.id, self.label, self.key, self.note, self.paste = id, label, key, note, paste
         self._path, self._home, self.extra = path, home, extra or {}
 
     def paths(self) -> list[Path]:
@@ -438,7 +461,8 @@ class ClaudeDesktop(JsonTarget):
         super().__init__("claude-desktop", "Claude Desktop", None,
                          note="Quit Claude Desktop from the tray and open it again after a "
                               "change. For /cortex in Chat, upload cortex-skill.zip (below) "
-                              "under Settings → Capabilities (it cannot be installed by file).")
+                              "under Settings → Capabilities (it cannot be installed by file).",
+                         paste=PASTE_DESKTOP)
 
     def paths(self) -> list[Path]:
         from cortex import clients
@@ -671,10 +695,11 @@ class Codex(Hooks, Rules, CodexToml):
 # Plan v9 item 8: the rules files that carry the Cortex block. Cursor documents no global
 # rules file (its User Rules live in its settings database; `.cursor/rules` is per project),
 # so Cortex keeps an always-applied rule at ~/.cursor/rules/cortex.mdc: Cursor applies it in
-# the home folder as a project, and its text is what to paste into Settings → Rules for every
-# project (docs/SETUP.md). VS Code applies every `*.instructions.md` in the user profile's
-# prompts folder to Copilot chats in any workspace (`.github/copilot-instructions.md` is per
-# repository). Codex reads ~/.codex/AGENTS.md in every project.
+# the home folder as a project; for every project the owner pastes packs.USE_TEXT into its
+# User Rules (PASTE_CURSOR, docs/CONNECT.md). VS Code applies every `*.instructions.md` in the
+# user profile's prompts folder to Copilot chats in any workspace
+# (`.github/copilot-instructions.md` is per repository). Codex reads ~/.codex/AGENTS.md in
+# every project.
 CURSOR_RULE = (".cursor", "rules", "cortex.mdc")
 CURSOR_HEAD = "---\ndescription: About me, from Cortex\nalwaysApply: true\n---\n"
 VSCODE_RULE = ("prompts", "cortex.instructions.md")
@@ -684,11 +709,16 @@ VSCODE_HEAD = '---\napplyTo: "**"\n---\n'
 class ClaudeCode:
     """Claude Code: the Cortex plugin (MCP server, /cortex skill and hooks) through the `claude`
     CLI when it is on PATH and the marketplace source is known; else an `mcpServers` entry in
-    `~/.claude.json` (no skills then)."""
+    `~/.claude.json` (no skills or hooks then: `paste` asks for packs.USE_TEXT in CLAUDE.md).
+    A marketplace on GitHub is cloned with git, so that route needs git first."""
 
     id, label = "claude-code", "Claude Code"
-    note = "Restart Claude Code after a change. The plugin brings the /cortex skill too."
+    note = ("Restart Claude Code after a change: open a new terminal, or quit the Claude desktop "
+            "app from the tray and open it again for its Code tab. The plugin brings the "
+            "/cortex skill and the hooks too.")
     PLUGIN = "cortex@cortex"
+    NO_GIT = ("Claude Code needs Git to download the Cortex plugin from GitHub. Install Git "
+              "(Install Git under Setup or Status, or git-scm.com), then Apply again.")
 
     def __init__(self):
         self.json = JsonTarget("claude-code-json", "Claude Code",
@@ -713,6 +743,18 @@ class ClaudeCode:
         from cortex import doctor
         return doctor.plugin_enabled()
 
+    def _no_git(self) -> bool:
+        """The marketplace is the GitHub repo (no source checkout here), which `claude plugin
+        marketplace add` clones with git, and git is not found (a new Windows laptop)."""
+        from cortex import session
+        src = self._source()
+        return src is not None and not Path(src).is_dir() and session.git_exe() is None
+
+    @property
+    def paste(self) -> str:
+        """Where USE_TEXT goes: only on the ~/.claude.json route, which brings no hooks."""
+        return "" if self._plugin_on() or self._plugin_route() else PASTE_CODE
+
     def detect(self) -> bool:
         return (_which("claude") is not None or (Path.home() / ".claude").is_dir()
                 or (Path.home() / ".claude.json").is_file())
@@ -731,6 +773,8 @@ class ClaudeCode:
             if self._plugin_on():
                 return []
             if self._plugin_route():
+                if self._no_git():
+                    return [_row(settings, "error", self.NO_GIT)]
                 return [_row(settings, "add", "runs: " + "; ".join(
                     "claude " + " ".join(c) for c in self.commands()))]
             return self.json.plan(True, base)
@@ -749,6 +793,8 @@ class ClaudeCode:
         if self._plugin_on():
             return []
         if self._plugin_route():
+            if self._no_git():
+                raise ValueError(self.NO_GIT)
             return [self._claude(c) for c in self.commands()]
         return self.json.apply(base)
 
@@ -862,7 +908,7 @@ def targets() -> list:
                    lambda: h() / ".gemini" / "antigravity" / "mcp_config.json"),
         RuleJson("cursor", "Cursor", lambda: h() / ".cursor" / "mcp.json",
                  rule=lambda: h().joinpath(*CURSOR_RULE), head=CURSOR_HEAD,
-                 client="cursor-vscode"),
+                 client="cursor-vscode", paste=PASTE_CURSOR),
         RuleJson("vscode", "VS Code (Copilot)", lambda: _vscode_user() / "mcp.json",
                  key="servers", extra={"type": "stdio"},
                  rule=lambda: _vscode_user().joinpath(*VSCODE_RULE), head=VSCODE_HEAD,
@@ -883,7 +929,7 @@ def targets() -> list:
         # https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
         JsonTarget("copilot-cli", "GitHub Copilot CLI",
                    lambda: h() / ".copilot" / "mcp-config.json", home=lambda: h() / ".copilot",
-                   extra={"type": "local", "tools": ["*"]}),
+                   extra={"type": "local", "tools": ["*"]}, paste=PASTE_COPILOT),
         # Junie, user scope ~/.junie/mcp/mcp.json, key mcpServers:
         # https://junie.jetbrains.com/docs/junie-cli-mcp-configuration.html
         JsonTarget("junie", "JetBrains Junie", lambda: h() / ".junie" / "mcp" / "mcp.json",
@@ -898,19 +944,21 @@ def by_id() -> dict:
 def describe(base: dict | None) -> list[dict]:
     """The rows of the Connect section: detection, state and what a change would touch.
     `private_offer`: the row may offer the --private opt-in (LM Studio, private_mcp on);
-    `private`: its entry has --private now."""
+    `private`: its entry has --private now; `paste`: where packs.USE_TEXT goes in that app
+    (Copy instructions), "" when Cortex brings it in itself."""
     out, offer = [], private_mcp()
     for t in targets():
         lms = isinstance(t, LMStudio)
         row = {"id": t.id, "label": t.label, "detected": False, "connected": False,
                "files": [], "snippet": "", "note": getattr(t, "note", ""),
-               "private_offer": lms and offer, "private": False}
+               "private_offer": lms and offer, "private": False, "paste": ""}
         try:
             rules = [t.rule_path()] if isinstance(t, Rules) else []
             rules += [t.hook_path()] if isinstance(t, Hooks) and t.hook_path() not in t.paths() \
                 else []
             row.update(detected=t.detect(), connected=t.connected(),
-                       files=[str(p) for p in [*t.paths(), *rules]], private=lms and t.private())
+                       files=[str(p) for p in [*t.paths(), *rules]], private=lms and t.private(),
+                       paste=getattr(t, "paste", ""))
             if base is not None:
                 row["snippet"] = t.snippet(base)
                 # Claude Code's plugin route shows the commands Cortex runs, not an entry

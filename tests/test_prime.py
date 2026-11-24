@@ -599,7 +599,7 @@ def test_prime_hook_console_entry_and_no_vault(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == ""
     cfg = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     (ups,) = cfg["hooks"]["UserPromptSubmit"]
-    assert ups["hooks"][0]["command"] == "cortex prime-hook || true" and "matcher" not in ups
+    assert ups["hooks"][0]["command"] == "cortex prime-hook; exit 0" and "matcher" not in ups
 
 
 def test_profile_drops_lines_past_their_until_day(root):
@@ -700,7 +700,7 @@ def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
     (pre,) = cfg["hooks"]["PreCompact"]
     assert start["matcher"] == "compact|resume|clear"
     for h in (start, pre):
-        assert h["hooks"][0]["command"] == "cortex prime-hook || true"
+        assert h["hooks"][0]["command"] == "cortex prime-hook; exit 0"
 
 
 def test_lately_lists_recent_pages_from_the_related_budget(vault, monkeypatch):

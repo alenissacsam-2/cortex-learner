@@ -1,0 +1,101 @@
+"""CN: connecting AI apps on a new laptop. An app installed after Cortex started is found on the
+registry's PATH, Claude Code's GitHub plugin route asks for git first, and the apps whose own
+instructions Cortex cannot write get the "use Cortex every time" text (packs.USE_TEXT) to paste,
+with where. Temp home only (the `home` fixture); never the real registry or `claude`."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from cortex import mcp_server, packs, session
+from cortex.app import targets
+
+ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\vault"]}
+
+
+def _exe(folder, name):
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / (name + (".exe" if sys.platform == "win32" else ""))
+    p.write_bytes(b"")
+    p.chmod(0o755)
+    return p
+
+
+def test_an_app_installed_after_cortex_started_is_found(home, tmp_path, monkeypatch):
+    """The app runs from login with the PATH it started with; Claude Code or Git installed
+    since is on the registry's PATH only. Cortex finds it, and what it runs finds it too."""
+    late = tmp_path / "late-bin"
+    claude = _exe(late, "claude")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert targets._which("claude") is None
+    monkeypatch.setattr(session, "_registry_path", lambda: str(late))
+    assert targets._which("claude").lower() == str(claude).lower()
+    ok, out = targets._run([sys.executable, "-c", "import os; print(os.environ['PATH'])"])
+    assert ok and str(late) in out
+
+
+def test_claude_code_from_github_needs_git_first(home, tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
+                        else None)
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (ran.append(args),
+                                                                    (True, "ok"))[1])
+    monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: "owner/repo")
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    t = targets.by_id()["claude-code"]
+    (row,) = t.plan(True, ENTRY)
+    assert row["change"] == "error" and row["detail"] == t.NO_GIT
+    with pytest.raises(ValueError, match="needs Git"):
+        t.apply(ENTRY)
+    assert ran == [] and not (home / ".claude.json").exists()  # nothing half done
+    rows = targets.plan_all({"claude-code": True}, ENTRY)
+    assert [r["change"] for r in rows] == ["error"]
+    assert targets.apply_all({"claude-code": True}, ENTRY) == [] and ran == []
+    monkeypatch.setattr(session, "git_exe", lambda: "C:\\git\\git.exe")
+    assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]
+    t.apply(ENTRY)
+    assert [a[1:3] for a in ran] == [["plugin", "marketplace"], ["plugin", "install"]]
+    # a source checkout is a local marketplace: no clone, so no git needed
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: str(tmp_path))
+    assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]
+
+
+def test_rows_say_where_to_paste_the_instructions(home, monkeypatch):
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    for d in (".claude", ".cursor", ".codex", ".gemini", ".copilot",
+              "LOCALAPPDATA/Claude-Data/claude_ab12", "APPDATA/Code/User"):
+        (home / d).mkdir(parents=True)
+    rows = {r["id"]: r for r in targets.describe(ENTRY)}
+    assert {i: r["paste"] for i, r in rows.items() if r["paste"]} == {
+        "claude-desktop": targets.PASTE_DESKTOP,  # Chat has no hooks
+        "claude-code": targets.PASTE_CODE,  # no `claude`: the ~/.claude.json route, no hooks
+        "cursor": targets.PASTE_CURSOR,  # its rule file reaches the home folder only
+        "copilot-cli": targets.PASTE_COPILOT}
+    assert all(rows[i]["detected"] for i in ("claude-code", "cursor", "copilot-cli"))
+    # with the plugin (its hooks prime every chat), Claude Code needs no paste
+    s = home / ".claude" / "settings.json"
+    s.write_text(json.dumps({"enabledPlugins": {"cortex@cortex": True}}), encoding="utf-8")
+    assert {r["id"]: r for r in targets.describe(ENTRY)}["claude-code"]["paste"] == ""
+    s.unlink()
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
+                        else None)
+    assert {r["id"]: r for r in targets.describe(ENTRY)}["claude-code"]["paste"] == ""
+
+
+def test_the_pasted_text_shares_its_lines_with_the_server_and_the_rule_block():
+    lines = packs.USE_TEXT.splitlines()
+    assert 8 <= len(lines) <= 12 and packs.USE_TEXT.endswith("\n")
+    assert f"- {packs.PRIME_LINE}" in lines and packs.PRIME_LINE in packs.rule_block(None)
+    for line in (packs.TOPIC_LINE, packs.SAFE_LINE):
+        assert f"- {line}" in lines and f"- {line}" in mcp_server.INSTRUCTIONS
+    assert "cortex_prime" in lines[1] and "<untrusted_note>" in packs.USE_TEXT
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "CONNECT.md").read_text("utf-8")
+    assert packs.USE_TEXT in guide  # the guide shows the text Copy instructions copies
+    for where, file in ((targets.PASTE_CODE, "~/.claude/CLAUDE.md"),  # the files rows name
+                        (targets.PASTE_COPILOT, "~/.copilot/copilot-instructions.md")):
+        assert f"into {file}," in where and file in guide

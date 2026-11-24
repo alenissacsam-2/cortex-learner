@@ -482,6 +482,7 @@ class App:
                                for n in packs.PACKS],
                      "profiles": profiles.load(v), "scopes": list(access.SCOPES)}
         return {"targets": targets.describe(self.entry()), "vault": self.entry() is not None,
+                "instructions": packs.USE_TEXT,  # Copy instructions on rows with a `paste`
                 "skill_zip": str(_checkout() / "dist" / "cortex-skill.zip"),
                 "skill_zip_found": (_checkout() / "dist" / "cortex-skill.zip").is_file(),
                 "skill_url": skill_url(), **extra}

@@ -160,17 +160,7 @@ cortex sample remove
 
 ## 6. Claude Code
 
-If the setup did not install the plugin for you, type these in Claude Code:
-
-```
-/plugin marketplace add <your Cortex-app folder>
-```
-
-```
-/plugin install cortex@cortex
-```
-
-Restart Claude Code. Type `/mcp` to check that `cortex` is connected, then type `/cortex` or just talk.
+[CONNECT.md](CONNECT.md#claude-code-in-a-terminal) walks through Claude Code in a terminal and in the Claude desktop app's Code tab: what to install first, what Cortex writes, how to check it works and what to do when it doesn't. From a source checkout, if the setup did not install the plugin for you, type `/plugin marketplace add <your Cortex-app folder>` and then `/plugin install cortex@cortex` in Claude Code, and restart it.
 
 Claude Code starts the first `cortex` on your PATH. If that is a different copy, of a different version from the installed app (for example a `uv tool` one in `~\.local\bin`), **Status** says "Claude Code runs Cortex 0.3.9, the app is 0.4.1"; its **Fix** puts the app's `bin` folder first on your user PATH, and then you quit Claude completely and open it again. When the other copy's folder is on the system PATH, which Windows reads first, the row names that folder instead: remove it from the system PATH, or update that copy.
 
@@ -181,6 +171,8 @@ Besides the server and the `/cortex` skill, the plugin adds a few hooks (small c
 To keep Cortex out of one folder (a client's repository, code you cloned), run `cortex exclude add <folder>`. New Claude Code chats in that folder or under it get no Cortex context, and Claude can read your vault there but not write to it. `cortex exclude list` shows the folders and `cortex exclude remove <folder>` lifts one. The Chat tab is not affected.
 
 ## 7. Claude desktop app (Chat)
+
+[CONNECT.md](CONNECT.md#claude-desktop-chat) has the steps, the instructions to paste so Claude uses Cortex in every chat, a check and the fixes for common problems. The rest of this section is for adding the entry by hand.
 
 The setup adds the entry for you when it finds the app's config folder. When Cortex is installed with CortexSetup.exe, the entry runs that install's `bin\cortex.exe`, so updating the app also updates what Claude Desktop runs. If the entry points at another copy (for example a `uv tool` one in `~\.local\bin`), **Status** says "Claude Desktop runs a different Cortex copy"; **Apply** under **Connect** points it back at the install (the old file is backed up beside it). To do it by hand:
 
@@ -206,7 +198,7 @@ The setup adds the entry for you when it finds the app's config folder. When Cor
 4. In **Settings > Developer**, check that `cortex` shows as **running**.
 5. For the `/cortex` skill, use `cortex-skill.zip`: with the Windows installer, download it from the release (the app's **Connect** page links it); from a source checkout, use `dist/cortex-skill.zip` in your Cortex-app folder (if it is missing, run `uv run python scripts/build_skills.py` there to build it). Upload it under **Settings > Capabilities > Skills**. Skills need **Code execution and file creation** turned on, on the same page. Upload the zip as it is; do not unpack it.
 
-The Chat tab has no hooks. Instead, Cortex asks Claude to call `cortex_prime` with your first message of each chat, which loads the same short context as the Claude Code hook.
+The Chat tab has no hooks. Instead, Cortex asks Claude to call `cortex_prime` with your first message of each chat, which loads the same short context as the Claude Code hook. So that Claude does it in every chat, paste the instructions from [CONNECT.md](CONNECT.md#the-instructions-to-paste) into Claude's settings (**Copy instructions** on the Claude Desktop row in Connect AI apps copies them).
 
 If `cortex` shows as failed, read the MCP logs. On Windows they are in `%APPDATA%\Claude\logs\` or `%LOCALAPPDATA%\Claude-Data\<profile>\logs\`; on macOS in `~/Library/Logs/Claude/`. Look for `mcp-server-cortex.log`.
 

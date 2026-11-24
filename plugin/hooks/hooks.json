@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortex prime-hook || true",
+            "command": "cortex prime-hook; exit 0",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortex prime-hook || true",
+            "command": "cortex prime-hook; exit 0",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortex prime-hook || true",
+            "command": "cortex prime-hook; exit 0",
             "timeout": 10
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortex session sweep || true",
+            "command": "cortex session sweep; exit 0",
             "timeout": 30
           }
         ]
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortex taint || true",
+            "command": "cortex taint; exit 0",
             "timeout": 10
           }
         ]

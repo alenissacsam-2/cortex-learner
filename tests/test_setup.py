@@ -7,7 +7,8 @@ from datetime import UTC, datetime
 import pytest
 from test_cli import run  # the CliRunner helper, not a fixture
 
-from cortex import clients, dashboard, levels, sample
+from cortex import clients, dashboard, levels, packs, sample
+from cortex.app import targets
 from cortex.catalog import Catalog
 from cortex.events import EventLog, local_day
 from cortex.lint import lint_report
@@ -130,6 +131,7 @@ def test_setup_writes_desktop_config(tmp_path, home, monkeypatch):
     got = json.loads(cfg.read_text(encoding="utf-8"))
     assert got["mcpServers"]["cortex"]["args"] == ["mcp", "--vault", str(root.resolve())]
     assert got["theme"] == "dark" and "Fully quit Claude desktop" in out
+    assert targets.PASTE_DESKTOP in out and packs.USE_TEXT in out  # CN: what to paste, where
     assert f"updated  {cfg}" in out and ".cortex-" in out
     assert old_bak.read_text(encoding="utf-8") == "mine"
     baks = list(cfg.parent.glob(cfg.name + ".cortex-*.bak"))  # the app's timestamped backup
@@ -169,6 +171,11 @@ def test_setup_points_at_the_checkout_never_a_placeholder(tmp_path, home, monkey
     out = run(*args).output + run(*args, "--dry-run").output
     assert f"marketplace add {cli.REPO}" in out  # the published repo, once there is one
     assert "<owner>" not in out
+    # CN: Claude Code clones the published repo with git; without git, say so first
+    from cortex import session
+    monkeypatch.setattr(session, "git_exe", lambda: None)
+    out = run(*args).output
+    assert "Claude Code needs Git" in out and "marketplace add" not in out
 
 
 def test_setup_ends_by_offering_the_app(tmp_path, home, monkeypatch):
