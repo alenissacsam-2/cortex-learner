@@ -74,6 +74,7 @@ In every chat Cortex already knows you from your first message, saves what's dur
 | `model` (`download`, `build`, `status`) | The local search model |
 | `browse` (`scan`, `import`, `status`, `pair`, `serve`) / `llm status` | Your browsing as day pages, filtered on this laptop / the optional local LLM |
 | `exclude add\|list\|remove` | Folders where Cortex stays off (e.g. a work repo) |
+| `watch add\|list\|remove` | Folders (or Zotero) the app imports by itself: their new and changed files, every 10 minutes |
 | `voice import` / `forget` / `kill` / `access` | Your writing samples / delete a person's page / emergency stop / what was read as you |
 | `session close\|sweep` | Close leftover sessions |
 | `setup` / `init` / `sample remove` / `mcp` | Install, create a vault, remove the sample, run the server |

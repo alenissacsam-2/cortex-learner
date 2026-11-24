@@ -5,8 +5,7 @@
       "The app is easier to find your way in: the sidebar has three groups (Every day, Your setup, Check), and Setup is a short list of numbered steps with a progress bar.",
       "Chat says how sure each answer is: exactly from your pages, from a few of your pages, thin, or nothing on record. Type # in Chat to hand it up to 3 of your pages.",
       "Home follows what you do: study, build and research boards appear once you use them, and a new vault gets a Get started card. The brain has a month-by-month time scrub, a Focus Lens for one page and its links, and Save picture.",
-      "Quick capture: press Ctrl+Alt+Space anywhere to save a thought to Cortex.",
-      "More comes in by itself: Codex, Gemini CLI and GitHub Copilot CLI sessions; watched folders, notes, git projects, Zotero and calendars every 10 minutes; Anki with your review history; and TODO: lines in your notes become open loops.",
+      "Press Ctrl+Alt+Space anywhere to save a thought, and more comes in by itself: Codex, Gemini CLI and GitHub Copilot CLI sessions; watched folders, notes, git projects, Zotero and calendars every 10 minutes; Anki with your review history; and TODO: lines in your notes become open loops.",
       "Also new: Zed, Cline, Copilot CLI and JetBrains Junie can connect; text inside <private>...</private> is never saved; forget removes a line from every place Cortex keeps it; the Mind Mirror shows how your views changed; X-ray traces a reply back to what an app was given; a damaged store repairs itself; search is about 5x faster; a hidden window sleeps; and buttons, tabs and toasts move a little."
     ],
     "do": [
