@@ -57,9 +57,14 @@ _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 STATIC = {"/": (None, "text/html; charset=utf-8"),
           "/manage": (ASSETS / "index.html", "text/html; charset=utf-8"),
           "/app.css": (ASSETS / "app.css", _CSS), "/app.js": (ASSETS / "app.js", _JS),
+          # quick capture's box (the desktop app's hotkey): its own small page
+          "/capture": (ASSETS / "capture.html", "text/html; charset=utf-8"),
+          "/capture.js": (ASSETS / "capture.js", _JS),
           "/dashboard.css": (ASSETS.parent / "dashboard.css", _CSS),
           **{"/" + n: (ASSETS.parent / n, _JS) for n in ("d3.v7.min.js", "brain3d.js",
                                                         "dashboard.js")}}
+CAPTURE_MAX = 1000  # quick capture: a line's characters
+URL_ONLY = re.compile(r"https?://\S+", re.I)  # a quick-capture line that is one link
 PAGE_ROWS = 20  # the private chats list, a page at a time
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
 QUERY_GETS = {"/api/chat/get", "/api/chat/passage", "/api/home",  # GETs that read the query
@@ -296,6 +301,7 @@ class App:
         self.reviewing = threading.Lock()  # one Review click at a time
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
+                    "/api/app/hotkey": self.hotkey,
                     "/api/home": self.home, "/api/home/version": self.home_version,
                     "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
                     "/api/home/check": self.cold_check, "/api/import/pickup": self.pickup,
@@ -351,6 +357,7 @@ class App:
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
             "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
+            "/api/app/hotkey": self.hotkey_set, "/api/capture/hide": self.capture_hide,
             "/api/review/approve": self.review_approve, "/api/review/dismiss": self.review_dismiss,
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
@@ -372,7 +379,7 @@ class App:
             "/api/xray/pin": self.xray_pin, "/api/xray/mute": self.xray_mute,
             "/api/xray/dryrun": self.xray_dryrun, "/api/xray/trace": self.xray_trace,
             "/api/xray/compare": self.xray_compare, "/api/xray/ack": self.xray_ack,
-            "/api/tonight/undo": self.tonight_undo}
+            "/api/tonight/undo": self.tonight_undo, "/api/capture": self.capture}
 
     def touch(self) -> None:
         self.last = time.monotonic()
@@ -763,6 +770,70 @@ class App:
             raise ValueError(out.get("message") or out["error"])
         return {"id": out["id"], "title": what, "date": day.isoformat(), "kind": kind}
 
+    def capture(self, body: dict) -> dict:
+        """Quick capture (the desktop app's hotkey box): one typed line, written through the
+        shared core (`_with_core`) as the owner's own words. //pref, //fact and //forget lines
+        take the chat's own tag path (tags.find, tags.apply); a line that is only an http(s)
+        URL becomes a resource titled with its host and path (no fetch), unless a resource in
+        the index has that URL already; anything else is a journal line. {kind, said}: `said`
+        is the hint line's text. A refusal (a secret, an unsafe line) is a ValueError with the
+        core's own message, and nothing is written."""
+        from datetime import date
+
+        from cortex import chats, dates, tags
+        from cortex.events import local_day
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Type something first.")
+        if len(text) > CAPTURE_MAX:
+            raise ValueError(f"Keep it to {CAPTURE_MAX:,} characters.")
+        clean = chats.drop_private(text).strip()
+        if not clean.replace(chats.PRIVATE, "").strip():
+            raise ValueError("Nothing to save: a <private> part is never saved.")
+        if found := tags.find(text):
+            def tag(core) -> tuple[list[str], list[str]]:
+                refused: list[str] = []
+                day = local_day(core._now())
+                return tags.apply(core, [(t, x, day) for t, x in found],
+                                  refused=refused), refused
+            lines, refused = self._with_core(tag, "Quick capture in the Cortex app")
+            if refused:
+                raise ValueError("; ".join(lines + refused))
+            return {"kind": "tag", "said": "; ".join(lines) or "Already saved today."}
+        parts = urlsplit(clean) if URL_ONLY.fullmatch(clean) else None
+        if parts is not None and parts.hostname:
+            want = clean.removesuffix("/")
+            title = (parts.hostname + parts.path.removesuffix("/"))[:200]
+
+            def link(core) -> dict:
+                core.index.refresh()
+                for n in core.index._notes.values():  # the index's parsed frontmatter
+                    u = n["fields"].get("url")
+                    if n["kind"] == "resource" and isinstance(u, str) \
+                            and u.strip().removesuffix("/") == want:
+                        return {"already": n["title"]}
+                return core._call("cortex_add", core.cortex_add, {
+                    "kind": "resource", "title": title, "force": True, "fields": {"url": clean}})
+            out = self._with_core(link, "Quick capture in the Cortex app")
+            if "error" in out:
+                raise ValueError(out.get("message") or out["error"])
+            if "already" in out:
+                return {"kind": "link", "said": f"Already saved: {out['already']}"}
+            return {"kind": "link", "said": "Link saved"}
+
+        def journal(core) -> dict:
+            now = core._now()
+            # typed just now, so its relative dates get today's day (L1); _log_journal pins
+            # nothing itself under app_clicks (mcp_server._pin_day), so this is the one pin
+            line = dates.pin(clean, date.fromisoformat(local_day(now)))
+            out = core._call("cortex_log", core.cortex_log,
+                             {"kind": "journal", "payload": {"text": line}})
+            return {**out, "hhmm": f"{now.astimezone():%H:%M}"}
+        out = self._with_core(journal, "Quick capture in the Cortex app")
+        if "error" in out:
+            raise ValueError(out.get("message") or out["error"])
+        return {"kind": "journal", "said": f"Added to today's journal {out['hhmm']}"}
+
     def unlock(self, body: dict) -> dict:
         """The Private switch: Windows asks the user to verify (Windows Hello); private items
         then show for PRIVATE_S, until the switch is pressed again or the window minimised."""
@@ -860,20 +931,31 @@ class App:
         writes."""
         return self._clicks([(tool, method, kwargs, card, producer)])
 
-    def _clicks(self, calls: list[tuple]) -> dict:
-        """One answer's writes, each a `_click` (tool, method, kwargs, card, producer), all in
-        one session, so one `cortex undo` takes the whole answer back (D5: an answer that
-        covers near-copies). Stops at the first error; what was written before it is kept."""
+    def _with_core(self, fn, summary: str):
+        """fn(core) with the app's shared mcp_server.Cortex (`app_clicks` set: every write is
+        the owner's own) under the Review lock, in a session closed at once so it is committed
+        and `cortex undo` can take it back; fn's own result."""
         from cortex.mcp_server import Cortex
         from cortex.vault import Vault
         root = self.need_root()
-        out: dict = {}
         with self.reviewing:
             if self.core is None or self.core[0] != root:
                 core = Cortex(Vault(root))
                 core.app_clicks = True  # every write here is the user's own click
                 self.core = (root, core)
             core = self.core[1]
+            try:
+                return fn(core)
+            finally:
+                if core.sessions.current is not None:
+                    core.sessions.close(summary=summary)
+
+    def _clicks(self, calls: list[tuple]) -> dict:
+        """One answer's writes, each a `_click` (tool, method, kwargs, card, producer), all in
+        one session, so one `cortex undo` takes the whole answer back (D5: an answer that
+        covers near-copies). Stops at the first error; what was written before it is kept."""
+        def run(core) -> dict:
+            out: dict = {}
             try:
                 for tool, method, kwargs, card, producer in calls:
                     core.sessions.stamp = {k: v for k, v in (("card", card),
@@ -883,8 +965,8 @@ class App:
                         break
             finally:
                 core.sessions.stamp = {}
-                if core.sessions.current is not None:
-                    core.sessions.close(summary="Review in the Cortex app")
+            return out
+        out = self._with_core(run, "Review in the Cortex app")
         if "error" in out:
             raise ValueError(out.get("message") or out["error"])
         # R3-7: the rules-file block; R5a: a Keep or Remove on a line changed outside Cortex
@@ -2304,6 +2386,27 @@ class App:
         from cortex.app import desktop
         return desktop.save_notify(body)
 
+    def hotkey(self) -> dict:
+        """Quick capture's key: the choice, the choices, and whether another app holds it
+        (`taken`). `desktop`: false in the browser app, which has no hotkey."""
+        from cortex.app import desktop
+        h = self.desktop.hotkey if self.desktop is not None else None
+        return {"desktop": h is not None, "key": desktop.hotkey_setting(),
+                "choices": [{"key": k, "label": v[2] if v else "Off"}
+                            for k, v in desktop.HOTKEYS.items()],
+                "taken": bool(h and h.taken)}
+
+    def hotkey_set(self, body: dict) -> dict:
+        from cortex.app import desktop
+        desktop.save_hotkey(body)
+        if self.desktop is not None:
+            self.desktop.change_hotkey()  # registered again now, no restart
+        return self.hotkey()
+
+    def capture_hide(self, body: dict) -> dict:
+        """The capture box's Esc, a saved line, or the box losing focus."""
+        return {"hidden": self.desktop is not None and self.desktop.hide_box()}
+
 
 # ---- HTTP -----------------------------------------------------------------------------------
 
@@ -2399,7 +2502,7 @@ def _handler(app: App):
                     data = dashboard.render_live(key).encode()
                 else:
                     data = path.read_bytes()
-                if url.path == "/manage":
+                if url.path in ("/manage", "/capture"):
                     data = data.replace(b"{{T}}", key.encode()) \
                         .replace(b"{{REOPEN}}", reopen().encode())
                 self._send(200, data, ctype)

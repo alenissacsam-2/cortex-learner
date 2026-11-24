@@ -77,6 +77,54 @@ def _no_real_run_key(monkeypatch):
     return run
 
 
+class FakeUser32:
+    """The user32 calls quick capture's hotkey thread makes (cortex.app.desktop.Hotkey): a
+    message queue per process, `held` combinations another app holds, and every call
+    recorded in `calls`. `press()` is a WM_HOTKEY."""
+
+    def __init__(self, held=()):
+        import queue
+        self.q, self.held, self.calls, self.registered = queue.Queue(), set(held), [], set()
+
+    def PeekMessageW(self, *a):  # noqa: N802
+        return 0
+
+    def RegisterHotKey(self, hwnd, id, mods, vk):  # noqa: N802, A002
+        self.calls.append(("register", mods, vk))
+        if (mods, vk) in self.held:
+            return 0
+        self.registered.add(id)
+        return 1
+
+    def UnregisterHotKey(self, hwnd, id):  # noqa: N802, A002
+        self.calls.append(("unregister",))
+        self.registered.discard(id)
+        return 1
+
+    def GetMessageW(self, pmsg, hwnd, lo, hi):  # noqa: N802
+        m = self.q.get()
+        pmsg._obj.message = m
+        return 0 if m == 0x12 else 1  # WM_QUIT
+
+    def PostThreadMessageW(self, tid, m, w, lp):  # noqa: N802
+        self.q.put(m)
+        return 1
+
+    def press(self):
+        self.q.put(0x312)  # WM_HOTKEY
+
+
+@pytest.fixture(autouse=True)
+def _no_real_hotkey(monkeypatch):
+    """Tests never register a real global hotkey: the desktop app's hotkey thread gets a
+    FakeUser32. Returns it."""
+    from cortex.app import desktop
+
+    fake = FakeUser32()
+    monkeypatch.setattr(desktop, "_user32", lambda: fake)
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def _no_real_windows_hello(monkeypatch):
     """Tests never show a real Windows Hello prompt: the Private switch's tests mock it."""
