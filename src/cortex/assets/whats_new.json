@@ -1,4 +1,16 @@
 {
+  "0.6.0": {
+    "items": [
+      "A welcome guide for new users: six short steps that set up your notes folder, connect your AI apps and show you where things are. Reopen it any time from Setup.",
+      "Installing and updating look like Cortex now: one window with each step, a progress bar and plain words. If another program is still using Cortex, it asks you inside the window.",
+      "Change your vault folder from Dashboard and vault. A vault in a temporary folder gets a warning, and Cortex never swaps the vault you use for one.",
+      "Something not working? Status has Copy details (versions and what is on or off, never your notes or file paths) and a button to report it on GitHub. In a terminal: cortex doctor --report.",
+      "Agent X-ray's dry run is quick after the first run: it reuses what it already read."
+    ],
+    "do": [
+      "Restart Claude and your other AI apps once after updating."
+    ]
+  },
   "0.5.0": {
     "items": [
       "A calmer day theme: soft sand panels with amber ink, the night theme in daylight. No bright yellow slabs and no pure white.",
