@@ -19,14 +19,19 @@ this never does); without them the model steps are skipped and say so.
     uv run python scripts/memory_probe.py [--notes 1500] [--visits 30000] [--trace]
     uv run python scripts/memory_probe.py --app 60 [--hidden] [--notes 300] [--visits 3000]
     uv run python scripts/memory_probe.py --launch 12 [--hidden] [--notes 300] [--visits 3000]
+    uv run python scripts/memory_probe.py --launch 25 --busy --scale 0.2 [--notes 300]
+    uv run python scripts/memory_probe.py --mcp 15 --scale 0.2 [--notes 300]
 
 --trace adds tracemalloc's Python heap per step and its top allocation sites at the end
 (slower; its own bookkeeping counts in the process numbers). --app runs the desktop app on the
 vault instead (its window shows on the screen) and prints its WebView2 processes' CPU and memory
 per window state (`app_probe`). --launch starts the app as the installer does and, idle, prints
-its memory and loaded search models each minute (`launch_probe`). The probe caps numpy's BLAS
-threads as Cortex's entry points do (`taint.cap_blas`); set OPENBLAS_NUM_THREADS to measure
-another count.
+its memory and loaded search models each minute (`launch_probe`); with --busy a person searches
+once at the start and new visits and chat pages keep coming, so the live browse import and the
+safety net run on their schedules. --mcp starts one `cortex mcp` connection, sends a prime and a
+recall over stdio and prints its memory and loaded models each idle minute (`mcp_probe`).
+--scale shortens the schedules and the minute alike. The probe caps numpy's BLAS threads as
+Cortex's entry points do (`taint.cap_blas`); set OPENBLAS_NUM_THREADS to measure another count.
 """
 
 from __future__ import annotations
@@ -139,13 +144,13 @@ def make(tmp: Path, notes: int, visits: int, models: Path | None = None) -> None
         (root / "resources" / f"probe-{i}.md").write_text(
             f'---\ntitle: "probe page {i}"\nkind: resource\nsummary: "{rng.choice(WORDS)} '
             f'notes {i}"\n---\n# probe page {i}\n\n{_text(rng, size)}', encoding="utf-8")
-    local = tmp / "local"
-    heavy_history(local / "Google" / "Chrome" / "User Data" / "Default" / "History",
-                  n=visits, n_sites=max(500, visits // 12), days=365)
+    local = Path(os.environ["LOCALAPPDATA"])  # the temp HOME's: the app's live import finds it
+    heavy_history(_history(), n=visits, n_sites=max(500, visits // 12), days=365)
     v = Vault(root)
     settings = Settings(visible_to_claude=True, hidden_from_claude=("adult",))
     store.migrate(v, settings=settings)
-    build.run(v, sources.discover(local, tmp / "roaming"), settings, embed=Embed(per_text=0),
+    build.run(v, sources.discover(local, Path(os.environ["APPDATA"])), settings,
+              embed=Embed(per_text=0),
               runner=None, tz=UTC, now=NOW + timedelta(minutes=1), summaries=False,
               keep_local=False, ask=False)
     for p in (root / ".cortex").glob("vectors*"):  # the fake embedder's: the probe builds anew
@@ -160,6 +165,12 @@ def make(tmp: Path, notes: int, visits: int, models: Path | None = None) -> None
         semantic.vectors(core.index, embed, len(semantic._embed(embed, ["cortex"])[0]))
     print(f"made {notes} notes, {sum(1 for _ in (root / 'browse').rglob('*.md'))} browse pages",
           flush=True)
+
+
+def _history() -> Path:
+    """The made-up Chrome History, under the temp HOME's LOCALAPPDATA."""
+    return (Path(os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data" / "Default"
+            / "History")
 
 
 def _home(tmp: Path) -> dict:
@@ -422,12 +433,51 @@ def app_probe(tmp: Path, seconds: int, hidden: bool) -> None:
     print(f"WebView2 processes left after Quit: {len(descendants(me))}")
 
 
-def launch_probe(tmp: Path, minutes: int, hidden: bool) -> None:
+def _scale(f: float) -> None:
+    """Every schedule M3 measures times `f` (the models' idle unload and its check, the live
+    browse import's, the chat passes' with the safety net), so N minutes take N * f; the model
+    loads and the work itself stay real."""
+    from cortex import browse_serve, chat_import, semantic
+    semantic.IDLE_UNLOAD *= f
+    semantic.IDLE_CHECK *= f
+    browse_serve.AUTO_FIRST_S *= f
+    browse_serve.AUTO_EVERY_S *= f
+    chat_import.FIRST_S *= f
+    chat_import.EVERY_S *= f
+
+
+def _feed(root: Path, minute: float, stop) -> None:
+    """A PC in use, made up: 40 new visits in the History every minute, so each live import has
+    some, and a new chat page every 5 minutes, so each safety-net pass has one waiting."""
+    from datetime import datetime
+
+    sys.path.insert(0, str(TESTS))
+    from test_browse_perf import heavy_history
+
+    from cortex.vault import Vault
+    v, n = Vault(root), 0
+    while not stop.wait(minute):
+        n += 1
+        heavy_history(_history(), n=40, n_sites=40, days=1, start_id=10 ** 7 + 40 * n,
+                      end=datetime.now(UTC))
+        if n % 5 == 1:
+            when = datetime.now().strftime("%Y-%m-%d %H:%M")
+            a, b = WORDS[n % len(WORDS)], WORDS[n * 7 % len(WORDS)]
+            v.write_text(root / "resources" / f"probe-chat-{n}.md", (
+                f'---\ntitle: "Chat {n}"\nkind: resource\nresource_type: other\n---\n'
+                f"# Chat {n}\n\nTimeline: · Source: Claude · Date: {when[:10]} · My turns only"
+                f"\n\n### {when}\n**Me:** explain {a} and {b} with an example\n\n"))
+
+
+def launch_probe(tmp: Path, minutes: int, hidden: bool, busy: bool = False,
+                 scale: float = 1.0) -> None:
     """The app as the installer starts it (`Cortex.exe -m cortex.app.launch [--hidden]`:
     launch.main, made safe by _fake_app) on the made-up vault, the real models readable and no
     job started; its window stays as it starts. Each minute: this (the app's) process's memory,
     its WebView2 processes', which search models are loaded and how long unused, and what used
-    them. At the end, what dropping the models gives back."""
+    them. At the end, what dropping the models gives back. `busy` (M3): a person's search at
+    the start, then the PC in use as `_feed` makes it, so the live import and the safety net
+    run on their schedules; `scale` shortens every schedule and the minute (`_scale`)."""
     import threading
     import traceback
     from contextlib import contextmanager
@@ -436,18 +486,24 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool) -> None:
     from cortex.app import launch
     os.environ["CORTEX_VAULT"] = str(tmp / "vault")  # the vault, as a config would name it
     semantic.models_dir = lambda: MODELS
+    _scale(scale)
+    minute = 60 * scale
+    stop = threading.Event()
+    if busy:
+        threading.Thread(target=_feed, args=(tmp / "vault", minute, stop), daemon=True,
+                         name="probe-feed").start()
     apps, _ = _fake_app()
     held = {"embedder": semantic._main, "background copy": semantic._capped,
             "reranker": semantic._ranker}
     names, uses, real_use = {id(h): n for n, h in held.items()}, [], semantic._Held.use
 
     @contextmanager
-    def use(self):  # who keeps a model warm: the thread and the Cortex frames that called it
+    def use(self, *a, **k):  # who keeps a model warm: the thread and the Cortex frames
         where = [f"{Path(f.filename).stem}.{f.name}" for f in traceback.extract_stack()[:-2]
                  if "cortex" in f.filename and Path(f.filename).stem != "semantic"]
         uses.append(f"{names.get(id(self), '?')}: {threading.current_thread().name} "
                     f"({' < '.join(where[:-4:-1])})")
-        with real_use(self) as m:
+        with real_use(self, *a, **k) as m:
             yield m
     semantic._Held.use = use
     me = os.getpid()
@@ -458,19 +514,23 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool) -> None:
         d = _desktop(apps)
         t0 = time.monotonic()
         try:
+            if busy and (embed := semantic.load_embedder()) is not None:
+                embed([semantic.QUERY_PREFIX + "what do I know about graphs"])
+                print("   0: a person's search (the embedder loaded)")
             for minute in range(1, minutes + 1):
-                time.sleep(max(0.0, t0 + 60 * minute - time.monotonic()))
+                time.sleep(max(0.0, t0 + 60 * scale * minute - time.monotonic()))
                 ws, priv, _ = memory()
                 kids = [u for p in descendants(me) if (u := usage(p))]
                 now = time.monotonic()
-                loaded = ", ".join(f"{n} ({now - h.used:.0f})" for n, h in held.items()
-                                   if h.model) or "none"
+                loaded = ", ".join(f"{n} ({(now - h.used) / scale:.0f})"
+                                   for n, h in held.items() if h.model) or "none"
                 print(f"{minute:4d}{ws:8.0f}{priv:9.0f}{sum(k[1] for k in kids):13.0f}"
                       f"{sum(k[2] for k in kids):7.0f}  {'job' if d.app.jobs.running() else '-'}"
                       f", {loaded}")
                 for u in sorted(set(uses)):
                     print(f"        used: {u}")
                 uses.clear()
+            stop.set()
             dropped = semantic.drop_idle(time.monotonic() + 10 ** 6)
             gc.collect()
             ws, priv, _ = memory()
@@ -482,6 +542,98 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool) -> None:
     threading.Thread(target=drive, daemon=True, name="probe-drive").start()
     sys.argv = [sys.argv[0], *(["--hidden"] if hidden else [])]
     launch.main()
+
+
+def serve_child(tmp: Path, models: Path, scale: float) -> None:
+    """`cortex mcp --vault` as an AI app starts it (taint.main), on the made-up vault with the
+    real models readable. On stderr every minute: `@@` and its memory and loaded models.
+    cortex.semantic is imported first, to point it at the models and scale its idle unload:
+    numpy then loads before the handshake instead of in the warm-up a moment after."""
+    import threading
+
+    from cortex import semantic, taint
+    semantic.models_dir = lambda: models
+    semantic.IDLE_UNLOAD *= scale
+    semantic.IDLE_CHECK *= scale
+
+    def watch():
+        t0 = time.monotonic()
+        held = {"embedder": semantic._main, "reranker": semantic._ranker}
+        for minute in range(1, 10 ** 6):
+            time.sleep(max(0.0, t0 + 60 * scale * minute - time.monotonic()))
+            ws, priv, _ = memory()
+            now = time.monotonic()
+            loaded = ", ".join(f"{n} ({(now - h.used) / scale:.0f})" for n, h in held.items()
+                               if h.model) or "none"
+            sys.stderr.write(f"@@{minute:4d}{ws:8.0f}{priv:9.0f}  {loaded}\n")
+            sys.stderr.flush()
+    threading.Thread(target=watch, daemon=True, name="probe-watch").start()
+    sys.argv = ["cortex", "mcp", "--vault", str(tmp / "vault")]
+    taint.main()
+
+
+def mcp_probe(tmp: Path, minutes: int, scale: float) -> None:
+    """One `cortex mcp` connection (`serve_child`), driven over stdio as an AI app does:
+    initialize, one cortex_prime, one cortex_recall, then idle `minutes` (each 60 * `scale` s,
+    the idle unload scaled alike); then a prime and a recall again. Prints the calls' seconds
+    and the server's memory and loaded models each minute."""
+    import json
+    import threading
+
+    p = subprocess.Popen([sys.executable, __file__, "--serve", str(tmp), "--models", str(MODELS),
+                          "--scale", str(scale)], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    print(f"{'min':>4}{'ws MB':>8}{'priv MB':>9}  models loaded (seconds unused)")
+
+    def rows():
+        for line in p.stderr:
+            s = line.decode("utf-8", "replace").rstrip()
+            if s.startswith("@@"):
+                print(s[2:], flush=True)
+    threading.Thread(target=rows, daemon=True).start()
+    n = [0]
+
+    def call(method: str, params: dict | None = None) -> dict | None:
+        msg = {"jsonrpc": "2.0", "method": method, **({} if params is None else
+                                                      {"params": params})}
+        if not method.startswith("notifications/"):
+            n[0] += 1
+            msg["id"] = n[0]
+        p.stdin.write((json.dumps(msg) + "\n").encode())
+        p.stdin.flush()
+        while "id" in msg:
+            line = p.stdout.readline()
+            if not line:
+                raise RuntimeError("the server ended")
+            r = json.loads(line)
+            if r.get("id") == n[0] and "method" not in r:
+                if "error" in r or r.get("result", {}).get("isError"):
+                    print(f"!! {method}: {str(r)[:300]}")
+                return r
+        return None
+
+    def timed_call(label: str, method: str, params: dict | None = None) -> None:
+        t = time.perf_counter()
+        call(method, params)
+        print(f"   {label}: {time.perf_counter() - t:.2f} s", flush=True)
+
+    def tools(when: str) -> None:
+        timed_call(f"cortex_prime{when}", "tools/call", {"name": "cortex_prime", "arguments": {
+            "prompt": "what do I know about graphs and binary search"}})
+        timed_call(f"cortex_recall{when}", "tools/call", {"name": "cortex_recall", "arguments": {
+            "query": "dynamic programming interview notes"}})
+
+    t0 = time.monotonic()
+    timed_call("initialize", "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                            "clientInfo": {"name": "memory-probe",
+                                                           "version": "0"}})
+    call("notifications/initialized")
+    tools(" (first)")
+    time.sleep(max(0.0, t0 + 60 * scale * minutes - time.monotonic()) + 1)
+    tools(" after idle")
+    time.sleep(60 * scale + 1)  # one more row: the models loaded again
+    p.stdin.close()
+    p.wait(60)
 
 
 def main() -> None:
@@ -496,8 +648,17 @@ def main() -> None:
                     help="the app as the installer starts it, idle, MINUTES long")
     ap.add_argument("--hidden", action="store_true",
                     help="--app, --launch: started hidden, as at login")
+    ap.add_argument("--busy", action="store_true",
+                    help="--launch: a person's search at the start, then new visits and chat "
+                         "pages, so the live import and the safety net run (M3)")
+    ap.add_argument("--mcp", type=int, default=0, metavar="MINUTES",
+                    help="one `cortex mcp` connection: a prime and a recall, then idle MINUTES")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="--launch, --mcp: every schedule and the minute times this (0.2: a "
+                         "minute takes 12 s)")
     ap.add_argument("--make", help=argparse.SUPPRESS)  # the child: make the vault there
     ap.add_argument("--models", help=argparse.SUPPRESS)  # the child: and index it with these
+    ap.add_argument("--serve", help=argparse.SUPPRESS)  # the child: `cortex mcp` on that vault
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # each line as it comes, into a file too
     from cortex import taint
@@ -506,17 +667,23 @@ def main() -> None:
         _home(Path(args.make))
         make(Path(args.make), args.notes, args.visits, args.models and Path(args.models))
         return
+    if args.serve:
+        _home(Path(args.serve))
+        serve_child(Path(args.serve), Path(args.models), args.scale)
+        return
     tmp = Path(tempfile.mkdtemp(prefix="cortex-memory-probe-"))
     try:
         env = _home(tmp)
         subprocess.run([sys.executable, __file__, "--make", str(tmp), "--notes",
                         str(args.notes), "--visits", str(args.visits),
-                        *(["--models", str(MODELS)] if args.launch else [])],
+                        *(["--models", str(MODELS)] if args.launch or args.mcp else [])],
                        check=True, env={**os.environ, **env})
         print(f"{os.cpu_count()} logical cores; models in {MODELS.name}: "
               f"{'yes' if MODELS.is_dir() else 'no'}")
-        if args.launch:
-            launch_probe(tmp, args.launch, args.hidden)
+        if args.mcp:
+            mcp_probe(tmp, args.mcp, args.scale)
+        elif args.launch:
+            launch_probe(tmp, args.launch, args.hidden, args.busy, args.scale)
         elif args.app:
             app_probe(tmp, args.app, args.hidden)
         else:

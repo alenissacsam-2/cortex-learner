@@ -259,16 +259,23 @@ def test_idle_models_are_dropped_and_load_again_on_the_next_call(counted):
     embed = counted
     with semantic.background():
         embed(["x"])  # the capped copy
+        assert semantic._capped.model is not None
+    assert semantic._capped.model is None  # M3: dropped when the background work ended
     embed(["x"])
     assert Counted.loads == 2
     soon = time.monotonic() + semantic.IDLE_UNLOAD - 30
     assert semantic.drop_idle(soon) == []  # used within IDLE_UNLOAD: kept
     later = time.monotonic() + semantic.IDLE_UNLOAD + 1
-    assert semantic.drop_idle(later) == ["embedder", "background copy"]
-    assert semantic._main.model is None and semantic._capped.model is None
+    assert semantic.drop_idle(later) == ["embedder"]
+    assert semantic._main.model is None
     assert REAL_LOAD() is embed  # still set up: callers keep the same function
     assert embed(["x", "y"]).shape == (2, 4) and Counted.loads == 3  # loaded again
     assert semantic.drop_idle() == []  # just used
+    with semantic.background():  # a long background run: its copy goes when idle too
+        embed(["x"])
+        later = time.monotonic() + semantic.IDLE_UNLOAD + 1
+        assert semantic.drop_idle(later) == ["embedder", "background copy"]
+    assert Counted.loads == 4
 
 
 def test_a_model_in_use_is_never_dropped(counted):
@@ -286,6 +293,80 @@ def test_a_model_in_use_is_never_dropped(counted):
         t.join(10)
     assert semantic.drop_idle(time.monotonic() + semantic.IDLE_UNLOAD + 1) == ["embedder"]
     assert Counted.loads == 1
+
+
+def _model_files():
+    (semantic.models_dir() / "models--Qdrant--bge-small-en-v1.5-onnx-Q").mkdir(parents=True)
+
+
+def test_background_use_never_restarts_the_idle_clock(counted, monkeypatch):
+    """M3: only a person's use keeps the main model; the safety net's embedder and the full
+    model doing background work (no capped copy) leave its idle clock where it was."""
+    embed = counted
+    embed(["a person's recall"])
+    used = semantic._main.used
+    quiet = semantic.loaded_embedder()
+    assert quiet is not None and quiet(["the safety net"]).shape == (1, 4)
+    monkeypatch.setattr(semantic, "_capped", semantic._Held(lambda: False))  # copy failed
+    with semantic.background():
+        assert embed(["the browse import"]).shape == (1, 4)
+    assert semantic._main.used == used and Counted.loads == 1
+    assert semantic.drop_idle(used + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    assert semantic.loaded_embedder() is None  # dropped: the net never loads it again
+    with semantic.background():  # background work that had to load it: gone when the
+        embed(["the browse import"])  # person's clock runs out, not IDLE_UNLOAD after this
+    assert Counted.loads == 2
+    assert semantic.drop_idle(used + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    embed(["the next recall"])  # a person's use loads it and restarts the clock
+    assert Counted.loads == 3 and semantic.drop_idle(time.monotonic() + 1) == []
+
+
+def test_review_scores_with_the_embedder_only_while_it_is_in_memory(counted):
+    """M3: review's scorer (the app's about-me tidy) uses the embedder only while it is in
+    memory, and that use keeps it no longer; after an idle drop it loads nothing and scores
+    by words."""
+    from cortex import review
+    used = semantic._main.used
+    _, cut = review.scorer(["likes spicy food", "enjoys spicy dishes"])
+    assert cut == review.COS and semantic._main.used == used  # in memory: the clock left alone
+    assert semantic.drop_idle(used + semantic.IDLE_UNLOAD + 1) == ["embedder"]
+    _, cut = review.scorer(["reads papers", "reads news every morning"])
+    assert cut == review.JACCARD and semantic._main.model is None and Counted.loads == 1
+
+
+def test_background_import_setup_loads_no_model(home, root, monkeypatch):
+    """M3: inside background(), load_embedder loads nothing (the browse import asks for it
+    every run); the first embed loads only the capped copy, which goes when the work ends,
+    and `_embedder` (prime and review's "already loaded") stays unset."""
+    from cortex import browse_serve
+
+    monkeypatch.setattr(semantic, "load_embedder", REAL_LOAD)
+    monkeypatch.setattr(Counted, "loads", 0)
+    monkeypatch.setattr(semantic, "_text_embedding",
+                        lambda download=False, threads=None: Counted(threads))
+    semantic.models_dir().mkdir(parents=True)
+    with semantic.background():  # a models folder without the search model: not set up
+        assert semantic.load_embedder() is None
+    _model_files()
+    got = {}
+
+    def run(v, srcs, settings, embed=None, **kw):
+        got["loads"] = Counted.loads
+        got["shape"] = embed(["a visit's title"]).shape
+        got["loaded"] = (semantic._main.model, semantic._capped.model is not None)
+        return {}
+
+    monkeypatch.setattr(build, "run", run)
+    monkeypatch.setattr(sites, "update_vectors", lambda *a, **k: None)
+    trims = []
+    monkeypatch.setattr(semantic, "_trim", lambda: trims.append(1))
+    browse_serve.run_import(Vault(root), srcs=[])
+    assert got == {"loads": 0, "shape": (1, 4), "loaded": (None, True)}
+    assert Counted.loads == 1 and semantic._capped.model is None  # dropped as the run ended
+    assert trims == [1]  # no model left: the working set emptied too
+    assert semantic._main.model is None and semantic._embedder is None
+    from cortex import safety_net
+    assert safety_net.background_tools()[1] is None  # nothing in memory: the net uses none
 
 
 # ---- site counts in the browsing store ----------------------------------------------------
@@ -448,7 +529,7 @@ def test_the_background_net_uses_the_embedder_only_while_it_is_in_memory(monkeyp
     monkeypatch.setattr(semantic._main, "model", None)  # dropped after IDLE_UNLOAD
     assert safety_net.background_tools() == (None, None)
     monkeypatch.setattr(semantic._main, "model", object())
-    assert safety_net.background_tools() == (None, semantic._embed_real)
+    assert safety_net.background_tools() == (None, semantic._embed_quiet)  # M3
     fake = lambda texts: texts  # noqa: E731  (a test's injected embedder is always in memory)
     monkeypatch.setattr(semantic, "_embedder", fake)
     monkeypatch.setattr(semantic._main, "model", None)

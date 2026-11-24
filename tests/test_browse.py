@@ -31,6 +31,7 @@ from cortex.index import Index
 from cortex.vault import Vault, secret_pattern
 
 S = Settings()
+REAL_LOAD = semantic.load_embedder  # before conftest's _no_real_embedder wraps it
 
 
 def kept(url, title="A page", settings=S):
@@ -704,6 +705,36 @@ def test_without_an_embedder_everything_is_private(vault, browsers):
         encoding="utf-8")
     assert "### lichess.org · " in priv and "Topic: [[" not in priv
     assert rep["signals"] == 0 and rep.get("kept", 0) == 0
+
+
+def test_a_broken_model_leaves_the_background_import_as_without_one(vault, browsers,
+                                                                     monkeypatch):
+    """M3: the background import loads no model until it embeds. A half download is not set
+    up (doctor.search_model_ready); a whole one that does not load (corrupt) fails at the
+    first embed, and the import still finishes as with no model: no topics, no vectors."""
+    from cortex import browse_serve, doctor
+    from cortex.browse import titles
+
+    def corrupt(download=False, threads=None):
+        raise RuntimeError("a corrupt model file")
+
+    monkeypatch.setattr(semantic, "load_embedder", REAL_LOAD)
+    monkeypatch.setattr(semantic, "_text_embedding", corrupt)
+    monkeypatch.setattr(titles, "idle", lambda *a, **k: True)  # the vectors' pass runs too
+    d = semantic.models_dir()
+    d.mkdir(parents=True)
+    (d / "model.onnx.incomplete").write_text("")
+    with semantic.background():
+        assert semantic.load_embedder() is None
+    (d / "model.onnx.incomplete").unlink()
+    (d / doctor.MODEL_READY).write_text("downloaded\n", encoding="utf-8")
+    lines: list[str] = []
+    browse_serve.run_import(Vault(vault), say=lines.append, srcs=sources.discover(*browsers))
+    pages = list((vault / "browse" / "private").glob("browse-private-*.md"))
+    assert pages and all("Topic: [[" not in p.read_text(encoding="utf-8") for p in pages)
+    assert json.loads((vault / build.STATE).read_text(encoding="utf-8"))["embedder"] is False
+    assert "private browse search not updated: " + semantic.NOT_SET_UP in lines
+    assert semantic._main.model is None and semantic._embedder is None
 
 
 # ---- privacy review regressions (C1, H1, H2, M1, M5, L2, L3, L4) ----------------------------

@@ -188,6 +188,140 @@ Possible fixes, all outside M2's files (`semantic.py`, `browse_serve.py`, `safet
   restart the idle clock;
 - or a shorter `IDLE_UNLOAD` in the app.
 
+## M3: an idle Cortex gives its memory back
+
+The owner's installed 0.4.2, 15 minutes after start on a PC in use: the app's Python process
+had a 726 MB working set and 1,184 MB of private bytes, and each idle `cortex mcp` had 295-323
+MB. M3 closes the two gaps M2 found in the app and makes an idle MCP connection small.
+
+Two probe runs, both on made-up data with a temp HOME and the real models:
+- `--launch 25 --busy --scale 0.2 --notes 300` starts the app as the installer does. It makes
+  one person's search at the start. Every minute it adds 40 visits to a made-up Chrome
+  history, and every fifth minute a chat page. The browse import, the chats import, the
+  safety net and the idle check run on their schedules. `--scale 0.2` shortens every schedule
+  and `IDLE_UNLOAD` five times, so 25 minutes take 5. Times are shown at full scale.
+- `--mcp 15 --scale 0.2 --notes 300` starts `cortex mcp` over stdio as an AI app does:
+  `initialize`, then one `cortex_prime` and one `cortex_recall` (first calls, timed), then 15
+  idle minutes, then the same two calls again.
+
+Both print the working set and private bytes each minute, and which models are loaded and for
+how long they have gone unused.
+
+"Before" is main at 19191f1. "After" is this change. The runs used `--notes 300 --visits 3000`
+and a hidden window, on 16 logical cores, with no test suite running. Times are full-scale
+minutes. "Embedder" is the main model and "copy" is the background copy.
+
+**The app on a PC in use** (`--launch 25 --busy`), working set and private bytes in MB:
+
+| min | before ws | priv | models | after ws | priv | models |
+|---:|---:|---:|---|---:|---:|---|
+| 1 | 338 | 407 | embedder | 339 | 408 | embedder |
+| 2 | 466 | 535 | embedder, copy | 467 | 535 | embedder, copy |
+| 4 | 468 | 537 | embedder, copy | 500 | 587 | embedder, copy (vectors) |
+| 7 | 868 | 975 | embedder, copy | 654 | 786 | embedder, copy (vectors) |
+| 10 | 474 | 544 | embedder, copy | 365 | 435 | embedder |
+| 12 | 473 | 544 | embedder, copy | 47 | 326 | none |
+| 14 | 476 | 547 | embedder, copy | 49 | 327 | none |
+| 16 | 478 | 549 | embedder, copy | 51 | 327 | none |
+| 20 | 481 | 551 | embedder, copy | 100 | 318 | none (an import ran) |
+| 25 | 473 | 545 | embedder, copy | 109 | 323 | none |
+
+**Before:** the safety net's uses every 5 minutes kept the embedder loaded for the whole run.
+The copy was dropped only once, at minute 13, and the next import loaded it again.
+
+**After:** the embedder goes 10 minutes after the person's search (minute 12), although the net
+used it at minutes 2 and 7. From then on the net runs without an embedder and picks no hub by
+vectors, as M1 intended after a drop. The copy goes when each import ends.
+
+Each run also depends on whether the PC was idle. In the after run it was idle from minute 4, so
+the import's private-vectors pass ran for its budget and held the copy until minute 9. In the
+before run it never ran.
+
+The after run came before review's scorer stopped restarting the clock (see below). In that
+run, its first pass, at minute 1, used the embedder too, which moved the drop about a minute
+later.
+
+A first after run, which trimmed only on an idle drop, stayed at 132-136 MB with no model
+after its minute-14 import. The end of a background run now trims too.
+
+**One idle `cortex mcp`** (`--mcp 15`), in MB:
+
+| min | before ws | priv | after ws | priv | models |
+|---:|---:|---:|---:|---:|---|
+| 1-11 | 360 | 425 | 360 | 425 | embedder, reranker |
+| 12-14 | 153 | 217 | 2-3 | 224 | none (dropped at 10 idle minutes) |
+| 16, after a prime and a recall | 269 | 335 | 159 | 335 | embedder |
+
+The idle check drops both models between 10 and 11 idle minutes. Before, the working set stayed
+at 153 MB after that. Now the trim empties it, and the next calls fault back what they touch.
+Private bytes are the same, since they still hold the imports.
+
+**First calls over stdio** (seconds), two runs each:
+
+| call | before | after |
+|---|---|---|
+| initialize | 6.40, 5.75 | 5.88, 5.70 |
+| `cortex_prime`, first (waits for the warm-up's load) | 4.31, 4.23 | 4.38, 4.22 |
+| `cortex_recall`, first | 0.11, 0.13 | 0.10, 0.09 |
+| `cortex_prime`, after the idle drop (loads again) | 0.52 | 0.52 |
+| `cortex_recall`, after the idle drop | 0.11 | 0.10 |
+
+The first prime is 0.7% slower on the mean, which is within noise. The trim costs no visible
+time after idle, because that call loads the model again anyway.
+
+**The rule: only a person's use keeps a model.** Background work still uses the models, but it
+never keeps one loaded:
+- **The browse import loads nothing to get its embed function.** Inside
+  `semantic.background()`, `load_embedder()` returns the function when the download is whole,
+  by the same rule as `doctor.search_model_ready` (the `.complete` marker, else no
+  `*.incomplete` file). It never loads a model. The first embed loads the capped copy, which
+  is the model background work uses anyway. When the outermost `background()` ends, the copy
+  is dropped, since it served only that work. `_embedder`, which prime and review read as
+  "this process has the model", is set only by a load outside `background()`. A background
+  import therefore never makes them load the model.
+- **A background use never restarts the idle clock.** `_Held.use(touch=False)` leaves the
+  clock where a person's last use set it. A model no person used goes at the next idle check,
+  even while background work runs every few minutes.
+- **The safety net and review's scorer never load the main embedder by themselves.**
+  `safety_net.background_tools()` and `review._warm` get `semantic.loaded_embedder()`, which
+  returns an embed function only while the main model is in memory. That function does not restart the clock.
+  If the model is dropped between that check and the embed, the call loads it again, and the
+  next idle check drops it.
+- **The failure path is the same as before.** Before M3, a model whose files did not load
+  (corrupt or half downloaded) made `load_embedder()` return None, and the import ran without
+  it. Now a half download is still None, by the readiness rule. A whole download that does not
+  load fails at the first embed with `semantic.NotLoaded`, a `VaultError` with the `not_set_up`
+  message. `browse_serve.run_import` then runs `build.run` again without a model. Its days
+  stay dirty until their pages are saved, so the second run makes them, with no topics and no
+  vectors. The private vectors' pass already reports any failure and goes on.
+  `test_a_broken_model_leaves_the_background_import_as_without_one` covers both cases.
+
+**What an idle `cortex mcp` holds.**
+- **The imports.** They take about 127 MB of working set before any model loads, and they stay
+  for the life of the process:
+  - the MCP SDK brings starlette, uvicorn, sse_starlette and cryptography;
+  - fastembed brings onnxruntime, tokenizers, PIL, huggingface_hub, requests, tqdm, mmh3 and
+    loguru;
+  - numpy comes in through `cortex.cli`, by way of dashboard and brainmap.
+- **The embedder.** The warm-up after `notifications/initialized` loads it, so the first prime
+  is quick and orders by cosine. It stays: dropping it would slow the first call.
+- **The core's catalog and index, and the vector matrices kept for queries**
+  (`semantic._MEM`). Dropping `_MEM` would change what `cortex_read` lists as similar pages.
+
+The M1 idle check drops the embedder after `IDLE_UNLOAD`. On Windows a process keeps the pages
+it touched in its working set after the memory is freed. So when the last model goes, the
+process now empties its working set. That happens at an idle drop (`semantic.idle_pass`) or
+at the end of a background run that leaves no model (`background()`). Both call
+`_trim_if_none`, then `_trim`, which calls `K32EmptyWorkingSet`. `TRIM = False` turns it off. The pages go to the standby list, where
+other programs can take them, and the next call faults back only the pages it touches. Private
+bytes do not change, and no tool's output or server-stamped field changes.
+
+**Review's scorer follows the same rule.** `review._warm` serves the app's about-me tidy and
+Review. It used to take `_embedder` as meaning the model was loaded. So once a person's use had
+set it, the scorer loaded the embedder again after an idle drop and restarted its clock. Now it
+also uses `semantic.loaded_embedder()`. With no model in memory, it scores by words (Jaccard),
+as it already did when no model was set up.
+
 ## What is left (not changed here)
 
 - **The index build's transient peak**, about 900 MB above the loaded model at a batch of 64
