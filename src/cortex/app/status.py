@@ -527,14 +527,22 @@ def rows(root: Path | None) -> list[dict]:
                 "detail": "Finds notes by meaning, not just matching words." if e["downloaded"]
                 else "Without it, search matches words only.",
                 "action": None if e["downloaded"] else _go("setup", "Download")})
+    from cortex import clients
     from cortex.app import targets
-    on = [t["label"] for t in kept(("targets", None), lambda: targets.describe(None))
-          if t["connected"]]
+    # with a vault, the same describe(entry) (and cache key) as the server's /api/status uses,
+    # so `stale` (an entry naming another vault folder) costs nothing extra there
+    entry = clients.server_entry(clients.mcp_command(), root) if v["ok"] else None
+    ts = kept(("targets", json.dumps(entry, sort_keys=True) if entry else None),
+              lambda: targets.describe(entry))
+    on = [t["label"] for t in ts if t["connected"]]
     out.append({"id": "apps", "label": "AI apps", "state": "ok" if on else "off",
                 "value": ", ".join(on) or "none connected",
                 "detail": "They read and record through Cortex." if on else
                 "Without one, nothing reads or records anything.",
                 "action": _go("connect", "Open" if on else "Connect")})
+    if any(t["connected"] and t.get("stale") for t in ts):
+        out[-1].update(state="warn", detail="An AI app still uses your old vault folder. Open "
+                       "Connect AI apps and click Apply.", action=_go("connect", "Open"))
     if stale := targets.ClaudeDesktop().other_copy():  # uncached: Apply fixes it at once
         out[-1].update(state="warn", value="Claude Desktop runs a different Cortex copy",
                        detail=f"{'; '.join(map(str, stale))} starts another cortex than the "

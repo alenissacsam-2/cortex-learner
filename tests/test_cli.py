@@ -602,6 +602,9 @@ def test_help_keeps_brackets_and_names_no_internal_docs():
     for path in walk(typer.main.get_command(app), []):
         out = runner.invoke(app, [*path, "--help"], terminal_width=200).output
         assert "[]" not in out and not any(w in out for w in ("PHASE", "SPEC", "§")), path
+        assert "<bool>" not in out, path  # FX4: a flag takes no value
+    setup = runner.invoke(app, ["setup", "--help"], terminal_width=200).output
+    assert "--dry-run" in setup and "<bool>" not in setup and "<path>" in setup
     assert 'Add the [[links]] Obsidian' in run("relink", "--help").output
     assert 'edges as "[[id]]"' in runner.invoke(app, ["relink", "--help"],
                                                  terminal_width=200).output

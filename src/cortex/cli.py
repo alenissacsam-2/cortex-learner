@@ -38,6 +38,10 @@ EPILOG = ("About you: claims [--unasked|--summary], voice, export context · "
           "Chats: chats, harvest status, safety-net, fact-harvest · "
           "Vault: lint, relink, concept duplicates, topics, replay, undo, backup · "
           "Setup: app, setup [--print-mcp-config], init, doctor, model download, exclude")
+# typer 0.29 prints <bool> after every flag, --help too; a flag takes no value, so show none
+_display_type = typer.core.TyperOption.display_type_rich
+typer.core.TyperOption.display_type_rich = \
+    lambda self, ctx: None if self.is_flag else _display_type(self, ctx)
 app = typer.Typer(no_args_is_help=True, epilog=EPILOG)
 log_app = typer.Typer(no_args_is_help=True, help="Record evidence (source external).")
 concept_app = typer.Typer(no_args_is_help=True, help="Edit the concept catalog.")

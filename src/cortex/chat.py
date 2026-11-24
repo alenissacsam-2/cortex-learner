@@ -84,6 +84,9 @@ NO_ANSWER = "I don't know from your archive."
 SEARCHED = 5  # pages listed as "searched, not cited" when the answer cites none
 PAGES_READ = 4  # pages of an inventory, schedule or decisions answer the model reads
 FRONT_MAX = 2000  # characters of a routed half's data answer (a site list) the model gets
+# the app's Chat only: semantic.NOT_SET_UP names a CLI command (fine for agents, not here)
+NO_SEARCH_MODEL = ("Search by meaning is off: download the search model in Setup to find notes by "
+                   "meaning.")
 SAID_NOTHING = ("{model} gave no answer, twice. These are the pages it searched; open one to "
                 "read it, or ask again in other words.")
 CITE = "\n\n(Answer from the passages above and cite each one you use as [n].)"  # 2B models forget
@@ -1208,10 +1211,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     blocked = None # with a routed half: why its other half gets no model answer
     if passages and not files and not read and semantic.load_embedder() is None:
         if front is None:
-            emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP,
+            emit({"t": "err", "code": "not_set_up", "message": NO_SEARCH_MODEL,
                   "id": convo_id})
             return convo_id
-        blocked = semantic.NOT_SET_UP
+        blocked = NO_SEARCH_MODEL
     if passages and not blocked and callable(runner) \
             and not isinstance(runner, localllm.Runner):
         try:  # the app passes localllm.find: it may start LM Studio, so only when needed
