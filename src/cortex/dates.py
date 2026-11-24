@@ -131,8 +131,8 @@ def _this(m, t: date) -> tuple[date, date]:
 
 
 def _next(m, t: date) -> tuple[date, date]:
-    """"next Friday": the first such day after today (a week on, said on a Friday)."""
-    d = t + ((_WEEKDAYS.index(m[1].lower()) - t.weekday() - 1) % 7 + 1) * _D
+    """"next Wednesday": that day of next Monday-to-Sunday week, as "this" is of this week."""
+    d = _monday(t) + (7 + _WEEKDAYS.index(m[1].lower())) * _D
     return d, d
 
 
@@ -155,7 +155,9 @@ _PIN_RULES = [(re.compile(p, re.I), f, counted) for p, f, counted in [
     (rf"\bin\s+{_NUM}\s+days?\b", lambda m, t: (t + _n(m[1]) * _D,) * 2, True),
     (r"\blast\s+week\b", lambda m, t: (_monday(t) - 7 * _D, _monday(t) - _D), False),
     (r"\bthis\s+weekend\b", lambda m, t: (_monday(t) + 5 * _D, _monday(t) + 6 * _D), False),
-    (rf"\b(on|last)\s+({_DAYS})\b", _weekday, False),  # as `when`: the most recent one
+    # as `when`: the most recent one. "on Friday" and a bare "Friday" have no tense ("exam on
+    # Friday", said on a Wednesday), so they are never pinned
+    (rf"\b(last)\s+({_DAYS})\b", _weekday, False),
     (rf"\bthis\s+({_DAYS})\b", _this, False),
     (rf"\bnext\s+({_DAYS})\b", _next, False),
 ]]

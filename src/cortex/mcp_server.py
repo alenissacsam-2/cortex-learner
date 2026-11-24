@@ -154,9 +154,12 @@ PIN_KINDS = frozenset({"me", "note", "decision", "loop", "journal"})
 
 
 def _pin_day(core) -> date | None:
-    """Today for dates.pin (the day events are stamped with), or None while old chats are
-    written (a harvest bundle, fact_harvest's session): their "yesterday" is not today's."""
-    if core.sessions.harvesting or getattr(core.session, "mode", None) == "harvest":
+    """Today for dates.pin (the day events are stamped with), or None when today is not the
+    day the words were written, since a wrong day is worse than none: old chats (a harvest
+    bundle, fact_harvest's session), the owner's clicks in the app (Approve of a line proposed
+    days ago) and a //tag (tags.apply pins it as of its own turn's day, or not at all)."""
+    if (core.app_clicks or core.tagged or core.sessions.harvesting
+            or getattr(core.session, "mode", None) == "harvest"):
         return None
     return date.fromisoformat(local_day(core._now()))
 
@@ -2677,8 +2680,6 @@ class Cortex:
             text += f" · {name} {v}"
         now = self._now()
         day, hhmm = local_day(now), f"{now.astimezone():%H:%M}"
-        if today := _pin_day(self):  # L1: as of the day it is written
-            text = dates.pin(text, today)
         if p.get("date") is not None:  # BIO-1: a backdated line; events keep the real day
             d = p["date"]
             if not (isinstance(d, str) and len(d) == 10 and loops.parse_day(d)) \
@@ -2687,6 +2688,8 @@ class Cortex:
             if d != day:
                 text, hhmm = f"{text} (added {day})", "—"
                 day = d
+        if _pin_day(self):  # L1: as of the line's own day (a backdated line's, not today's)
+            text = dates.pin(text, date.fromisoformat(day))
         self.vault.append_journal(day, hhmm, text)
         hint = self.sessions.note("journal", change={"tool": "journal"})
         return {"recorded": 1, "display_line": f"Journal {day}: logged",

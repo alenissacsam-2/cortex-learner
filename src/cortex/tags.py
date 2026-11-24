@@ -78,7 +78,9 @@ def apply(core, items, said: bool = True, forget_said: bool = True,
         if core.log.has_key(k):  # before _call, which would open a session for nothing
             continue
         ok = said and (forget_said or tag != "forget")
-        if tag in PAGES and day:  # "yesterday" as of the turn's own day (an import's is old)
+        # "yesterday" as of the turn's own day (an import's is old); no day, no pin, and
+        # cortex_patch never pins a tag itself (mcp_server._pin_day: `tagged`)
+        if tag in PAGES and day:
             text = dates.pin(text, date.fromisoformat(day))
         out = core._call("cortex_patch", core._tag, {"tag": tag, "text": text, "said": ok,
                                                      "key": k})

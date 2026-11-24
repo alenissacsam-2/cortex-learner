@@ -13,6 +13,7 @@ from mcp import Client
 from mcp.types import Implementation
 
 from cortex import chat, chats, dates, fact_harvest, recall_log, session, tags, voice
+from cortex.app import server
 from cortex.mcp_server import build_server
 from cortex.vault import Vault
 
@@ -135,6 +136,37 @@ def test_an_imported_tag_is_pinned_to_its_own_day(root):
         (root / "me/profile.md").read_text(encoding="utf-8")
 
 
+def test_an_imported_tag_with_no_day_is_never_pinned(root):
+    """No timestamp, no day: cortex_patch must not pin it with today either."""
+    tags.apply_in(Vault(root), [("fact", "Started at Beta Corp yesterday", "")])
+    profile = (root / "me/profile.md").read_text(encoding="utf-8")
+    assert "Started at Beta Corp yesterday" in profile and "yesterday (20" not in profile
+
+
+def test_a_backdated_journal_line_is_pinned_as_of_its_own_day(root, monday):
+    async def body(call):
+        await call("cortex_log", {"kind": "journal", "payload": {
+            "text": "Ran 5k yesterday", "date": "2026-11-20"}})
+
+    run(root, body)
+    journal = next((root / "journal").glob("2026-11-20*.md")).read_text(encoding="utf-8")
+    assert "Ran 5k yesterday (2026-11-19) (added 2026-11-23)" in journal
+
+
+def test_approve_in_the_app_never_pins(root):
+    """A line proposed days ago and approved now: today is not the day it was written."""
+    (root / ".cortex").mkdir(exist_ok=True)
+    (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
+    (root / "inbox.md").write_text("# Inbox\n\n## About me (unconfirmed)\n- Coding: Reviews "
+                                   "code the day after tomorrow (proposed 2026-11-01, "
+                                   "me/preferences)\n", encoding="utf-8")
+    app = server.App(root)
+    (p,) = [p for p in app.review()["pending"] if p["page"] == "preferences"]
+    app.review_approve({"key": p["key"]})
+    prefs = (root / "me" / "preferences.md").read_text(encoding="utf-8")
+    assert "- Reviews code the day after tomorrow (confirmed " in prefs
+
+
 def test_a_fact_harvest_from_old_chats_pins_nothing(root):
     fact_harvest._save(Vault(root), [("c1", "profile", "Moved to Pune yesterday", False)])
     profile = (root / "me/profile.md").read_text(encoding="utf-8")
@@ -174,7 +206,6 @@ def test_the_recall_log_and_voice_samples_keep_no_private_span(root):
     # a Monday
     (date(2026, 11, 23), "met the recruiter yesterday", "yesterday (2026-11-22)"),
     (date(2026, 11, 23), "last Monday", "last Monday (2026-11-16)"),
-    (date(2026, 11, 23), "on Monday", "on Monday (2026-11-23)"),
     (date(2026, 11, 23), "this Monday", "this Monday (2026-11-23)"),
     (date(2026, 11, 23), "exam next Monday", "next Monday (2026-11-30)"),
     (date(2026, 11, 23), "trip this weekend", "this weekend (2026-11-28 to 2026-11-29)"),
@@ -183,9 +214,10 @@ def test_the_recall_log_and_voice_samples_keep_no_private_span(root):
     (date(2026, 11, 29), "trip this weekend", "this weekend (2026-11-28 to 2026-11-29)"),
     (date(2026, 11, 29), "away last week", "last week (2026-11-16 to 2026-11-22)"),
     (date(2026, 11, 29), "due this Friday", "this Friday (2026-11-27)"),
-    (date(2026, 11, 29), "on Sunday", "on Sunday (2026-11-29)"),
     (date(2026, 11, 29), "last Sunday", "last Sunday (2026-11-22)"),
     (date(2026, 11, 29), "next Monday", "next Monday (2026-11-30)"),
+    (date(2026, 11, 29), "next Friday", "next Friday (2026-12-04)"),
+    (date(2026, 11, 24), "next Wednesday", "next Wednesday (2026-12-02)"),  # not tomorrow
     (date(2026, 11, 29), "tomorrow", "tomorrow (2026-11-30)"),
     # a month boundary (a Tuesday)
     (date(2026, 12, 1), "yesterday", "yesterday (2026-11-30)"),
@@ -211,6 +243,7 @@ def test_pin_dates_the_phrase(today, text, want):
     "in October", "on 30 Nov", "on Monday, 30 Nov", "on 2026-11-30", "since 12 Nov",  # absolute
     "run `make today` first", "```\nexam tomorrow\n```", "past 3 days", "this week",
     "yesterday (2026-11-22) again", "Yesterdays",
+    "exam on Friday", "on Monday", "met her Friday", "Friday works",  # no tense: never pinned
 ])
 def test_pin_leaves_these_alone(text):
     assert dates.pin(text, date(2026, 11, 23)) == text
