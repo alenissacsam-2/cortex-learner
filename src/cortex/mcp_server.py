@@ -308,6 +308,8 @@ ASK_LONG = 280
 ASK_FOCUS = (" This question is long or asks two things; next time ask one focused, precise "
              "question (modes/grading.md).")
 MORE_NEXT = "Continue, or call cortex_end with a short summary when done."
+HELD_NEXT = ("Saved, but AI apps don't get it until the owner keeps it in Cortex's Review: it "
+             "holds a command to run. ")  # G5b-6
 # B11: cortex_log kinds that write files, not keyed events; their key goes on a `keyed` marker
 FILE_LOG_KINDS = frozenset({"journal", "capture", "voice_sample"})
 SPLITS_MAX = 2  # REVIEW-1005 §6.2: split proposals per cortex_reflect, to bound CPU
@@ -2909,6 +2911,8 @@ class Cortex:
             if out.get("queued"):
                 out["next"] = (f"Saved as unconfirmed ({why}): it waits for the user's Approve "
                                "in the Cortex app; say so in one line and go on.")
+            elif out.get("next", "").startswith(HELD_NEXT):  # G5b-6: no app sees it yet
+                out["next"] = HELD_NEXT + "say so in one line and go on."
             elif out.get("changed"):  # D3: a claim line, written now, served (ask)
                 out["next"] = (f"Saved now but unconfirmed ({why}): AI apps see it marked (ask) "
                                "until the user confirms it; say so in one line and go on.")
@@ -2932,7 +2936,8 @@ class Cortex:
             if not claim_page:
                 raise invalid(f"{op} works only on the claim pages: me/"
                            + ", me/".join(claims.PAGES) + ".")
-            return self._claim_op(nid, op, target, text, user_confirmed, until, said == "yes")
+            return self._held_command(
+                self._claim_op(nid, op, target, text, user_confirmed, until, said == "yes"), text)
         changed = True
         day = local_day(self._now())
         if sup is None and self.app_clicks and claim_page and op == "append_to_section":
@@ -3077,7 +3082,18 @@ class Cortex:
                + ("Cortex retired the line(s) in `replaced` (they said nearly the same or this "
                   "one replaces them; `cortex undo` brings them back); say so in one line. "
                   if gone else "") + self._next(MORE_NEXT) + hint}
-        return _update_of(None if gone else shown, out)
+        return _update_of(None if gone else shown, self._held_command(out, f"{target}\n{text}"))
+
+    def _held_command(self, out: dict[str, Any], text: str) -> dict[str, Any]:
+        """G5b-6: `out` with HELD_NEXT first in its `next` when the claim line it names is held
+        for a command to run (review.unsafe_lines); text with no command costs nothing."""
+        ids = out.get("claim")
+        ids = set(ids) if isinstance(ids, list) else {ids} if ids else set()
+        if ids and claims.command(text) and ids & {
+                x["id"] for x in review.unsafe_lines(self.vault, self.log.iter_events())
+                if x.get("command")}:
+            out["next"] = HELD_NEXT + out["next"]
+        return out
 
     def _line_ref(self, r: dict) -> dict:
         """A claim row as a result names it: {id, page, text} with the text wrapped, or no text

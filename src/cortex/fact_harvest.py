@@ -50,7 +50,8 @@ exact words. Code then checks each one (`check`): the quote occurs verbatim (whi
 case aside) in one user turn of that page, is first person, its clause not a question, and
 backs the fact (`_backed`: CONTAINS of its content words, the same polarity and tense); the
 fact passes
-claims.unsafe (the about-me injection guard) and vault.secret_pattern, and fits LINE_CHARS.
+claims.unsafe (the about-me injection guard), claims.command (G5b-6: no command to run) and
+vault.secret_pattern, and fits LINE_CHARS.
 A failed check drops it silently.
 
 Each survivor is written as cortex_patch writes an about-me line without user_confirmed (an
@@ -141,7 +142,8 @@ def check(item, turns: list[str]) -> tuple[str, str] | None:
         return None
     fact = " ".join(fact.split()).removeprefix("- ").strip()
     if (page not in PAGES or not 3 <= len(fact) <= LINE_CHARS or "\n" in fact
-            or claims.unsafe(f"{PAGES[page]}\n{fact}", page) or secret_pattern(fact)
+            or claims.unsafe(f"{PAGES[page]}\n{fact}", page) or claims.command(fact)
+            or secret_pattern(fact)
             or not said(quote, turns) or not _backed(fact, quote)):
         return None
     return page, fact

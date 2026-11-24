@@ -1,4 +1,4 @@
-"""`cortex doctor --security` (cortex.redteam): the five probes PASS on this code, and each one
+"""`cortex doctor --security` (cortex.redteam): the six probes PASS on this code, and each one
 really detects its hole: with the one guard it depends on turned off, that probe and only that
 probe FAILs. The run builds its own made-up vaults in a temp folder it deletes."""
 
@@ -56,6 +56,7 @@ HOLES = {  # probe -> the one guard turned off
     "P4": lambda mp: mp.setattr(review, "outside_lines", lambda vault, events: []),
     "P5": _carving_open,
     "P5-sweep": lambda mp: mp.setattr(forget, "_sweep", lambda *a, **k: {}),  # events, caches
+    "P6": lambda mp: mp.setattr(claims, "command", lambda text: None),
 }
 
 
@@ -93,11 +94,12 @@ def test_doctor_security_prints_a_line_per_probe_and_exits_1_on_a_fail(monkeypat
     assert r.exit_code == 1, r.output
     assert "PASS  P1 image exfiltration\n" in r.output
     assert "FAIL  P3 MemoryGraft playbook: a guard\n" in r.output
-    assert r.output.rstrip().endswith("4 of 5 attacks stopped; 1 got through.")
+    assert "PASS  P6 command line\n" in r.output
+    assert r.output.rstrip().endswith("5 of 6 attacks stopped; 1 got through.")
     for p in probes:
         p.ok = True
     r = CliRunner().invoke(cli.app, ["doctor", "--security"])
-    assert r.exit_code == 0 and r.output.rstrip().endswith("5 of 5 attacks stopped.")
+    assert r.exit_code == 0 and r.output.rstrip().endswith("6 of 6 attacks stopped.")
     assert "Python" not in r.output  # not the plain doctor's checks
 
 

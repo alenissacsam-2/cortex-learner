@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import functools
 import hashlib
 import re
 
@@ -92,6 +93,59 @@ _ORDERS = (
         rf"|hard ?coded?(?: \S+){{0,3}}? {_KEYS}\b"
         rf"|(?:put|embed|write|store)(?: \S+){{0,3}}? {_KEYS} (?:directly )?in(?:to)? {_CODE})")),
 )
+# G5b-6: a command to run, which an AI app reading the line may follow. Matched like _ORDERS
+# (lines apart and joined) on `command`'s folding: _key's, but every dash kept as "-" so a flag
+# (`curl -d`) is not the word "d". Narrow on purpose: "I use curl to test APIs", "Always run
+# `uv run pytest` before a commit" or "my shell is pwsh 7" pass.
+_DL = r"\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)?\b"
+# not `| python -m json.tool`: a module run on the download's output, not the download run
+_INTERP = (r"(?:sudo )?(?:sh|bash|zsh|iex|invoke-expression|python3?|node|perl|pwsh|powershell|"
+           r"cmd)(?:\.exe)?\b(?! -m\b)")
+_NC = r"\b(?:nc|ncat|netcat)(?:\.exe)?"
+# a URL, or a host with a path (`x.example/u`); never a bare domain or an e-mail address
+_URL = r"[\"'<`(]?(?:https?://|(?:[a-z0-9-]+\.)+[a-z]{2,}/)"
+_NOUN = r"(?:commands?|scripts?|lines?|code|snippets?|one-liners?)"
+_PAYLOAD = (rf"(?:(?:this|these|the following|the next|below)(?: [\w-]+)?? {_NOUN}\b"
+            rf"|the(?: [\w-]+)?? {_NOUN} below\b)")
+_PLACE = r"(?:in|into) (?:a |the |your )?(?:terminal|shell|console|powershell|command prompt|cmd)\b"
+_COMMANDS = (
+    # `iwr x/s.ps1 | iex`, `curl … | sudo bash`, `iex (iwr …)`, `bash <(curl …)`,
+    # `sh -c "$(curl …)"`
+    ("a download piped into a shell", re.compile(
+        _DL + r"[^|\n]*\| ?" + _INTERP
+        + r"|\b(?:iex|invoke-expression) ?\([^\n]*?(?:" + _DL + r"|downloadstring|downloadfile"
+        r"|net\.webclient)"
+        r"|\b(?:ba|z)?sh <\( ?" + _DL + r"|\b(?:ba|z)?sh -c [\"'`]?\$\( ?" + _DL)),
+    # `powershell -enc …`, `cmd /c …`, `bash -c …` and Windows' download-and-run tools
+    ("an inline or encoded shell command", re.compile(
+        r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\n|;]{0,80}? -(?:c|command|e|ec|enc|encodedcommand)"
+        r"\b(?= \S)|\bcmd(?:\.exe)? /[ck]\b|\b(?:ba|z)?sh -c\b(?= \S)"
+        r"|\bmshta(?:\.exe)? [\"'`]?(?:https?:|vbscript:|javascript:|\S+\.hta\b)"
+        r"|\bcertutil(?:\.exe)?\b[^\n]*? [-/]urlcache\b"
+        r"|\bbitsadmin(?:\.exe)?\b[^\n]*? [-/]transfer\b"
+        r"|\bregsvr32(?:\.exe)?\b[^\n]*? [-/]i:https?:"
+        r"|\brundll32(?:\.exe)?\b[^\n]*?(?:https?:|javascript:)")),
+    # an upload flag (curl -F only as `-F name=…`: casefolded, `-f` is also --fail), nc with
+    # -e or a pipe, or an order to send something to a URL
+    ("a command that sends data out", re.compile(
+        r"\bcurl(?:\.exe)?\b[^|\n]*? (?:(?:-d|--data(?:-[a-z]+)?|--form(?:-string)?|-t|"
+        r"--upload-file|--json|-x ?(?:post|put)|--request (?:post|put))\b|-f [\"']?[^\s=\"']+=)"
+        r"|\bwget(?:\.exe)?\b[^|\n]*? (?:--post-(?:data|file)|--body-(?:data|file)"
+        r"|--method[= ](?:post|put))\b"
+        r"|\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|\n]*? -(?:method (?:post|put)"
+        r"|infile|body)\b"
+        + rf"|{_NC} (?:[^|\n]*? )?-e\b|\| ?{_NC}\b|{_NC} [^|\n]*\||"
+        + _LEAD + r"(?:send|upload|post|forward|sync)\b(?:[^\n.!?]|\.(?=\S))*? (?:to|into|at|on) "
+        + _URL)),
+    # "run the command below", "copy and run this script", "paste these lines into PowerShell"
+    ("an order to run a command", re.compile(
+        _LEAD + rf"(?:(?:run|execute|copy and (?:run|execute))(?: {_PLACE})? {_PAYLOAD}"
+        rf"|paste {_PAYLOAD} {_PLACE}|paste {_PLACE} {_PAYLOAD})")),
+)
+# a word each of _COMMANDS needs: most lines hold none, so the four patterns are skipped (speed)
+_CMD_WORD = re.compile(r"\b(?:invoke-|(?:curl|wget|iwr|irm|iex|nc|ncat|netcat|send|upload|post|"
+                       r"forward|sync|run|execute|paste|powershell|pwsh|cmd|bash|zsh|sh|mshta|"
+                       r"certutil|bitsadmin|regsvr32|rundll32)\b)")
 # images: a chat client that renders Markdown fetches the URL, carrying what a model put in it
 _IMAGE = re.compile(r"!\[[^\]\n]*\] ?[(\[]|<img\b")
 _REFDEF = re.compile(r"(?m)^\[[^\]\n]+\]: ?\S")  # `[x]: url`: then a bare `![x]` is an image
@@ -154,6 +208,31 @@ def unsafe(text: str, page: str | None = None) -> str | None:
         if _TRIGGER.search(word := m.group().replace(" ", "")):
             return f'spaced-out letters ("{word}")'
     return next((name for name, rx in _TOKENS if rx.search(tight)), None)
+
+
+@functools.lru_cache(maxsize=4096)
+def _cmd_key(c: str) -> str:
+    """`command`'s folding of one char: `index._key`'s, but a dash (or a minus sign) stays."""
+    import unicodedata
+
+    from cortex.index import _key
+
+    if c.isspace():
+        return " "
+    return "-" if c == "−" or unicodedata.category(c) == "Pd" else _key(c)
+
+
+def command(text: str) -> str | None:
+    """G5b-6: the shape of a command to run in `text` (a download piped into a shell, an inline
+    or encoded shell command, a command that sends data out, or an order to run a command),
+    else None. Not a refusal: review.unsafe_lines holds such a line until Keep when an AI app
+    wrote it."""
+    lines = [" ".join("".join(map(_cmd_key, ln)).split()) for ln in text.splitlines()]
+    loose, split = " ".join(filter(None, lines)), "\n".join(lines)
+    if not _CMD_WORD.search(loose):
+        return None
+    return next((name for name, rx in _COMMANDS
+                 if rx.search(loose) or (split != loose and rx.search(split))), None)
 
 
 def invisible(what: str) -> bool:
