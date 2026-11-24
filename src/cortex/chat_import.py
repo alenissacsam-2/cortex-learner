@@ -2,15 +2,16 @@
 per past conversation, written with no model.
 
 Claude Code transcripts (chats.root(), the desktop app's Code tab included, and its Cowork
-sessions: chats.cowork_files()), imported chat exports (chats.export_root()) and the chats a
-Claude app logged live over MCP (chats.LIVE) not saved yet, or changed since their page was
-written, become `resource` pages whose `Timeline:` line names their `Source:` app
-(semantic.is_chat), new ones in the git-ignored archive/chats/ (cortex.chat_archive). An
-ordinary chat keeps the user's own turns only, redacted and capped (chats.LINE_CHARS a turn,
-chats.PART_CHARS a page); assistant text is never copied. A coding session (Edit, Write,
-NotebookEdit or Bash calls) becomes a short summary: project, dates, the user's requests (first
-lines), files touched (relative paths) and commit subjects, never code, diffs, tool output or
-file contents.
+sessions: chats.cowork_files()), Codex, Gemini CLI and Copilot CLI sessions (chats.codex_files,
+gemini_files, copilot_files; one reader each turns them into the same Chat), imported chat
+exports (chats.export_root()) and the chats a Claude app logged live over MCP (chats.LIVE) not
+saved yet, or changed since their page was written, become `resource` pages whose `Timeline:`
+line names their `Source:` app (semantic.is_chat), new ones in the git-ignored archive/chats/
+(cortex.chat_archive). An ordinary chat keeps the user's own turns only, redacted and capped
+(chats.LINE_CHARS a turn, chats.PART_CHARS a page); assistant text is never copied. A coding
+session (file edits or shell commands) becomes a short summary: project, dates, the user's
+requests (first lines), files touched (relative paths) and commit subjects, never code, diffs,
+tool output or file contents.
 
 Each page written gets a `chat_saved` log event (payload `auto: true` and the body's `hash`).
 A page is rewritten only while its body (less a `Topics:` line) is still what was written: an
@@ -70,7 +71,9 @@ FIRST_S, EVERY_S = 60, 300  # the app's first pass a minute after start, then ev
 STATE, LOCK = ".cortex/chat-import.sqlite", ".cortex/chat-import.lock"
 BUSY = "A chat import is already running."
 LABELS = {"claude-code": "Claude Code", "claude-chat": "Claude", "chatgpt": "ChatGPT",
-          "gemini": "Gemini", "perplexity": "Perplexity", chats.LIVE: "Claude"}
+          "gemini": "Gemini", "perplexity": "Perplexity", chats.LIVE: "Claude",
+          "codex": "Codex", "gemini-cli": "Gemini CLI", "copilot-cli": "Copilot CLI"}
+AGENTS = ("claude-code", "codex", "gemini-cli", "copilot-cli")  # coding agents' own sessions
 MINE = "My turns only"  # on the Timeline line: harvest.user_turns ends a turn at `### `
 CODING = {"Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"}
 REQUESTS, FILES, COMMITS, TITLE_CHARS = 12, 30, 20, 80
@@ -115,10 +118,13 @@ def enabled() -> bool:
 # ---- which transcripts ------------------------------------------------------------------------
 
 def _transcripts():
-    """(source, path) of every Claude Code transcript (Cowork's run Claude Code too), imported
-    export conversation and live-logged chat."""
+    """(source, path) of every Claude Code transcript (Cowork's run Claude Code too), Codex,
+    Gemini CLI and Copilot CLI session, imported export conversation and live-logged chat."""
     yield from (("claude-code", p) for p in chats.root().glob("*/*.jsonl"))
     yield from (("claude-code", p) for p in chats.cowork_files())
+    yield from (("codex", p) for p in chats.codex_files())
+    yield from (("gemini-cli", p) for p in chats.gemini_files())
+    yield from (("copilot-cli", p) for p in chats.copilot_files())
     for d, s in [*chats.EXPORT_DIRS.values(), (chats.LIVE, chats.LIVE)]:
         yield from ((s, p) for p in (chats.export_root() / d).glob("*.jsonl"))
 
@@ -217,6 +223,7 @@ class Chat:
     files: dict = field(default_factory=dict)  # each path a tool wrote, in order, up to PATHS
     commits: dict = field(default_factory=dict)  # each commit subject, in order, up to SUBJECTS
     tags: list = field(default_factory=list)  # [tag, text, day] of the user's //tags, up to TAGS
+    sub: bool = False  # a Codex sub-agent's or internal session: never a page
 
     def dump(self) -> dict:
         return {**asdict(self), "files": list(self.files), "commits": list(self.commits)}
@@ -298,13 +305,18 @@ def _lines(f):
             yield b"", off
 
 
-def read(path: Path, prev: dict | None = None, pace: Callable[[], None] = lambda: None
-         ) -> tuple[Chat, dict]:
+def read(path: Path, prev: dict | None = None, pace: Callable[[], None] = lambda: None,
+         source: str = "claude-code") -> tuple[Chat, dict]:
     """Stream a transcript from where `prev` (its STATE record) stopped, on top of prev's
     summary; from the start when there is none, or the file shrank or its first line changed.
     Keeps the user's turns (sidechain, meta and compaction-summary lines dropped) and, from
     coding tool calls, the paths written and commit subjects; tool inputs and outputs never.
-    Returns the summary and the new record."""
+    Each line goes to `source`'s reader (_READERS; Claude Code's and the exports' format by
+    default); a Gemini CLI session is replayed whole (_gemini). Returns the summary and the new
+    record."""
+    if source == "gemini-cli":
+        return _gemini(path, pace), {}
+    add = _READERS.get(source, _add)
     prev = prev or {}
     with path.open("rb") as f:
         head = hashlib.sha1(f.readline(HEAD)).hexdigest()[:16]
@@ -326,7 +338,7 @@ def read(path: Path, prev: dict | None = None, pace: Callable[[], None] = lambda
                     d = json.loads(b.decode("utf-8", "replace"))
                 except ValueError:
                     continue
-                _add(c, d)
+                add(c, d)
     return c, {"offset": off, "head": head, "chat": c.dump()}
 
 
@@ -359,6 +371,202 @@ def _tool(c: Chat, b: dict) -> None:
         for s in commits(inp["command"]):
             if (s := _line(s)) and len(c.commits) < SUBJECTS:
                 c.commits.setdefault(s, None)
+
+
+def _edited(c: Chat, path) -> None:
+    """A file a tool wrote, summarised as _tool does."""
+    if isinstance(path, str) and path:
+        _tool(c, {"name": "Edit", "input": {"file_path": path}})
+
+
+def _ran(c: Chat, cmd) -> None:
+    """A shell command a tool ran (a list is an argv), summarised as _tool does."""
+    if isinstance(cmd, list):
+        cmd = " ".join(x for x in cmd if isinstance(x, str))
+    _tool(c, {"name": "Bash", "input": {"command": cmd if isinstance(cmd, str) else ""}})
+
+
+# ---- other coding agents' sessions ------------------------------------------------------------
+# Each reader takes one parsed record and skips a type it does not know. Formats as their
+# open-source code defines them; fixtures are hand-written from it, never copied from a session.
+
+# Codex puts its own context in user-role messages: a whole message in one tag
+# (<environment_context>, <user_instructions>, <turn_aborted>...) or AGENTS.md's text (openai/codex
+# codex-rs/core/src/context/contextual_user_message.rs)
+_CODEX_CONTEXT = re.compile(r"\A\s*(?:<([\w-]+)\b[^>]*>.*</\1>\s*\Z|# AGENTS\.md instructions\b)",
+                            re.S)
+_PATCH_FILE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$", re.M)
+
+
+def _add_codex(c: Chat, d) -> None:
+    """One Codex rollout line {timestamp, type, payload} (openai/codex codex-rs/history/src/
+    rollout_payload.rs RolloutItemWire, codex-rs/protocol/src/models.rs ResponseItem): the cwd
+    from session_meta and turn_context, the user's messages and the shell and apply_patch
+    calls. A sub-agent's or internal session (session_meta source) is never a page."""
+    p = d.get("payload") if isinstance(d, dict) else None
+    if not isinstance(p, dict) or c.sub:
+        return
+    kind, ts = d.get("type"), str(d.get("timestamp") or "")
+    if kind in ("session_meta", "turn_context"):
+        src = p.get("source")
+        c.sub = c.sub or isinstance(src, dict) and ("subagent" in src or "internal" in src)
+        if not c.cwd and isinstance(p.get("cwd"), str):
+            c.cwd = p["cwd"][:1000]
+        return
+    if kind != "response_item":
+        return
+    t = p.get("type")
+    if t == "message" and p.get("role") in ("user", "assistant"):
+        if ts:
+            c.last = ts
+        if p["role"] == "user" and isinstance(p.get("content"), list):
+            text = "\n".join(b["text"] for b in p["content"] if isinstance(b, dict)
+                             and b.get("type") == "input_text" and isinstance(b.get("text"), str)
+                             and not _CODEX_CONTEXT.match(b["text"])).strip()
+            if text:
+                c.turn(ts, text)
+    elif t in ("function_call", "custom_tool_call", "local_shell_call"):
+        args = p.get("action") if t == "local_shell_call" else p.get("input")
+        if t == "function_call":
+            try:
+                args = json.loads(p.get("arguments") or "")
+            except (TypeError, ValueError):
+                args = None
+        patch = args if isinstance(args, str) else \
+            args.get("input") if isinstance(args, dict) else None
+        if isinstance(patch, str) and "*** Begin Patch" in patch:
+            for f in _PATCH_FILE.findall(patch):
+                _edited(c, f.strip())
+        elif isinstance(args, dict) and (cmd := args.get("command") or args.get("cmd")):
+            _ran(c, cmd)
+
+
+def _add_copilot(c: Chat, d) -> None:
+    """One Copilot CLI events.jsonl line {id, parentId, timestamp, type, data, agentId?,
+    checkpoint?} (the session events of microsoft/copilot-sdk nodejs/src/generated/
+    session-events.ts, https://github.com/microsoft/copilot-sdk): the cwd from session.start
+    and session.resume, the user's messages, the files tools edited and the shell commands.
+    A sub-agent's event, a replayed checkpoint and a message an agent wrote are skipped."""
+    if not isinstance(d, dict) or d.get("agentId") or d.get("checkpoint") \
+            or not isinstance(x := d.get("data"), dict):
+        return
+    kind, ts = d.get("type"), str(d.get("timestamp") or "")
+    if kind in ("session.start", "session.resume"):
+        ctx = x.get("context")
+        if not c.cwd and isinstance(ctx, dict) and isinstance(ctx.get("cwd"), str):
+            c.cwd = ctx["cwd"][:1000]
+    elif kind == "user.message" and isinstance(x.get("content"), str) \
+            and not x.get("agentAuthored") and not x.get("isAutopilotContinuation"):
+        c.turn(ts, x["content"])
+    elif kind == "tool.execution_complete" and isinstance(x.get("fileEdits"), list):
+        for e in x["fileEdits"]:
+            _edited(c, e.get("path") if isinstance(e, dict) else None)
+    elif kind == "tool.execution_start" and isinstance(info := x.get("shellToolInfo"), dict):
+        args = x.get("arguments")
+        _ran(c, args.get("command") if isinstance(args, dict) and isinstance(
+            args.get("command"), str) else info.get("displayCommand"))
+    if kind in ("user.message", "assistant.message") and ts:
+        c.last = ts
+
+
+_READERS = {"codex": _add_codex, "copilot-cli": _add_copilot}
+
+
+def _parts(x) -> str:
+    """The text of a Gemini PartListUnion: a string, a part {text} or a list of them."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return x["text"] if isinstance(x.get("text"), str) else ""
+    return "\n".join(_parts(p) for p in x) if isinstance(x, list) else ""
+
+
+def _gemini(path: Path, pace: Callable[[], None]) -> Chat:
+    """A Gemini CLI session replayed whole, as chatRecordingService.ts loads it: a message
+    record (one with the same id replaces it in place), `$rewindTo` (that message and the ones
+    after it dropped; all of them for an unknown id), `$patch` (content, removeIds, orderIds),
+    `$set` (a legacy full `messages` list), metadata; or a legacy .json ConversationRecord.
+    Records can rewrite earlier ones, so nothing is carried between passes. A message keeps
+    only its type, time, the user's text (displayContent, else content) and the tool calls."""
+    msgs: dict[str, list] = {}  # id -> [type, timestamp, user text, [(tool, args)]]
+    meta: dict = {}
+
+    def message(m) -> None:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
+            return
+        kind = m.get("type")
+        text = _parts(m.get("displayContent") or m.get("content")) if kind == "user" else ""
+        calls = [(t.get("name"), t.get("args")) for t in m.get("toolCalls") or []
+                 if isinstance(t, dict) and isinstance(t.get("args"), dict)] \
+            if kind == "gemini" and isinstance(m.get("toolCalls"), list) else []
+        msgs[m["id"]] = [kind, str(m.get("timestamp") or ""), text, calls]
+
+    def record(r) -> None:
+        nonlocal msgs
+        if not isinstance(r, dict):
+            return
+        if isinstance(r.get("$rewindTo"), str):
+            ids = list(msgs)
+            cut = ids.index(r["$rewindTo"]) if r["$rewindTo"] in ids else 0
+            msgs = {i: msgs[i] for i in ids[:cut]}
+        elif isinstance(p := r.get("$patch"), dict):
+            for u in [p, *(p.get("updates") if isinstance(p.get("updates"), list) else [])]:
+                m = msgs.get(u.get("id")) if isinstance(u, dict) else None
+                if m and m[0] == "user" and u.get("content") is not None:
+                    m[2] = _parts(u["content"])
+            for i in p.get("removeIds") if isinstance(p.get("removeIds"), list) else []:
+                if isinstance(i, str):
+                    msgs.pop(i, None)
+            if isinstance(p.get("orderIds"), list):
+                last = [i for i in p["orderIds"] if isinstance(i, str) and i in msgs]
+                msgs = {i: msgs[i] for i in [*(i for i in msgs if i not in last), *last]}
+        elif isinstance(r.get("$set"), dict):
+            meta.update({k: v for k, v in r["$set"].items() if k != "messages"})
+            if isinstance(r["$set"].get("messages"), list):
+                msgs = {}
+                for m in r["$set"]["messages"]:
+                    message(m)
+        elif isinstance(r.get("id"), str):
+            message(r)
+        elif isinstance(r.get("sessionId"), str):
+            meta.update(r)
+
+    if path.suffix == ".json":
+        try:
+            data = json.loads(path.read_bytes().decode("utf-8", "replace"))
+        except ValueError:  # a broken file is an empty chat, as a broken transcript is
+            data = None
+        if isinstance(data, dict):
+            meta.update({k: v for k, v in data.items() if k != "messages"})
+            for m in data.get("messages") if isinstance(data.get("messages"), list) else []:
+                message(m)
+    else:
+        with path.open("rb") as f:
+            for b, _ in _lines(f):
+                pace()
+                try:
+                    record(json.loads(b.decode("utf-8", "replace")) if b else None)
+                except ValueError:
+                    continue
+    c = Chat()
+    if meta.get("kind") == "subagent":
+        return c
+    try:  # the project folder Gemini CLI records beside its chats (config/projectRegistry.ts)
+        c.cwd = (path.parent.parent / ".project_root").read_text(encoding="utf-8").strip()[:1000]
+    except (OSError, UnicodeError):
+        pass
+    for kind, ts, text, calls in msgs.values():
+        if kind == "user" and text.strip():
+            c.turn(ts, text)
+        if kind in ("user", "gemini") and ts:
+            c.last = ts
+        # tool names and parameters: packages/core/src/tools/definitions/base-declarations.ts
+        for name, args in calls:
+            if name in ("write_file", "replace"):
+                _edited(c, args.get("file_path"))
+            elif name == "run_shell_command":
+                _ran(c, args.get("command"))
+    return c
 
 
 def commits(cmd: str) -> list[str]:
@@ -443,7 +651,9 @@ def build(source: str, path: Path, c: Chat, ctx: Ctx) -> Page:
             out += [f"**Me:** {_ESCAPE.sub(lambda m: chr(92), t)}", ""]
         return Page(title, day, _body(out), "\n".join([title, *(t for _, t in kept)]))
     base = c.cwd.replace("\\", "/").rstrip("/")
-    name = base.split("/.claude/worktrees/")[0].rsplit("/", 1)[-1] or path.parent.name
+    # a Gemini CLI session with no recorded folder: its project's folder in ~/.gemini/tmp
+    name = base.split("/.claude/worktrees/")[0].rsplit("/", 1)[-1] or (
+        path.parent.parent if source == "gemini-cli" else path.parent).name
     title = _line(f"{name}: {first}" if first else f"Coding in {name}", TITLE_CHARS)
     asked = c.asked
     files = [f"`{r.replace('`', '')}`" for r in (_rel(p, base) for p in c.files) if r]
@@ -715,10 +925,10 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
         return "saved_by_hand", {}
     if prev and isinstance(prev.get("adopted"), str):
         return "earlier_import", prev
-    c, rec = read(path, prev, pace)
+    c, rec = read(path, prev, pace, source)
     if not c.n:
         return "empty", rec
-    if source == "claude-code" and ctx.excluded(c.cwd):
+    if ctx.excluded(c.cwd):
         return "excluded_folder", rec
     keys = [(source, cid)]  # the ledger keys this page is written for
     if source in (EXPORT[1], chats.LIVE) and (other := ctx.partner(path)) is not None:
@@ -743,7 +953,7 @@ def one(vault: Vault, evlog: EventLog, ctx: Ctx, ledger: dict, source: str, path
             log.warning("chat import: the //tags of %s not saved (%s)", cid,
                         getattr(e, "code", type(e).__name__))
     pid = _pid(had)
-    if pid is None and source != "claude-code" and (old := ctx.duplicate(source, c, page.day)):
+    if pid is None and source not in AGENTS and (old := ctx.duplicate(source, c, page.day)):
         # kept in STATE only, not the event log: thousands of these would each cost an append
         return "earlier_import", {"adopted": old}
     pid = pid or page_id(source, path, page)
