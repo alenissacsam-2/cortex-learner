@@ -2072,7 +2072,6 @@
      (app.first_run_hidden). Built once, so a live update keeps the typed line. */
   const GS_STEPS = ['Tell Cortex one thing about you', 'Connect an AI app', 'Bring in what you already have'];
   let gs = null, gsTicks = null, FIRST_HIDDEN = !!D.first_run_hidden;
-  const CONNECTED = !!D.connected;
   function gsBoard() {
     const note = el('span', 'band-note');
     const b = board('Get started', { cls: 'get-started', action: note });
@@ -2117,7 +2116,7 @@
   }
   function getStarted() {
     const st = LIVE && !FIRST_HIDDEN ? D.get_started : null;
-    const ticks = st ? [!!st.fact, CONNECTED, !!st.imported] : null;
+    const ticks = st ? [!!st.fact, !!D.connected, !!st.imported] : null;  // D: the latest poll
     if (ticks && gsTicks) ticks.forEach((t, i) => { if (t && !gsTicks[i]) announce(`Step ${i + 1} of 3 done: ${GS_STEPS[i]}.`); });
     gsTicks = ticks;
     if (!ticks || ticks.every(Boolean)) {
