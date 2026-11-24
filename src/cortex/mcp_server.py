@@ -48,6 +48,7 @@ from cortex import (
 )
 from cortex import lint as lint_mod
 from cortex import session as session_mod
+from cortex import where as where_mod
 from cortex.catalog import KINDS as CATALOG_KINDS
 from cortex.catalog import Catalog, inbox_add, slugify
 from cortex.catalog import sync as catalog_sync
@@ -65,11 +66,13 @@ from cortex.events import (
 )
 from cortex.index import (
     GLYPHS,
+    MAX_HITS,
     READ_CAP_CHARS,
     TRUNCATED,
     Index,
     _edge_targets,
     _neutralise,
+    _preview,
     _target,
     _wrap,
     link_targets,
@@ -1160,10 +1163,12 @@ class Cortex:
         st = self.index._stats.get(path) if n["kind"] in ("note", "resource") else None
         return local_day(datetime.fromtimestamp(st[0] / 1e9, UTC)) if st else ""
 
-    def _keep(self, since: str | None, until: str | None, source: str | None):
+    def _keep(self, since: str | None, until: str | None, source: str | None,
+              where: str | None = None):
         """RR-31: `keep(id)`, true for a page dated in [since, until] whose import label is
-        `source` (any case; MINE: no import wrote it), or None with no filter. An undated page
-        never passes a date filter. Bad input raises invalid_argument."""
+        `source` (any case; MINE: no import wrote it) and whose frontmatter passes `where`
+        (FW, where.match), or None with no filter. An undated page never passes a date filter.
+        Bad input raises invalid_argument."""
         for name, v in (("since", since), ("until", until)):
             if v is not None:
                 check_day(name, v)
@@ -1172,7 +1177,8 @@ class Cortex:
         if source is not None and not (isinstance(source, str) and source.strip()):
             raise invalid("source must be an import label such as Git, Notes or Highlights, "
                           f"or '{MINE}' for pages no import wrote.")
-        if since is None and until is None and source is None:
+        clauses = where_mod.parse(where) if where is not None else None
+        if since is None and until is None and source is None and clauses is None:
             return None
         lo, hi = since or "", until or "9999"
         want = source.strip().casefold() if source else None
@@ -1181,6 +1187,8 @@ class Cortex:
         def keep(i: str) -> bool:
             n = notes.get(i)
             if n is None or want is not None and (page_label(n).casefold() or MINE) != want:
+                return False
+            if clauses and not where_mod.match(clauses, n["fields"]):
                 return False
             if not (since or until):
                 return True
@@ -1268,15 +1276,20 @@ class Cortex:
             "resource", "note", "project", "decision", "journal", "loop", "due",
             "ready", "weak", "resurface", "timeline"] | None = None,
             limit: int | None = None, since: str | None = None, until: str | None = None,
-            source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-        out = self._find(query, kind, limit, since, until, source)
+            source: str | None = None, where: str | None = None,
+            ctx: Context | None = None) -> dict[str, Any]:
+        out = self._find(query, kind, limit, since, until, source, where)
         # R27b: the X-ray keeps the ids it returned (never the query), for the broad-read flag
         xray.record(self.vault, "cortex_find", self.sessions.client, {"found": _hit_ids(
             out.get("hits") or out.get("items"))}, {}, len(str(out.get("text") or "")))
         return out
 
     def _find(self, query: str, kind: str | None, limit: int | None, since: str | None,
-              until: str | None, source: str | None) -> dict[str, Any]:
+              until: str | None, source: str | None, where: str | None = None
+              ) -> dict[str, Any]:
+        if where is not None and kind in ("resurface", "timeline"):
+            raise invalid(f"where does not work with kind={kind}; drop where, or use "
+                          "another kind (resurface and timeline take none).")
         if kind == "resurface":  # ideas due to be shown again; query is not used
             return self._resurface(3 if limit is None else limit)
         if kind == "timeline":
@@ -1284,7 +1297,8 @@ class Cortex:
             return self._timeline(query, limit, since, until, source)
         limit = 8 if limit is None else limit
         self._refresh_index()
-        keep = self._keep(since, until, source)
+        keep = self._keep(since, until, source, where)
+        listing = where is not None and not (query or "").strip()
         if kind == "loop":  # open first; with no query, list them (FTS needs a query)
             rows = [r for r in loops.loops(self.vault, None) if keep is None or keep(r["id"])]
             if query:
@@ -1296,16 +1310,31 @@ class Cortex:
         if kind == "problem":  # every problem in rank order, then the filter and the limit
             hits = [h for h in self.index.problems(query, 10**6, syntax=True)
                     if keep is None or keep(h["id"])][:max(1, min(limit, 8))]
+        elif listing and kind not in ("due", "ready", "weak"):
+            hits = self._listing(kind, keep, limit)
         else:
             hits = self.index.find(query, kind, limit, keep=keep, syntax=True)
         if hits:
             return {**_find_out(hits), "next": self._next("Call cortex_read on an id for "
                                                           "details.")}
         s = self._searched(("concept",) if kind in ("due", "ready", "weak") else
-                           (kind,) if kind else (), keep, "keyword")
+                           (kind,) if kind else (), keep, "where filter" if listing else "keyword")
         return {**_find_out(hits), "searched": s, "next": self._next(self._absent(
-            s, False, "Try other words or cortex_recall (by meaning); if the user says it is "
-            "new, cortex_add it."))}
+            s, False, "Loosen the where filter." if listing else "Try other words or "
+            "cortex_recall (by meaning); if the user says it is new, cortex_add it."))}
+
+    def _listing(self, kind: str | None, keep, limit: int) -> list[dict]:
+        """FW: with `where` and no query, the index pages (of `kind`) past `keep`, newest first
+        by `_day_of` (undated last), then by id."""
+        idx = self.index
+        paths = {i: p for p, i in idx._ids.items()}
+        rows = sorted(i for i, n in idx._notes.items()
+                      if (kind is None or n["kind"] == kind) and keep(i))
+        day = {i: self._day_of(i, idx._notes[i], paths.get(i)) for i in rows}
+        rows.sort(key=day.__getitem__, reverse=True)  # stable: ties stay in id order
+        cap = max(1, min(MAX_HITS, int(limit)))
+        return [idx._hit(i, n["kind"], n["title"], _preview(n["body"]))
+                for i in rows[:cap] for n in (idx._notes[i],)]
 
     def cortex_recall(self, query: str, limit: int = 8, hops: int = 1, check: bool = False,
                       chats: bool = False, since: str | None = None, until: str | None = None,
@@ -3943,7 +3972,9 @@ DESCRIPTIONS = {
                    "phrase\" matches exactly; -word leaves a word out. kind=problem: "
                    "todo problems first; a query also matches their linked concepts. "
                    "since/until (YYYY-MM-DD) and source (an import label such as Git, Notes "
-                   "or Highlights, or 'mine') narrow the hits. "
+                   "or Highlights, or 'mine') narrow the hits. where filters by frontmatter "
+                   "(status=open tags=dsa due<=2026-12-01; = != < <= > >= ~), and with no "
+                   "query lists the pages that pass, newest first. "
                    "kind=resurface: "
                    "ideas (permanent notes, decisions, summarised resources) due to be shown "
                    "again, most overdue first (limit, default 3; query unused); record what you "
