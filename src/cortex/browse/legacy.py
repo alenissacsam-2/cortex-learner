@@ -83,7 +83,7 @@ def _vectors(vault: Vault) -> None:
     old, sig, dim = vectors._npz(vault)
     if not old:
         return
-    with closing(vecstore.connect(vault.root / vectors.CACHE)) as con:
+    with closing(vecstore.connect(vault.root / vectors.CACHE, vault=vault)) as con:
         if vecstore.prepare(con, vectors._want(dim)):
             with vecstore.tx(con):
                 vecstore.set_meta(con, "sig", None)

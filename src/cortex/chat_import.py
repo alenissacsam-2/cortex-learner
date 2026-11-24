@@ -49,7 +49,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from cortex import chat_archive, chats, render, tags, taint, topics
+from cortex import chat_archive, chats, quarantine, render, tags, taint, topics
 from cortex.browse import privacy
 from cortex.catalog import slugify
 from cortex.events import EventLog, live, local_day
@@ -130,27 +130,34 @@ def _key(source: str, p: Path) -> str:
 class State:
     """STATE: per transcript key, its (mtime_ns, size) when handled and a JSON record (offset,
     head, chat). WAL with synchronous=NORMAL: a commit per transcript costs no fsync, and a lost
-    one only means that transcript is read again."""
+    one only means that transcript is read again. A damaged one (quick_check at the first open
+    in a process) is moved aside (cortex.quarantine) and started again: the next pass reads
+    every transcript from its start, the event log's chat_saved ledger still knows each page
+    written (kept, edited or deleted ones stay so) and a forgotten chat's ledger page is
+    "[forgotten]", which never makes a page; only the time to read them again is lost."""
 
     def __init__(self, vault: Vault):
         p = vault.root / STATE
         p.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._open(p)
-        except sqlite3.DatabaseError as e:  # a broken cache starts over; a locked one waits
-            if e.sqlite_errorcode not in (sqlite3.SQLITE_NOTADB, sqlite3.SQLITE_CORRUPT):
+        except sqlite3.DatabaseError as e:  # a damaged cache starts over; a locked one waits
+            if not quarantine.torn(e) or not quarantine.heal(
+                    p, e, "every chat is read again from its start", vault):
                 raise
-            self.db.close()
-            for f in (p, p.with_name(p.name + "-wal"), p.with_name(p.name + "-shm")):
-                f.unlink(missing_ok=True)
             self._open(p)
 
     def _open(self, p: Path) -> None:
         self.db = sqlite3.connect(p, timeout=10, check_same_thread=False)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.execute("CREATE TABLE IF NOT EXISTS files (key TEXT PRIMARY KEY, "
-                        "mtime_ns INTEGER, size INTEGER, data TEXT)")
+        try:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=NORMAL")
+            self.db.execute("CREATE TABLE IF NOT EXISTS files (key TEXT PRIMARY KEY, "
+                            "mtime_ns INTEGER, size INTEGER, data TEXT)")
+            quarantine.check(self.db, p, "files", ["key", "mtime_ns", "size", "data"])
+        except BaseException:
+            self.db.close()
+            raise
 
     def close(self) -> None:
         self.db.close()

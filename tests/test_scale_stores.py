@@ -71,15 +71,31 @@ def test_upsert_delete_and_a_change_stamp_seen_by_another_connection(tmp_path):
 # ---- the vault's vectors (cortex.semantic) -------------------------------------------------
 
 
-def test_the_npz_cache_is_read_in_once_and_kept(root):
+def _legacy_npz(root, cache: dict) -> bytes:
+    """The .npz cache as Cortex wrote it before the store (the writer is gone: G-5-5)."""
+    ids = list(cache)
+    rows = [cache[i] for i in ids]
+    np.savez(root / semantic.NPZ, ids=np.array(ids, dtype=str),
+             full=np.array([e[1] for e in rows], dtype=bool),
+             page=np.repeat(np.arange(len(ids), dtype=np.int32), [len(e[2]) for e in rows]),
+             start=np.concatenate([e[2] for e in rows]),
+             vecs=np.concatenate([e[3] for e in rows]).astype(np.float16),
+             meta=np.array(json.dumps({"model": semantic.MODEL, "text": semantic.TEXT_VERSION,
+                                       "chunk": semantic.CHUNKING, "dim": 4,
+                                       "pages": {i: cache[i][0] for i in ids}})))
+    return (root / semantic.NPZ).read_bytes()
+
+
+def test_the_npz_cache_is_read_in_once_and_deleted_by_a_prune(root):
     idx = index(root)
     semantic.vectors(idx, FakeEmbed(), 4)
     cache = semantic._read(root)
-    semantic._npz_write(Vault(root), cache)  # the cache as it was before the store
     for s in vecstore.SUFFIXES:
         (root / f"{semantic.CACHE}{s}").unlink(missing_ok=True)
     semantic._MEM.clear()
-    npz = (root / semantic.NPZ).read_bytes()
+    npz = _legacy_npz(root, cache)
+    semantic.vectors(idx, FakeEmbed(), 4, save=False)  # a dry run reads, makes, moves nothing
+    assert not (root / semantic.CACHE).exists() and (root / semantic.NPZ).read_bytes() == npz
     fake = FakeEmbed()
     ids = semantic.vectors(idx, fake, 4)[0]
     assert fake.texts == [] and set(ids) == set(cache)  # nothing embedded again
@@ -90,7 +106,12 @@ def test_the_npz_cache_is_read_in_once_and_kept(root):
         for i, e in got.items():
             assert e[0] == cache[i][0] and np.array_equal(e[2], cache[i][2])
             assert np.allclose(e[3], cache[i][3], atol=1e-3)
-    assert (root / semantic.NPZ).read_bytes() == npz  # kept as a backup
+    v = Vault(root)
+    assert semantic.prune(v) == 0 and (root / semantic.NPZ).read_bytes() == npz  # never written
+    gone = next(iter(cache))
+    v.remove(root / cache[gone][0][0])  # a page goes: its row would live on in the .npz
+    assert semantic.prune(v) == 1 and not (root / semantic.NPZ).exists()
+    assert gone not in semantic._read(root) and semantic.prune(v) == 0
 
 
 def test_another_process_save_is_seen_through_the_stamp(root, monkeypatch):

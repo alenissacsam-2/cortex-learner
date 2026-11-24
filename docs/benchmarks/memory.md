@@ -346,3 +346,34 @@ On test_home's made-up 5k-note vault (quiet PC, median of 15), a warm `cortex_fi
 before (the refresh 558 ms: `current_states` 248 ms, the index's stat pass 256 ms) and 90 ms after
 (the refresh 72 ms: `current_states` 9 ms from the cached fold, the scan 53 ms from `os.scandir`'s
 listing); `tests/test_replay_cache.py` holds it under 0.3 s.
+
+## R30d: the parse caches (`events._PARSED`, `vault._PARSED`)
+
+Both caches keep every file they parsed for the life of the process; an outside review proposed
+an LRU of 512 entries. Measured first (with F1 in), on test_home's made-up 5k-note vault plus
+2,000 made-up session files (6 to 18 events each, grades with a 40-word answer and 30-word
+feedback, `taught` logs, a 50-word close summary): 2,001 event files, 27,138 events, 16.6 MB of
+JSONL; 5,000 pages, 6.3 MB of Markdown. Every event file read through `EventLog.iter_events`
+and every page parsed through `Vault.iter_notes` (more than a server ever parses: the index
+starts from its snapshot), then the results dropped:
+
+| cache | entries | Python allocations held (tracemalloc) |
+|---|---:|---:|
+| `events._PARSED` | 2,001 files | 65.3 MB |
+| `vault._PARSED` | 5,000 pages | 32.8 MB |
+| both | | **98 MB** |
+
+The process's working set rose 79 → 171 MB and its private bytes 545 → 636 MB with both full
+(tracemalloc off). A warm `cortex_find` on that vault took 245 ms (median of 7) with another
+test suite keeping the CPU busy; F1's budget is 0.3 s.
+
+**Decision: no bound.** Both together stay under the 150 MB line at this size, and a bound
+below the working set would make each fold parse the log again: `levels.replay` and the
+planner read every event file on each call, so an LRU of 512 files would re-read 1,500 files
+per call at 2,000 sessions. The cache grows with the vault, about 33 KB per session file and
+6.5 KB per page; a vault several times this size is the point to bound it by bytes, never below
+the event files the folds read.
+
+**quick_check (R29b).** `cortex.quarantine.check` runs `PRAGMA quick_check` once per store per
+process, at its first open. On the 5k-page vectors (one 384-dim chunk a page, 5.3 MB) it took
+20 ms; on the same pages with 6 chunks each (25.8 MB) 130 ms.

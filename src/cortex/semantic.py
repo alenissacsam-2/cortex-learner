@@ -8,7 +8,9 @@ disposable per-vault cache, the SQLite store `.cortex/vectors.db` (`cortex.vecst
 page with its manifest (path, mtime_ns, size), chunk starts and float16 vectors; a save writes
 the changed pages only); only pages whose file changed are re-embedded. A process reads the
 store on its first query into one float32 matrix and then only the rows other processes saved
-since. The older `.cortex/vectors-v3.npz` is read into it once and kept as a backup. A recall
+since. A damaged store is moved aside and started again (cortex.quarantine). The older
+`.cortex/vectors-v3.npz` is read into it once and never written again; a prune that finds
+rows of pages that went or changed in it deletes it (the store holds every row). A recall
 embeds missing heads for at most HEAD_BUDGET seconds and
 other missing chunks for at most RECALL_BUDGET; `cortex model build` builds the rest.
 Private pages and raw/ never enter the index, so they are never embedded. Background work (the
@@ -29,7 +31,6 @@ An optional cross-encoder (`RERANK_MODEL`, same cache dir, same download rule) r
 from __future__ import annotations
 
 import bisect
-import io
 import json
 import logging
 import math
@@ -45,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cortex import vecstore
+from cortex import quarantine, vecstore
 from cortex.events import local_day
 from cortex.index import BM25, STOPWORDS, Index, _one_line, aliases
 from cortex.topics import is_hub, page_date, page_source
@@ -59,7 +60,7 @@ RERANK_POOL = 30
 RRF_K = 60
 NOT_SET_UP = "semantic search not set up; run `cortex model download`"
 CACHE = ".cortex/vectors.db"  # the vector store (cortex.vecstore)
-NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once, then a backup
+NPZ = ".cortex/vectors-v3.npz"  # the cache before the store: read into it once; `prune` deletes it
 BODY_CHARS = 1500
 CHUNK_CHARS, CHUNK_OVERLAP = 1000, 200  # ~250-300 tokens: well under bge-small's 512
 TEXT_VERSION = 5  # bump when _text or _chunks change, so cached vectors are rebuilt
@@ -717,26 +718,11 @@ def _npz_read(root: Path) -> dict:
     return {}
 
 
-def _npz_write(vault, cache: dict) -> None:
-    """Rewrite the .npz backup with `cache` only (a forget takes rows out of it too)."""
-    ids = list(cache)
-    rows = [cache[i] for i in ids]
-    dim = rows[0][3].shape[1] if rows else 1
-    buf = io.BytesIO()
-    np.savez(buf, ids=np.array(ids, dtype=str), full=np.array([e[1] for e in rows], dtype=bool),
-             page=np.repeat(np.arange(len(ids), dtype=np.int32), [len(e[2]) for e in rows]),
-             start=np.concatenate([e[2] for e in rows] or [np.zeros(0, np.int32)]),
-             vecs=np.concatenate([e[3] for e in rows] or [np.zeros((0, dim))]).astype(np.float16),
-             meta=np.array(json.dumps({"model": MODEL, "text": TEXT_VERSION, "chunk": CHUNKING,
-                                       "dim": dim, "pages": {i: cache[i][0] for i in ids}})))
-    with vault.lock():
-        vault._atomic_write(vault.root / NPZ, buf.getvalue())
-
-
-def _connect(root: Path, dim: int, write: bool = True):
-    """The store, its settings checked (other ones empty it) and the .npz read into it once
-    (the .npz is kept as a backup, never deleted). With `write` False (a dry run) nothing is
-    made or changed: None when there is no store or it holds other settings."""
+def _connect(root: Path, dim: int, write: bool = True, vault=None):
+    """The store, its settings checked (other ones empty it; a damaged one is moved aside
+    through `vault` and made again) and the .npz read into it once (never written again:
+    `prune` deletes it). With `write` False (a dry run) nothing is made, moved or changed:
+    None when there is no store or it holds other settings."""
     p = root / CACHE
     if not write:
         if not p.is_file():
@@ -746,7 +732,7 @@ def _connect(root: Path, dim: int, write: bool = True):
             con.close()
             return None
         return con
-    con = vecstore.connect(p)
+    con = vecstore.connect(p, vault=vault)
     try:
         vecstore.prepare(con, _want(dim))
         if not vecstore.get_meta(con, "migrated"):  # idempotent: a rerun upserts the same rows
@@ -823,7 +809,8 @@ def heads(root: Path) -> tuple[list[str], np.ndarray]:
 def prune(vault) -> int:
     """Delete the rows of pages that went or changed, with no model needed (a forget or a
     settings change must not leave a page's vectors behind; a changed page is embedded again
-    later); the .npz backup loses them too. Rows deleted from the store."""
+    later). The old .npz is deleted when it holds such a row: the store read it in, so it only
+    kept forgotten pages (G-5-5). Rows deleted from the store."""
     from cortex.catalog import Catalog
 
     root = vault.root
@@ -832,13 +819,11 @@ def prune(vault) -> int:
     pages = _pages(Index(vault, Catalog.load(vault)))
     n = 0
     if (root / CACHE).is_file():
-        with closing(vecstore.connect(root / CACHE)) as con:
+        with closing(vecstore.connect(root / CACHE, vault=vault)) as con:
             n = vecstore.delete(con, [i for i, m in vecstore.manifests(con).items()
                                       if pages.get(i) != tuple(json.loads(m))])
-    old = _npz_read(root)
-    keep = {i: e for i, e in old.items() if pages.get(i) == e[0]}
-    if len(keep) < len(old):
-        _npz_write(vault, keep)
+    if any(pages.get(i) != e[0] for i, e in _npz_read(root).items()):
+        vault.remove(root / NPZ)
     return n
 
 
@@ -892,7 +877,7 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
     cache = dict(cache)
     con = None
     try:
-        con = _connect(root, dim, save)
+        con = _connect(root, dim, save, index.vault)
         if save and con is not None:
             _code_heads_once(con, index)
         if con is None:  # a dry run with no usable store: nothing cached
@@ -902,7 +887,11 @@ def vectors(index: Index, embed, dim: int, budget: float | None = None,
             stack = None if moved else stack
     except (sqlite3.Error, OSError) as e:  # a disposable cache: embed what this call can
         log.warning("vector cache not read: %s", e)
+        if con is not None:
+            con.close()
         con = None
+        if save and quarantine.torn(e):  # damaged past the first open: the next call starts over
+            vecstore.heal(root / CACHE, e, index.vault)
     try:
         return _vectors(index, embed, dim, pages, st, cache, stack, con, budget, save_every,
                         progress, heads, only, save)
