@@ -581,7 +581,10 @@ def unsafe_lines(vault, events) -> list[dict]:
     """G6: the live claim lines (private pages too) whose text or section claims.unsafe flags
     and Keep has not kept, as {key, page, id, section, text (raw), what}. Keep is a `dismiss`
     change on id `unsafe` holding the key's hash (`dismissed`); the key hashes the page and the
-    exact line, so a line edited since is checked again."""
+    exact line, so a line edited since is checked again.
+    G5b-6: also a line whose text or section claims.command flags, when an AI app wrote it
+    (tier agent or exposed, or confirmed by a yes other than the owner's click or tag); its row
+    has `command: True`. The tier fold runs only when such a line is found."""
     events = list(events)
     voided, kept = _voided(events), set()
     for e in events:
@@ -589,16 +592,32 @@ def unsafe_lines(vault, events) -> list[dict]:
         if (isinstance(c, dict) and c.get("tool") == "dismiss" and c.get("id") == "unsafe"
                 and e.get("id") not in voided):
             kept.add(c.get("hash"))
-    out = []
+    out, sections = [], {}
     for r in claims.rows(vault):
-        if r["status"] != "live" or not (what := claims.unsafe(r["text"], r["page"])
-                                         or claims.unsafe(r["section"], r["page"])):
+        if r["status"] != "live":
+            continue
+        what = claims.unsafe(r["text"], r["page"]) or claims.unsafe(r["section"], r["page"])
+        if not what and r["section"] not in sections:
+            sections[r["section"]] = claims.command(r["section"])
+        cmd = None if what else claims.command(r["text"]) or sections[r["section"]]
+        if not (what or cmd):
             continue
         key = hashlib.sha256(f"{r['page']}\n{r['section']}\n{r['text']}".encode()).hexdigest()[:16]
         if text_hash(key) not in kept:
             out.append({"key": key, "page": r["page"], "id": r["id"], "section": r["section"],
-                        "text": r["text"], "what": what})
+                        "text": r["text"], "what": what or cmd, **({"command": True} if cmd
+                                                                   else {})})
+    if any(x.get("command") for x in out):
+        by = {(t["page"], t["id"]): t for t in claims.tiers(vault, events)}
+        out = [x for x in out if not x.get("command") or _by_app(by.get((x["page"], x["id"])))]
     return out
+
+
+def _by_app(t: dict | None) -> bool:
+    """G5b-6: a claims.tiers row an AI app wrote: not the owner's (a click or a //pref or
+    //fact tag), nor a typed or legacy line."""
+    return bool(t) and (t["tier"] in INFERRED or (
+        t["tier"] == "confirmed" and t["confirm"] not in ("clicked", "tagged")))
 
 
 # R5a: the pages every AI app takes as standing orders. A line on them that Cortex did not write
@@ -1117,7 +1136,7 @@ def view(vault, events, today: str) -> dict:
                for x in sources.edited_pages(vault, events)]
     unsafe = [{"key": g["key"], "page": g["page"], "id": g["id"], "what": g["what"],
                "keys": [m["key"] for m in g["members"]], "ids": [m["id"] for m in g["members"]],
-               "invisible": claims.invisible(g["what"]),
+               "invisible": claims.invisible(g["what"]), "command": bool(g.get("command")),
                "text": _shown("".join(c for c in g["text"] if c.isprintable()))}
               for g in collapse([x for x in unsafe_lines(vault, events)
                                  if x["page"] not in hidden])]
