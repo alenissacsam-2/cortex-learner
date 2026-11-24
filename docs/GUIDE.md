@@ -28,6 +28,8 @@ The Claude desktop **Chat tab** gets the same tools but no automatic prime, so t
 
 **Gemini CLI.** Connecting Gemini CLI also adds Cortex's hooks to `~/.gemini/settings.json`: the same prime on your first real message (`BeforeAgent`), only new lines after that, your `//` lines saved, the prime served again after `/clear` or a resumed chat, and a web fetch, a web search or another server's MCP tool marking outside text. By default Gemini CLI gets the coding profile, as Cursor does. Removing Gemini CLI takes out only Cortex's hooks.
 
+**Zed, Cline (VS Code), GitHub Copilot CLI and JetBrains Junie** can be connected under **Connect AI apps** too; each gets only the MCP entry (no rules file or hooks). Zed's `settings.json` allows comments, which Cortex cannot rewrite safely, so a Zed file with comments is left alone and the row shows the snippet to paste into `context_servers`. Cline, Copilot CLI and Junie are shown only when their folder exists.
+
 **Cursor** has hooks too, but its prompt hook can only allow or block a message, not add to it, so Cursor still relies on its rules file to call `cortex_prime`.
 
 ---

@@ -607,7 +607,7 @@ def test_connect_over_the_api(app, home, vault):
     (home / ".cursor").mkdir()
     _, js, _, _ = call(app, "GET", "/api/connect")
     rows = {r["id"]: r for r in js["targets"]}
-    assert len(rows) == 9 and rows["cursor"]["detected"] and not rows["windsurf"]["detected"]
+    assert len(rows) == 13 and rows["cursor"]["detected"] and not rows["windsurf"]["detected"]
     assert str(vault.resolve()) in json.loads(rows["cursor"]["snippet"])[
         "mcpServers"]["cortex"]["args"]
     want = {"cursor": True, "windsurf": True}
