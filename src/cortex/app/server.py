@@ -43,11 +43,12 @@ MAX_BODY = 64 * 1024
 MAX_UPLOAD = 4 * 2**30
 UPLOAD = "/api/import/upload"  # the one raw (not JSON) POST: an export file, streamed to disk
 UPLOAD_EXT = (".zip", ".json", ".html", ".md", ".txt", ".ics", ".mbox",
-              ".pdf", ".docx")  # the last two: a document, or a file attached in Chat (C1)
+              ".pdf", ".docx",  # these two: a document, or a file attached in Chat (C1)
+              ".apkg", ".colpkg")  # Anki exports (R22)
 CLOUD_FIELDS = ("cloud_processing", "provider", "model", "base_url", "api_key_env")
 IMPORTS = ("claude", "chatgpt", "gemini", "perplexity", "google-activity", "notes", "calendar",
            "docs", "repos", "highlights", "mail", "selfchat", "location",
-           "photos", "spotify", "voice-memos")
+           "photos", "spotify", "voice-memos", "anki")
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "app"
 _JS, _CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 # path -> (its file, type); "/" is the live home, filled by dashboard.render_live
@@ -2389,7 +2390,8 @@ def _handler(app: App):
             ext = name.suffix.lower()
             if ext not in UPLOAD_EXT:
                 self._send(400, {"error": "Add the export as it came: a .zip, .json, .html, .md, "
-                                          ".txt, .ics, .mbox, .pdf or .docx file."})
+                                          ".txt, .ics, .mbox, .pdf, .docx, .apkg or .colpkg "
+                                          "file."})
                 return
             stem = re.sub(r"[^A-Za-z0-9_-]", "", name.stem)[:40]
             try:

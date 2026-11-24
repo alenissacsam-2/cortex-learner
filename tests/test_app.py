@@ -2121,6 +2121,27 @@ def test_voice_memos_ask_to_install_then_count_without_transcribing(app, vault, 
     assert "private: true" in page.read_text("utf-8")
 
 
+def test_anki_card_uploads_an_export_previews_and_imports(app, vault, tmp_path):
+    """R22: the Anki card takes an uploaded .apkg (and .colpkg), asks the tier, and imports one
+    page per deck, linked to its parent deck's, as `cortex import` does."""
+    from test_anki_import import _legacy_apkg
+
+    from cortex import importers
+    _, s, _, _ = call(app, "GET", "/api/setup")
+    assert s["guides"]["anki"]["steps"] == importers.GUIDES["anki"]["steps"]
+    assert upload(app, b"PK", "decks.colpkg")[0] == 200
+    code, up = upload(app, _legacy_apkg(tmp_path).read_bytes(), "Physics.apkg")
+    assert code == 200
+    call(app, "POST", "/api/import/preview", {"source": "anki", "upload": up["upload"]})
+    r = wait_job(app)["result"]
+    assert r["found"] == 2 and r["tier"] == "cloud" and not list(vault.glob("resources/deck-*"))
+    call(app, "POST", "/api/import/run", {"source": "anki", "upload": up["upload"]})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["counts"] == {"anki": 2}
+    page = (vault / "resources" / "deck-anki-physics-optics.md").read_text("utf-8")
+    assert "[[deck-anki-physics]]" in page and "## Leeches" in page
+
+
 def test_cloud_on_needs_provider_model_and_variable(app, home):
     """R3-4: "on" is refused until each is filled, naming what is missing; off saves."""
     from cortex import taint

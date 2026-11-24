@@ -498,6 +498,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert "Start: Notes (Obsidian, Notion or a folder)" in out["startLabels"]
     assert "Start: Calendar (Google, Outlook or Apple)" in out["startLabels"]
     assert "Start: Browser history" in out["startLabels"]
+    assert "Start: Anki decks" in out["startLabels"]  # R22
     # R3-2: Ask names both missing pieces at once; a section click is a Back step (R3-10)
     assert out["missing"] == [["Search model", "Set up the search model"],
                               ["Local model", "Set up a local model"]]
