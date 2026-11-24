@@ -936,6 +936,45 @@ def test_export_snapshot_downloads_in_the_browser_and_saves_by_dialog_in_the_win
     assert asked == [(30, server.snapshot_name())] * 2
 
 
+def test_save_picture_downloads_in_the_browser_and_saves_by_dialog_in_the_window(
+        app, vault, monkeypatch, tmp_path):
+    """POST /api/brain/picture: the browser app downloads the PNG itself; the desktop window
+    asks where (Downloads first, cortex-brain-<day>.png) and writes only there; a bad payload,
+    a non-PNG and one over 8 MB are refused with one sentence; no key, no picture."""
+    import base64
+    from types import SimpleNamespace
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    body = {"png": base64.b64encode(png).decode(), "day": "2026-11-24"}
+    before = snapshot(vault)
+    assert call(app, "POST", "/api/brain/picture", body)[:2] == (200, {"download": True})
+    refused = (400, {"error": "That picture could not be saved."})
+    over = b"\x89PNG\r\n\x1a\n" + b"\x00" * server.PICTURE_MAX
+    for bad in ({}, {"png": 5}, {"png": "not base64!"},
+                {"png": base64.b64encode(b"GIF89a").decode()},
+                {"png": base64.b64encode(over).decode()}):
+        assert call(app, "POST", "/api/brain/picture", bad)[:2] == refused, list(bad)
+    assert call(app, "POST", "/api/brain/picture", body, token=False)[0] == 401
+    downloads, dest, asked = tmp_path / "dl", tmp_path / "chosen" / "mine.png", []
+    downloads.mkdir()
+    dest.parent.mkdir()
+    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setitem(__import__("sys").modules, "webview",
+                        SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30)))
+
+    def dialog(kind, **kw):
+        asked.append((kind, kw["directory"], kw["save_filename"]))
+        return [str(dest)] if len(asked) == 1 else None
+    app.desktop = SimpleNamespace(win=SimpleNamespace(create_file_dialog=dialog))
+    assert call(app, "POST", "/api/brain/picture", body)[:2] == (200, {"saved": "mine.png"})
+    assert dest.read_bytes() == png
+    assert call(app, "POST", "/api/brain/picture", body)[:2] == (200, {"cancelled": True})
+    assert asked == [(30, str(downloads), "cortex-brain-2026-11-24.png")] * 2
+    assert list(downloads.iterdir()) == [] and snapshot(vault) == before  # nothing else written
+    odd_day = {**body, "day": "../x"}
+    assert call(app, "POST", "/api/brain/picture", odd_day)[:2] == (200, {"cancelled": True})
+    assert asked[-1][2] == f"cortex-brain-{time.strftime('%Y-%m-%d')}.png"
+
+
 def test_llm_page_lists_both_runners_chat_models_and_the_recommendation(app, monkeypatch):
     """Ollama and LM Studio models, embedding models left out by the chat's rule, and the
     model Setup would recommend for this computer."""
