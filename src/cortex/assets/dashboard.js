@@ -158,6 +158,7 @@
   const ICONS = {
     copy: ['M9 9h10v10H9z', 'M5 15V5h10'],
     obsidian: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v5H5V6h5'],
+    focus: ['M4 9V4h5', 'M15 4h5v5', 'M20 15v5h-5', 'M9 20H4v-5', 'M12 11a1 1 0 1 0 0.01 0'],
     target: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M12 7a5 5 0 1 0 0.01 0', 'M12 11a1 1 0 1 0 0.01 0'],
     search: ['M10.5 4a6.5 6.5 0 1 0 0.01 0', 'M15.5 15.5L20 20'],
     sun: ['M12 8a4 4 0 1 0 0.01 0', 'M12 2v2', 'M12 20v2', 'M2 12h2', 'M20 12h2', 'M4.9 4.9l1.4 1.4',
@@ -810,6 +811,7 @@
       if (!rendered.has(name)) { rendered.add(name); RENDER[name](); }
       else if (stale.delete(name)) rerender(name);
       if (name === 'home') placeBrain('home-brain-slot');
+      else clearLens();  // the lens is Home's
       if (name === 'brain') setView(view);
       window.scrollTo(0, 0);
     }
@@ -990,6 +992,7 @@
           if (info) { if (n.kind === 'site') inspectSite(n); else inspectPage(n.id, info); }
         },
         onToday: syncToday,
+        onLens() { lensId = null; syncLens(); },  // Esc in the brain, or Today, ended the lens
         onCluster(c) { if (c) { markLobe(c.id); filterLibraryLobe(c.id); } },
         onLobe(c) { if (c) inspectLobe(c.id); },
         onMode: syncMode,
@@ -1113,7 +1116,8 @@
     const ids = remountIds, old = brain;
     remountIds = null;
     const keep = { camera: old.camera, mode: old.mode, style: old.style, selected: old.selected,
-      spin: old.spin, growth: old.growth, focused: old.focused, atStem: old.atStem, today: old.todayIds };
+      spin: old.spin, growth: old.growth, focused: old.focused, atStem: old.atStem, today: old.todayIds,
+      lensCam: old.lensCam };
     hideTip();
     old.destroy();
     brain = null;
@@ -1126,6 +1130,7 @@
     if (keep.spin) brain.setSpin(true);
     if (keep.atStem) brain.atStem = true;
     if (keep.today) brain.today(keep.today, keep.selected, true);
+    if (lensId) { if (BRAIN_IDS.has(lensId)) applyLens(true, keep.lensCam); else { lensId = null; syncLens(); } }
     syncStem();
     syncLook();
     findInBrain();
@@ -1269,16 +1274,218 @@
   }
   function syncMode(m) {
     for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
-    if (brainUi && !brainFailed) { $('scrub').hidden = m !== 'growth'; renderLegend(m); }
+    for (const s of scrubs) { s.root.hidden = m !== 'growth'; if (m !== 'growth') s.stop(); }
+    if (brainUi && !brainFailed) renderLegend(m);
   }
+
+  /* ---- the Growth scrubber: a bar per month of new pages above the range (decoration; the range is
+     the real control), "1 year" and "All" for the span, and Play, which runs the handle through it ---- */
+  let growthData = null;
+  function growthMonths() {
+    if (growthData) return growthData;
+    const months = [], counts = {};
+    // a typo like 0001-01-01 or 9999-12-31 must not make the slider thousands of months long
+    const latest = String(+TODAY.slice(0, 4) + 1) + TODAY.slice(4);
+    const dates = D.pages.map((p) => p.date).filter((d) => isDay(d) && d >= '1990' && d <= latest).sort();
+    if (dates.length) {
+      let y = +dates[0].slice(0, 4), m = +dates[0].slice(5, 7);
+      const end = dates[dates.length - 1].slice(0, 7);
+      for (;;) {
+        const k = `${y}-${String(m).padStart(2, '0')}`;
+        months.push(k);
+        if (k >= end) break;
+        if (++m > 12) { m = 1; y++; }
+      }
+    }
+    for (const d of dates) counts[d.slice(0, 7)] = (counts[d.slice(0, 7)] || 0) + 1;
+    return (growthData = { months, counts });
+  }
+  const scrubs = [];
+  const PLAY_MS = 6000;
+  function buildScrub() {
+    let all = growthMonths().months, counts = growthMonths().counts;
+    let span = all, yearOn = false, playing = false, raf = 0;
+    const root = el('div', 'scrub'), bars = el('div', 'scrub-bars'), range = el('input'), out = el('output');
+    root.hidden = !(brain && brain.mode === 'growth');
+    bars.setAttribute('aria-hidden', 'true');
+    range.type = 'range';
+    range.min = '0';
+    range.setAttribute('aria-label', 'Growth: show pages up to this month');
+    const yr = button('btn tbtn', '1 year', () => setSpan(true)), whole = button('btn tbtn', 'All', () => setSpan(false));
+    const play = button('btn tbtn', 'Play', () => (playing ? stop() : start()));
+    play.hidden = REDUCED.matches;
+    REDUCED.addEventListener('change', () => { play.hidden = REDUCED.matches; if (REDUCED.matches) stop(); });
+    const paint = () => {
+      const v = +range.value;
+      [...bars.children].forEach((b, k) => b.classList.toggle('on', k <= v));
+      const mo = span[v];
+      out.textContent = mo ? fmtMonth(mo) : '';
+      range.setAttribute('aria-valuetext', out.textContent);
+    };
+    const draw = () => {
+      const peak = Math.max(1, ...span.map((m) => counts[m] || 0));
+      range.max = String(Math.max(0, span.length - 1));
+      bars.replaceChildren(...span.map((m, k) => {
+        const b = el('span', 'sb'), i = el('i'), n = counts[m] || 0;
+        i.style.height = n ? Math.max(2, Math.round(32 * n / peak)) + 'px' : '0';
+        b.dataset.i = String(k);
+        b.append(i);
+        return b;
+      }));
+      yr.setAttribute('aria-pressed', String(yearOn));
+      whole.setAttribute('aria-pressed', String(!yearOn));
+    };
+    const apply = () => {
+      paint();
+      const mo = span[+range.value] || null;
+      if (brain) brain.setGrowth(mo);
+      for (const s of scrubs) if (s.root !== root) s.set(mo);
+    };
+    function setSpan(year) {
+      stop();
+      yearOn = year;
+      span = year ? all.slice(-12) : all;
+      range.value = String(span.length - 1);
+      draw();
+      apply();
+    }
+    function stop() {
+      if (!playing) return;
+      playing = false;
+      cancelAnimationFrame(raf);
+      play.textContent = 'Play';
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') stop(); }
+    function start() {
+      if (span.length < 2) return;
+      playing = true;
+      play.textContent = 'Pause';
+      document.addEventListener('keydown', onKey);
+      const t0 = performance.now();
+      let last = -1;
+      const step = () => {
+        if (!playing) return;
+        if (!root.offsetParent) { stop(); return; }  // the tab or the mode was left
+        const p = Math.min(1, (performance.now() - t0) / PLAY_MS), k = Math.round(p * (span.length - 1));
+        if (k !== last) { last = k; range.value = String(k); apply(); }
+        if (p >= 1) stop(); else raf = requestAnimationFrame(step);
+      };
+      step();
+    }
+    range.addEventListener('input', () => { stop(); apply(); });
+    bars.addEventListener('click', (e) => {  // pointer only: the range is the keyboard's way
+      const b = e.target.closest && e.target.closest('.sb');
+      if (!b) return;
+      stop();
+      range.value = b.dataset.i;
+      apply();
+    });
+    range.value = String(Math.max(0, span.length - 1));
+    draw();
+    paint();
+    const row = el('div', 'scrub-row'), seg = el('span', 'scrub-span');
+    seg.append(yr, whole);
+    row.append(el('span', null, 'Up to'), range, out, seg, play);
+    root.append(bars, row);
+    if (!all.length) { range.disabled = true; for (const b of [yr, whole, play]) b.disabled = true; }
+    const me = { root, stop, refresh() {  // new data: the months and counts again, the chosen month kept
+      stop();
+      const keep = span[+range.value];
+      all = growthMonths().months;
+      counts = growthMonths().counts;
+      span = yearOn ? all.slice(-12) : all;
+      const k = span.indexOf(keep);
+      range.disabled = !all.length;
+      for (const b of [yr, whole, play]) b.disabled = !all.length;
+      draw();
+      range.value = String(k < 0 ? Math.max(0, span.length - 1) : k);
+      paint();
+    }, set(month) {  // follow the other scrubber, without moving the brain
+      let k = span.indexOf(month);
+      if (k < 0) k = month && month < span[0] ? 0 : span.length - 1;
+      range.value = String(Math.max(0, k));
+      paint();
+    } };
+    for (let i = scrubs.length; i--;) if (!scrubs[i].root.isConnected) scrubs.splice(i, 1);  // a rerender's old ones
+    scrubs.push(me);
+    return me;
+  }
+
+  /* ---- Focus Lens: a Home row's page and the pages linked with it stay lit, the rest dims as in
+     Today and the camera frames them; Clear, Esc, the same row again or Today ends it ---- */
+  let lensId = null, lensAdj = null, lensEl = null;
+  const LENS_CAP = 40, LENS_FEW = 5;
+  function lensNear(id) {  // links both ways, between pages the brain shows
+    if (!lensAdj) {
+      lensAdj = new Map();
+      const add = (a, b) => { if (!lensAdj.has(a)) lensAdj.set(a, new Set()); lensAdj.get(a).add(b); };
+      for (const p of D.pages) {
+        if (!BRAIN_IDS.has(p.id)) continue;
+        for (const t of p.links) if (t !== p.id && BRAIN_IDS.has(t)) { add(p.id, t); add(t, p.id); }
+      }
+    }
+    return lensAdj.get(id) || [];
+  }
+  function lensBar() {
+    lensEl = el('span', 'lens-bar');
+    lensEl.hidden = true;
+    return lensEl;
+  }
+  function syncLens() {
+    if (lensEl) {
+      lensEl.hidden = !lensId;
+      if (lensId) {
+        const n = lensEl.dataset.n, p = PAGES.get(lensId);
+        const note = el('span', 'lens-note', 'Focus: ');
+        note.append(el('b', null, p ? p.title : lensId), `, ${plural(+n, 'linked page')}`);
+        lensEl.replaceChildren(note, button('band-btn', 'Clear', () => clearLens()));
+      }
+    }
+    for (const b of document.querySelectorAll('[data-lens]')) b.setAttribute('aria-pressed', String(b.dataset.lens === lensId));
+  }
+  // quiet: a remount puts the same lens on the new brain (no camera move)
+  function applyLens(quiet, cam) {
+    const ids = window.CortexBrain.LENS.set(lensId, lensNear, LENS_CAP, LENS_FEW), got = brain.lens(ids, quiet, cam);
+    if (!got) { lensId = null; syncLens(); return false; }
+    lensEl.dataset.n = String(Math.max(0, got - 1));
+    syncLens();
+    return true;
+  }
+  function setLens(id) {
+    if (!brain || !BRAIN_IDS.has(id)) return;
+    lensId = id;
+    if (!applyLens(false)) return;
+    const slot = $('home-brain-slot');
+    if (slot.scrollIntoView) slot.scrollIntoView({ block: 'nearest', behavior: REDUCED.matches ? 'auto' : 'smooth' });
+    live(`Focus: ${PAGES.get(id) ? PAGES.get(id).title : id}, ${plural(+lensEl.dataset.n, 'linked page')}.`);
+  }
+  function clearLens() {
+    if (!lensId) return;
+    lensId = null;
+    if (brain) brain.endLens();
+    syncLens();
+  }
+  const toggleLens = (id) => (lensId === id ? clearLens() : setLens(id));
+  // a quiet button at a Home row's right end (rows of pages the brain does not show get none)
+  function lensBtn(id, title) {
+    if (brainFailed || !BRAIN_IDS.has(id) || !PAGES.has(id)) return null;
+    const b = iconBtn('focus', `Show ${title} in the brain`, () => toggleLens(id));
+    b.dataset.lens = id;
+    b.setAttribute('aria-pressed', String(id === lensId));
+    return b;
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && lensId && !e.defaultPrevented) clearLens(); });
   function syncSpin(on) {
     for (const b of spinBtns) b.setAttribute('aria-pressed', String(on));
   }
   function syncAlive(on) {
     for (const b of aliveBtns) b.setAttribute('aria-pressed', String(on));
   }
-  if (!brainFailed) $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'));
-  else noBrain();
+  if (!brainFailed) {
+    $('home-brain-tools').append(modeGroup(), todayBtn('band-btn'), lensBar());
+    $('home-brain-slot').before(buildScrub().root);  // under the band, where the panel's own colours are
+  } else noBrain();
   $('explore').addEventListener('click', () => { show('brain'); setView('3d'); });
 
   /* ---- Look: the brain's style, generated from the renderer's schema ---- */
@@ -1465,10 +1672,15 @@
     if (brainId && PAGES.has(brainId)) {
       acts.append(iconBtn('target', 'Show in brain', () => showInBrain(brainId)));
       syncRow(r, brainId);
+      const f = homeRows && lensBtn(brainId, title);
+      if (f) acts.append(f);
     }
     r.append(t, acts);
     return r;
   }
+  // Home's own rows (Exams and deadlines, Open loops, Back on your mind) carry the Focus Lens button
+  let homeRows = false;
+  const onHome = (fn) => (x) => { homeRows = true; try { return fn(x); } finally { homeRows = false; } };
   function moreFoot(n, where, section) {
     const f = el('div', 'foot');
     f.append(button('linkbtn', `+ ${n} more on ${where}`, () => show(section)));
@@ -1961,6 +2173,8 @@
       const acts = el('div', 'acts');
       acts.append(copyBtn(it.prompt));
       if (PAGES.has(it.id)) acts.append(iconBtn('target', 'Show in brain', () => showInBrain(it.id)));
+      const lb = lensBtn(it.id, it.title);
+      if (lb) acts.append(lb);
       r.append(tc, item, plat, st, acts);
       if (PAGES.has(it.id)) syncRow(r, it.id);
       b.body.append(r);
@@ -1998,12 +2212,12 @@
 
     const exams = (D.exams || D.assessments.filter((a) => isDay(a.date))).slice().sort((a, c) => a.days_left - c.days_left);
     const eb = STUDIES ? board('Exams and deadlines') : null;
-    const examsBoard = eb ? boardList(eb, exams.map(examRow), 4,
+    const examsBoard = eb ? boardList(eb, exams.map(onHome(examRow)), 4,
       'Nothing scheduled. Tell any Claude chat about a test and its date.', ['Study', 'study']) : null;
     const refocus = eb && LIVE ? dateExtras(eb) : null;  // the snapshot cannot add a date
-    const loops = boardList(board('Open loops'), D.loops.map(loopRow), 5,
+    const loops = boardList(board('Open loops'), D.loops.map(onHome(loopRow)), 5,
       "No open loops. Say 'remind me to…' in any Claude chat.", ['Ideas', 'ideas']);
-    const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
+    const back = boardList(board('Back on your mind'), D.resurface.map(onHome(resurfaceRow)), 3,
       'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
       ['Ideas', 'ideas']);
     const boards = { study: examsBoard, build: loops, research: back };
@@ -2365,37 +2579,8 @@
     });
     arch.title = 'Show the unsorted chats as a faint ring under the brain';
     arch.setAttribute('aria-pressed', String(archiveOn));
-    const months = [];
-    // a typo like 0001-01-01 or 9999-12-31 must not make the slider thousands of months long
-    const latest = String(+TODAY.slice(0, 4) + 1) + TODAY.slice(4);
-    const dates = D.pages.map((p) => p.date).filter((d) => isDay(d) && d >= '1990' && d <= latest).sort();
-    if (dates.length) {
-      let y = +dates[0].slice(0, 4), m = +dates[0].slice(5, 7);
-      const end = dates[dates.length - 1].slice(0, 7);
-      for (;;) {
-        const k = `${y}-${String(m).padStart(2, '0')}`;
-        months.push(k);
-        if (k >= end) break;
-        if (++m > 12) { m = 1; y++; }
-      }
-    }
-    const scrub = el('div', 'scrub'), range = el('input'), out = el('output');
+    const scrub = buildScrub().root;
     scrub.id = 'scrub';
-    scrub.hidden = true;
-    range.type = 'range';
-    range.min = '0';
-    range.max = String(Math.max(0, months.length - 1));
-    range.value = range.max;
-    range.setAttribute('aria-label', 'Growth: show pages up to this month');
-    const setOut = () => {
-      const mo = months[+range.value];
-      out.textContent = mo ? fmtMonth(mo) : '';
-      range.setAttribute('aria-valuetext', out.textContent);
-    };
-    setOut();
-    range.addEventListener('input', () => { setOut(); if (brain) brain.setGrowth(months[+range.value] || null); });
-    scrub.append(el('span', null, 'Up to'), range, out);
-    if (!months.length) range.disabled = true;
     tools.append(modeGroup(), spin, alive, todayBtn('btn'), stemBtn(), pictureBtn(), arch);
     tools.addEventListener('click', syncStem);  // another flight (Today) leaves the stem
     if (HAS_STYLE) tools.append(lookBtn());
@@ -3923,6 +4108,10 @@
     for (const c of D.clusters) LOBES.set(c.id, c);
     BRAIN_IDS.clear();
     if (D.brain && D.brain.nodes) for (const id of D.brain.nodes.ids) BRAIN_IDS.add(id);
+    lensAdj = null;
+    growthData = null;
+    for (let i = scrubs.length; i--;) { if (scrubs[i].root.isConnected) scrubs[i].refresh(); else scrubs.splice(i, 1); }
+    if (lensId && !BRAIN_IDS.has(lensId)) clearLens();  // its page is gone
     countDegrees();
     BACK = HAY = CMDS = null;
   }

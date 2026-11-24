@@ -332,7 +332,8 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - A, M and G switch modes. S toggles spin. L opens Look.
 
 **The toolbar**
-- **Activity / Mastery / Growth:** what the colours and halos show.
+- **Activity / Mastery / Growth:** what the colours and halos show. In Growth, a bar for each month shows how many pages were added; drag the range or click a bar to see the brain up to that month, use **1 year** or **All** to change the span, and **Play** to watch it grow (it is not shown if your system asks for less motion).
+- **Focus (the icon at the right of a row on Home):** the button on a row in Open loops, Back on your mind, Exams and deadlines or Next up shows that page and the pages linked with it in the brain and dims the rest. Press **Clear**, Esc, the same button again or Today to end it.
 - **Spin:** off by default. While on, it pauses when you move the mouse and resumes after 3 seconds.
 - **Alive:** neurons fire now and then. It sleeps after 2 minutes idle.
 - **Today:** shows everything from today (your day starts at 04:00): pages taught, tested or asked about, and pages added or saved. The camera frames them all, and every one is highlighted as chosen while the rest dims. `[` and `]`, the Left and Right arrow keys, or the arrows beside the button open them one at a time ("2 of 7"); the links between two of today's pages are drawn brighter than the links leading out of today. Press Today again, Esc or 0 to leave.

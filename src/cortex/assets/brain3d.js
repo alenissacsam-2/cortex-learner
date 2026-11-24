@@ -1389,6 +1389,19 @@ void main() {
     return out;
   }
 
+  /* ---- Focus Lens: a page and the pages linked with it (pure). `near(id)` lists a page's linked ids;
+     1 link away, then 2 links away when fewer than `few` are 1 away; the page first, `cap` in all ---- */
+  const LENS = {
+    set(id, near, cap, few) {
+      cap = cap || 40; few = few || 5;
+      const seen = new Set([id]), out = [id], hop1 = [];
+      for (const j of near(id)) if (!seen.has(j)) { seen.add(j); hop1.push(j); }
+      out.push(...hop1);
+      if (hop1.length < few) for (const a of hop1) for (const j of near(a)) if (!seen.has(j)) { seen.add(j); out.push(j); }
+      return out.slice(0, cap);
+    },
+  };
+
   /* ---------------- mount ---------------- */
   /* ---- the growth moment's rules (pure; the app and the tests call them) ---- */
   const GROWTH = {
@@ -1966,7 +1979,7 @@ void main() {
     let hl = null, focus = -1, hover = -1, selected = -1, reticle = -1, todaySet = null, replay = null;
     // Today: its pages in order (the stepping list); the growth moment: its new pages, whether their
     // dim holds the stage, the timeline and labels; the pages that keep a faint glow until midnight
-    let todayList = [], grow = null, growSet = null, growOn = false, faintSet = null;
+    let lensOn = false, lensCam = null, todayList = [], grow = null, growSet = null, growOn = false, faintSet = null;
     let picked = false;  // a page or region was chosen once: `hover` labels stop showing every region name
     let beaconLobes = [], beaconT0 = 0, selOrbit = false, crumbKey = '', walk = null;
     const hist = [], userVis = new Uint8Array(N).fill(1);
@@ -2803,12 +2816,12 @@ void main() {
       return viewToward(x, y, z, Math.max(V3 ? 0.9 : 0.45, (r + 0.15) * focal / (0.4 * Math.max(1, Math.min(W, H)))));
     }
     function syncToday() {
-      if (opts.onToday) opts.onToday(todaySet ? { n: todayList.length, at: todayList.indexOf(selected) } : null);
+      if (opts.onToday) opts.onToday(todaySet && !lensOn ? { n: todayList.length, at: todayList.indexOf(selected) } : null);
     }
     // [ and ] in Today, and the page's arrows: the next or previous page of today, round the list
     function todayStep(dir) {
       const n = todayList.length;
-      if (!todaySet || !n) return false;
+      if (!todaySet || lensOn || !n) return false;
       const at = todayList.indexOf(selected);
       choose(todayList[at < 0 ? (dir < 0 ? n - 1 : 0) : (at + (dir < 0 ? n - 1 : 1)) % n]);
       return true;
@@ -3215,13 +3228,15 @@ void main() {
       }
     }
     function clearAll() {
-      const was = !!todaySet;
+      const was = !!todaySet, lens = lensOn;
+      lensOn = false; lensCam = null;
       if (selected >= 0) select(-1, false);
       focus = -1; reticle = -1; beaconLobes = []; todaySet = null; todayList = []; walk = null;
       if (replay) { replay = null; R.setSprites([]); }
       grow = null; growOn = false;
       restyle(); retint(); relines();
       if (was) syncToday();
+      if (lens && opts.onLens) opts.onLens(null);
     }
     function overview() { clearAll(); fly(home); }
     // Back one level: page -> its region -> the overview; false when already at the overview.
@@ -3597,8 +3612,9 @@ void main() {
       // Today: every page in `list` drawn as chosen and framed together, a pulse from each (max 30)
       // along its links; they stay lit until the view leaves Today. `quiet` (a remount) restores it
       // with `selectedId` still chosen, no pulse and no flight.
-      today(list, selectedId, quiet) {
+      today(list, selectedId, quiet, asLens) {
         const src = [], pul = [];
+        if (!asLens && lensOn) { lensOn = false; lensCam = null; if (opts.onLens) opts.onLens(null); }  // Today ends the Focus Lens
         for (const id of list || []) {
           const i = idIndex.get(String(id));
           if (i !== undefined && i < SF && userVis[i] && !src.includes(i)) src.push(i);
@@ -3608,6 +3624,7 @@ void main() {
         todaySet = new Uint8Array(N);
         todayList = src;
         for (const i of src) todaySet[i] = 1;
+        lensOn = !!asLens && src.length > 0;
         reticle = -1;
         restyle(); relines();
         if (quiet) {
@@ -3618,7 +3635,7 @@ void main() {
         }
         if (src.length) fly(todayView());
         syncToday();  // the button reads pressed from the start, not when the pulses end
-        if (reduced || !src.length) { settleToday(); return; }
+        if (reduced || !src.length || asLens) { settleToday(); return; }
         pul.push(...src.slice(0, 30));
         if (V3 && NF) {  // comets run along each page's link fibres in lobe colours
           const t0 = performance.now(), stagger = Math.min(120, 1800 / pul.length);
@@ -3636,8 +3653,31 @@ void main() {
         invalidate();
       },
       // Today's pages in order while the view is in Today, else null; step through them
-      get todayIds() { return todaySet ? todayList.map((i) => PG[i].id) : null; },
+      get todayIds() { return todaySet && !lensOn ? todayList.map((i) => PG[i].id) : null; },
       todayStep,
+      // Focus Lens: these pages (those this view shows) in full, the rest dimmed as in Today, the camera
+      // on them; no pulses, no stepping. `quiet` (a remount) keeps the camera; `cam0` is the view to
+      // return to. Returns the number framed, or 0 (nothing changes).
+      lens(list, quiet, cam0) {
+        let seen = 0;
+        for (const id of list || []) { const i = idIndex.get(String(id)); if (i !== undefined && i < SF && userVis[i]) seen++; }
+        if (!seen) return 0;  // nothing to show: nothing changes
+        const keep = cam0 || (lensOn ? lensCam : Object.assign({}, cam));
+        this.today(list, null, quiet, true);
+        if (!lensOn) return 0;
+        lensCam = keep;
+        return todayList.length;
+      },
+      // leave the lens and fly back to where the camera was when it began
+      endLens() {
+        if (!lensOn) return false;
+        const c = lensCam;
+        clearAll();
+        if (c) fly(c);
+        return true;
+      },
+      get lensIds() { return lensOn ? todayList.map((i) => PG[i].id) : null; },
+      get lensCam() { return lensOn ? lensCam : null; },
       // The growth moment for these new page ids (only those this view shows): {n, labels} or null.
       grow: startGrow,
       // whether this view draws a page (a filtered, archived or stem node does not)
@@ -3686,5 +3726,5 @@ void main() {
     };
   }
 
-  window.CortexBrain = { mount, STYLE_SCHEMA, PRESETS, DEFAULT_STYLE, GROWTH };
+  window.CortexBrain = { mount, STYLE_SCHEMA, PRESETS, DEFAULT_STYLE, GROWTH, LENS };
 })();
