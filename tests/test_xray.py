@@ -410,6 +410,43 @@ def test_a_shared_index_sees_pages_added_edited_and_deleted(vault):
         shared.db.close()
 
 
+def test_a_shared_index_takes_each_runs_catalog(vault):
+    """A concept added to catalog.yaml under a private domain after the shared index was built
+    is hidden in the next run, as in a fresh index's (a public one beside it is served)."""
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+
+    def domains(with_concepts):
+        out = ""
+        for d, private in (("racing", True), ("cars", False)):
+            note(vault, f"domains/{d}.md", f"id: {d}\ntitle: {d.title()}\nkind: domain\n"
+                 + ("private: true\n" if private else ""), f"# {d.title()}")
+            note(vault, f"areas/{d}.motors.md", f"id: {d}.motors\ntitle: Motors\nkind: area\n"
+                 f"domain: {d}\n", "# Motors")
+            out += (f'  - id: "{d}"\n    title: "{d.title()}"\n    areas:\n'
+                    f'      - id: "{d}.motors"\n        title: "Motors"\n        concepts:'
+                    + (f'\n          - id: "{d}-turbo"\n            title: "Turbo"\n'
+                       if with_concepts else " []\n"))
+        return out
+
+    cat = (vault / "catalog.yaml").read_text(encoding="utf-8")
+    (vault / "catalog.yaml").write_text(cat + domains(False), encoding="utf-8")
+    v = Vault(vault)
+    shared = Index(v, Catalog.load(v), save=False)
+    try:
+        dry_prime(v, "claude-ai", PROMPT, index=shared)
+        for d in ("racing", "cars"):
+            note(vault, f"concepts/{d}-turbo.md", f'id: {d}-turbo\ntitle: "Turbo car motor"\n'
+                 f'parent: "[[{d}.motors]]"\ndomain: {d}\n',
+                 "# Turbo car motor\n\nHow a car motor turbo works, for motor racing.")
+        (vault / "catalog.yaml").write_text(cat + domains(True), encoding="utf-8")
+        got = dry_prime(v, "claude-ai", PROMPT, index=shared)
+        assert "racing-turbo" not in _ids(got) and "cars-turbo" in _ids(got)
+        assert _same(got, dry_prime(v, "claude-ai", PROMPT))
+    finally:
+        shared.db.close()
+
+
 def test_a_shared_index_writes_nothing(vault, home, monkeypatch):
     from cortex import index
     from cortex.catalog import Catalog

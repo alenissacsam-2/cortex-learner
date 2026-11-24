@@ -4130,8 +4130,8 @@ def dry_prime(vault: Vault, client: str, prompt: str, every: bool = False,
     c.sessions.client = None if client in ("", "unknown") else client
     if index is None:
         c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
-    else:  # _prime_select's refresh applies the new withhold
-        index.withhold, c._index = c._index_withheld, index
+    else:  # _prime_select's refresh applies the new withhold, under this run's catalog
+        index.withhold, index.catalog, c._index = c._index_withheld, c.catalog, index
     c._ready.set()
     parts, xr, _ = c._prime_select(prompt[:PRIME_PROMPT], save=False)
     return {**xr, "chars": len("\n\n".join(parts))}
