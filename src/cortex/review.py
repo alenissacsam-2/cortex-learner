@@ -518,7 +518,8 @@ def unused(vault, events, today: str) -> tuple[list[dict], int, str | None]:
     X-ray call served and whose file is over UNUSED_DAYS old, not kept (a `dismiss` change on
     id `playbooks` holding the id's hash) in the last UNUSED_DAYS, oldest first, as {id, title,
     path (vault-relative), changed}; the X-ray calls seen; the first one's day). Nothing while
-    the X-ray holds no call."""
+    the X-ray holds no call. R27b: a cortex_find, cortex_recall or cortex_read that returned a
+    playbook counts as serving it too, which only ever keeps a playbook off this list."""
     from cortex import xray
     calls = xray.rows(vault)
     if not calls:

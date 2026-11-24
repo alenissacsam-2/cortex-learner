@@ -434,6 +434,13 @@ TIMELINE_KINDS = ("journal", "note", "resource", "decision", "project", "loop", 
 TIMELINE_DAYS, TIMELINE_MAX = 3, 12
 
 
+def _hit_ids(hits) -> list[str]:
+    """R27b: the string ids among a tool's hits, for its X-ray row; any other shape is skipped,
+    so the X-ray never breaks the tool."""
+    return [h["id"] for h in hits if isinstance(h, dict) and isinstance(h.get("id"), str)] \
+        if isinstance(hits, list) else []
+
+
 def _find_out(hits: list[dict]) -> dict:
     """cortex_find's result: ids, kinds and states as data; titles, summaries, snippets and
     loop fields (note text) as one `<untrusted_note id="find">` block, one line per hit."""
@@ -1262,6 +1269,14 @@ class Cortex:
             "ready", "weak", "resurface", "timeline"] | None = None,
             limit: int | None = None, since: str | None = None, until: str | None = None,
             source: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+        out = self._find(query, kind, limit, since, until, source)
+        # R27b: the X-ray keeps the ids it returned (never the query), for the broad-read flag
+        xray.record(self.vault, "cortex_find", self.sessions.client, {"found": _hit_ids(
+            out.get("hits") or out.get("items"))}, {}, len(str(out.get("text") or "")))
+        return out
+
+    def _find(self, query: str, kind: str | None, limit: int | None, since: str | None,
+              until: str | None, source: str | None) -> dict[str, Any]:
         if kind == "resurface":  # ideas due to be shown again; query is not used
             return self._resurface(3 if limit is None else limit)
         if kind == "timeline":
@@ -1343,6 +1358,8 @@ class Cortex:
         if check:
             out["checks"] = self._checks(sentences)
             out["next"] = CHECK_NEXT
+        xray.record(self.vault, "cortex_recall", self.sessions.client,  # R27b: ids only
+                    {"recalled": _hit_ids(hits)}, {}, len(str(out.get("text") or "")))
         return out
 
     def _quiet(self) -> dict[str, float]:
@@ -1402,6 +1419,9 @@ class Cortex:
             if p is None:
                 raise VaultError("unknown_id", f"No people page '{id}'.")
             private = is_private(self.vault.read("person", p["id"][len(people.PREFIX):]))
+            # R27b: the bare id, so the X-ray shows a private person as "a private page"
+            xray.record(self.vault, "cortex_read", self.sessions.client,
+                        {"read": [p["id"][len(people.PREFIX):]]}, {}, len(p["body"]))
             return {"id": p["id"], "kind": "person", "title": render.plain(p["title"], 80),
                     "fields": _wrap_fields(p["id"], {"relation": p["relation"],
                                                       "tier": p["tier"]}),
@@ -1428,6 +1448,8 @@ class Cortex:
                                   "teaching." if out["kind"] == "concept"  # dogfood r4 #13
                                   else "Use it as context; cite it as [[id]] where it helps.")
                                  + on)
+        xray.record(self.vault, "cortex_read", self.sessions.client,  # R27b: ids only
+                    {"read": _hit_ids([out])}, {}, len(str(out.get("text") or "")))
         return out
 
     def _similar(self, id: str) -> list[dict]:
@@ -3264,7 +3286,8 @@ class Cortex:
         X-ray saw all of: its oldest call is on or before the guess's day.
         shortcut: a busy owner's ring (xray.CAP calls) may never reach 30 days back, and then
         nothing retires; a per-day fold of served ids if that matters."""
-        ring = [str(r.get("ts")) for r in xray.rows(self.vault)]
+        ring = [str(r.get("ts")) for r in xray.rows(self.vault)  # R27b: find, recall and read
+                if r.get("tool") not in xray.READS]  # rows reach further back (READ_CAP)
         if self._tidy_state().get("guesses") == day or not ring:
             return []
         try:
@@ -4044,16 +4067,24 @@ CLOUD_CLIENTS = ("claude", "gemini", "chatgpt", "openai", "cursor", "copilot", "
                  "windsurf", "vscode", "code", "antigravity", "cline")
 
 
-def dry_prime(vault: Vault, client: str, prompt: str) -> dict:
+def dry_prime(vault: Vault, client: str, prompt: str, every: bool = False,
+              index: Index | None = None) -> dict:
     """The app's X-ray dry run: what a new chat's cortex_prime would serve the owner's MCP
     client named `client` ("" or "unknown": one that sends no name) for `prompt`, by the same
     selection (Cortex._prime_select) under that client's profile, as {served, trimmed} ids by
     block and the context's `chars`. Nothing is written: no X-ray row, event, chat log, tag,
-    session, index snapshot or vector cache, and the prompt is kept nowhere."""
+    session, index snapshot or vector cache, and the prompt is kept nowhere. `every`: with
+    every scope, as the owner's own view (the X-ray's compare, R27b). `index`: a read-only
+    (save=False) Index to reuse across runs (R27b's compare); its withhold becomes this
+    client's, and the selection's refresh moves the pages that changes, as a privacy change
+    does."""
     c = Cortex(vault, build=False)
-    c.over_mcp = True  # the client's profile applies, as over MCP
+    c.over_mcp = not every  # the client's profile applies, as over MCP
     c.sessions.client = None if client in ("", "unknown") else client
-    c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
+    if index is None:
+        c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
+    else:  # _prime_select's refresh applies the new withhold
+        index.withhold, c._index = c._index_withheld, index
     c._ready.set()
     parts, xr, _ = c._prime_select(prompt[:PRIME_PROMPT], save=False)
     return {**xr, "chars": len("\n\n".join(parts))}
