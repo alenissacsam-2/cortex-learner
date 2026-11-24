@@ -335,6 +335,7 @@ The home page of the Cortex app (or `cortex dashboard`) shows the brain as a 3D 
 - **Alive:** neurons fire now and then. It sleeps after 2 minutes idle.
 - **Today:** shows everything from today (your day starts at 04:00): pages taught, tested or asked about, and pages added or saved. The camera frames them all, and every one is highlighted as chosen while the rest dims. `[` and `]`, the Left and Right arrow keys, or the arrows beside the button open them one at a time ("2 of 7"); the links between two of today's pages are drawn brighter than the links leading out of today. Press Today again, Esc or 0 to leave.
 - **Stem:** flies to the websites in the brain stem; press it again for the whole brain. It shows only once your browsing is in Cortex.
+- **Save picture:** saves a 1200 x 675 PNG of your brain from where you are looking, in the night look, safe to share: it shows only your public pages and their links, with no titles, no topic names and no websites, and its one caption counts your pages and areas and gives the day.
 - **Unsorted chats:** shows chats with no topic as a faint ring under the brain.
 - **Look:** opens the Look panel.
 - **Legend** (bottom left): what the colours, sizes and fibres mean. It is open on your first visit and folded after that; click it to open or fold it, and the page remembers your choice.

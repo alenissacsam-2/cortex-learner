@@ -968,7 +968,8 @@
     if (brain || brainFailed) return brain;
     const t = performance.now();
     const pages = D.pages.map((p) => ({ id: p.id, title: p.title, kind: p.kind, cluster: p.cluster, links: p.links,
-      date: p.date, updated: p.updated, group: kindGroup(p), state: GN.has(p.id) ? GN.get(p.id).state : null }));
+      date: p.date, updated: p.updated, group: kindGroup(p), state: GN.has(p.id) ? GN.get(p.id).state : null,
+      private: !!p.private }));  // never in a blob today; Save picture leaves one out all the same
     const first = !brainHost;
     if (first) {
       brainHost = el('div', 'brain-host');
@@ -1197,6 +1198,56 @@
       b.hidden = !(brain && brain.hasStem);
       b.setAttribute('aria-pressed', String(!!(brain && brain.atStem)));
     }
+  }
+  /* ---- Save picture: the brain's shape and light as a 1200 x 675 PNG, safe to post anywhere. Its
+     only text is the caption, built from two counts and the day, never from a page field. ---- */
+  const PIC_W = 1200, PIC_H = 675;
+  function pictureBtn() {
+    const b = button('btn tbtn', null, savePicture);
+    b.title = 'Save a picture of your brain’s shape: no titles, no names, nothing private';
+    b.append(icon('update'), ' Save picture');
+    return b;
+  }
+  function brainPicture() {
+    const p = brain && brain.picture && brain.picture(PIC_W, PIC_H);
+    if (!p) return null;
+    const g = p.canvas.getContext('2d'), n = (k, w) => `${k.toLocaleString('en')} ${w}${k === 1 ? '' : 's'}`;
+    g.font = '18px system-ui, "Segoe UI", sans-serif';
+    g.textBaseline = 'alphabetic';
+    g.textAlign = 'left';
+    g.fillStyle = 'rgba(255, 176, 0, 0.85)';  // --lit at 85 %
+    g.fillText(`${n(p.pages, 'page')} in ${n(p.areas, 'area')}, kept on this computer`, 24, PIC_H - 24);
+    g.textAlign = 'right';
+    g.fillStyle = '#958870';  // night --ink-3
+    g.fillText(`${fmtDay(TODAY)} ${TODAY.slice(0, 4)}`, PIC_W - 24, PIC_H - 24);
+    return p.canvas;
+  }
+  function downloadBlob(blob, name) {
+    const a = el('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+  async function savePicture() {
+    const name = `cortex-brain-${TODAY.slice(0, 10)}.png`;
+    try {
+      const c = brainPicture();
+      const blob = c && await new Promise((r) => c.toBlob(r, 'image/png'));
+      if (!blob) throw new Error('That picture could not be made.');
+      if (!LIVE) { downloadBlob(blob, name); live('Picture saved to your downloads.'); return; }
+      const url = await new Promise((ok, no) => {
+        const fr = new FileReader();
+        fr.onload = () => ok(String(fr.result));
+        fr.onerror = () => no(new Error('That picture could not be made.'));
+        fr.readAsDataURL(blob);
+      });
+      const r = await api('/api/brain/picture', { png: url.slice(url.indexOf(',') + 1), day: TODAY.slice(0, 10) });
+      if (r.download) { downloadBlob(blob, name); live('Picture saved to your downloads.'); }
+      else if (r.saved) live(`Picture saved: ${r.saved}`);
+    } catch (e) { live(e.message); }
   }
   function playToday() {
     if (!brain) return;
@@ -2233,7 +2284,7 @@
     range.addEventListener('input', () => { setOut(); if (brain) brain.setGrowth(months[+range.value] || null); });
     scrub.append(el('span', null, 'Up to'), range, out);
     if (!months.length) range.disabled = true;
-    tools.append(modeGroup(), spin, alive, todayBtn('btn'), stemBtn(), arch);
+    tools.append(modeGroup(), spin, alive, todayBtn('btn'), stemBtn(), pictureBtn(), arch);
     tools.addEventListener('click', syncStem);  // another flight (Today) leaves the stem
     if (HAS_STYLE) tools.append(lookBtn());
     tools.append(scrub);
