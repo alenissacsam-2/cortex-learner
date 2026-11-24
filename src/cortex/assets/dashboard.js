@@ -1978,8 +1978,10 @@
     }
     // an open 90-second check stays where it is (a live update never takes its focus or clock)
     for (const c of [...host.children]) if ((!cold || c !== cold.root) && c !== pickupEl) c.remove();
-    // `imported` is computed only for someone who does not study
-    host.append((STUDIES ? D.first_run : !D.imported) && !items.length ? firstRunBoard() : b.root);
+    // `imported` is computed only for someone who does not study; Get started, when it shows, is
+    // the one first-run board
+    const started = getStarted();
+    host.append(!started && (STUDIES ? D.first_run : !D.imported) && !items.length ? firstRunBoard() : b.root);
     if (!flicked && !REDUCED.matches) {  // the one authored motion: a split-flap flick, on the first render only
       flicked = true;
       times.forEach((d, k) => {
@@ -2004,21 +2006,131 @@
     const back = boardList(board('Back on your mind'), D.resurface.map(resurfaceRow), 3,
       'Nothing coming back today. Old ideas and decisions return here when they are due another look.',
       ['Ideas', 'ideas']);
+    const boards = { study: examsBoard, build: loops, research: back };
+    const g = homeGroups().map((k) => boards[k]).filter(Boolean);
     const rowA = $('home-row-a'), rowB = $('home-row-b');
-    rowA.className = 'home-row ' + (STUDIES ? 'three' : 'two');  // without exams: two boards in it
+    const cols = (n) => 'home-row ' + ['one', 'one', 'two', 'three'][n];
     if (!LIVE) {  // the snapshot has no feed and no chat
-      rowA.replaceChildren(...[examsBoard, loops, back].filter(Boolean));
+      rowA.className = cols(g.length);
+      rowA.replaceChildren(...g);
       rowB.replaceChildren();
       return;
     }
+    // as Home always was: one group board (or the first of three) between the feed and the
+    // chat, the others in the row below
+    const mid = g.length % 2 ? g.shift() : null;
+    rowA.className = cols(mid ? 3 : 2);
     // the quick chat is built once: a live update never takes its text or focus
     if (!chatBoard) chatBoard = quickChat();
     for (const c of [...rowA.children]) if (c !== chatBoard) c.remove();
-    rowA.prepend(...[feedBoard(), examsBoard].filter(Boolean));
-    if (refocus) refocus();
+    rowA.prepend(...[feedBoard(), mid].filter(Boolean));
     if (!chatBoard.isConnected) rowA.append(chatBoard);
-    rowB.className = 'home-row two';
-    rowB.replaceChildren(loops, back);
+    rowB.className = cols(g.length);
+    rowB.hidden = !g.length;
+    rowB.replaceChildren(...g);
+    if (refocus) refocus();
+    pinLink();
+  }
+
+  /* UX-E: Home's group boards (Exams and deadlines: study; Open loops: build; Back on your mind:
+     research) in the order of how much of the vault serves each (dashboard.signals; a stable
+     sort, so ties keep this order), or as pinned (app.home_layout). A group at 0 hides, study
+     exactly as the Study tab does; all at 0 is Home as it always was. */
+  const HOME_GROUPS = ['study', 'build', 'research'];
+  let PIN = Array.isArray(D.home_layout) ? D.home_layout.filter((k) => HOME_GROUPS.includes(k)) : null;
+  function homeOrder() {
+    const s = D.signals || {};
+    return PIN ? [...PIN, ...HOME_GROUPS.filter((k) => !PIN.includes(k))]
+      : HOME_GROUPS.slice().sort((a, b) => (s[b] || 0) - (s[a] || 0));
+  }
+  function homeGroups() {
+    const s = D.signals || {}, none = HOME_GROUPS.every((k) => !s[k]);
+    return homeOrder().filter((k) => (k === 'study' ? STUDIES : none || s[k] > 0));
+  }
+  // Pin layout, at Home's end (the live home only): Home stops reordering until Unpin layout
+  let pinEl = null;
+  function pinLink() {
+    if (!pinEl) {
+      pinEl = el('div', 'home-pin');
+      $('view-home').append(pinEl);
+    }
+    const b = button('linkbtn', PIN ? 'Unpin layout' : 'Pin layout', async () => {
+      b.disabled = true;
+      try {
+        const r = await api('/api/home/layout', { order: PIN ? null : homeOrder() });
+        PIN = r.home_layout || null;
+      } catch (e) { b.disabled = false; toast(e.message, 'error'); return; }
+      toast(PIN ? 'Home keeps this layout.' : 'Home orders its boards by itself again.');
+      renderHome();
+      pinEl.firstChild.focus();
+    });
+    pinEl.replaceChildren(b);
+  }
+
+  /* UX-E: Get started on a new vault (dashboard.get_started, the live home only): three steps,
+     each ticked from the vault (`connected` from the app), until all three are ticked or Hide
+     (app.first_run_hidden). Built once, so a live update keeps the typed line. */
+  const GS_STEPS = ['Tell Cortex one thing about you', 'Connect an AI app', 'Bring in what you already have'];
+  let gs = null, gsTicks = null, FIRST_HIDDEN = !!D.first_run_hidden;
+  function gsBoard() {
+    const note = el('span', 'band-note');
+    const b = board('Get started', { cls: 'get-started', action: note });
+    const form = el('form', 'gs-form'), input = el('input'), save = el('button', 'btn lit', 'Save');
+    input.type = 'text';
+    input.id = 'gs-fact';
+    input.maxLength = 300;
+    input.autocomplete = 'off';
+    input.placeholder = 'Where you work or study, or what you are into';
+    input.setAttribute('aria-label', 'One thing about you');
+    save.type = 'submit';
+    form.append(input, save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (save.disabled) return;
+      save.disabled = true;
+      try {
+        const r = await api('/api/home/fact', { text: input.value });
+        input.value = '';
+        toast(r.saved && r.saved.length ? 'Saved to your profile.' : 'Your profile has that line already.');
+        poll();  // the tick comes with the next data load
+      } catch (err) { toast(err.message, 'error'); }
+      save.disabled = false;
+    });
+    const go = (text, href) => { const a = el('a', 'btn', text); a.href = href; return a; };
+    const controls = [form, go('Connect', '/manage#connect'), go('Import', '/manage#setup')];
+    const codes = GS_STEPS.map((title, i) => {
+      const code = el('span', 'code');
+      b.body.append(brow({ title, left: code, right: controls[i] }));
+      return code;
+    });
+    const f = el('div', 'foot');
+    f.append(button('linkbtn', 'Hide', async () => {
+      try { await api('/api/home/layout', { first_run_hidden: true }); } catch (e) { toast(e.message, 'error'); return; }
+      FIRST_HIDDEN = true;
+      renderHome();
+      toast('Get started is hidden. Settings still has Connect AI apps and Setup.');
+      $('view-home').focus({ preventScroll: true });
+    }, 'Hide Get started'));
+    b.root.append(f);
+    return { root: b.root, note, codes };
+  }
+  function getStarted() {
+    const st = LIVE && !FIRST_HIDDEN ? D.get_started : null;
+    const ticks = st ? [!!st.fact, !!D.connected, !!st.imported] : null;  // D: the latest poll
+    if (ticks && gsTicks) ticks.forEach((t, i) => { if (t && !gsTicks[i]) announce(`Step ${i + 1} of 3 done: ${GS_STEPS[i]}.`); });
+    gsTicks = ticks;
+    if (!ticks || ticks.every(Boolean)) {
+      if (gs) { gs.root.remove(); gs = null; }
+      return false;
+    }
+    if (!gs) gs = gsBoard();
+    ticks.forEach((t, i) => {
+      gs.codes[i].textContent = t ? '✓' : String(i + 1);
+      gs.codes[i].setAttribute('aria-label', t ? 'Done' : `Step ${i + 1}`);
+    });
+    gs.note.textContent = `${ticks.filter(Boolean).length} of 3 done`;
+    if (!gs.root.isConnected) $('view-home').prepend(gs.root);
+    return true;
   }
 
   /* ---- Brain section ---- */

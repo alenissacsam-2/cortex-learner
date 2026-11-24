@@ -337,6 +337,7 @@ class App:
             PICTURE: self.brain_picture,
             "/api/home/unlock": self.unlock, "/api/home/lock": self.lock,
             "/api/home/check/answer": self.cold_answer, "/api/home/date": self.home_date,
+            "/api/home/layout": self.home_layout, "/api/home/fact": self.home_fact,
             "/api/vault/doctor": self.doctor, "/api/vault/git": self.git_settings,
             "/api/open": self.open,
             "/api/setup/vault": self.setup_vault, "/api/setup/embed": self.setup_embed,
@@ -628,7 +629,65 @@ class App:
         that must relock gets the public home with `relock`."""
         private = self._private(query)
         home = self._home().get(private is True)
+        home = {**home, **self._home_prefs(home)}
         return home if private is not None else {**home, "relock": True}
+
+    # ---- UX-E: Home's pinned layout and its Get started board (config.yaml `app:`) ----
+    def _home_prefs(self, home: dict) -> dict:
+        """`home_layout` and `first_run_hidden` from config.yaml; while Get started shows,
+        `connected`: an AI app is connected, as Setup's Connect step reads it."""
+        from cortex import dashboard
+        from cortex.app import desktop
+        a = desktop._app_cfg()
+        out = {"home_layout": dashboard.home_layout({"app": a}),
+               "first_run_hidden": a.get("first_run_hidden") is True}
+        if home.get("get_started") and not out["first_run_hidden"]:
+            entry = self.entry()
+            out["connected"] = any(t["connected"] for t in status.kept(
+                ("targets", json.dumps(entry, sort_keys=True)), lambda: targets.describe(entry)))
+        return out
+
+    def home_layout(self, body: dict) -> dict:
+        """Pin layout (`order`: Home's groups in order, null to unpin) and Get started's Hide
+        (`first_run_hidden`: true), kept in config.yaml's `app:` as app.notify is."""
+        from cortex import dashboard
+        from cortex.app import desktop
+        if not body or set(body) - {"order", "first_run_hidden"}:
+            raise ValueError("send order or first_run_hidden")
+        order = body.get("order")
+        if "order" in body and order is not None and dashboard.home_layout(
+                {"app": {"home_layout": order}}) is None:
+            raise ValueError(f"order must list {', '.join(dashboard.HOME_GROUPS)}, each once")
+        if "first_run_hidden" in body and body["first_run_hidden"] is not True:
+            raise ValueError("first_run_hidden can only be true")
+
+        def merge(a: dict) -> dict:
+            a = {**a, **({"first_run_hidden": True} if "first_run_hidden" in body else {})}
+            if "order" in body:
+                a = {k: v for k, v in a.items() if k != "home_layout"}
+                if order is not None:
+                    a["home_layout"] = list(order)
+            return a
+        desktop._merge_app(merge)
+        return self._home_prefs({})
+
+    def home_fact(self, body: dict) -> dict:
+        """Get started's one line about you, saved as a `//fact:` typed in a chat is (tags:
+        me/profile under Background, the owner's own words)."""
+        from cortex import tags
+        from cortex.vault import Vault
+        text = body.get("text")
+        text = " ".join(text.split()) if isinstance(text, str) else ""
+        if not text:
+            raise ValueError("Write one line about you first.")
+        if len(text) > tags.MAX_CHARS:
+            raise ValueError(f"Keep it to {tags.MAX_CHARS} characters.")
+        root, refused = self.need_root(), []
+        with self.reviewing:
+            saved = tags.apply_in(Vault(root), [("fact", text, self._today())], refused=refused)
+        if refused:
+            raise ValueError(refused[0])
+        return {"saved": saved}
 
     def home_version(self) -> dict:
         """The home's version, the Private switch and a prepared update (the page's 3 s poll)."""

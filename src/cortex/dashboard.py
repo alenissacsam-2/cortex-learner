@@ -31,7 +31,9 @@ from cortex import (
     levels,
     loops,
     planner,
+    profiles,
     reflect,
+    taint,
     topics,
 )
 from cortex import vault as vault_mod
@@ -56,7 +58,7 @@ REPO = Path(__file__).resolve().parents[2]  # a source checkout; installed, asse
 GLOSSARY = "The names, in plain words"  # the GUIDE heading after its number
 _NAME_RE = re.compile(r"\*\*Name:\*\*\s*(\S+)")
 # an import's header (doctor._IMPORT_HEAD): `Source: <label> · Date:`, maybe on a Timeline line
-_IMPORTED = re.compile(r"^(?:Timeline: [^\n]*?)?Source: [^·\n]+? · Date: ", re.M)
+_IMPORTED = re.compile(r"^(?:Timeline: [^\n]*?)?Source: ([^·\n]+?) · Date: ", re.M)
 UNFILED = "unfiled"
 GROUP_TITLES = {"journal": "Journal", "you": "About you", "sessions": "Study sessions",
                 "placements": "Tests and applications",
@@ -146,6 +148,94 @@ def studies(vault: Vault, events: list[dict], notes: dict | None = None) -> bool
         return True
     voided = {e.get("ref") for e in events if e.get("kind") == "void"}
     return any(e.get("kind") == "grade" and e.get("id") not in voided for e in events)
+
+
+# UX-E: Home's boards by the signal they serve (dashboard.js homeGroups)
+HOME_GROUPS = ("study", "build", "research")
+RECENT_DAYS = 30  # a page or event this recent counts twice
+BUILD_KINDS = ("project", "decision", "loop")  # the "Projects, decisions and loops" lobe
+STUDY_EVENTS = ("taught", "ask", "grade")
+CODING_LABELS = ("Claude Code", "Git")  # `Source:` labels of coding apps' chats and repo pages
+# MCP client names of coding apps, normalised (profiles.norm), as profiles.DEFAULT matches them
+CODING_CLIENTS = ("claudecode", "cursor", "codex", "visualstudiocode", "copilot", "geminicli",
+                  "windsurf", "antigravity", "cline", "opencode", "jetbrains")
+# a resource saved by hand (no label: a link, a paper) or from Zotero, documents, highlights or
+# notes; not calendar, mail, photos, chats and the like
+RESEARCH_LABELS = ("", "Zotero", "Documents", "Highlights", "Pocket", "Obsidian", "Notion",
+                   "Notes")
+NEW_PAGES = 10  # Get started: a vault with fewer pages of its own is new
+
+
+def signals(pages: list[dict], events: list[dict], day: str, study: bool) -> dict:
+    """How much of the vault serves study, build and research: pages and events, those of the
+    last RECENT_DAYS days counted twice. Study: concept, track and assessment pages and taught,
+    ask, grade and self-report events, 0 for someone who does not study (`studies`). Build:
+    project, decision and loop pages, coding apps' chats and repo pages, chats opened from a
+    coding app. Research: resources saved by hand or from a research source, and notes that
+    link one. A fold over the page rows and events, never stored."""
+    cut = (date.fromisoformat(day) - timedelta(days=RECENT_DAYS)).isoformat()
+    out = dict.fromkeys(HOME_GROUPS, 0)
+    # a resource or chat page's group by its `Source:` label (`in` first: the regex over
+    # every body would cost the build ~20 ms on 5k pages)
+    by_label = {}
+    for p in pages:
+        if (res := p["kind"] == "resource") or p["source"]:
+            x = p["source"] or ("Source: " in p["body"] and (
+                m := _IMPORTED.search(p["body"])) and m[1]) or ""
+            if x in CODING_LABELS:
+                by_label[p["id"]] = "build"
+            elif res and x in RESEARCH_LABELS:
+                by_label[p["id"]] = "research"
+    found = {i for i, g in by_label.items() if g == "research"}
+    by_kind = {**dict.fromkeys(STUDY_KINDS, "study"), **dict.fromkeys(BUILD_KINDS, "build")}
+    for p in pages:  # a plain loop: it runs over every page on each build (budget: 5 ms on 5k)
+        g = by_kind.get(k := p["kind"]) or by_label.get(p["id"]) or (
+            "research" if k == "note" and found and not found.isdisjoint(p["links"] or ())
+            else None)
+        if g:
+            out[g] += 2 if (p["date"] or p["updated"]) > cut else 1  # both ISO day strings
+    coding: dict[str, bool] = {}  # client name -> a coding app's, asked once per name
+    for e in events:
+        if (k := e.get("kind")) in STUDY_EVENTS:
+            g = "study"
+        elif k in ("log", "open") and isinstance(pl := e.get("payload"), dict):
+            if k == "log" and pl.get("kind") == "self_report":
+                g = "study"
+            elif k == "open" and isinstance(c := pl.get("client"), str) and (
+                    coding[c] if c in coding else coding.setdefault(
+                        c, any(x in profiles.norm(c) for x in CODING_CLIENTS))):
+                g = "build"
+            else:
+                continue
+        else:
+            continue
+        out[g] += 2 if str(e.get("day") or "") > cut else 1
+    if not study:
+        out["study"] = 0
+    return out
+
+
+def get_started(pages: list[dict], known: dict) -> dict | None:
+    """A new vault's first steps, or None: fewer than NEW_PAGES pages besides me/, rollups
+    and Cortex's session receipts. `fact`: a live line on a me/ page; `imported`: any page an
+    import or an AI app's chat import wrote. Derived on each build, never stored; the app adds
+    whether an AI app is connected."""
+    own = 0
+    for p in pages:  # stops at NEW_PAGES: a big vault costs nothing here
+        if p["kind"] not in ("me", "rollup") and not (
+                p["kind"] == "session" and _is_ambient(p["kind"], p["id"])):
+            own += 1
+            if own >= NEW_PAGES:
+                return None
+    return {"fact": known["total"]["live"] > 0, "imported": any(map(_imported, pages))}
+
+
+def home_layout(cfg: dict | None = None) -> list[str] | None:
+    """`app.home_layout` in config.yaml: Home's pinned group order, or None (automatic)."""
+    a = (taint.config() if cfg is None else cfg).get("app")
+    v = a.get("home_layout") if isinstance(a, dict) else None
+    ok = isinstance(v, list) and 0 < len(v) == len(set(v)) and all(x in HOME_GROUPS for x in v)
+    return v if ok else None
 
 
 def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
@@ -363,6 +453,9 @@ def build_data(vault: Vault, *, now: datetime, relayout: bool = False,
         "first_run": not today and not any(e.get("kind") == "grade" for e in events),
         # study features (the Study tab, exams, Tomorrow) show only for someone who studies
         "studies": study,
+        # UX-E: what Home's boards are ordered by, and a new vault's Get started
+        "signals": signals(pages, events, day, study),
+        "get_started": get_started(pages, known),
         # concepts forgotten LEECH_LAPSES+ times after they were learned, most lapses first
         "leeches": leeches,
         # any imported page yet (chats, notes, calendar, browsing), which ends the everyone
@@ -822,8 +915,8 @@ def build(vault: Vault, *, now: datetime, relayout: bool = False) -> dict:
 
 def snapshot(vault: Vault, *, now: datetime) -> str:
     """The self-contained page Export snapshot saves where the owner chooses (never in the
-    vault): non-private items only, CSP default-src 'none'."""
-    return render_html(build(vault, now=now))
+    vault): non-private items only, CSP default-src 'none'. A pinned Home layout is baked in."""
+    return render_html({**build(vault, now=now), "home_layout": home_layout()})
 
 
 def retire_old(vault: Vault) -> Path | None:
