@@ -34,7 +34,7 @@ def test_init_keeps_the_real_vault_when_a_temp_folder_asks(tmp_path, systemp):
     assert Path(taint.config()["vault"]) == real
     _, _, warned = cli._init(temp, default=True)
     assert Path(taint.config()["vault"]) == real
-    assert warned and f"kept your vault {real}" in warned[0]
+    assert warned and warned[0].startswith(f"Kept your vault {real}")
     assert "Pick a folder outside Temp" in warned[0]
 
 

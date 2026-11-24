@@ -1310,6 +1310,54 @@ def test_setup_vault_creates_and_points(app, tmp_path, home):
     assert "full path" in wait_job(app)["error"]
 
 
+def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tmp_path, home,
+                                                                  monkeypatch):
+    """FX1 1: with a real vault in use, a temp folder is refused before `cortex init` makes
+    anything there; a first setup (no vault yet) may still use one (Status warns later)."""
+    import tempfile
+
+    from cortex import cli, taint
+    systemp = tmp_path / "systemp"
+    systemp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(systemp))
+    cli._write_config(vault=str(vault))
+    call(app, "POST", "/api/setup/vault", {"path": str(systemp / "demo")})
+    job = wait_job(app)
+    assert job["error"] == wizard.TEMP_REFUSED and str(systemp) not in job["error"]
+    assert not (systemp / "demo").exists() and app.root == vault
+    assert Path(taint.config()["vault"]) == vault
+    taint.write_config({"vault": None})  # a new user: their only choice is not blocked
+    out = wizard.make_vault(type("Job", (), {"say": lambda self, s: None})(),
+                            str(systemp / "first"))[1]
+    assert out["ok"] and (systemp / "first" / ".cortex").is_dir()
+
+
+def test_change_folder_asks_to_move_connected_apps_and_moves_start_at_login(
+        app, vault, tmp_path, home, monkeypatch, _no_real_run_key):
+    """FX1 6b/6c: after a real vault change the job says `reconnect` while an app still
+    names the old folder (Connect's Apply moves it); Start at login is re-registered for the
+    new vault (registration mocked). The same folder again changes nothing."""
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    monkeypatch.setattr(targets, "_run", lambda *a, **k: (False, "no runs in tests"))
+    logins = []
+    monkeypatch.setattr(actions, "login", lambda job, root, on: logins.append((root, on)))
+    (home / ".codeium" / "windsurf").mkdir(parents=True)
+    targets.apply_all({"windsurf": True}, app.entry())
+    _no_real_run_key[status.LOGIN_TASK] = status.login_command(vault)
+    call(app, "POST", "/api/setup/vault", {"path": str(vault)})  # the same folder
+    job = wait_job(app)
+    assert job["error"] is None and "reconnect" not in job["result"] and logins == []
+    new = tmp_path / "new vault"
+    call(app, "POST", "/api/setup/vault", {"path": str(new)})
+    job = wait_job(app)
+    assert job["error"] is None and job["result"]["reconnect"] is True
+    assert logins == [(new.resolve(), True)]
+    assert "Start at login now uses the new folder." in job["result"]["lines"]
+    targets.apply_all({"windsurf": True}, app.entry())  # Connect's Apply
+    call(app, "POST", "/api/setup/vault", {"path": str(vault)})  # back: windsurf names `new`
+    assert wait_job(app)["result"]["reconnect"] is True
+
+
 def test_setup_state_and_no_download_without_a_click(app, monkeypatch):
     _, s, _, _ = call(app, "GET", "/api/setup")
     assert s["vault"]["done"] and not s["embed"]["done"] and s["embed"]["size"]

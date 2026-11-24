@@ -2188,8 +2188,21 @@ class App:
         path = body.get("path")
 
         def run(job):
+            old = self.root
             root, out = wizard.make_vault(job, path)
             self.root = root
+            if old is None or Path(old).resolve() == root:
+                return out
+            # FX1 6: the vault moved. Start at login is Cortex's own: it follows at once. AI
+            # apps' configs are the owner's: Connect re-points them after a confirm.
+            if status.login_task()["exists"]:
+                try:
+                    actions.login(job, root, True)
+                    out["lines"].append("Start at login now uses the new folder.")
+                except Exception as e:  # noqa: BLE001  (the vault itself is set up)
+                    out["lines"].append(f"Start at login still uses the old folder: {e}")
+            if any(t.get("stale") for t in targets.describe(self.entry())):
+                out["reconnect"] = True
             return out
         return self.jobs.start("Setting up the vault", "setup", run)
 

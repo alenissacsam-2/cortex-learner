@@ -932,6 +932,81 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
     assert out["errors"] == [] and out["boot"] == step1
 
 
+WG_FIX = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const S = () => DATA.routes['/api/setup'];
+const wgBtn = (text) => $('wg-body').querySelectorAll('button').find((b) => b.textContent === text);
+const line = () => ($('wg-job') || { textContent: null }).textContent;
+(async () => {
+  try {
+    $('confirm').open = true;  // another dialog is open when /api/setup answers
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    out.overConfirm = !!$('welcome').open;
+    $('confirm').open = false;
+    $('confirm').fire('close');
+    await tick();
+    out.afterConfirm = !!$('welcome').open;
+    // step 2: a refused POST leaves no job of the guide's; the next unrelated job stays out
+    S().vault.done = false;
+    $('wg-next').fire('click'); await tick();
+    DATA.fail = true;
+    wgBtn('Use this folder').fire('click');
+    await tick();
+    DATA.fail = false;
+    DATA.routes['/api/job'] = { seq: 2, job: { name: 'Indexing your notes', section: 'setup', running: true, line: 'note 3', seconds: 1, error: null, result: null } };
+    docL.visibilitychange.forEach((fn) => fn());
+    await tick();
+    out.refused = line();
+    // its own job: the line on step 2 only, never on step 3
+    DATA.routes['/api/job'] = { seq: 3, job: { name: 'Setting up the vault', section: 'setup', running: false, seconds: 1, error: null,
+      result: { ok: true, vault: 'D:\\Notes', lines: [] } } };
+    wgBtn('Use this folder').fire('click');
+    await new Promise((r) => setTimeout(r, 1000));  // the running job's poll sleeps 600 ms first
+    await tick();
+    out.step2 = line();
+    $('wg-next').fire('click'); await tick();
+    out.step3 = line();
+    // step 6: the example is the placeholder, and an empty Ask sends it
+    for (let i = 0; i < 3; i++) { $('wg-next').fire('click'); await tick(); }
+    out.placeholder = $('wg-q').getAttribute('placeholder');
+    wgBtn('Ask').fire('click');
+    await tick();
+    out.sent = fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body.text);
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_the_welcome_guide_waits_for_dialogs_keeps_job_lines_to_their_step_and_has_an_example(
+        root_committed, tmp_path, monkeypatch):
+    """FX1 2, 4, 7, 8: the guide does not open over another dialog (it opens once that one
+    closes); a refused vault POST leaves no guide job, so an unrelated job never writes into
+    it; step 2's job line is not shown on step 3; step 6's placeholder holds an example that
+    an empty Ask sends."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/setup"]["connect"] = [{"id": "x", "label": "X", "detected": True,
+                                        "connected": False}]
+    routes["/api/chat"]["chats"] = []
+    routes["/api/chat/list"] = {"chats": []}
+    routes["/api/app/welcome"] = {"welcome_done": False, "vault": True}
+    out = _run(node, tmp_path, "wgfix", WG_FIX, {"routes": routes, "stream": [
+        json.dumps({"t": "start", "id": CHAT_ID, "model": "m"}) + "\n"
+        + json.dumps({"t": "done", "id": CHAT_ID, "model": "m", "seconds": 1}) + "\n"]})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["overConfirm"] is False and out["afterConfirm"] is True
+    assert out["refused"] == ""
+    assert out["step2"] == "Setting up the vault: done." and out["step3"] == ""
+    assert out["placeholder"] == "For example: what do you know about me?"
+    assert out["sent"] == ["What do you know about me?"]
+
+
 def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):
     """A job with `progress` (server.Job.progress) reads "Step 3 of 5 · checking titles ·
     42% · about 2 min left" and fills its bar to the overall share; without, the moving bar."""
@@ -1872,7 +1947,7 @@ const answer = async () => { for (const r of waits.splice(0)) r(); await tick();
       $('status').querySelector('.band').querySelectorAll('button').find((b) => b.textContent === 'Check again').fire('click');
       await answer();
     }
-    out.asked = fetched.filter((f) => f.path.startsWith('/api/status')).map((f) => f.path);
+    out.asked = fetched.filter((f) => /^\/api\/status($|\?)/.test(f.path)).map((f) => f.path);  // not the report board's own GET
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
   console.log(JSON.stringify(out));
@@ -2372,6 +2447,70 @@ const posts = () => fetched.filter((f) => f.path === '/api/setup/vault').map((f)
   process.exit(0);
 })();
 """  # noqa: E501  (JavaScript)
+
+
+RECONNECT = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const btnIn = (label) => $('vault').querySelectorAll('button').find((b) => b.getAttribute('aria-label') === label || b.textContent === label);
+const row = () => $('vault').querySelectorAll('.brow').find((r) => (r.querySelector('.ttl') || {}).textContent === 'Your AI apps still use your old folder');
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'vault').fire('click');
+    await tick();
+    btnIn('Change folder: Vault').fire('click');
+    await tick();
+    $('vault').querySelectorAll('input')[0].value = 'D:\\New';
+    $('vault').querySelectorAll('input')[0].fire('input');
+    DATA.routes['/api/job'] = { job: { name: 'Setting up the vault', section: 'setup', running: false, seconds: 1, error: null,
+      result: { ok: true, vault: 'D:\\New', reconnect: true, lines: [] } } };
+    btnIn('Use this folder').fire('click');
+    await tick();
+    const m = $('toast-msg'), next = m.parentNode.childNodes[m.parentNode.childNodes.indexOf(m) + 1];  // the stub page is flat
+    out.toast = [m.textContent, next.tagName === 'BUTTON' ? next.textContent : null];
+    out.row = row() && [row().querySelector('.sub').textContent, row().querySelectorAll('button').map((b) => b.textContent)];
+    // Connect's rows: a stale one says so and stays ticked for Apply
+    DATA.routes['/api/connect'].targets = [{ id: 'windsurf', label: 'Windsurf', detected: true, connected: true, stale: true, files: [], snippet: 'x', note: '', paste: '' }];
+    row().querySelectorAll('button')[0].fire('click');
+    await tick();
+    out.connect = [!$('s-connect').hidden, $('connect').querySelector('.trow').querySelector('.sub').textContent, $('cb-windsurf').checked];
+    // Connect's Apply done: the row goes
+    DATA.routes['/api/job'] = { seq: 9, job: { name: 'Connecting AI apps', section: 'connect', running: false, seconds: 1, error: null, result: { ok: true, rows: [] } } };
+    DATA.routes['/api/connect/plan'] = { rows: [{ id: 'windsurf', label: 'Windsurf', op: 'add', file: 'f', change: 'update', detail: '' }] };
+    $('connect').querySelectorAll('button').find((b) => b.textContent === 'Apply…').fire('click');
+    await tick();
+    $('confirm-ok').onclick();
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'vault').fire('click');
+    await tick();
+    out.after = !row();
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_change_folder_asks_to_move_connected_apps(root_committed, tmp_path, monkeypatch):
+    """FX1 6b: a vault change whose result says `reconnect` shows the message in the toast
+    with an Open Connect AI apps button and as a lasting row in Dashboard and vault, until
+    Connect's Apply succeeds; Connect marks a stale row "Points at another folder"."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/vault"]["temp"] = False
+    out = _run(node, tmp_path, "reconnect", RECONNECT, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    msg = ("Your AI apps still use your old folder. Open Connect AI apps and click Apply to "
+           "move them.")
+    assert out["toast"] == [f"Cortex now uses D:\\New. {msg}", "Open Connect AI apps"]
+    assert out["row"] == ["Open Connect AI apps and click Apply to move them.",
+                          ["Open Connect AI apps"]]
+    assert out["connect"] == [True, "Points at another folder.", True]
+    assert out["after"] is True
 
 
 def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp_path,

@@ -99,3 +99,25 @@ def test_the_pasted_text_shares_its_lines_with_the_server_and_the_rule_block():
     for where, file in ((targets.PASTE_CODE, "~/.claude/CLAUDE.md"),  # the files rows name
                         (targets.PASTE_COPILOT, "~/.copilot/copilot-instructions.md")):
         assert f"into {file}," in where and file in guide
+
+
+def test_a_connected_app_pointing_at_another_vault_is_stale(home, monkeypatch):
+    """FX1 6a: after Change folder, a JSON or Codex TOML entry still names the old vault:
+    describe marks it stale (Connect keeps it ticked, Apply re-points it); the same vault or
+    an unconnected app is not stale."""
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+    moved = {**ENTRY, "args": ["mcp", "--vault", "D:\\new vault"]}
+    for d in (".codeium/windsurf", ".codex"):
+        (home / d).mkdir(parents=True)
+    rows = {r["id"]: r for r in targets.describe(ENTRY)}
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]  # not connected yet
+    targets.apply_all({"windsurf": True, "codex": True}, ENTRY)
+    rows = {r["id"]: r for r in targets.describe(ENTRY)}
+    assert rows["windsurf"]["connected"] and rows["codex"]["connected"]
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]
+    rows = {r["id"]: r for r in targets.describe(moved)}
+    assert rows["windsurf"]["stale"] and rows["codex"]["stale"]
+    targets.apply_all({"windsurf": True, "codex": True}, moved)  # Apply re-points both
+    rows = {r["id"]: r for r in targets.describe(moved)}
+    assert not rows["windsurf"]["stale"] and not rows["codex"]["stale"]
+    assert "new vault" in (home / ".codeium/windsurf/mcp_config.json").read_text("utf-8")

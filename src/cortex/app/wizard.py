@@ -258,9 +258,16 @@ def state(root: Path | None, scanned: dict | None = None) -> dict:
 # ---- the steps' jobs ---------------------------------------------------------------------------
 
 
+TEMP_REFUSED = ("That folder is inside Windows' temporary folder, which Windows can empty at any "
+                "time. Pick a folder outside it, such as one in Documents.")
+
+
 def make_vault(job, path: str) -> tuple[Path, dict]:
-    """`cortex init` on the chosen folder (it becomes the default vault)."""
-    from cortex import cli
+    """`cortex init` on the chosen folder (it becomes the default vault). A temp folder is
+    refused before anything is made there while a real vault exists; a first setup may use it
+    (Status warns)."""
+    from cortex import cli, taint
+    from cortex.vault import in_temp_folder
     if not isinstance(path, str) or not path.strip():
         raise ValueError("Choose a folder for the vault.")
     root = Path(path.strip().strip("\"'")).expanduser()
@@ -269,16 +276,18 @@ def make_vault(job, path: str) -> tuple[Path, dict]:
     root = root.resolve()
     if root.exists() and not root.is_dir():
         raise ValueError(f"{root} is a file; pick a folder.")
+    current = taint.config().get("vault")
+    if (current and Path(current).is_dir() and not in_temp_folder(current)
+            and in_temp_folder(root)):
+        raise ValueError(TEMP_REFUSED)
     job.say(f"setting up {root}")
     did, skipped, warned = cli._init(root, default=True)
-    from cortex import taint  # the pointer may have kept the current vault (a temp folder asked)
-    kept = Path(taint.config().get("vault") or root).resolve()
     from cortex import doctor
     if (sync := doctor.check_onedrive(root))[0] != "PASS":
         warned.append(f"{sync[2]}: {sync[3]}")
     for line in [*did, *warned]:
         job.say(str(line))
-    return kept, {"ok": True, "vault": str(kept), "kept": kept != root,
+    return root, {"ok": True, "vault": str(root),
                   "lines": [str(x) for x in [*did, *warned]][-100:]}
 
 

@@ -155,10 +155,22 @@ const out = { errors };
     out.help = b.querySelector('.sub').textContent;
     const copy = b.querySelectorAll('button').find((x) => x.textContent.includes('Copy details'));
     out.copyLabel = copy.textContent;
+    const gets = () => fetched.filter((f) => f.path === '/api/status/report').map((f) => f.method || 'GET');
+    out.getsBefore = gets();  // fetched with the board, before any click
     copy.fire('click');
     await tick();
     out.copied = clipboard.slice();
-    out.gets = fetched.filter((f) => f.path === '/api/status/report').map((f) => f.method || 'GET');
+    out.gets = gets();
+    // a blocked copy: the kept text, read-only and selected, with how to copy it by hand
+    Element.prototype.select = function () { this.selected = true; };
+    DATA.fail = true;
+    copy.fire('click');
+    await tick();
+    const area = b.querySelector('textarea');
+    out.blocked = area && [area.value, area.readonly === true || area.getAttribute('readonly') !== null,
+      area.selected === true, document.activeElement === area, b.querySelector('.report-text').querySelector('p').textContent];
+    out.blockedToast = $('toast-msg').textContent;
+    out.getsAfter = gets().length;
     const a = b.querySelectorAll('a').find((x) => x.textContent === 'Report on GitHub');
     out.href = a.getAttribute('href');
     out.attrs = [a.getAttribute('target'), a.getAttribute('rel')];
@@ -182,7 +194,11 @@ def test_status_board_copies_the_servers_text_and_links_the_issue_form(root_comm
     assert out["board"] and out["copyLabel"] == "Copy details"
     assert out["help"] == ("Copy details, then paste them into the form. Nothing is sent "
                            "until you submit it on GitHub.")
-    assert out["copied"] == [routes["/api/status/report"]["text"]] and out["gets"] == ["GET"]
+    text = routes["/api/status/report"]["text"]
+    assert out["getsBefore"] == ["GET"]  # the click only writes the clipboard
+    assert out["copied"] == [text] and out["gets"] == ["GET"]
+    assert out["blocked"] == [text, True, True, True, "Select the text and press Ctrl+C."]
+    assert "terminal" not in out["blockedToast"] and out["getsAfter"] == 1
     assert out["href"] == f"https://github.com/{update.REPO}/issues/new?template=bug_report.yml"
     assert out["attrs"] == ["_blank", "noopener noreferrer"]
     assert json.dumps(routes["/api/status"]["issue_url"]) == json.dumps(out["href"])
