@@ -140,6 +140,14 @@ def test_a_read_lands_in_the_xray_with_the_client(vroot):
         "Call me Sam.", "CANARY-CARE-5R wants a backend role."}
 
 
+def test_resources_never_wait_for_the_index(vroot, monkeypatch):
+    """A read that arrives before the start-up index build finishes is served at once: the
+    resource path (_withheld, profiles, packs, the X-ray) never touches the index."""
+    monkeypatch.setattr(mcp_server.Cortex, "_build_index", lambda self: None)  # never ready
+    listed, got = attach(vroot, "cursor", ["cortex://pack/coding"])
+    assert mcp_server.CORE_URI in listed and "Python first" in got["cortex://pack/coding"]
+
+
 def test_listing_alone_records_nothing_and_instructions_are_unchanged(vroot):
     attach(vroot, "claude-ai")
     assert xray.rows(Vault(vroot)) == []
