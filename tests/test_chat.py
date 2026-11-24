@@ -820,7 +820,12 @@ def test_history_treats_an_old_answer_as_made_with_every_switch_on():
     assert chat.history(old, {**ask.SOURCES, "notes": False}) == []
 
 
+def _day17(vault):  # a page yesterday, so a dated question is searched, not answered at once
+    note(vault.root, "notes/day-17.md", "title: Day 17\ndate: 2026-11-17\n", "# Day 17\n\nCar.")
+
+
 def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
+    _day17(vault)
     s = stream("ollama", ["Answer [1]."])
     cid, _ = _turn(vault, None, "car motor", s.runner())
     asked = []
@@ -834,6 +839,7 @@ def test_a_new_subject_is_searched_alone(vault, stream, monkeypatch):
 
 
 def test_a_follow_up_keeps_the_last_questions_dates(vault, stream, monkeypatch):
+    _day17(vault)
     s = stream("ollama", ["Answer [1]."])
     asked = []
     real = ask._passages
@@ -1501,6 +1507,9 @@ def test_a_future_date_does_not_narrow_the_search(vault, stream, monkeypatch):
         asked.append(kw["between"])
         return real(v, q, k, **kw)
     monkeypatch.setattr(ask, "_passages", passages)
+    # a page from yesterday, so the range is not answered at once as holding nothing
+    note(vault.root, "notes/yesterday.md", "kind: note\ntitle: Yesterday\ndate: 2026-11-17\n",
+         "# Yesterday\n\nCar motors.")
     _turn(vault, None, "explain car motors for tomorrow's exam", s.runner())
     _turn(vault, None, "what did I read about car motors yesterday?", s.runner())
     assert asked == [None, ("2026-11-17", "2026-11-17")]

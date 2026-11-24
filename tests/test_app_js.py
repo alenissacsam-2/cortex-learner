@@ -1366,6 +1366,104 @@ def test_chat_attaches_a_file_shows_its_line_saves_removes_and_names_it_in_sourc
     assert out["removed"] == [[{"id": "f1"}], ""]
 
 
+EVIDENCE = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    const ev = (o) => JSON.stringify(o) + '\n';
+    const log = $('chat-log');
+    const ask = async (q, ...events) => {
+      DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'An answer [1].' }) + events.map(ev).join('')];
+      $('chat-input').value = q;
+      $('chat-input').fire('keydown', { key: 'Enter', shiftKey: false });
+      await tick();
+      const bots = log.querySelectorAll('.msg').filter((m) => m.className === 'msg bot');
+      return bots[bots.length - 1];
+    };
+    const lines = (b) => b.querySelectorAll('.chat-evidence').map((p) => p.textContent);
+    const src = [{ n: 1, path: 'me/new.md', title: 'New job', kind: 'note', at: 0, len: 10 }];
+    const done = { t: 'done', seconds: 1 };
+    const hz = { first: '2024-01', last: '2026-11', months: ['2024-01', '2026-11'] };
+    const clash = [{ old: { path: 'me/old.md', title: 'Old job', day: '2026-01-05' }, new: { path: 'me/new.md', title: 'New job', day: '2026-03-12' } }];
+    out.exact = lines(await ask('a', { t: 'src', sources: src, certainty: 'exact', horizon: hz }, done));
+    out.grounded = lines(await ask('b', { t: 'src', sources: [...src, { ...src[0], n: 2, path: 'me/b.md' }, { ...src[0], n: 3, path: 'me/c.md' }], certainty: 'grounded' }, done));
+    const thin = await ask('c', { t: 'src', sources: src, certainty: 'thin', horizon: hz }, done);
+    out.thin = lines(thin);
+    out.thinStrong = thin.querySelector('.chat-evidence').querySelector('strong').textContent;
+    out.none = lines(await ask('d', { t: 'src', sources: [], searched: [], certainty: 'none', horizon: hz }, done));
+    out.noneNoHorizon = lines(await ask('e', { t: 'src', sources: [], searched: [], certainty: 'none' }, done));
+    out.old = lines(await ask('f', { t: 'src', sources: src }, done));  // an answer saved before the rail: no line
+    // a conflict: the newer page is a source pill's passage; the older opens by its path
+    DATA.routes['/api/chat/passage'] = { path: 'me/new.md', title: 'New job', kind: 'note', heading: '', text: 'Joined Acme' };
+    const c = await ask('g', { t: 'src', sources: src, certainty: 'grounded', conflicts: clash }, done);
+    out.conflict = lines(c);
+    const btns = c.querySelectorAll('.chat-conflict button');
+    out.conflictBtns = btns.map((b) => b.textContent);
+    btns[0].fire('click');
+    await tick();
+    out.openedNew = [fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path),
+      c.querySelector('.chip').getAttribute('aria-pressed'), c.querySelector('.chat-conflict button').getAttribute('aria-pressed')];
+    out.titleIsText = c.querySelector('.chat-conflict').querySelectorAll('*').every((n) => ['BUTTON'].includes(n.tagName));
+    btns[1].fire('click');
+    await tick();
+    out.openedOld = fetched.filter((f) => f.path.startsWith('/api/chat/passage')).map((f) => f.path).slice(-1);
+    // a saved answer re-renders it
+    DATA.routes['/api/chat/get?id=01KA0000000000000000000000'] = { id: '01KA0000000000000000000000', messages: [
+      { role: 'user', text: 'jobs?' },
+      { role: 'assistant', text: 'He changed jobs [1].', model: 'm', sources: src, certainty: 'thin', horizon: { first: '2024-01', last: '2026-11' }, conflicts: clash },
+      { role: 'user', text: 'and?' },
+      { role: 'assistant', text: 'Half an ans', model: 'm', stopped: true, certainty: 'thin' },
+    ] };
+    DATA.routes['/api/chat'] = { ...DATA.routes['/api/chat'], chats: [{ id: '01KA0000000000000000000000', title: 'Jobs', updated: new Date().toISOString(), count: 2 }] };
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    $('chat-side').querySelectorAll('.chat-open')[0].fire('click');
+    await tick();
+    out.saved = lines($('chat-log').querySelectorAll('.msg')[1]);
+    out.stopped = lines($('chat-log').querySelectorAll('.msg')[3]);  // a stopped answer shows nothing
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_chat_evidence_line_says_certainty_horizon_and_what_replaced_what(
+        root_committed, tmp_path, monkeypatch):
+    """P3: a finished answer gets one quiet line under its sources (certainty in words; the span of
+    the data only when thin or none) and a line per recorded change whose two titles open their
+    passages; nothing while streaming or on a stopped answer; a saved answer shows it again."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/chat"]["chats"] = []
+    out = _run(node, tmp_path, "evidence", EVIDENCE, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["exact"] == ["Exact: counted or quoted from your pages"]  # no horizon when exact
+    assert out["grounded"] == ["From 3 of your pages"]
+    assert out["thin"] == ["Thin: check the sources · Your data covers Jan 2024 to Nov 2026"]
+    assert out["thinStrong"] == "Thin"
+    assert out["none"] == ["No record · Your data covers Jan 2024 to Nov 2026"]
+    assert out["noneNoHorizon"] == ["No record"]
+    assert out["old"] == []
+    assert out["conflict"] == ["From 1 of your pages",
+                               "Changed: New job (12 Mar 2026) replaces Old job (5 Jan 2026)"]
+    assert out["conflictBtns"] == ["New job", "Old job"] and out["titleIsText"]
+    assert out["openedNew"] == [["/api/chat/passage?path=me%2Fnew.md&at=0&len=10"], "true", "true"]
+    assert out["openedOld"] == ["/api/chat/passage?path=me%2Fold.md&at=0&len=0"]
+    assert out["stopped"] == []
+    assert out["saved"] == ["Thin: check the sources · Your data covers Jan 2024 to Nov 2026",
+                            "Changed: New job (12 Mar 2026) replaces Old job (5 Jan 2026)"]
+
+
 HIST = HARNESS[:HARNESS.index("const out = {};")] + r"""
 const out = { errors };
 const go = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };

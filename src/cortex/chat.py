@@ -9,9 +9,11 @@ never served over MCP, never on the dashboard, never logged."""
 
 from __future__ import annotations
 
+import bisect
 import builtins
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -62,7 +64,7 @@ from cortex.dates import (  # noqa: F401
     _when,
 )
 from cortex.index import STOPWORDS, _wrap, aliases
-from cortex.vault import Vault, VaultError
+from cortex.vault import PRIVATE_BROWSE_DIR, Vault, VaultError
 
 when = dates.when  # chat.when, as before the move
 
@@ -500,12 +502,11 @@ def _index(vault: Vault, max_age: float = 0.0):
     return idx
 
 
-def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
-    """[(day, kind, id, title, body, is_chat, is_private, aliases)] of notes, saved AI chats and
-    journal pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under
-    Chat's `notes` and `chats` switches. Private pages (`ask.private_pages`: their own
-    `private: true`, or under a private subject) come under the `private` switch instead: the
-    local model may read them (owner's decision, 19 Nov 2026). `aliases`: index.aliases."""
+def _page_days(vault: Vault, sources: dict) -> list:
+    """[(day, id, page, is_chat, is_private, switches)] of every page the index holds and,
+    under the `private` switch, every private one (`ask.private_pages`), each dated as
+    `ask._passages(between=…)` dates it (`ask._note_day`; '' undated), with the switches its
+    passages fall under there (`ask._switch`; any one on lets the search return it)."""
     with _INDEX_LOCK:
         idx = _index(vault)
         paths = {i: p for p, i in idx._ids.items()}
@@ -518,16 +519,102 @@ def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
     old, memo = _DAYS.get(vault.root, {}), {}
     out = []
     for i, n in pages:
-        if n["kind"] not in (*_NOTE_KINDS, "journal") or i not in paths:
+        if i not in paths:
             continue
         k = (paths[i], stats.get(paths[i]))
         d, is_chat = memo[k] = old.get(k) or (ask._note_day(vault, i, n, paths[i]),
                                               semantic.is_chat(n))
-        if lo <= d <= hi and (i in private or sources.get("chats" if is_chat else "notes")):
-            out.append((d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat,
-                        i in private, aliases(n["fields"])))
+        own = "private" if i in private else "chats" if is_chat else "notes"
+        # a browse/ page is a browse passage as a search hit, a note or chat as `ask._dated`'s
+        switches = (own, "browsing") if own != "private" and idx._rel(
+            paths[i]).startswith("browse/") else (own,)
+        out.append((d, i, n, is_chat, i in private, switches))
     _DAYS[vault.root] = memo
+    return out
+
+
+def _pages_in(vault: Vault, lo: str, hi: str, sources: dict) -> list:
+    """[(day, kind, id, title, body, is_chat, is_private, aliases)] of notes, saved AI chats and
+    journal pages dated in [lo, hi] (`ask._note_day`: a date, else a note's last change), under
+    Chat's `notes` and `chats` switches. Private pages (`ask.private_pages`: their own
+    `private: true`, or under a private subject) come under the `private` switch instead: the
+    local model may read them (owner's decision, 19 Nov 2026). `aliases`: index.aliases."""
+    out = [(d, n["kind"], i, chat_study._title(n["title"]) or i, n["body"], is_chat, priv,
+            aliases(n["fields"]))
+           for d, i, n, is_chat, priv, _ in _page_days(vault, sources)
+           if n["kind"] in (*_NOTE_KINDS, "journal") and lo <= d <= hi
+           and (priv or sources.get("chats" if is_chat else "notes"))]
     return sorted(out, key=lambda p: (p[0], p[3]))
+
+
+_HORIZON: dict = {}  # vault root -> (stamp, sorted days): `_horizon_days`
+
+
+def _private_names(vault: Vault) -> tuple:
+    """The files under browse/private/ (home.version leaves them out): their days are their
+    names, so names alone stamp them."""
+    top = vault.root / PRIVATE_BROWSE_DIR
+    return tuple(sorted(os.path.join(d, f) for d, _, fs in os.walk(top) for f in fs))
+
+
+def _horizon_days(vault: Vault, sources: dict) -> list[str]:
+    """Every day (sorted, unique) that holds a page `ask._passages(between=…)` could return
+    under `sources`: indexed and private pages as `_page_days` dates them, and browse pages by
+    their file name (`ask._browse_day`; vectors.search embeds every browse/**/*.md first). Kept
+    per home.version (its listings: browse/sites/ site pages are left out, but they are
+    undated), the private browse names and the switches."""
+    from cortex import home  # lazy: home pulls in the dashboard
+
+    key = (home.version(vault), _private_names(vault) if sources.get("private") else (),
+           tuple(sorted((k, bool(v)) for k, v in sources.items())))
+    hit = _HORIZON.get(vault.root)
+    if hit and hit[0] == key:
+        return hit[1]
+    days = {d for d, _, _, _, _, switches in _page_days(vault, sources)
+            if d and any(sources.get(k) for k in switches)}
+    top = vault.root / "browse"
+    hidden = os.path.normcase(str(vault.root / PRIVATE_BROWSE_DIR))
+    for folder, _, files in os.walk(top):
+        nc = os.path.normcase(folder)
+        if sources.get("private" if nc == hidden or nc.startswith(hidden + os.sep)
+                       else "browsing"):
+            days |= {d for f in files if f.endswith(".md") and (d := ask._browse_day(f))}
+    days = sorted(days)
+    _HORIZON[vault.root] = (key, days)
+    return days
+
+
+def horizon(vault: Vault, sources: dict) -> dict | None:
+    """{first, last, months: ["YYYY-MM", ...]}: the months holding any page Chat's search could
+    read under `sources` (`_horizon_days`), or None when it could read none."""
+    return _horizon(_horizon_days(vault, sources))
+
+
+def _horizon(days: list[str]) -> dict | None:
+    months = sorted({d[:7] for d in days})
+    return {"first": months[0], "last": months[-1], "months": months} if months else None
+
+
+def _month_name(ym: str) -> str:
+    try:
+        return f"{date.fromisoformat(ym + '-01'):%b %Y}"
+    except ValueError:  # a page id's odd day ("2026-13-40") still counts, as the search's
+        return ym
+
+
+def _nothing(lo: date, hi: date, days: list[str], today: date) -> str | None:
+    """Cortex's own answer when no page `ask._passages(between=(lo, hi))` could return is
+    dated in [lo, hi] (`days`: `_horizon_days`), else None. The same day check as the search's
+    filter, so it never hides a page the search would find."""
+    a, b = lo.isoformat(), hi.isoformat()
+    i = bisect.bisect_left(days, a)
+    if i < len(days) and days[i] <= b:
+        return None
+    when = f"on {_span(lo, hi, today)}" if lo == hi else f"from {_span(lo, hi, today)}"
+    out = f"Cortex has nothing {when}."
+    if days and (a > days[-1] or b < days[0]):
+        out += f" Your data covers {_month_name(days[0][:7])} – {_month_name(days[-1][:7])}."
+    return out
 
 
 def digest(vault: Vault, lo: date, hi: date, sources: dict, today: date,
@@ -961,6 +1048,64 @@ def halves(text: str, routes) -> list[str]:
     return []
 
 
+# a data answer that found nothing: site_list, digest and `_nothing`, the study answers
+_EMPTY = ("No sites are stored", "Browsing is switched off", "Cortex has nothing", NOTES_OFF,
+          chat_study.NO_STUDY, "No concepts yet")
+
+
+def certainty(*, data: bool = False, empty: bool = False, read: int = 0, cited: int = 0,
+              quoted: bool = False, unquoted: bool = False, unanswered: bool = False,
+              stopped: bool = False) -> str | None:
+    """How far an answer can be trusted, from what `reply` already knows (no model call):
+
+    | answer                                                         | certainty  |
+    |----------------------------------------------------------------|------------|
+    | stopped                                                        | None       |
+    | nothing found, an empty data/facts answer, a switch off        | "none"     |
+    | a data or facts answer counted by code, with a result          | "exact"    |
+    | model: unanswered, cites nothing, or a quote no passage holds  | "thin"     |
+    | model: cites, quotes at least one span, every quote found      | "exact"    |
+    | model: cites, no quote, read 2+ passages                       | "grounded" |
+    | model: cites, no quote, read 1 passage                         | "thin"     |
+
+    `data`: counted by code (site list, digest, study answer, chat_facts); `empty`: it (or the
+    search) found nothing; `read`/`cited`: passages; `quoted`/`unquoted`: any quoted span /
+    any one no passage holds (`ask.unquoted`)."""
+    if stopped:
+        return None
+    if empty:
+        return "none"
+    if data:
+        return "exact"
+    if unanswered or not cited or unquoted:
+        return "thin"
+    if quoted:
+        return "exact"
+    return "grounded" if read >= 2 else "thin"
+
+
+def _conflicts(vault: Vault, ps: list[dict]) -> list[tuple[dict, dict]]:
+    """[(old passage, new passage)] for each two of `ps` whose me/ pages hold a recorded pair
+    (claims.recorded_pairs: `update_of`, `supersedes`), once per two pages: the newer is the
+    later day, a tie the recorded direction."""
+    from pathlib import PurePosixPath
+
+    me = {PurePosixPath(p["path"]).stem: p for p in ps if p["path"].startswith("me/")}
+    if len(me) < 2:  # the event log is read only when a pair could be there
+        return []
+    from cortex import claims
+
+    pairs, _ = claims.recorded_pairs(events.EventLog(vault).iter_events())
+    out, seen = [], set()
+    for old, new, _ in pairs.values():
+        a, b = me.get(old[0]), me.get(new[0])
+        if a is None or b is None or a is b or (two := frozenset((a["path"], b["path"]))) in seen:
+            continue
+        seen.add(two)
+        out.append((b, a) if (a.get("day") or "") > (b.get("day") or "") else (a, b))
+    return out
+
+
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None,
           files: list | None = None, pages: list | None = None) -> str:
@@ -976,10 +1121,16 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     matched, more (true when a search was full: "matched" is a floor), also (names
     `relatives` added, when any)} when passages were searched (how many
     the model read of how many the search found; saved on the answer too), unquoted (quoted
-    spans no cited passage holds, `ask.unquoted`; saved too) when any}; {"t": "text", "s"}
+    spans no cited passage holds, `ask.unquoted`; saved too) when any, certainty (`certainty`:
+    exact, grounded, thin or none; saved too) unless stopped, horizon {first, last, months}
+    ("YYYY-MM": `horizon`, what the search could read; saved as {first, last}) on an answer
+    from the passage search, conflicts [{old, new}: {path, title, day}] when two pages it cited
+    (read, when none cited) hold a recorded pair (`_conflicts`; saved too)}; {"t": "text", "s"}
     replaces the words so far (a loop cut, leaked tokens dropped, a retry). A model that says
     nothing is asked once more; still nothing, the answer is SAID_NOTHING with the pages it
-    searched (saved with `unanswered`). Then {"t": "done", id, model, seconds, stopped,
+    searched (saved with `unanswered`). A past date range (the question's or a follow-up's)
+    that holds no page the search could read is answered at once by Cortex (`_nothing`), with
+    no search model or runner. Then {"t": "done", id, model, seconds, stopped,
     remembers (`remembers` of the chat now)}; or {"t": "err", code (not_set_up,
     no_local_model, no_answer), message}. A set `cancel` stops the stream; the partial answer
     is saved with `stopped: true`. Returns the chat id. `runner` is a local `localllm.Runner`
@@ -1043,7 +1194,18 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     fq = route.fq if route else None
     listed = "" if codes else None  # a data answer: filled in after its step
     passages = listed is None and fq is None  # the search model and a runner are needed
-    blocked = None  # with a routed half: why its other half gets no model answer
+    searched_pages = passages  # the answer the horizon is for; sent with its sources
+    days = None
+    # a past range (pages are dated by when they were written: a future one keeps no page)
+    # that holds no page the search could return is answered at once: no model, no embedder
+    if passages and not files and not read and not split and got and got[0] <= today:
+        days = _horizon_days(vault, s["sources"])
+        end = min(got[1], today)
+        if none := _nothing(got[0], end, days, today):
+            codes, listed, passages = [Route(
+                f"Searching your notes and browsing from {_span(got[0], end, today)}",
+                lambda: none)], "", False
+    blocked = None # with a routed half: why its other half gets no model answer
     if passages and not files and not read and semantic.load_embedder() is None:
         if front is None:
             emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP,
@@ -1264,6 +1426,22 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                      *(chat_facts._lines(facts, today) if facts else []),
                                      front_text]
                             ) if by_model else []
+    sure = certainty(data=listed is not None or facts is not None,
+                     empty=listed.startswith(_EMPTY) if listed is not None else
+                     chat_facts.empty(facts) if facts is not None else not found,
+                     read=len(found), cited=len(sources),
+                     quoted=bool(ask.unquoted(answer, [])),  # every quote, none to match
+                     unquoted=bool(unquoted), unanswered=unanswered, stopped=stopped)
+
+    def side(p):
+        return {"path": p["path"], "title": pill(p)["title"], "day": p.get("day") or ""}
+    clash = [{"old": side(a), "new": side(b)} for a, b in _conflicts(
+        vault, [p for n, p in enumerate(found, 1) if n in cited or not sources])]
+    hz = _horizon(days if days is not None else _horizon_days(vault, s["sources"])) \
+        if searched_pages else None
+    extra = {**({"certainty": sure} if sure else {}),
+             **({"horizon": {"first": hz["first"], "last": hz["last"]}} if hz else {}),
+             **({"conflicts": clash} if clash else {})}
     msgs.append({"role": "assistant", "text": kept or answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
                  **({"unquoted": unquoted} if unquoted else {}),
@@ -1271,11 +1449,12 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                  **({"coverage": coverage} if coverage else {}),
                  "model": model, "switches": dict(s["sources"]),
                  **({"unanswered": True} if unanswered else {}),
-                 **({"stopped": True} if stopped else {})})
+                 **({"stopped": True} if stopped else {}), **extra})
     _save(vault, convo_id, msgs, s["history"])
     emit({"t": "src", "sources": sources, "searched": searched,
           **({"unquoted": unquoted} if unquoted else {}),
-          **({"coverage": coverage} if coverage else {})})
+          **({"coverage": coverage} if coverage else {}), **extra,
+          **({"horizon": hz} if hz else {})})
     emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1),
           "remembers": remembers(msgs, s["sources"])})

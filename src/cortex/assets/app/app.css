@@ -467,6 +467,10 @@ dialog.confirm h2 { margin: 0 0 10px; }
 .fx-chip { display: inline-flex; gap: 6px; align-items: baseline; font-variant-numeric: tabular-nums; }
 .fx-cov, .cov { color: var(--ink-3); font-size: 12px; margin: 6px 0 0; }
 .cov.qflag { color: var(--learning); }
+.chat-evidence { color: var(--ink-2); font-size: 12px; margin: 6px 0 0; }
+.chat-evidence strong { color: var(--ink); font-weight: 600; }
+.chat-conflict { margin-top: 2px; }
+.chat-conflict .linkbtn { font-size: inherit; min-height: 0; }
 /* the exact passage a source stands for */
 .passage { max-width: 78ch; margin-top: 8px; padding: 8px 12px; background: var(--panel);
   border: 1px solid var(--edge); border-radius: 2px; }
