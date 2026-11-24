@@ -30,7 +30,7 @@ from cortex.catalog import sync as catalog_sync
 from cortex.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from cortex.session import _git
 from cortex.update import CHECKOUT, REPO  # stdlib-only; update must not import cli (a cycle)
-from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError
+from cortex.vault import CHAT_ARCHIVE, PRIVATE_BROWSE_DIR, Vault, VaultError, in_temp_folder
 
 EPILOG = ("About you: claims [--unasked|--summary], voice, export context · "
           "Study: today, brief, reflect, recall, log, eval · "
@@ -429,7 +429,11 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
     if not current:  # a first setup: What's new starts at this version, not at BEFORE_NEWS
         from cortex.app import news
         news.start()
-    if default or not current:
+    if (default and current and Path(current).is_dir() and not in_temp_folder(current)
+            and in_temp_folder(root)):  # a probe or a stray click must not take the vault over
+        warned.append(f"kept your vault {current}: {root} is a temporary folder, which Windows "
+                      "can empty. Pick a folder outside Temp.")
+    elif default or not current:
         did.append(f"pointer {_write_config(vault=str(root))}")
     elif Path(current).resolve() == root:
         skipped.append(f"pointer {_pointer()}")
