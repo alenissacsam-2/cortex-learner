@@ -97,6 +97,9 @@ def test_review_cards_carry_their_related_pages(app, vault):
     view = {"pending": [{"key": "k1", "page": "alpha"}], "stale": [{"id": "c1", "page": "zeta"}],
             "conflicts": [{"key": "c", "left": {"page": "alpha"}, "right": {"page": "beta"}}],
             "today": [{"type": "pending", "key": "k1"}]}
+    cold = app._related(Vault(vault), copy.deepcopy(view), [])  # Chat's index not built yet
+    assert "related" not in cold["pending"][0]  # Review never builds it (~3 s at 5k)
+    chat.pick_list(Vault(vault), "", chat.get_settings()["sources"])  # Chat's first use builds it
     got = app._related(Vault(vault), copy.deepcopy(view), [])
     rel = got["pending"][0]["related"]
     assert len(rel) == app.RELATED

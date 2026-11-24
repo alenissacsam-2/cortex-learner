@@ -830,7 +830,8 @@ class App:
         from cortex.topics import is_hub
         cards = [x for k in self.CARDS for x in view.get(k) or []
                  if isinstance(x.get("page"), str)]
-        if not cards:
+        # never build Chat's index (~3 s at 5k) just for Review: before Chat's first use, no line
+        if not cards or chat._INDEX.get(v.root) is None:
             return view
         quiet, got = harvest.quiet(evs), {}
         with chat._INDEX_LOCK:
