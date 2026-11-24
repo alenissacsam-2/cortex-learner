@@ -473,6 +473,12 @@ For everyone: tell Cortex about you in any chat (`//fact: I'm on the payments te
 | Name | Meaning |
 |---|---|
 | **Vault** | Your Cortex folder (Markdown notes + event logs); also opens in Obsidian |
+| **AI app** | A chat or coding tool that runs an AI model, such as Claude, Cursor or VS Code |
+| **MCP** | The standard way AI apps plug into tools; Cortex is one such tool |
+| **Chat** | The chat in the Cortex app that answers from your own data with a model on your computer |
+| **Review** | The app's short daily list of things only you can decide, at most five cards |
+| **Home** | The Cortex app's first page: what is next, what you did, and a quick chat box |
+| **Local model** | An AI model that runs on your computer (through Ollama or LM Studio), so nothing is sent out; optional |
 | **Prime** | The context a chat gets about you from your first message |
 | **Session** | One chat's batch of changes; closes by itself and is committed to git |
 | **Ambient** | A session the chat opened automatically, not a `/cortex` study session |
