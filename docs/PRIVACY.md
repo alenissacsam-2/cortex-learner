@@ -170,6 +170,7 @@ What each of the newer imports reads, and what it never reads:
 Each line says where it holds.
 
 - **Secrets, keys and passwords**, from every source. They become `[redacted]` before anything is written. A write that still holds one is refused.
+- **Text you wrap in `<private>…</private>`** in a chat. It becomes `[private]` before anything is written (chat logs, chat pages, imported chats, Cortex's Chat, the recall log, saved pages and lines); the AI app you typed it to still sees it.
 - **Sign-in, payment and bank pages.** Browsing visits to them are dropped and never stored.
 - **Adult browsing.** It is skipped by default. You can choose to keep it on private pages instead.
 - **AI replies in your vault's chat pages.** A saved chat page keeps only your own messages. The copy of an imported export in `~/.cortex/claude-chat`, which `cortex_chats` reads, keeps the whole conversation.

@@ -448,7 +448,33 @@ def _save(source: str, convs, dry_run: bool = False, got: Got | None = None) -> 
     return (source, n, old) if dry_run else (source, n)
 
 
+PRIVATE = "[private]"
+_PRIVATE_TAG = re.compile(r"<\s*(/?)\s*private\s*>", re.I)
+
+
+def drop_private(text: str) -> str:
+    """`text` with each `<private>…</private>` span (any case, across lines, nested or
+    repeated) replaced by PRIVATE: what a person marks private is never saved. An unclosed
+    `<private>` drops everything after it, the safe reading; a stray `</private>` stays."""
+    out, depth, pos = [], 0, 0
+    for m in _PRIVATE_TAG.finditer(text):
+        if not m[1]:
+            if not depth:
+                out.append(text[pos:m.start()])
+            depth += 1
+        elif depth:
+            depth -= 1
+            if not depth:
+                out.append(PRIVATE)
+                pos = m.end()
+    return "".join([*out, PRIVATE if depth else text[pos:]])
+
+
 def redact(text: str) -> str:
+    """`text` with private spans dropped (drop_private) and secrets masked: every copy of chat
+    text Cortex keeps (live logs, imported exports, chat pages, the recall log) goes through
+    here."""
+    text = drop_private(text)
     for rx in SECRET_RES:
         text = rx.sub("[redacted]", text)
     return text
