@@ -6,6 +6,7 @@ passes on a page's frontmatter (index `_plain` form). Pure: no vault, no index."
 
 from __future__ import annotations
 
+import functools
 import re
 
 from cortex.vault import invalid
@@ -47,6 +48,8 @@ def parse(text) -> list[tuple[str, str, str]]:
         if end < n and not text[end].isspace():
             raise _bad(f"'{tok}' has an unbalanced quote" if '"' in text[pos:end + 1]
                        else f"'{tok}' has an unknown operator")
+        if not value.strip():
+            raise _bad(f"'{tok}' has no value")
         out.append((field.casefold(), op, value))
         if len(out) > MAX_CLAUSES:
             raise _bad(f"at most {MAX_CLAUSES} clauses")
@@ -62,23 +65,32 @@ def _norm(v) -> str:
     return s.casefold()
 
 
-def _order(a, b) -> tuple | None:
+@functools.lru_cache(maxsize=256)
+def _value(b: str) -> tuple[str, str | None, float | None]:
+    """A clause value once per call, not once per page: its _norm, day and number."""
+    t = b.strip()
+    return _norm(b), t[:10] if _DAY.match(t) else None, float(t) if _NUM.match(t) else None
+
+
+def _order(a, b: str) -> tuple | None:
     """Both days (a timestamp by its first 10 characters) or both numbers, else None."""
-    if isinstance(a, str) and _DAY.match(a.strip()) and _DAY.match(b.strip()):
-        return a.strip()[:10], b.strip()[:10]
-    if isinstance(a, bool):
+    _, day, num = _value(b)
+    if day is not None and isinstance(a, str) and _DAY.match(a.strip()):
+        return a.strip()[:10], day
+    if num is None or isinstance(a, bool):
         return None
     if isinstance(a, (int, float)) or isinstance(a, str) and _NUM.match(a.strip()):
-        if _NUM.match(b.strip()):
-            return float(a), float(b)
+        return float(a), num
     return None
 
 
 def _one(op: str, field, value: str) -> bool:
-    if op in ("=", "!="):
-        return (_norm(field) == _norm(value)) == (op == "=")
     if op == "~":
-        return _norm(value) in _norm(field)
+        return _value(value)[0] in _norm(field)
+    if op in ("=", "!="):  # two days or two numbers compare as such: 4 = 4.0
+        same = _norm(field) == _value(value)[0] or (
+            (pair := _order(field, value)) is not None and pair[0] == pair[1])
+        return same == (op == "=")
     pair = _order(field, value)
     if pair is None:
         return False  # no string ordering: "10" < "9" would surprise
@@ -89,9 +101,10 @@ def _one(op: str, field, value: str) -> bool:
 def match(clauses, fields: dict) -> bool:
     if not clauses:
         return True
-    by = {str(k).casefold(): v for k, v in fields.items()}
     for key, op, value in clauses:
-        v = by.get(key)
+        v = fields.get(key)
+        if v is None and key not in fields:  # keys compare in any case
+            v = next((x for k, x in fields.items() if str(k).casefold() == key), None)
         if v is None:
             if op != "!=":
                 return False

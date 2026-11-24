@@ -24,8 +24,8 @@ def ok(text, fields):
 def test_parse_clauses_quotes_and_casefolded_keys():
     assert where.parse('Status=open  title~"binary search" due<=2026-12-01') == [
         ("status", "=", "open"), ("title", "~", "binary search"), ("due", "<=", "2026-12-01")]
-    assert where.parse("a!=b c<1 d>2 e>=3 f-g_h=") == [
-        ("a", "!=", "b"), ("c", "<", "1"), ("d", ">", "2"), ("e", ">=", "3"), ("f-g_h", "=", "")]
+    assert where.parse("a!=b c<1 d>2 e>=3 f-g_h=x") == [
+        ("a", "!=", "b"), ("c", "<", "1"), ("d", ">", "2"), ("e", ">=", "3"), ("f-g_h", "=", "x")]
 
 
 @pytest.mark.parametrize("text, why", [
@@ -35,6 +35,8 @@ def test_parse_clauses_quotes_and_casefolded_keys():
     ("a<>b", "unknown operator"), ("=open", "unknown operator"),
     ('title~"binary search', "unbalanced quote"), ('title~bin"ary', "unbalanced quote"),
     ("a=1 b=2 c=3 d=4 e=5 f=6 g=7", "at most 6"),
+    ("status=", "has no value"), ("title~", "has no value"), ('title~""', "has no value"),
+    ('title~"  "', "has no value"), ("a=1 status!=", "has no value"),
 ])
 def test_every_error_is_invalid_argument_with_an_example(text, why):
     with pytest.raises(VaultError) as e:
@@ -78,6 +80,14 @@ def test_days_and_timestamps():
     assert ok("at>=2026-11-01", f) and ok("at<2026-11-02", f) and not ok("at>2026-11-01", f)
     assert ok("at<=2026-11-01T23:00", f)  # either side by its first 10 characters
     assert not ok("due<soon", f) and not ok("due<5", f)  # a day and a non-day: fails
+
+
+def test_equal_compares_days_and_numbers_as_such():
+    f = {"rating": 4.0, "at": "2026-11-20T10:00:00", "n": "07"}
+    assert ok("rating=4", f) and not ok("rating!=4", f) and ok("rating!=4.5", f)
+    assert ok("at=2026-11-20", f) and not ok("at!=2026-11-20", f) and not ok("at=2026-11-21", f)
+    assert ok("n=7", f)  # both numbers
+    assert ok("at!=soon", f) and not ok("at=2026-11-20T10", {"at": "x"})  # else as strings
 
 
 def test_numbers_and_bools():
@@ -236,13 +246,21 @@ def test_a_where_listing_stays_quick_on_5k_notes(tmp_path, capsys):
     cx = mcp_server.Cortex(Vault(root))
     cx._ready.wait()
     cx.cortex_find(where="tags=t7")  # the first call folds the log and warms the caches
-    times = []
-    for _ in range(7):
-        t = time.perf_counter()
-        out = cx.cortex_find(where="tags=t7")
-        times.append(time.perf_counter() - t)
+
+    def median(**kw):
+        times = []
+        for _ in range(7):
+            t = time.perf_counter()
+            out = cx.cortex_find(**kw)
+            times.append(time.perf_counter() - t)
+        return statistics.median(times), out
+
+    plain, _ = median(query="array list")
+    warm, out = median(where="tags=t7")
     assert out["hits"]
-    warm = statistics.median(times)
     with capsys.disabled():
-        print(f"\nwarm where-only cortex_find on 5k notes: {warm * 1000:.0f} ms (median of 7)")
-    assert warm < 0.15
+        print(f"\nwarm on 5k notes: where-only listing {warm * 1000:.0f} ms, plain find "
+              f"{plain * 1000:.0f} ms (medians of 7)")
+    # 150 ms on a quiet PC; both pay the same index refresh (most of it), so a busy PC is
+    # judged by the listing's own cost over a plain find
+    assert warm < 0.15 or warm < plain + 0.03, (warm, plain)
