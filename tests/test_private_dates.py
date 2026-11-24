@@ -99,15 +99,16 @@ def test_add_patch_and_journal_drop_private_spans_and_pin_dates(root, monday):
         got["l"] = (await call("cortex_add", {
             "kind": "loop", "title": "Send the form tomorrow",
             "fields": {"summary": "Asked for it last week"}}))["id"]
-        got["r"] = (await call("cortex_add", {
-            "kind": "resource", "title": "Lecture tomorrow",  # not a durable statement kind
-            "raw_text": f"Slides <private>{SECRET}</private> here"}))["id"]
         await call("cortex_patch", {
             "id": "me/profile", "op": "append_to_section", "target": "Brief",
             "user_confirmed": True,
             "text": f"- Moved to Pune last week <private>{SECRET}</private>"})
         await call("cortex_log", {"kind": "journal", "payload": {
             "text": f"Met the recruiter yesterday; <private>{SECRET}</private> exam this Friday"}})
+        # last: raw_text exposes the session, which then may not change me/
+        got["r"] = (await call("cortex_add", {
+            "kind": "resource", "title": "Lecture tomorrow",  # not a durable statement kind
+            "raw_text": f"Slides <private>{SECRET}</private> here"}))["id"]
 
     run(root, body)
     decision = (root / "decisions" / f"{got['d']}.md").read_text(encoding="utf-8")
@@ -157,8 +158,9 @@ def test_approve_in_the_app_never_pins(root):
     """A line proposed days ago and approved now: today is not the day it was written."""
     (root / ".cortex").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
+    then = date.today() - dt.timedelta(days=3)  # inside the Review's 14 days
     (root / "inbox.md").write_text("# Inbox\n\n## About me (unconfirmed)\n- Coding: Reviews "
-                                   "code the day after tomorrow (proposed 2026-11-01, "
+                                   f"code the day after tomorrow (proposed {then}, "
                                    "me/preferences)\n", encoding="utf-8")
     app = server.App(root)
     (p,) = [p for p in app.review()["pending"] if p["page"] == "preferences"]
