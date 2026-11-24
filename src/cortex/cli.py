@@ -443,7 +443,7 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
 def doctor(vault: VaultOpt = None, privacy: Annotated[bool, typer.Option(
         "--privacy", help="Print only where Cortex connects.")] = False,
         security: Annotated[bool, typer.Option(
-            "--security", help="Fire five memory attacks at a throwaway made-up vault "
+            "--security", help="Fire six memory attacks at a throwaway made-up vault "
             "(never your notes) and say PASS or FAIL for each.")] = False) -> None:
     """Check Python/FTS5, the search model, PATH, the local model, OneDrive and the vault git,
     then list where Cortex connects; exit 1 on any FAIL. --security: the offline red team
