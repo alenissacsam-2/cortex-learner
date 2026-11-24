@@ -23,7 +23,7 @@ from cortex.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TODAY = local_day(datetime.now(UTC))
-BUDGET = 0.5  # s; set from the measurement in docs/benchmarks/memory.md (F1)
+BUDGET = 0.3  # s; measured 90 ms on a quiet PC (docs/benchmarks/memory.md, F1): 3x headroom
 
 
 def _day(n: int, base: str = TODAY) -> str:
