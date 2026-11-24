@@ -97,6 +97,18 @@ REPLACE_TRIES = 8
 _HELD: set[str] = set()
 
 
+def in_temp_folder(p: Path | str) -> bool:
+    """Whether `p` lies inside the system temp folder (path parts, not a string prefix;
+    case-insensitive on Windows). Windows can empty that folder at any time."""
+    try:
+        t, q = Path(tempfile.gettempdir()).resolve().parts, Path(p).resolve().parts
+    except OSError:
+        return False
+    if os.name == "nt":
+        t, q = tuple(x.casefold() for x in t), tuple(x.casefold() for x in q)
+    return q[:len(t)] == t
+
+
 class VaultError(Exception):
     """A vault failure with a tool error code from docs/tools.md."""
 

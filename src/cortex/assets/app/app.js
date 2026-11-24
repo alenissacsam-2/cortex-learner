@@ -331,6 +331,13 @@
   const jobFailed = (j) => { const r = j.result || {}; return !!j.error || (r.ok === false && !r.cancelled && !r.need); };
   function finish(j) {
     if (jobFailed(j)) toast.error(j.error || `${j.name}: failed.`);
+    else if (j.name === 'Setting up the vault' && j.result && j.result.vault) {  // server.setup_vault's job
+      vaultChange.open = false;
+      vaultChange.text = '';
+      const r = j.result;
+      if (r.kept) toast((r.lines || []).find((l) => l.startsWith('kept your vault')) || 'Your vault stayed as it was.', true);
+      else toast.ok(`Cortex now uses ${r.vault}.`);
+    }
     else if (j.name === 'Start at login') toast.ok('The receiver now starts at login.');  // server.login's job name
     if (guide && guide.wait && j.section === 'setup') {  // a guided import's own job: shown in its panel
       const w = guide.wait;
@@ -1750,14 +1757,38 @@
     } catch (e) { toast.error(e.message); }
   }
   const noObsidian = (r) => { if (r.obsidian === false) toast('Obsidian is not installed, so it opened with this computer’s own app.', true); };
+  // Change folder: the inline field in the Vault board (the same job Setup's Vault step runs)
+  const vaultChange = { open: false, text: '', focus: false, d: null };
+  const VAULT_HELP = 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault. Your current vault stays where it is.';
+  function openChange() { vaultChange.open = true; vaultChange.focus = true; renderVault(vaultChange.d); }
+  function closeChange() { vaultChange.open = false; vaultChange.text = ''; renderVault(vaultChange.d); }
+  function changeField() {
+    const use = btn('Use this folder', () => job('/api/setup/vault', { path: path.value.trim() }), 'btn lit', { disabled: !vaultChange.text.trim() });
+    const path = h('input', { type: 'text', id: 'vault-change-path', value: vaultChange.text, placeholder: 'C:\\Notes\\MyVault', 'aria-label': 'Use another folder for your notes', spellcheck: 'false' });
+    path.addEventListener('input', () => { vaultChange.text = path.value; use.disabled = !path.value.trim(); });
+    path.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !use.disabled) { e.preventDefault(); use.click(); } });
+    const f = h('div', { class: 'field', id: 'vault-change' }, h('label', { for: 'vault-change-path', text: 'Use another folder for your notes' }),
+      h('div', { class: 'inline' }, path, use, btn('Cancel', closeChange)),
+      h('p', { class: 'help', text: VAULT_HELP }));
+    f.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeChange(); } });
+    if (vaultChange.focus) { vaultChange.focus = false; setTimeout(() => path.focus(), 0); }
+    return f;
+  }
   function renderVault(d) {
+    vaultChange.d = d;
     if (!d.ok) {
       put('vault', board('Vault', {}, row('No vault yet', d.path || '', 'Set one up first.', [btn('Open Setup', () => show('setup', true))])));
       return;
     }
     put('vault', board('Vault', {},
       row('Folder', d.path, 'Your notes live here as Markdown files.', [btn('Open vault in Obsidian', () => post('/api/open', { what: 'vault' }, noObsidian)),
-        btn('Open folder', () => post('/api/open', { what: 'folder' }), null, { 'aria-label': 'Open folder: Vault' })]),
+        btn('Open folder', () => post('/api/open', { what: 'folder' }), null, { 'aria-label': 'Open folder: Vault' }),
+        btn('Change folder', openChange, null, { 'aria-label': 'Change folder: Vault', 'aria-expanded': String(vaultChange.open) })]),
+      vaultChange.open ? changeField() : null,
+      d.temp ? h('div', { class: 'brow srow' }, stateCell('warn'),
+        h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'This vault is in a temporary folder' })),
+          h('span', { class: 'sub', text: 'Windows can empty it at any time. Use Change folder to pick your real vault.' })),
+        h('div', { class: 'acts' }, btn('Change folder', openChange, 'btn lit', { 'aria-label': 'Change folder: temporary vault' }))) : null,
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
         h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
       row('Snapshot', null, 'One page of your notes and the 3D brain that opens without Cortex. Private items are never in it.',
