@@ -1885,7 +1885,7 @@
     };
     api('/api/chat').then((s) => {
       if ((s.missing || []).includes('llm')) {
-        need.replaceChildren(setUp('llm', 'No local model is set up, so chat answers only about your sites and studying.'));
+        need.replaceChildren(setUp('llm', 'No local model is set up yet, so this chat can only count and list what Cortex keeps: your notes, saved chats, browsing and study.'));
       }
     }, () => {});
     function sources(src) {

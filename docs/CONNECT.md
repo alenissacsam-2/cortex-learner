@@ -175,6 +175,8 @@ Cortex's hooks work whether Claude Code runs them in Git Bash or, without Git, i
 
 **Install first:** [Gemini CLI](https://github.com/google-gemini/gemini-cli). Run it once, so `~/.gemini` exists.
 
+**Note:** since 18 June 2026 Google serves Gemini CLI only with a paid Gemini API key or a work licence (Gemini Code Assist Standard or Enterprise). Personal Google accounts moved to Antigravity: connect **Antigravity** below for its MCP tools.
+
 **In Cortex:** **Connect AI apps** → tick **Gemini CLI** → **Apply…**. Cortex adds `cortex` under `mcpServers` and its hooks (before each prompt, at session start and after web or other servers' tools) to `~/.gemini/settings.json`, and a short Cortex block to `~/.gemini/GEMINI.md`.
 
 **Then:** start Gemini CLI in a new terminal.
@@ -192,7 +194,7 @@ Cortex also connects these. Each gets only Cortex's MCP server, with the full pa
 
 | App | What Cortex writes |
 |---|---|
-| Antigravity | `cortex` under `mcpServers` in `~/.gemini/antigravity/mcp_config.json` |
+| Antigravity | `cortex` under `mcpServers` in `~/.gemini/config/mcp_config.json`, which the Antigravity editor, app and `agy` CLI all read. An entry an older Cortex wrote to `~/.gemini/antigravity/mcp_config.json` shows **Out of date**: **Apply…** moves it |
 | Windsurf | `cortex` under `mcpServers` in `~/.codeium/windsurf/mcp_config.json` |
 | LM Studio | `cortex` under `mcpServers` in `~/.lmstudio/mcp.json` (private browsing search only if you turn it on under Browsing) |
 | Zed | `cortex` under `context_servers` in `%APPDATA%\Zed\settings.json`. A settings file with comments is left alone: copy the entry from **What this changes** into it yourself |

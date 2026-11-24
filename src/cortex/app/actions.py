@@ -641,6 +641,8 @@ def import_run(job, source: str, path: Path, root: Path | None = None,
 def drop_old_task() -> bool:
     """Delete the Task Scheduler entry older versions made (Windows); True when one was there."""
     from cortex.app import targets
+    if status.test_copy():  # a test copy never deletes the real install's entry
+        return False
     return targets._run(["schtasks", "/Delete", "/F", "/TN", status.LOGIN_TASK], timeout=30)[0]
 
 

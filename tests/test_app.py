@@ -9,6 +9,7 @@ import io
 import json
 import os
 import socket
+import sys
 import threading
 import time
 import tomllib
@@ -446,7 +447,7 @@ def test_run_prints_the_link_and_quits(vault, monkeypatch):
 # ---- connectors on temp homes --------------------------------------------------------------
 
 
-JSON_TARGETS = {"antigravity": ".gemini/antigravity/mcp_config.json", "cursor": ".cursor/mcp.json",
+JSON_TARGETS = {"antigravity": ".gemini/config/mcp_config.json", "cursor": ".cursor/mcp.json",
                 "windsurf": ".codeium/windsurf/mcp_config.json", "lmstudio": ".lmstudio/mcp.json",
                 "gemini-cli": ".gemini/settings.json", "vscode": None}
 
@@ -482,6 +483,26 @@ def test_json_connector_add_remove_keep_backup(home, tid):
     assert "cortex" not in data[key] and data[key]["other"] == {"command": "x"}
     assert data["theme"] == "dark" and not t.connected() and len(_baks(path)) == 2 * writes
     assert "hooks" not in data
+
+
+def test_antigravity_moves_to_its_2_0_config_file(home):
+    """Antigravity 2.0 (editor, app and `agy`) reads ~/.gemini/config/mcp_config.json: an entry
+    in the old ~/.gemini/antigravity file shows out of date until Apply writes the new one, and
+    remove cleans both."""
+    old = home / ".gemini" / "antigravity" / "mcp_config.json"
+    new = home / ".gemini" / "config" / "mcp_config.json"
+    old.parent.mkdir(parents=True)
+    old.write_text(json.dumps({"mcpServers": {"cortex": ENTRY}}), encoding="utf-8")
+    t = targets.by_id()["antigravity"]
+    assert t.detect() and t.connected() and t.paths() == [new]
+    assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]  # describe: stale
+    t.apply(ENTRY)
+    assert json.loads(new.read_text(encoding="utf-8"))["mcpServers"]["cortex"] == ENTRY
+    assert t.plan(True, ENTRY) == []
+    t.remove()
+    assert not t.connected()
+    for p in (old, new):
+        assert "cortex" not in json.loads(p.read_text(encoding="utf-8"))["mcpServers"]
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '{"mcpServers": []}',
@@ -1311,8 +1332,8 @@ def test_setup_vault_creates_and_points(app, tmp_path, home):
     assert app.root == target.resolve()
     from cortex import taint
     assert Path(taint.config()["vault"]) == target.resolve()
-    call(app, "POST", "/api/setup/vault", {"path": "relative/path"})
-    assert "full path" in wait_job(app)["error"]
+    code, out, _, _ = call(app, "POST", "/api/setup/vault", {"path": "relative/path"})
+    assert code == 400 and "full path" in out["error"]  # refused before any job starts
 
 
 def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tmp_path, home,
@@ -1326,9 +1347,9 @@ def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tm
     systemp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(systemp))
     cli._write_config(vault=str(vault))
-    call(app, "POST", "/api/setup/vault", {"path": str(systemp / "demo")})
-    job = wait_job(app)
-    assert job["error"] == wizard.TEMP_REFUSED and str(systemp) not in job["error"]
+    code, out, _, _ = call(app, "POST", "/api/setup/vault", {"path": str(systemp / "demo")})
+    assert code == 400 and out["error"] == wizard.TEMP_REFUSED  # one message, no failed job
+    assert str(systemp) not in out["error"]
     assert not (systemp / "demo").exists() and app.root == vault
     assert Path(taint.config()["vault"]) == vault
     taint.write_config({"vault": None})  # a new user: their only choice is not blocked
@@ -2069,10 +2090,10 @@ def test_last_indexed_is_one_answer(app, vault):
         return s["embed"]["indexed"], v["last_index"], row["detail"]
 
     (vault / ".cortex" / "index-snapshot.json").write_text("{}", encoding="utf-8")
-    assert seen() == (None, None, f"{status.notes(vault)} notes; last indexed not yet")
+    assert seen() == (None, None, "Last indexed not yet.")  # the count is its own label
     (vault / semantic.CACHE).write_bytes(b"x")
     a, b, detail = seen()
-    assert a and a == b and detail.endswith(f"last indexed {a}")
+    assert a and a == b and detail == f"Last indexed {a}."
 
 
 def test_doctor_in_the_app_points_at_setup_not_at_cortex_app(app, vault):
@@ -2707,8 +2728,8 @@ def test_start_at_login_on_windows_is_a_run_value(monkeypatch, fakes, tmp_path,
                                                   _no_real_run_key):
     """A10: Start at login is an HKCU Run value running the no-console receiver (faked
     registry); the old scheduled task goes on Add, on Remove and at app start."""
-    import sys
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(status, "test_copy", lambda: False)  # as the installed Cortex
     exe = tmp_path / "bin" / "cortex.exe"
     exe.parent.mkdir()
     (exe.parent / "cortex-receiver.exe").write_bytes(b"MZ")
@@ -2731,6 +2752,37 @@ def test_start_at_login_on_windows_is_a_run_value(monkeypatch, fakes, tmp_path,
     fakes.clear()
     actions.migrate_login(root)  # a Run value already there: nothing runs
     assert fakes == []
+
+
+REAL_RUN = (status.run_set, status.run_delete)  # before conftest fakes them for each test
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the HKCU Run key and Task Scheduler")
+def test_a_test_copy_never_changes_windows_start_up_settings(monkeypatch):
+    """R1 (25 Nov): a Cortex whose home folder was moved (tests, screenshots, demos) leaves the
+    real install's Run values and Task Scheduler entry alone; the real install still may."""
+    import winreg
+
+    from cortex.app import desktop
+    writes = []
+    for name in ("CreateKey", "SetValueEx", "DeleteValue"):
+        monkeypatch.setattr(winreg, name, lambda *a, n=name: writes.append(n))
+    monkeypatch.setattr(status, "run_set", REAL_RUN[0])
+    monkeypatch.setattr(status, "run_delete", REAL_RUN[1])
+    monkeypatch.setattr(targets, "_run", lambda a, timeout=300: (writes.append(a), (True, ""))[1])
+    assert status.test_copy() is True  # conftest moved USERPROFILE to a temp folder
+    with pytest.raises(OSError, match="test home folder"):
+        status.run_set("x")
+    with pytest.raises(OSError, match="test home folder"):
+        status.run_delete(desktop.AUTOSTART)
+    assert actions.drop_old_task() is False
+    lines = []
+    desktop.first_run(lines.append)
+    assert writes == [] and "stays off" in lines[0]
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as k:
+        real = Path(winreg.QueryValueEx(k, "USERPROFILE")[0])
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: real))
+    assert status.test_copy() is False  # the installed Cortex, run with the real profile
 
 
 def test_receiver_falls_back_to_the_console_cortex(monkeypatch, tmp_path):
