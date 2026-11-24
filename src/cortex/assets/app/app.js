@@ -1872,9 +1872,12 @@
      back resolved to titles by the server; a private page is only "a private page". Pin: prime
      always serves it; Mute: prime and context never do. Every text is set with textContent. */
   const BLOCK = { core: 'Core lines', profile: 'Profile', preferences: 'Lines about you', contract: 'Teaching contract',
-    related: 'Related pages', mistakes: 'Open mistakes', hub: 'Topic', topic: 'Topic concepts', claims: 'Lines about you' };
+    related: 'Related pages', mistakes: 'Open mistakes', hub: 'Topic', topic: 'Topic concepts', claims: 'Lines about you',
+    found: 'Found', recalled: 'Recalled', read: 'Read' };
   const xrayOpen = new Set();  // the calls left open survive a redraw after a click
   const xrayDry = new Map();  // per AI app: its dry run's {prompt, r}
+  const xrayTrace = new Map();  // R27b, per AI app: its traced reply's {text, r}
+  const xrayCmp = { prompt: '', a: null, b: null, r: null };  // R27b: Compare two apps
   function renderXray(d) {
     const act = (path, body, said) => post(path, body, (r) => { renderXray(r); toast.ok(said); });
     const ref = (x) => (x.id ? { id: x.id } : { token: x.token });
@@ -1964,12 +1967,96 @@
       return [h('div', { class: 'field' }, h('label', { for: id, text: `What would ${g.client} get for this prompt?` }),
         h('div', { class: 'inline' }, input, show)), out];
     };
+    // R27b (C2): which served line a surprising reply came from; matched by the server with no
+    // model, the reply kept nowhere. Text and results survive a redraw, as the dry run's do
+    const trace = (g, k) => {
+      const key = `${g.name}|${g.client}`, st = xrayTrace.get(key) || { text: '', r: null }, id = `xray-trace-${k}`;
+      xrayTrace.set(key, st);
+      const area = h('textarea', { id, rows: '4', maxlength: '4000', value: st.text, spellcheck: 'false' });
+      const out = h('div', {});
+      const retire = (x) => btn('Retire', () => post('/api/review/retire', { id: x.id.slice(1) }, () => {
+        st.r = { ...st.r, hits: st.r.hits.filter((y) => y.id !== x.id) };
+        toast.ok('Retired. AI apps no longer get this line.');
+        load('xray');
+      }), null, { 'aria-label': `Retire: ${x.title}` });
+      const hit = (x) => {
+        const acts = x.id && x.kind !== 'me' ? [mute(x)] : [];
+        if (x.id && x.kind === 'claim') acts.push(retire(x));
+        const e = row(x.title, null, `served by ${x.tool} · ${x.ts ? daysAgo(x.ts, true) : ''}`, acts);
+        if (x.words && x.words.length) e.querySelector('.t').append(h('span', { class: 'sub', text: `Shared words: ${x.words.join(', ')}` }));
+        return e;
+      };
+      const draw = () => {
+        const r = st.r;
+        out.replaceChildren(...(r ? [note(`Matched against what Cortex gave ${g.client} in its last ${r.calls} call${r.calls === 1 ? '' : 's'} · the reply was not saved`),
+          ...(r.hits.length ? r.hits.map((x) => hit(now(x)))
+            : [note(`None of what Cortex gave ${g.client} recently matches this reply. The reply may come from the app's own memory or the model itself.`)])] : []));
+      };
+      const go = () => post('/api/xray/trace', { client: g.name, text: area.value }, (r) => { st.r = r; draw(); });
+      const run = btn('Trace', go);
+      const sync = () => { st.text = area.value; run.disabled = !area.value.trim(); };
+      area.addEventListener('input', sync);
+      area.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !run.disabled) { e.preventDefault(); go(); } });
+      sync();
+      draw();
+      return [h('div', { class: 'field' }, h('label', { for: id, text: `Paste a reply from ${g.client} that surprised you` }),
+        area, h('div', { class: 'inline' }, run)), out];
+    };
+    // R27b (G5b-5): an app that pulled many pages through find, recall or read in 15 minutes
+    const wide = (g) => (g.wide ? [row(`${g.client} read ${g.wide.n} pages in 15 minutes on ${g.wide.day}. Chats rarely need that many. If you didn't ask for it, narrow what it reads above, or remove the app under Connect.`,
+      null, null, [btn('Got it', () => act('/api/xray/ack', { client: g.name, end: g.wide.end }, 'Hidden until it reads that widely again.'),
+        null, { 'aria-label': `Got it: ${g.client} read ${g.wide.n} pages` })])] : []);
+    // R27b (G5b-7): two apps' dry runs side by side, and the scopes each one's profile withholds
+    const compare = () => {
+      const apps = d.clients, has = (n) => apps.some((g) => g.name === n);
+      if (!has(xrayCmp.a) || !has(xrayCmp.b)) { xrayCmp.a = apps[0].name; xrayCmp.b = apps[1].name; }
+      const input = h('input', { type: 'text', id: 'xray-cmp-prompt', value: xrayCmp.prompt, maxlength: '2000', spellcheck: 'false', autocomplete: 'off' });
+      const out = h('div', {});
+      const go = () => post('/api/xray/compare', { prompt: input.value, a: xrayCmp.a, b: xrayCmp.b }, (r) => {
+        const name = (n) => apps.find((g) => g.name === n).client;
+        xrayCmp.r = { ...r, an: name(xrayCmp.a), bn: name(xrayCmp.b) };
+        draw();
+      });
+      const show = btn('Show', go);
+      const sync = () => { xrayCmp.prompt = input.value; show.disabled = !input.value.trim() || xrayCmp.a === xrayCmp.b; };
+      const pick = (which, label) => {
+        const s = h('select', { id: `xray-cmp-${which}` }, apps.map((g) => h('option', { value: g.name, text: g.client })));
+        s.value = xrayCmp[which];
+        s.addEventListener('change', () => { xrayCmp[which] = s.value; sync(); });
+        return [h('label', { for: s.id, text: label }), s];
+      };
+      const col = (s, name, other) => {
+        const theirs = new Set(other.served.flatMap((b) => b.items.map((x) => x.id || x.token)));
+        const rows = [...s.served.flatMap((b) => b.items.map((x) => {
+          const e = item(now(x), b.block);
+          if (!theirs.has(x.id || x.token)) e.querySelector('.line1').append(h('span', { class: 'tag', text: `only ${name}` }));
+          return e;
+        })), ...s.trimmed.flatMap((b) => b.items.map((x) => item({ ...now(x), where: 'cut for space' }, b.block, 'cut'))),
+        ...s.withheld.map((w) => row(`Not given: ${scopeName(w)}`, null, null, null, 'cut'))];
+        return h('div', { class: 'xray-col' }, h('div', { class: 'field' }, h('span', { class: 'lbl', text: name }),
+          h('span', { class: 'help', text: `${s.chars} characters` })), ...(rows.length ? rows : [note('Nothing would be served.')]));
+      };
+      const draw = () => {
+        const r = xrayCmp.r;
+        out.className = r ? 'xray-cmp' : '';
+        out.replaceChildren(...(r ? [col(r.a, r.an, r.b), col(r.b, r.bn, r.a)] : []));
+      };
+      input.addEventListener('input', sync);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !show.disabled) { e.preventDefault(); go(); } });
+      sync();
+      draw();
+      return board('Compare two apps', { cls: 'xray-compare' },
+        h('div', { class: 'field' }, h('label', { for: 'xray-cmp-prompt', text: 'Prompt' }), input,
+          h('div', { class: 'inline' }, ...pick('a', 'First app'), ...pick('b', 'Second app'), show)),
+        out, note('Dry run · nothing was sent or logged'));
+    };
     put('xray',
       board('Pinned and muted', { note: String(d.pinned.length + d.muted.length) },
         ...(d.pinned.length || d.muted.length ? [...flags(d.pinned, 'pin'), ...flags(d.muted, 'mute')]
           : [note('Nothing pinned or muted. Pin or mute a page or line from a call below.')])),
+      d.clients.length >= 2 ? compare() : null,
       ...(d.clients.length ? d.clients.map((g, k) => board(g.client, { note: `${g.total} call${g.total === 1 ? '' : 's'}` },
-        scopeBar(g), ...often(g), ...dryRun(g, k), ...g.calls.map((c) => call(c, g.client))))
+        ...wide(g), scopeBar(g), ...often(g), ...dryRun(g, k), ...trace(g, k), ...g.calls.map((c) => call(c, g.client))))
         : [board('No calls yet', {}, note('When an AI app asks Cortex about you, each call shows here.'))]));
   }
 
