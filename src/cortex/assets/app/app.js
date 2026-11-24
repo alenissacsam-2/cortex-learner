@@ -1764,7 +1764,7 @@
   function closeChange() { vaultChange.open = false; vaultChange.text = ''; renderVault(vaultChange.d); }
   function changeField() {
     const use = btn('Use this folder', () => job('/api/setup/vault', { path: path.value.trim() }), 'btn lit', { disabled: !vaultChange.text.trim() });
-    const path = h('input', { type: 'text', id: 'vault-change-path', value: vaultChange.text, placeholder: 'D:\\Notes\\MyVault', 'aria-label': 'Use another folder for your notes', spellcheck: 'false' });
+    const path = h('input', { type: 'text', id: 'vault-change-path', value: vaultChange.text, placeholder: 'C:\\Notes\\MyVault', 'aria-label': 'Use another folder for your notes', spellcheck: 'false' });
     path.addEventListener('input', () => { vaultChange.text = path.value; use.disabled = !path.value.trim(); });
     path.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !use.disabled) { e.preventDefault(); use.click(); } });
     const f = h('div', { class: 'field', id: 'vault-change' }, h('label', { for: 'vault-change-path', text: 'Use another folder for your notes' }),

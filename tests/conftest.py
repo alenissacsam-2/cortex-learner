@@ -57,7 +57,7 @@ def _own_temp_folder(tmp_path_factory, monkeypatch):
     monkeypatches tempfile.gettempdir itself."""
     import tempfile
     t = tmp_path_factory.mktemp("systemp")
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(t))
+    monkeypatch.setattr(tempfile, "tempdir", str(t))  # what gettempdir() returns once set
 
 
 @pytest.fixture(autouse=True)

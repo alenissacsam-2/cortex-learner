@@ -2204,7 +2204,7 @@ def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp
     out = _run(node, tmp_path, "change", CHANGE, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["closed"] and out["noWarning"]
-    assert out["open"] == [True, "Use another folder for your notes", "D:\\Notes\\MyVault",
+    assert out["open"] == [True, "Use another folder for your notes", "C:\\Notes\\MyVault",
                            "Cortex adds its own folders and a git history there, and never "
                            "changes notes you already have. Obsidian can open it as a vault. "
                            "Your current vault stays where it is.", True]
