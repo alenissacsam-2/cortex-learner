@@ -448,10 +448,21 @@ def doctor(vault: VaultOpt = None, privacy: Annotated[bool, typer.Option(
         "--privacy", help="Print only where Cortex connects.")] = False,
         security: Annotated[bool, typer.Option(
             "--security", help="Fire six memory attacks at a throwaway made-up vault "
-            "(never your notes) and say PASS or FAIL for each.")] = False) -> None:
+            "(never your notes) and say PASS or FAIL for each.")] = False,
+        report: Annotated[bool, typer.Option(
+            "--report", help="Print the details to paste into a bug report: versions and "
+            "each check's state, no paths, names or notes.")] = False) -> None:
     """Check Python/FTS5, the search model, PATH, the local model, OneDrive and the vault git,
     then list where Cortex connects; exit 1 on any FAIL. --security: the offline red team
-    (cortex.redteam) instead."""
+    (cortex.redteam) instead. --report: the details for a bug report."""
+    if report:
+        from cortex.app import status
+        try:
+            root = _vault(vault).root
+        except VaultError:
+            root = None
+        typer.echo(status.report(root))
+        return
     if privacy:
         typer.echo("\n".join(doctor_mod.connects()))
         return

@@ -699,3 +699,55 @@ def history_row(root: Path | None, b: dict, now: datetime | None = None) -> dict
                 "detail": "Last import {ago}: newer visits are not in Cortex yet.",
                 "import": [s.key for s in browse_serve.auto_sources(Vault(root))]}
     return {**row, "state": "ok", "detail": f"New visits come in every {hours:g} hours."}
+
+
+# ---- "Something not working?": the text a user pastes into a bug report ---------------------
+
+_REDACT = ((re.compile(r"(?i)\b[a-z]:[\\/][^\s'\"<>|]*"), "<path>"),  # a drive path
+           (re.compile(r"(?<![\w.])/(?:Users|home|root|var|tmp|opt|etc)/[^\s'\"<>|]*"), "<path>"),
+           (re.compile(r"(?i)([?&](?:token|key|api_?key|access_token|auth|secret|password)=)"
+                       r"[^\s&'\"]*"), r"\1<redacted>"),
+           (re.compile(r"\b(?:sk|pk|ghp|gho|ghs|xox[bap])[-_][A-Za-z0-9_-]{8,}"), "<key>"))
+
+
+def redact(text, root: Path | str | None = None) -> str:
+    """`text` with the vault path, the home folder and any other path as `<path>`, the user name
+    as `<user>`, a URL's token= value and an API key removed."""
+    import getpass
+
+    s = str(text)
+    for p in sorted({str(x) for x in (root, Path.home()) if x}, key=len, reverse=True):
+        s = s.replace(p, "<path>").replace(p.replace("\\", "/"), "<path>")
+    for rx, sub in _REDACT:
+        s = rx.sub(sub, s)
+    names = {Path.home().name}
+    with contextlib.suppress(Exception):
+        names.add(getpass.getuser())
+    for n in names:
+        if n:
+            s = re.sub(rf"(?i)(?<![A-Za-z0-9]){re.escape(n)}(?![A-Za-z0-9])", "<user>", s)
+    return s
+
+
+def report(root: Path | None) -> str:
+    """The plain-text block for a bug report: versions, each Status row's name and state, which
+    optional parts are on. No value, path, note or model name; every line passes `redact`.
+    (Status shows no last-error line, so none is included.)"""
+    import platform
+
+    from cortex import doctor, update
+
+    rs = rows(root)
+    by = {r["id"]: r for r in rs}
+    state = {"ok": "Ready", "off": "Off"}
+    llm, embed, hist = by.get("llm", {}), by.get("embed", {}), by.get("history", {})
+    runner = (llm.get("value") or "").split(",")[0].strip()
+    lines = [f"Cortex {update.current()} ({'CortexSetup.exe' if doctor.installer() else 'uv'})",
+             f"{platform.system()} {platform.release()} (build {platform.version()}), "
+             f"Python {platform.python_version()}", "", "Status:"]
+    lines += [f"- {r['label']}: {state.get(r['state'], 'Needs attention')}" for r in rs]
+    lines += ["", "Optional parts:",
+              f"- Search model: {'on' if embed.get('state') == 'ok' else 'off'}",
+              f"- Local model: {(runner or 'on') if llm.get('state', 'off') != 'off' else 'off'}",
+              f"- Browsing import: {'yes' if hist.get('state', 'off') != 'off' else 'no'}"]
+    return redact("\n".join(lines), root)

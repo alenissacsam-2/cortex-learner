@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Cortex does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you post:** never paste your notes, chats, browsing history, API keys or file paths that contain your name. The app's **Copy details** button (Status, then Something not working?) leaves all of those out.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: Details for a bug report
+      description: In Cortex, open Status, then Something not working?, then Copy details, and paste here. Or run `cortex doctor --report`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2
+    validations:
+      required: false
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Cortex?
+      options:
+        - CortexSetup.exe
+        - uv
+        - Other
+    validations:
+      required: true

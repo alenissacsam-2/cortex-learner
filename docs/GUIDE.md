@@ -131,6 +131,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex harvest status` | Harvest progress |
 | `cortex undo <session>` | Reverts one chat's changes |
 | `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex, and per import source the page-length quartiles and the share of pages that are mostly links or numbers only (numbers only, never page text) |
+| `cortex doctor --report` | The details to paste into a bug report: versions and each check's state, with no paths, names or notes (the app's Status, Something not working?, Copy details prints the same) |
 | `cortex doctor --security` | A self-test of Cortex's memory guards ([below](#the-security-self-test)) |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
 | `cortex agent-text` | Every fixed text Cortex shows an AI app, with its size per app |

@@ -46,6 +46,7 @@
   - [Local models](#local-models)
   - [Install from source (macOS, Linux)](#install-from-source-macos-linux)
   - [Development](#development)
+- [Found a problem?](#found-a-problem)
 - [License](#license)
 
 ## Made for vibe coding
@@ -167,7 +168,7 @@ On macOS or Linux, or as a developer: see [Install from source](#install-from-so
 
 **Mac or Linux?** The installer is for Windows only, and Cortex is tested most on Windows. On macOS and Linux it runs from source: see [Install from source](#install-from-source-macos-linux).
 
-**How do I report a problem?** Open an issue on the [Issues page](https://github.com/alenissacsam-2/cortex-learner/issues). For a security or privacy problem, report it privately as [SECURITY.md](SECURITY.md) explains, never in a public issue.
+**How do I report a problem?** In the app, open **Status**, then **Something not working?**, press **Copy details** and paste them into a new issue ([how](#found-a-problem)). For a security or privacy problem, report it privately as [SECURITY.md](SECURITY.md) explains, never in a public issue.
 
 ### Troubleshooting
 
@@ -507,6 +508,10 @@ Always run Python through `uv run`. Tests use only synthetic data in `tests/fixt
 - **A demo vault:** `uv run cortex init <folder>` then `uv run python scripts/make_demo_vault.py <folder>` fills a throwaway vault with Sam, the made-up student, and made-up study history, as in the screenshots. Never point it at a real vault.
 
 Layout in brief: `src/cortex/` is the Python package (`vault.py` for every write, `events.py` for the log, `levels.py` for the folds, `planner.py` for Today, `mcp_server.py` for the tools, `cli.py` for the commands, `app/` for the Cortex app, `browse/` for browsing); `src/cortex/assets/` holds the dashboard and app pages; `plugin/` is the Claude Code plugin.
+
+## Found a problem?
+
+In the app, open Status, then Something not working?, and press Copy details: it copies versions and what is on or off, never your notes, chats, browsing or file paths. Paste it into a new report on the [Issues page](https://github.com/alenissacsam-2/cortex-learner/issues/new/choose); see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

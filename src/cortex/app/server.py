@@ -303,7 +303,8 @@ class App:
         self.warming: threading.Thread | None = None  # `warm_status`'s thread
         self.core = None  # (vault root, mcp_server.Cortex) for the Review's clicks
         self.reviewing = threading.Lock()  # one Review click at a time
-        self.get = {"/api/status": self.status, "/api/connect": self.connect,
+        self.get = {"/api/status": self.status, "/api/status/report": self.status_report,
+                    "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
                     "/api/app/hotkey": self.hotkey,
                     "/api/home": self.home, "/api/home/version": self.home_version,
@@ -416,8 +417,13 @@ class App:
         return {"rows": status.rows(self.root) + (self._paused_rows() if v["ok"] else []),
                 "first_run": not v["ok"], "vault": v["path"], "update": self.update_state(),
                 "whats_new": news.card(), "chat_import": chat_import.enabled(),
+                "issue_url": f"https://github.com/{update.REPO}/issues/new?template=bug_report.yml",
                 "connects": egress.summary(),  # cortex.egress: where Cortex connects
                 "land": "status" if ready else "setup"}  # Setup until its key steps are done
+
+    def status_report(self) -> dict:
+        """Copy details: the same block as `cortex doctor --report` (no paths, notes or values)."""
+        return {"text": status.report(self.root)}
 
     def _paused_rows(self) -> list[dict]:
         """RR-10: one Status row per paused Review producer, with its Resume; "imports" also
