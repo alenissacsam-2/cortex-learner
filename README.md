@@ -465,6 +465,10 @@ Start with `cortex doctor`: it checks each part and prints a fix for anything wr
 
 **Where is my data?** In the vault folder you chose, plus settings and the search model in `~/.cortex/`. To remove everything, follow [docs/INSTALL.md](docs/INSTALL.md) section 11.
 
+## Found a problem?
+
+In the app, open Status, then Something not working?, and press Copy details: it copies versions and what is on or off, never your notes, chats, browsing or file paths. Paste it into a new report on the [Issues page](https://github.com/alenissacsam-2/cortex-learner/issues/new/choose); see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

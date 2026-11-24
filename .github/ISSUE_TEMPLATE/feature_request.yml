@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something Cortex should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not paste your notes, chats, browsing history, API keys or file paths that contain your name.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or need, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Cortex to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+    validations:
+      required: false

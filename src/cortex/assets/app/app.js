@@ -202,10 +202,10 @@
   }
   // Copy: the label turns to a check and Copied for 1.5 s; a failure says so in a toast, or
   // runs `onFail` (e.g. selects the text so Ctrl+C copies it)
-  function copyBtn(text, failMsg, cls, withIcon, onFail, onOk) {
-    const face = () => (withIcon ? [icon('copy'), 'Copy'] : ['Copy']);
+  function copyBtn(text, failMsg, cls, withIcon, onFail, onOk, label = 'Copy') {
+    const face = () => (withIcon ? [icon('copy'), label] : [label]);
     let timer;
-    const b = btn('', () => Promise.resolve().then(() => navigator.clipboard.writeText(text())).then(() => {
+    const b = btn('', () => Promise.resolve().then(text).then((t) => navigator.clipboard.writeText(t)).then(() => {
       if (onOk) onOk();
       clearTimeout(timer);
       const ck = icon('check');
@@ -501,7 +501,15 @@
       d.update ? updatesBoard(d.update, wn.current) : null,
       d.connects && d.connects.length ? h('details', { class: 'review-more' },  // collapsed, like Review's "More"
         h('summary', { text: 'Where Cortex connects' }),
-        h('ul', { class: 'pad' }, d.connects.map((t) => h('li', { text: t })))) : null);
+        h('ul', { class: 'pad' }, d.connects.map((t) => h('li', { text: t })))) : null,
+      d.issue_url ? reportBoard(d.issue_url) : null);
+  }
+  /* Something not working?: the details come from the server (no paths or notes); nothing is sent from here */
+  function reportBoard(url) {
+    return board('Something not working?', {},
+      row('Report a problem', null, 'Copy details, then paste them into the form. Nothing is sent until you submit it on GitHub.',
+        [copyBtn(() => api('/api/status/report').then((r) => r.text), 'Copy failed. Run cortex doctor --report in a terminal instead.', 'btn lit', false, null, null, 'Copy details'),
+          ext(url, 'Report on GitHub')]));
   }
   /* app.chat_import: past AI chats saved as chat pages every 5 minutes, no model (on by default) */
   function chatImportBoard(on) {
