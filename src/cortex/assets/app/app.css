@@ -237,6 +237,15 @@ input[type="checkbox"] { accent-color: var(--lit); width: 16px; height: 16px; ma
 .field:last-child { border-bottom: 0; }
 .field label, .field .lbl { font-weight: 600; font-size: 13px; }
 .field .help { color: var(--ink-3); font-size: 12.5px; margin: 0; max-width: 78ch; }
+.field .help.taken { color: var(--refresh); }  /* the quick-capture key another app holds */
+/* quick capture's box (capture.html): one input and a hint line */
+body.capture { height: 100vh; overflow: hidden; padding: 14px 16px 10px; border: 1px solid var(--edge); }
+.capture #cap { width: 100%; padding: 10px 12px; font-size: 16px; background: var(--panel);
+  border: 1px solid var(--rule); border-radius: 2px; outline: none; }
+.capture #cap:focus { border-color: var(--lit); }
+.cap-hint { margin: 8px 2px 0; font-size: 12.5px; color: var(--ink-3); overflow: hidden; }
+.cap-hint.ok { color: var(--ok-ink); }
+.cap-hint.bad { color: var(--refresh); }
 .fields3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
 .fields3 .field { border-right: 1px solid var(--rule); border-bottom: 0; }
 .fields3 .field:last-child { border-right: 0; }
