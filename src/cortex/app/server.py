@@ -24,6 +24,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from contextlib import contextmanager
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -37,6 +38,7 @@ IDLE_S = 30 * 60
 PRIVATE_S = 10 * 60  # the Private switch relocks by itself after 10 minutes
 UPDATE_FIRST_S, UPDATE_EVERY_S = 60, 6 * 3600  # the quiet update check: a minute in, then 6 h
 WATCH_S = 5  # seconds between idle checks
+DRY_IDLE_S = 600  # X-ray's shared dry-run index goes after 10 unused minutes, as a model does
 WARM_STATUS = True  # `start` asks Status's slow probes at once (tests turn it off: conftest)
 PIGGYBACK = True  # C8: a fact-harvest pass after each Chat turn (tests turn it off: conftest)
 MAX_BODY = 64 * 1024
@@ -296,6 +298,8 @@ class App:
         self.private_until = 0.0  # the Private switch: ?private=1 applies until this monotonic
         self.update_ready: dict | None = None  # a newer release, prepared by the quiet check
         self.homes = (threading.Lock(), {})  # vault root -> its HomeCache
+        # X-ray's dry runs and compares: one read-only Index, one request at a time (_dry_index)
+        self.dry, self.dry_index, self.dry_used = threading.Lock(), None, 0.0
         self.warming: threading.Thread | None = None  # `warm_status`'s thread
         self.core = None  # (vault root, mcp_server.Cortex) for the Review's clicks
         self.reviewing = threading.Lock()  # one Review click at a time
@@ -1490,9 +1494,50 @@ class App:
             raise ValueError("client must be an AI app's name, at most 100 characters.")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 2000:
             raise ValueError("Type a prompt of at most 2,000 characters.")
-        v = self._vault()
-        got = dry_prime(v, client, prompt)
+        with self._dry_index() as (v, index):
+            got = dry_prime(v, client, prompt, index=index)
         return xray.present(v, got["served"], got["trimmed"], got["chars"])
+
+    @contextmanager
+    def _dry_index(self):
+        """(the vault, X-ray's one read-only Index for it), held by this request alone: built
+        by the first dry run or compare, kept for the next (dry_prime sets each run's withhold
+        and refreshes it by stat), replaced for another vault and let go by `drop_dry`. A run
+        that fails drops it, so a half-done refresh is never reused."""
+        from cortex.catalog import Catalog
+        from cortex.index import Index
+        v = self._vault()
+        with self.dry:
+            if self.dry_index is None or self.dry_index[0] != v.root:
+                self._close_dry()
+                self.dry_index = (v.root, Index(v, Catalog.load(v), save=False))
+            try:
+                yield v, self.dry_index[1]
+            except BaseException:
+                self._close_dry()
+                raise
+            finally:
+                self.dry_used = time.monotonic()
+
+    def _close_dry(self) -> None:  # under self.dry
+        if self.dry_index is not None:
+            self.dry_index[1].db.close()
+            self.dry_index = None
+
+    def drop_dry(self, now: float | None = None) -> bool:
+        """Let X-ray's shared index go once unused for DRY_IDLE_S or once another vault is open
+        (`start`'s watch checks); never while a request holds it. True when it went."""
+        if not self.dry.acquire(blocking=False):  # in use: not idle
+            return False
+        try:
+            now = time.monotonic() if now is None else now
+            if self.dry_index is None or (now - self.dry_used < DRY_IDLE_S
+                                          and self.dry_index[0] == self.root):
+                return False
+            self._close_dry()
+            return True
+        finally:
+            self.dry.release()
 
     @staticmethod
     def _xray_client(body: dict, key: str = "client") -> str:
@@ -1521,7 +1566,8 @@ class App:
             raise ValueError("Type a prompt of at most 2,000 characters.")
         if (a or "unknown") == (b or "unknown"):
             raise ValueError("Pick two different apps.")
-        return xray.compare(self._vault(), prompt, a, b)
+        with self._dry_index() as (v, index):
+            return xray.compare(v, prompt, a, b, index=index)
 
     def xray_ack(self, body: dict) -> dict:
         """R27b: Got it on an app's broad-read warning; like Pin and Mute, only this click sets
@@ -2907,6 +2953,7 @@ def start(root: Path | None, *, port: int = 0, echo=print, idle: bool = True,
             if idle and time.monotonic() - app.last > IDLE_S and not app.jobs.running():
                 echo("cortex app: 30 minutes idle; stopping.")
                 break
+            app.drop_dry()
         app.stop.set()
         srv.shutdown()
 

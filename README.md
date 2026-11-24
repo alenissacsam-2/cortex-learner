@@ -1,5 +1,12 @@
 # Cortex
 
+[![Latest release](https://img.shields.io/github/v/release/alenissacsam-2/cortex-learner?label=release)](https://github.com/alenissacsam-2/cortex-learner/releases/latest)
+[![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)](#install)
+[![Works through MCP](https://img.shields.io/badge/MCP-Claude%20%7C%20Cursor%20%7C%20Codex%20%7C%20Gemini%20CLI-8A5700)](#using-it)
+[![License: MIT](https://img.shields.io/github/license/alenissacsam-2/cortex-learner)](LICENSE)
+
+**[Download Cortex for Windows](https://github.com/alenissacsam-2/cortex-learner/releases/latest/download/CortexSetup.exe)** (free, one file, no account)
+
 ![Cortex: a second brain on your own computer. Every AI app you use reads from it and adds to it. Nothing about you leaves your computer unless you turn it on.](docs/images/hero.png)
 
 *Every screenshot in this README shows the bundled sample vault of Sam, a made-up student, plus made-up demo data. None of it is a real person's.*
@@ -102,7 +109,7 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 **Chat** talks with a model on this computer about your notes, saved AI chats and browsing, follows up across turns, shows each step while it works, and lists the pages each answer used. It never uses a cloud model. **Attach a file** (or drop one on the chat) to ask about a PDF, Word file or text file; the answer cites its pages, and **Save to your brain** imports it. Questions about your own record are answered straight from Cortex's data, even with no local model or search model: "which sites did I visit this month?" (every site, with visits and days, by browser if you name one), "what should I study today?", "what's due?", "where am I weak?", "what did I do yesterday?" and "summarize my week". Esc stops an answer, and every answer has Copy.
 
-![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips](docs/images/app-chat.png)
+![Chat: a question about a binary search that never stops and a follow-up, each answer citing the notes it used as numbered source chips, with an evidence line under it saying how sure Cortex is](docs/images/app-chat.png)
 
 *A real run on the demo vault with Qwen 3.5 2B and the search model. A model this small can still get a detail wrong, so check the cited pages; a bigger model (4B, 9B) does better if your computer can run it.*
 
