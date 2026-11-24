@@ -205,6 +205,12 @@ window.__T = (() => {
   addEventListener('error', (e) => errs.push(String(e.error && e.error.stack || e.message)));
   addEventListener('unhandledrejection', (e) => errs.push(String(e.reason && e.reason.stack || e.reason)));
   if (navigator.clipboard) navigator.clipboard.writeText = async (t) => { if (failCopy) throw new Error('denied'); clip.push(t); };
+  // a download link (Save picture) is recorded, never followed: no file lands in a real Downloads
+  const downloads = [], aclick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.hasAttribute('download')) { downloads.push({ name: this.download, href: this.href }); return; }
+    return aclick.call(this);
+  };
   const exec = Document.prototype.execCommand;
   Document.prototype.execCommand = function (...a) { return failCopy ? false : exec.apply(this, a); };
   const $ = (id) => document.getElementById(id);
@@ -343,7 +349,7 @@ window.__T = (() => {
     await view('list'); out['brain list'] = grab($('view-brain'));
     return out;
   }
-  return { get SECTIONS() { return sections(); }, go, scopes: () => Object.keys(SCOPES), keys: async (s) => { await SCOPES[s][1](); return controls(s).map((c) => c.key); }, hit, focused, checks, texts };
+  return { downloads, view, get SECTIONS() { return sections(); }, go, scopes: () => Object.keys(SCOPES), keys: async (s) => { await SCOPES[s][1](); return controls(s).map((c) => c.key); }, hit, focused, checks, texts };
 })();
 """.replace("CHECK", CHECK).replace("COPY", COPY)  # noqa: E501  (JavaScript)
 
@@ -1428,3 +1434,103 @@ def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch, narrow):
     assert p["row"] == ["DSA &amp; <i exam", 0] and p["imgs"] == 0
     assert p["sugToast"].startswith("Added: OS exam on ")
     assert p["sugLeft"] == ["Add as deadline"]
+
+
+# Save picture in the snapshot: every canvas string recorded while it runs, the download read back
+PICTURE_PROBE = r"""(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await __T.view('3d');
+  await sleep(300);
+  const btn = () => [...document.querySelectorAll('#brain-tools button')].find((b) => b.textContent.trim() === 'Save picture');
+  const cv = document.querySelector('#brain-slot .brain-host canvas'), size0 = [cv.width, cv.height];
+  const texts = [];
+  for (const m of ['fillText', 'strokeText']) {
+    const o = CanvasRenderingContext2D.prototype[m];
+    CanvasRenderingContext2D.prototype[m] = function (t, ...a) { texts.push(String(t)); return o.call(this, t, ...a); };
+  }
+  const blobs = new Map(), mk = URL.createObjectURL;  // the page's CSP lets no fetch read a blob: keep it
+  URL.createObjectURL = (o) => { const u = mk(o); blobs.set(u, o); return u; };
+  const n0 = __T.downloads.length, b = btn();
+  b.click();
+  for (let i = 0; i < 200 && __T.downloads.length === n0; i++) await sleep(25);
+  const d = __T.downloads[n0], blob = blobs.get(d.href);
+  const head = [...new Uint8Array(await blob.slice(0, 8).arrayBuffer())];
+  const bmp = await createImageBitmap(blob), c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  const g = c.getContext('2d');
+  g.drawImage(bmp, 0, 0);
+  const px = g.getImageData(0, 0, c.width, c.height - 60).data;
+  let lit = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 90) lit++;
+  await sleep(100);
+  const out = { label: b.title, name: d.name, type: blob.type, head, size: [bmp.width, bmp.height], texts, lit,
+    corner: [...g.getImageData(2, 2, 1, 1).data].slice(0, 3), size0, size1: [cv.width, cv.height],
+    live: document.getElementById('brain-live').textContent, renderer: document.body.dataset.brainRenderer };
+  await __T.view('2d');
+  out.in2d = !btn() || !btn().getClientRects().length;
+  return out;
+})()"""  # noqa: E501  (JavaScript)
+
+
+@pytest.mark.parametrize("canvas2d", [False, True])
+def test_save_picture_draws_shape_and_light_only(tmp_path, demo_vault, canvas2d):
+    """Save picture in the exported snapshot: a 1200 x 675 PNG download named for the day, whose
+    only text is the caption (public pages and their areas, from counts) and the day. A private
+    vault page, a page marked private in the blob, every stem website (a private one too) and
+    every title stay out; the on-screen canvas keeps its size; the button hides in 2D. Run on
+    the WebGL renderer and on the Canvas 2D fallback (?canvas)."""
+    import base64
+
+    import numpy as np
+
+    from cortex import brainmap
+
+    (demo_vault / "notes").mkdir(exist_ok=True)
+    (demo_vault / "notes" / "canary-private.md").write_text(
+        '---\ntitle: "CANARY private page"\nkind: note\nprivate: true\n---\nSecret.\n',
+        encoding="utf-8")
+    data = dashboard.build(Vault(demo_vault), now=datetime.now(UTC))
+    brain = data["brain"]
+    ids = brain["nodes"]["ids"]
+    assert "canary-private" not in ids
+    for p in data["pages"]:
+        p["title"] = "CANARY " + p["title"]
+    guard = data["pages"][0]["id"]
+    assert guard in ids
+    data["pages"][0]["private"] = True  # the brain's own guard
+    sites = [{"site": s, "category": "learning", "visits": v, "first_day": "2026-01-01",
+              "last_day": data["day"], "private": priv, "first": k, "hubs": [[ids[1], 3]],
+              "related": []}
+             for k, (s, v, priv) in enumerate([("public.example", 40, False),
+                                              ("open.example", 9, False),
+                                              ("secret.example", 99, True)])]
+    placed: dict = {}
+    brainmap.stem_order(sites, placed)
+    data["brain"] = brainmap.with_stem(brain, sites, placed, len(sites))
+    lobe = np.frombuffer(base64.b64decode(brain["nodes"]["lobe"]), "<u2")
+    drawn = [k for k, i in enumerate(ids) if i != guard]
+    n, areas = len(drawn), len({int(lobe[k]) for k in drawn if lobe[k] < len(brain["lobes"])})
+    page = tmp_path / "snap.html"
+    page.write_text(dashboard.render_html(data), encoding="utf-8")
+    out = _run(tmp_path, None, url=page.as_uri() + ("?canvas" if canvas2d else ""),
+               probe=PICTURE_PROBE)
+    assert out["errors"] == []
+    p = out["probe"]
+    assert p["renderer"] == ("canvas" if canvas2d else "webgl2"), p["renderer"]
+    day = data["day"]
+    mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    def count(k, w):
+        return f"{k:,} {w}{'' if k == 1 else 's'}"
+
+    caption = f"{count(n, 'page')} in {count(areas, 'area')}, kept on this computer"
+    shown_day = f"{int(day[8:10])} {mon[int(day[5:7]) - 1]} {day[:4]}"
+    assert sorted(p["texts"]) == sorted([caption, shown_day])
+    assert p["name"] == f"cortex-brain-{day}.png" and p["type"] == "image/png"
+    assert p["head"] == [137, 80, 78, 71, 13, 10, 26, 10] and p["size"] == [1200, 675]
+    assert p["lit"] > 500, p["lit"]  # the brain drew
+    assert max(p["corner"]) < 40, p["corner"]  # the night ground, whatever the theme
+    assert p["size0"] == p["size1"]
+    assert p["live"] == "Picture saved to your downloads."
+    assert p["in2d"]
+    assert "Save a picture of your brain" in p["label"] and "nothing private" in p["label"]

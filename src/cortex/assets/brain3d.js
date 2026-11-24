@@ -2032,6 +2032,10 @@ void main() {
     // Fibres follow their ends: hidden with either end; the hovered or selected page's fibres show at
     // 0.6 and thicken while the rest dim to 8 %; a focused lobe keeps its own; Mastery turns them neutral.
     const kindOn = (f) => (FK[f] ? style.similar : style.links);
+    // a fibre's overview alpha and width (FD: the density factor); cross-lobe fibres (the tracts
+    // between topics) read brighter than the fibres inside a cluster
+    const fibreA = (f, FD) => (FK[f] ? 0.05 : 0.22 * style.linkBrightness) * FD * (LOBE[FA[f]] === LOBE[FB[f]] ? 0.75 : 1.2) * OVK[f] * PAIRK[f];
+    const fibreW = (f) => (FK[f] ? 0.6 : style.linkWidth) * PAIRW[f] * (HUB[FA[f]] || HUB[FB[f]] ? 1.5 : 1);
     function refibre() {
       const src = hover >= 0 ? hover : selected, neutral = mode === 'mastery', spot = spotSet();
       const still = V3 && reduced && src >= 0 && src === selected;  // reduced motion: white fibres at 0.8
@@ -2049,10 +2053,8 @@ void main() {
         const i = FA[f], j = FB[f], o = f * 8, sim = FK[f] === 1, own = src >= 0 && (i === src || j === src);
         let a = 0, w = 0;
         if (on(f) && (own || OVK[f] > 0)) {
-          // cross-lobe fibres (the tracts between topics) read brighter than the fibres inside a cluster
-          a = (sim ? 0.05 : 0.22 * style.linkBrightness) * FD * (LOBE[i] === LOBE[j] ? 0.75 : 1.2) * OVK[f] * PAIRK[f];
-          w = (sim ? 0.6 : style.linkWidth) * PAIRW[f];
-          if (HUB[i] || HUB[j]) w *= 1.5;
+          a = fibreA(f, FD);
+          w = fibreW(f);
           if (src >= 0 && own) { a = still ? 0.8 : 0.6; w = sim ? 0.6 : 1; }
           else if (spot && (spot[i] || spot[j])) {
             a = sim ? 0.3 : 0.7; w *= 1.4;  // Today or the growth moment: every fibre of its pages stays lit
@@ -2438,6 +2440,73 @@ void main() {
         breath: reduced || t - breathT0 >= BREATH_MS ? 0 : 0.5 * Math.sin(Math.PI * Math.max(0, t - breathT0) / BREATH_MS),
         pop: !hl ? 0 : reduced || t - popT0 >= POP_MS ? 0.2 : ((p) => (p < 0.5 ? 1.2 * p : 0.6 - 0.8 * (p - 0.5)))((t - popT0) / POP_MS),
         wave: wv[0], waveK: wv[1] };
+    }
+
+    /* ---- Save picture: the brain from this camera, drawn again at w x h by a second renderer of
+       the same kind on its own canvas (the live canvas is never touched), in the night look. Only
+       the pages this view shows are drawn, in their lobe colours, with the fibres between them:
+       never a stem website, a private node, a label, a ring, a highlight or an effect. Returns a
+       2D canvas and the counts for the caption (pages drawn, lobes with a drawn page), or null. */
+    function picture(w, h) {
+      if (!camSet) return null;
+      const keep = (i) => i < SF && !PG[i].private && userVis[i] && (archiveOn || !ARCH[i])
+        && !(mode === 'growth' && growthMonth && MONTH[i] && MONTH[i] > growthMonth);
+      const st = DEFAULTS.state;
+      const night = [rgb(DEFAULTS.node), rgb(V3 ? V3C.neutral : DEFAULTS.grey), rgb(st.solid), rgb(st.learning), rgb(st.needs_refresh)]
+        .concat(V3 ? LC : [], V3 ? SCATS.map(() => rgb(V3C.neutral)) : []);
+      const col = new Uint8Array(N * 4), pi = new Uint16Array(N), on = new Set();
+      let pages = 0;
+      for (let i = 0; i < N; i++) {
+        if (!keep(i)) continue;
+        const c = night[pi[i] = V3 ? pcOf(i) : 0];
+        col.set([c[0], c[1], c[2], ARCH[i] ? 64 : 255], i * 4);
+        pages++;
+        if (LOBE[i] < L) on.add(LOBE[i]);
+      }
+      const fcol = new Uint8Array(NF * 8), fci = new Uint16Array(NF), tfc = new Float32Array(NF * 3);
+      const fOn = (f) => col[FA[f] * 4 + 3] && col[FB[f] * 4 + 3] && kindOn(f) && !BUSYF[f] && OVK[f] > 0;
+      let nv = 0;
+      for (let f = 0; f < NF; f++) if (fOn(f)) nv++;
+      const FD = Math.min(1, Math.sqrt(7000 / Math.max(1, nv)));
+      for (let f = 0; f < NF; f++) {
+        ctlT(f, tfc, f * 3);
+        if (!fOn(f)) continue;
+        const ca = night[fci[f] = V3 ? pcOf(FA[f]) : 0], cb = night[V3 ? pcOf(FB[f]) : 0];
+        const a = fibreA(f, FD) * (ARCH[FA[f]] || ARCH[FB[f]] ? 0.25 : 1);
+        fcol.set([ca[0], ca[1], ca[2], Math.round(Math.min(1, a) * 255), cb[0], cb[1], cb[2], Math.min(255, Math.round(fibreW(f) * 40))], f * 8);
+      }
+      const S2 = Object.assign({}, S, { COL: col, FX: new Uint8Array(N * 4), PI: pi, FCOL: fcol, FCI: fci, TFC: tfc });
+      // the camera as it is, framed for w x h: the same vertical field, so a wider picture shows more at
+      // the sides and a narrower one less (never stretched)
+      const was = [W, H, focal];
+      W = w; H = h; focal = h / 2 / Math.tan(FOV / 2);
+      const out = document.createElement('canvas');
+      out.width = w; out.height = h;
+      let R2 = null;
+      try {
+        basis();
+        const t = performance.now(), F = frameParams(t), g = growK(t);
+        const stage = f3(rgb(DEFAULTS.stage)), shellC = f3(rgb(V3 ? V3C.glass : DEFAULTS.rim));
+        Object.assign(F, {
+          pal: night, palCore: V3 ? night.map((p) => p.map((v) => Math.round(v + (255 - v) * 0.15))) : night,
+          colors: { stage, body: V3 ? shellC : f3(rgb(DEFAULTS.body)), rim: shellC, node: f3(rgb(DEFAULTS.node)), glow: true },
+          fogK: V3 ? SV.fog * Math.log(5) / Rb : F.fogK, dof: [cam.dist, Rb * 0.9, V3 ? SV.dof : 0], selP: FAR,
+          shellK: F.shellK / (1 - (1 - SPOT_DIM) * g), shimmer: 0, pulse: 0, flash: 0, breath: 0, pop: 0, wave: WAVE0, waveK: 0 });
+        const c2 = R.kind === 'webgl2' ? document.createElement('canvas') : out;
+        if (c2 !== out) { try { R2 = glRenderer(c2, S2); } catch (err) { R2 = null; } }
+        if (!R2) R2 = canvasRenderer(out, S2);
+        R2.resize(w, h, 1);
+        R2.setTint(new Uint8Array(4), 0);
+        R2.setFibres();
+        R2.draw(F);
+        // read back in the same task, before the GPU canvas is ever presented (no preserveDrawingBuffer)
+        if (R2.kind === 'webgl2') out.getContext('2d').drawImage(c2, 0, 0);
+      } finally {
+        if (R2) R2.destroy();
+        [W, H, focal] = was;
+        basis();
+      }
+      return { canvas: out, pages, areas: on.size };
     }
 
     function fly(to, ms, orbitAfter) {
@@ -3432,6 +3501,8 @@ void main() {
 
     return {
       get renderer() { return R.kind; },
+      // Save picture: {canvas, pages, areas} (see picture()), or null before the first layout
+      picture,
       // for a remount: the view, the selected page, spin and the Growth month, and whether a
       // pointer is down or the camera still moving (a flight, a zoom, a flick: a remount waits)
       get camera() { const o = {}; for (const k of CAM) o[k] = cam[k]; return o; },
