@@ -271,12 +271,15 @@ def make_vault(job, path: str) -> tuple[Path, dict]:
         raise ValueError(f"{root} is a file; pick a folder.")
     job.say(f"setting up {root}")
     did, skipped, warned = cli._init(root, default=True)
+    from cortex import taint  # the pointer may have kept the current vault (a temp folder asked)
+    kept = Path(taint.config().get("vault") or root).resolve()
     from cortex import doctor
     if (sync := doctor.check_onedrive(root))[0] != "PASS":
         warned.append(f"{sync[2]}: {sync[3]}")
     for line in [*did, *warned]:
         job.say(str(line))
-    return root, {"ok": True, "lines": [str(x) for x in [*did, *warned]][-100:]}
+    return kept, {"ok": True, "vault": str(kept), "kept": kept != root,
+                  "lines": [str(x) for x in [*did, *warned]][-100:]}
 
 
 def _cortex() -> str:

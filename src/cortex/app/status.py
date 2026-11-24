@@ -21,7 +21,10 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from cortex.vault import VaultError
+from cortex.vault import VaultError, in_temp_folder
+
+TEMP_VAULT = ("This vault is in a temporary folder. Windows can empty it at any time. "
+              "Use Change folder to pick your real vault.")
 
 log = logging.getLogger(__name__)
 LOGIN_TASK = "Cortex browse receiver"
@@ -107,7 +110,7 @@ def vault(root: Path | None) -> dict:
     if root is None:
         return {"path": None, "ok": False}
     ok = (root / ".cortex").is_dir()
-    return {"path": str(root), "ok": ok, "exists": root.is_dir(),
+    return {"path": str(root), "ok": ok, "exists": root.is_dir(), "temp": in_temp_folder(root),
             "notes": notes(root) if ok else 0,
             "last_index": indexed(root),
             "backups": len(list((root / ".cortex" / "backups").glob("*.zip"))) if ok else 0,
@@ -494,11 +497,15 @@ def rows(root: Path | None) -> list[dict]:
                     "detail": "Cortex keeps your notes in a folder you choose.",
                     "action": _go("setup", "Set up")})
     else:
-        out.append({"id": "vault", "label": "Vault", "state": "ok" if v["ok"] else "warn",
+        hot = v["ok"] and v["temp"]
+        out.append({"id": "vault", "label": "Vault",
+                    "state": "ok" if v["ok"] and not hot else "warn",
                     "value": v["path"], "count": v["notes"],
-                    "detail": (f"{v['notes']} notes; last indexed {v['last_index'] or 'not yet'}"
+                    "detail": (TEMP_VAULT if hot else
+                               f"{v['notes']} notes; last indexed {v['last_index'] or 'not yet'}"
                                if v["ok"] else "This folder is not a Cortex vault yet."),
-                    "action": None if v["ok"] else _go("setup", "Set up")})
+                    "action": _go("vault", "Change folder") if hot else
+                    None if v["ok"] else _go("setup", "Set up")})
     if v["ok"] and (row := archive_row(root)):
         out.append(row)
     out.append(git_row())
