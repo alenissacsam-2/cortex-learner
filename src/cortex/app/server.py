@@ -68,7 +68,8 @@ URL_ONLY = re.compile(r"https?://\S+", re.I)  # a quick-capture line that is one
 PAGE_ROWS = 20  # the private chats list, a page at a time
 PORT = 47615  # tried first: one origin across launches keeps the page's theme and brain style
 QUERY_GETS = {"/api/chat/get", "/api/chat/passage", "/api/home",  # GETs that read the query
-              "/api/home/delta", "/api/home/site", "/api/status", "/api/browse/private-chats"}
+              "/api/home/delta", "/api/home/site", "/api/status", "/api/browse/private-chats",
+              "/api/chat/pages"}
 CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
        "frame-ancestors 'none'")
 EXPIRED = (b"<!doctype html><meta charset=utf-8><title>Cortex</title><p>This link has no valid "
@@ -308,7 +309,7 @@ class App:
                     "/api/llm": self.llm, "/api/browse": self.browse, "/api/vault": self.vault,
                     "/api/setup": self.setup, "/api/chat": self.chat_state,
                     "/api/chat/list": self.chat_list, "/api/chat/get": self.chat_get,
-                    "/api/chat/passage": self.chat_passage,
+                    "/api/chat/passage": self.chat_passage, "/api/chat/pages": self.chat_pages,
                     "/api/chat/settings": self.chat_settings_get,
                     "/api/update": self.update_state, "/api/job": self.jobs.view,
                     "/api/review": self.review, "/api/xray": self.xray,
@@ -870,11 +871,56 @@ class App:
             return Cortex(Vault(root)).tidy()
 
     def review(self) -> dict:
-        """The Review view and its badge count (cortex.review); shown text only."""
+        """The Review view and its badge count (cortex.review); shown text only. UX-B: each
+        card about a page carries `related` (`_related`)."""
         from cortex import review
         from cortex.events import EventLog
         v = self._vault()
-        return review.view(v, EventLog(v).iter_events(), self._today())
+        evs = list(EventLog(v).iter_events())
+        return self._related(v, review.view(v, evs, self._today()), evs)
+
+    # ---- UX-B: "#" pages in Chat, related pages beside Review cards ----
+    RELATED = 3
+    CARDS = ("pending", "expired", "stale", "rules", "imports", "unsafe", "outside", "crowded",
+             "promote")  # the Review boards whose cards name their `page`
+
+    def chat_pages(self, query: dict) -> dict:
+        """The "#" list (?q=): pages Chat may read now whose title holds the words
+        (`chat.pick_list`); {pages: [{id, title, kind}]}."""
+        from cortex import chat
+        q = (query.get("q") or [""])[0][:200]
+        return {"pages": chat.pick_list(self._vault(), q, chat.get_settings()["sources"])}
+
+    def _related(self, v, view: dict, evs: list) -> dict:
+        """Each card with a `page` gets `related`: [{title, path}] of up to RELATED pages linked
+        with it (its [[links]] either way: the edges arm of `semantic.linked`, the cheap one;
+        the name arms cost ~180 ms a page at 5k), most links first, then by id; never the
+        card's own, a rollup, a hub or a quieted page. Chat's kept index holds no private
+        page, so none is listed (a card on a private page has none)."""
+        from cortex import chat, chat_study, harvest, semantic
+        from cortex.topics import is_hub
+        cards = [x for k in self.CARDS for x in view.get(k) or []
+                 if isinstance(x.get("page"), str)]
+        # never build Chat's index (~3 s at 5k) just for Review: before Chat's first use, no line
+        if not cards or chat._INDEX.get(v.root) is None:
+            return view
+        quiet, got = harvest.quiet(evs), {}
+        with chat._INDEX_LOCK:
+            idx = chat._index(v, chat.FRESH)
+            paths = {i: p for p, i in idx._ids.items()}
+            for page in {x["page"] for x in cards}:
+                n: dict = {}
+                for i, _ in semantic._neighbours(idx, page):
+                    note = idx._notes.get(i)
+                    if i != page and i in paths and note and note["kind"] != "rollup" \
+                            and not is_hub(note) and quiet.get(i) != 0:
+                        n[i] = n.get(i, 0) + 1
+                got[page] = [{"title": chat_study._title(idx._notes[i]["title"]) or i,
+                              "path": idx._rel(paths[i])}
+                             for i in sorted(n, key=lambda i: (-n[i], i))[:self.RELATED]]
+        for x in cards:
+            x["related"] = got[x["page"]]
+        return view
 
     def _click(self, tool: str, method: str, kwargs: dict, card: str | None = None,
                producer: str | None = None) -> dict:
@@ -2551,7 +2597,8 @@ def _handler(app: App):
                 # attached file (C1) is asked like any question: the person asked, so the
                 # configured local model may start, as for every Chat turn
                 files = app.files.get(body.get("files"))
-                chat.reply(vault, cid, text, localllm.find, emit, cancel, files=files)
+                chat.reply(vault, cid, text, localllm.find, emit, cancel, files=files,
+                           pages=body.get("pages"))  # UX-B: ids picked with "#"
             except Exception as e:  # noqa: BLE001  (the type only: a message could quote a page)
                 emit({"t": "err", "code": "internal",
                       "message": f"internal error ({type(e).__name__})"})

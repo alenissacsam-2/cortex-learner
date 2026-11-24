@@ -569,7 +569,7 @@
   const DATA_EXAMPLES = ['Which sites did I visit yesterday?', 'What should I study today?', 'What is due for review?', 'Where am I weak?'];
   const KIND = { note: 'note', chat: 'chat', browse: 'browsing', file: 'file' };
   const chatS = { d: null, id: null, msgs: [], els: [], remembers: 0, draft: '', busy: null, setOpen: false, focus: false, follow: true, pill: null,
-    files: [], reading: null, fileErr: null };
+    files: [], reading: null, fileErr: null, pages: [] };
   const last = (e) => e.childNodes[e.childNodes.length - 1];
 
   function inline(text, cite) {  // **bold**, `code` and [n] citations; everything else is text
@@ -755,9 +755,88 @@
     const box = $('chat-files');
     if (chatS.d) chatS.d.files = chatS.files;
     if (!box) return;
-    box.replaceChildren(...chatS.files.map(fileLine),
+    box.replaceChildren(...chatS.files.map(fileLine), ...chatS.pages.map(pageLine),
       chatS.reading ? h('p', { class: 'help', text: `Reading ${chatS.reading}…` }) : '',
       chatS.fileErr ? h('p', { class: 'help', role: 'alert', text: chatS.fileErr }) : '');
+  }
+  // UX-B: "#" in the message box lists pages to hand Chat (the server's chat.pick_list); a
+  // picked page is a line beside the files' and goes with the next message as `pages`
+  const PAGES_MAX = 3;
+  const pk = { open: false, rows: [], at: 0, start: -1, shut: -1, timer: null, seq: 0 };
+  function pageLine(p) {
+    return h('p', { class: 'help chat-file' }, h('span', { text: p.title }), ' ',
+      btn('Remove', () => { chatS.pages = chatS.pages.filter((x) => x !== p); drawFiles(); }, 'btn quiet', { 'aria-label': `Remove ${p.title}` }));
+  }
+  function hashAt(ta) {  // the "#words" just before the caret: at the start or after a space
+    const end = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+    const m = /(^|\s)#([^#\n]{0,60})$/.exec(ta.value.slice(0, end));
+    return m ? { start: m.index + m[1].length, end, q: m[2] } : null;
+  }
+  function pkDraw(ta) {
+    const list = $('chat-pk');
+    if (!list) return;
+    pk.open = pk.rows.length > 0;
+    list.hidden = !pk.open;
+    ta.setAttribute('aria-expanded', String(pk.open));
+    list.replaceChildren(...pk.rows.map((r, i) => h('li', { id: 'chat-pk-' + i, role: 'option', class: 'pk-row', 'aria-selected': String(i === pk.at),
+      onmousedown: (e) => e.preventDefault(), onclick: () => pkPick(ta, i) },  // the box keeps focus
+    h('span', { class: 'pk-t', text: r.title }), h('span', { class: 'pk-k', text: r.kind }))));
+    if (pk.open) ta.setAttribute('aria-activedescendant', 'chat-pk-' + pk.at);
+    else ta.removeAttribute('aria-activedescendant');
+    if (pk.open && ta.getBoundingClientRect) {  // under the box; above it when the window has no room below
+      const room = window.innerHeight - ta.getBoundingClientRect().bottom;
+      list.classList[room < pk.rows.length * 34 + 12 ? 'add' : 'remove']('up');
+    }
+  }
+  function pkClose(ta) {
+    pk.seq += 1;  // a search still on its way is dropped
+    clearTimeout(pk.timer);
+    pk.rows = [];
+    pkDraw(ta);
+  }
+  function pkInput(ta) {
+    const at = hashAt(ta);
+    if (!at) pk.shut = -1;
+    if (!at || at.start === pk.shut) { pkClose(ta); return; }  // Esc closed this "#" for good
+    clearTimeout(pk.timer);
+    const seq = ++pk.seq;
+    pk.timer = setTimeout(async () => {
+      let rows = [];
+      try { rows = (await api('/api/chat/pages?q=' + encodeURIComponent(at.q))).pages || []; } catch (e) { /* no list */ }
+      if (seq !== pk.seq) return;  // typed on, or closed, meanwhile
+      Object.assign(pk, { rows: rows.slice(0, 8), at: 0, start: at.start });
+      pkDraw(ta);
+    }, 120);
+  }
+  function pkPick(ta, i) {
+    const r = pk.rows[i], at = hashAt(ta);
+    pkClose(ta);
+    pk.shut = -1;
+    if (!r) return;
+    if (!chatS.pages.some((p) => p.id === r.id)) {
+      if (chatS.pages.length >= PAGES_MAX) { toast('Up to 3 pages'); return; }
+      chatS.pages = [...chatS.pages, { id: r.id, title: r.title }];
+    }
+    if (at) {  // the "#words" go; the page is a line above the box instead
+      ta.value = chatS.draft = ta.value.slice(0, at.start) + ta.value.slice(at.end);
+      if (ta.setSelectionRange) ta.setSelectionRange(at.start, at.start);
+    }
+    drawFiles();
+    ta.focus();
+  }
+  function pkKey(e, ta) {  // true: the open list took the key (Enter never sends then)
+    if (!pk.open || e.isComposing) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      pk.at = (pk.at + (e.key === 'ArrowDown' ? 1 : -1) + pk.rows.length) % pk.rows.length;
+      pkDraw(ta);
+    } else if (e.key === 'Enter' || e.key === 'Tab') pkPick(ta, pk.at);
+    else if (e.key === 'Escape') {  // the text stays as typed; an answer streaming goes on
+      pk.shut = pk.start;
+      pkClose(ta);
+      if (e.stopPropagation) e.stopPropagation();
+    } else return false;
+    e.preventDefault();
+    return true;
   }
   function dropFiles() {  // the chat is cleared: its files leave the app's memory too
     if (!chatS.files.length) return;
@@ -796,7 +875,7 @@
 
   async function openChat(id) {
     if (chatS.busy) return;
-    if (!id) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0 }); }
+    if (!id) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0, pages: [] }); }
     else {
       try {
         const r = await api('/api/chat/get?id=' + encodeURIComponent(id));
@@ -900,14 +979,17 @@
     const need = missing.length ? missingRows(missing, d.llm_error ? `The local model is not used: ${d.llm_error}` : null) : null;
     let foot;
     {
-      const ta = h('textarea', { id: 'chat-input', rows: '1', value: chatS.draft, placeholder: 'Message Cortex', 'aria-label': 'Message', spellcheck: 'true' });
+      const ta = h('textarea', { id: 'chat-input', rows: '1', value: chatS.draft, placeholder: 'Message Cortex', 'aria-label': 'Message', spellcheck: 'true',
+        'aria-controls': 'chat-pk', 'aria-expanded': 'false' });
       const grow = () => { ta.rows = String(Math.min(6, Math.max(1, ta.value.split('\n').length))); };
       grow();
-      ta.addEventListener('input', () => { chatS.draft = ta.value; grow(); });
+      ta.addEventListener('input', () => { chatS.draft = ta.value; grow(); pkInput(ta); });
+      ta.addEventListener('blur', () => pkClose(ta));
       const go = h('button', { class: 'btn lit chat-send', type: 'button', id: 'chat-send', text: 'Send' });
       // a Stop within 400 ms of sending is a double click on Send, not a Stop (Esc still stops)
       go.addEventListener('click', () => (!chatS.busy ? send(ta, go, log) : Date.now() - chatS.busy.t0 > 400 ? chatS.busy.ctrl.abort() : null));
       ta.addEventListener('keydown', (e) => {
+        if (pkKey(e, ta)) return;
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!chatS.busy) send(ta, go, log); }
       });
       // shown while an answer streams and the reader has scrolled up: jumps to the end
@@ -915,7 +997,8 @@
       const pickF = h('input', { type: 'file', id: 'chat-file', accept: '.pdf,.docx,.txt,.md', hidden: true });
       pickF.addEventListener('change', () => { const f = pickF.files && pickF.files[0]; pickF.value = ''; attachFile(f); });
       foot = h('div', { class: 'composer' }, chatS.pill, h('div', { id: 'chat-files' }),
-        h('div', { class: 'crow' }, ta, btn('Attach a file', () => pickF.click()), go, pickF),
+        h('div', { class: 'crow' }, ta, btn('Attach a file', () => pickF.click()), go, pickF,
+          h('ul', { id: 'chat-pk', class: 'pk-list', role: 'listbox', 'aria-label': 'Pages to attach', hidden: true })),
         h('p', { class: 'help', text: missing.length ? 'Runs on this computer. Nothing leaves it.' : `Runs on this computer with ${d.model || 'your local model'}. Nothing leaves it.` }));
     }
     const main = h('div', { class: 'chat-main' }, h('div', { class: 'chat-bar' }, pick, settingsPanel(d.settings)), need, log, foot);
@@ -966,13 +1049,19 @@
     ta.value = chatS.draft = '';
     ta.rows = '1';
     ta.focus();
+    pkClose(ta);
+    pk.shut = -1;
+    const pages = chatS.pages;  // the picked pages go with this message only
+    chatS.pages = [];
+    drawFiles();
     go.textContent = 'Stop';
     go.setAttribute('aria-label', 'Stop the answer');
     let failed = null;
     try {
       const r = await fetch('/api/chat', {
         method: 'POST', headers: { 'X-Cortex-Token': T, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: chatS.id, text, ...(chatS.files.length ? { files: chatS.files.map((f) => f.id) } : {}) }), signal: ctrl.signal,
+        body: JSON.stringify({ id: chatS.id, text, ...(chatS.files.length ? { files: chatS.files.map((f) => f.id) } : {}),
+          ...(pages.length ? { pages: pages.map((p) => p.id) } : {}) }), signal: ctrl.signal,
       });
       if (!r.ok) {
         let data = {};
@@ -1023,6 +1112,8 @@
         chatS.msgs.pop();
         chatS.els.pop();
         ta.value = chatS.draft = text;
+        chatS.pages = pages;  // and its pages, to send again
+        drawFiles();
       }
       ta.focus({ preventScroll: true });
       return;
@@ -1713,10 +1804,18 @@
     const where = (x) => (PAGE[x.page] || x.page) + (x.section ? ` · ${x.section}` : '');
     const two = (y, n) => ({ y, n });  // [button, function] for Y and N
     const kb = (text, fn, cls, label) => { const b = btn(text, fn, cls, { 'aria-label': label }); return [b, fn]; };
+    // UX-B: a muted line under a card's text naming up to 3 pages linked with its page (the
+    // server's `related`), each opening the page in Obsidian; no line when there are none
+    const rel = (el, x) => {
+      const r = x.related || [];
+      if (r.length) el.querySelector('.t').append(h('span', { class: 'sub related' }, 'Related: ',
+        ...r.flatMap((p, i) => [i ? ', ' : '', btn(p.title, () => post('/api/open', { what: 'page', path: p.path }), 'linkbtn', { 'aria-label': `Open in Obsidian: ${p.title}` })])));
+      return el;
+    };
     const pendingCard = (p, id) => {
       const y = kb('Approve', () => act('/api/review/approve', { key: p.key }, 'Approved.'), 'btn lit', `Approve: ${p.text}`);
       const n = kb('Dismiss', () => act('/api/review/dismiss', { key: p.key }, 'Dismissed. It will not be suggested again.'), null, `Dismiss: ${p.text}`);
-      return card(p.text, where(p), p.since ? `Suggested ${p.since}` : null, [y[0], n[0]], two(y, n), id);
+      return rel(card(p.text, where(p), p.since ? `Suggested ${p.since}` : null, [y[0], n[0]], two(y, n), id), p);
     };
     const conflictCard = (c, id) => {
       const both = kb('Keep both', () => act('/api/review/conflict', { key: c.key, keep: 'both' }, 'Kept both.'), null, `Keep both: ${c.left.text} and ${c.right.text}`);
@@ -1729,7 +1828,7 @@
     const ruleCard = (x, id) => {
       const y = kb('Approve', () => act('/api/review/rule/approve', { key: x.key }, x.page === 'core' ? 'Added to your core lines.' : 'Added to your preferences.'), 'btn lit', `Approve: ${x.text}`);
       const n = kb('Dismiss', () => act('/api/review/rule/dismiss', { key: x.key }, 'Dismissed. It will not be suggested again.'), null, `Dismiss: ${x.text}`);
-      return card(`You told ${x.chats} chats: ${x.text}`, x.page === 'core' ? 'Core' : 'Preferences', null, [y[0], n[0]], two(y, n), id);
+      return rel(card(`You told ${x.chats} chats: ${x.text}`, x.page === 'core' ? 'Core' : 'Preferences', null, [y[0], n[0]], two(y, n), id), x);
     };
     const retire = (x) => kb('Retire', () => act('/api/review/retire', { id: x.id }, 'Retired.'), null, `Retire: ${x.text}`);
     // G6: a line AI apps are not given until Keep it; Keep it out retires it to ## Past
@@ -1739,15 +1838,15 @@
       // G5b-6: a command to run that an AI app wrote
       const said = x.command ? `An AI app wrote this line in me/${x.page}, and it holds a command to run: ${x.what}. AI apps don't get it until you keep it.`
         : `This line in me/${x.page} ${x.invisible ? 'holds invisible characters' : 'looks like an instruction to an AI'}: ${x.what}. Keep it out, or Keep it.`;
-      return card(x.text, said, null, [r[0], y[0]], { r, y }, id);
+      return rel(card(x.text, said, null, [r[0], y[0]], { r, y }, id), x);
     };
     // R5a: a line on me/core, me/setup or the teaching contract Cortex did not write; AI apps get it only after Keep
     const outsideCard = (x, id) => {
       const y = kb('Keep', () => act('/api/review/outside/keep', { key: x.key }, 'Kept. AI apps get the line from now on.'), null, `Keep: ${x.text}`);
       const r = kb('Remove', () => act('/api/review/outside/remove', { key: x.key }, 'Removed. AI apps do not get it.'), null, `Remove: ${x.text}`);
-      return card(x.text, `Changed outside Cortex: keep? me/${x.page}` + (x.section ? ` · ${x.section}` : ''), 'AI apps do not get this line until you keep it.', [y[0], r[0]], { y, r }, id);
+      return rel(card(x.text, `Changed outside Cortex: keep? me/${x.page}` + (x.section ? ` · ${x.section}` : ''), 'AI apps do not get this line until you keep it.', [y[0], r[0]], { y, r }, id), x);
     };
-    return { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard };
+    return { where, two, kb, rel, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard };
   }
   // R3-4's Today's 5 board (Review and Tonight): the view's `today` keys as cards, skips left out;
   // D4: once none is left, the board says Done for today
@@ -1777,7 +1876,7 @@
     badge(d.count);
     const act = (path, body, said) => post(path, body, (r) => { renderReview(r); toast.ok(said); });
     const m = reviewCards(act);
-    const { where, two, kb, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard } = m;
+    const { where, two, kb, rel, pendingCard, conflictCard, ruleCard, retire, unsafeCard, outsideCard } = m;
     // D4: every board but Today's 5 sits folded under one section, closed until opened; the fold
     // leaves out the cards Today's 5 shows above and counts only what it holds
     const above = new Set((d.today || []).map((t) => `${t.type}:${t.key}`).filter((k) => !reviewSkipped.has(k)));
@@ -1795,18 +1894,18 @@
       'Nothing is waiting.')),
       board('Past their end date', { note: String(d.expired.length) }, ...list(d.expired.map((x) => {
         const r = retire(x);
-        return card(x.text, where(x), `Ended ${x.until}`, [r[0]], { r });
+        return rel(card(x.text, where(x), `Ended ${x.until}`, [r[0]], { r }), x);
       }), 'No line is past its end date.')),
       board('Still true?', { note: String(d.stale.length) }, ...list(d.stale.map((x) => {
         const y = kb('Still true', () => act('/api/review/still', { id: x.id }, 'Kept.'), 'btn lit', `Still true: ${x.text}`), r = retire(x);
-        return card(x.text, where(x), `Last confirmed ${x.since}`, [y[0], r[0]], { y, r });
+        return rel(card(x.text, where(x), `Last confirmed ${x.since}`, [y[0], r[0]], { y, r }), x);
       }), 'Nothing to check this month.')),
       // G7: lines the X-ray shows cut for space in most primes (Keep pins them), and playbooks no AI app was served
       board('Rarely reach your apps: still worth keeping?', { note: String((d.crowded || []).length) }, ...list((d.crowded || []).filter((x) => !reviewSkipped.has(`crowded:${x.id}`)).map((x) => {
         const id = `crowded:${x.id}`;
         const y = kb('Keep', () => act('/api/review/crowded/keep', { id: x.id }, 'Kept and pinned: AI apps get it first.'), 'btn lit', `Keep and pin: ${x.text}`), r = retire(x);
         const s = btn('Skip', () => { reviewSkipped.add(id); renderReview(lastReview); }, null, { 'aria-label': `Skip: ${x.text}`, 'aria-keyshortcuts': 'S' });
-        return card(x.text, where(x), `Cut for space in ${x.cut} of the ${x.seen} primes that offered it, in the last ${x.window} primes`, [y[0], r[0], s], { y, r }, id);
+        return rel(card(x.text, where(x), `Cut for space in ${x.cut} of the ${x.seen} primes that offered it, in the last ${x.window} primes`, [y[0], r[0], s], { y, r }, id), x);
       }), 'No line is crowded out.')),
       board('Still how you do this?', { note: String((d.unused || []).length) }, ...list((d.unused || []).filter((x) => !reviewSkipped.has(`unused:${x.id}`)).map((x) => {
         const y = kb('Keep', () => act('/api/review/playbook/keep', { id: x.id }, 'Kept. Asked again in 60 days.'), 'btn lit', `Keep: ${x.title}`);
@@ -1817,7 +1916,7 @@
       ...(d.promote || []).filter((x) => !reviewSkipped.has(`promote:${x.id}`)).map((x) => board('You keep coming back to this. Pin it to Core?', { note: '1' }, (() => {
         const y = kb('Pin to Core', () => act('/api/review/promote/pin', { id: x.id }, 'Added to your core lines.'), 'btn lit', `Pin to Core: ${x.text}`);
         const n = kb('Not now', () => act('/api/review/promote/later', { id: x.id }, 'Not asked again for 6 months.'), null, `Not now: ${x.text}`);
-        return card(x.text, where(x), null, [y[0], n[0]], two(y, n), `promote:${x.id}`);
+        return rel(card(x.text, where(x), null, [y[0], n[0]], two(y, n), `promote:${x.id}`), x);
       })())),
       board('Lines that may conflict', { note: String(pairs.length) }, ...list(pairs.map((c) => conflictCard(c)),
       'No lines seem to conflict.')),
@@ -1839,7 +1938,7 @@
       }), 'Nothing to forget.')),
       board('Imported notes you edited', { note: String((d.imports || []).length) }, ...list((d.imports || []).map((x) => {
         const n = kb('Dismiss', () => act('/api/review/import/dismiss', { key: x.key }, 'Dismissed. Both pages stay as they are.'), null, `Dismiss: ${x.title}`);
-        return card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n });
+        return rel(card(x.title, `Your edited page ${x.page} is kept; the changed file came in as ${x.new}`, x.private ? 'private' : null, [n[0]], { n }), x);
       }), 'No edited imports.')),
       board('Lines that may steer an AI', { note: String(unsafe.length) }, ...list(unsafe.map((x) => unsafeCard(x)),
       'No line looks like an instruction to an AI.')),
