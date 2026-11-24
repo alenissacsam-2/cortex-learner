@@ -642,15 +642,15 @@ def test_in_use_is_grouped_in_plain_words():
             (41, d + r"\uv.exe")]
     parents = {11: 5, 12: 11, 13: 12, 21: 6, 31: 7, 41: 8}
     assert sp.group_in_use(busy, parents) == [
-        "Claude's Cortex connection (1)", "the Cortex window (1)", "the browsing receiver (1)",
-        "other Cortex programs (1)"]
+        "Claude's Cortex connection (1)", "The Cortex window (1)", "The browsing receiver (1)",
+        "Other Cortex programs (1)"]
     two = [(11, d + r"\bin\cortex.exe"), (12, d + r"\BIN\CORTEX.EXE"),
            (13, d + r"\bin\cortex-app.exe")]
     assert sp.group_in_use(two, {}) == ["Claude's Cortex connection (2)",
-                                        "the Cortex window (1)"]
+                                        "The Cortex window (1)"]
     assert sp.group_in_use([], {}) == []
     loop = [(1, d + r"\bin\cortex.exe"), (2, d + r"\tools\python.exe")]
-    assert sp.group_in_use(loop, {1: 2, 2: 1}) == ["other Cortex programs (2)"]  # pid reuse
+    assert sp.group_in_use(loop, {1: 2, 2: 1}) == ["Other Cortex programs (2)"]  # pid reuse
 
 
 def test_the_window_icon_is_bundled_and_found(tmp_path, monkeypatch):
@@ -660,6 +660,8 @@ def test_the_window_icon_is_bundled_and_found(tmp_path, monkeypatch):
     args = build.data(tmp_path / "payload")
     pairs = [args[i + 1] for i, a in enumerate(args) if a == "--add-data"]
     assert f"{ICO}{os.pathsep}." in pairs and build.ICON == ICO and ICO.is_file()
+    assert args[args.index("--icon") + 1] == str(ICO)  # CortexSetup.exe's own icon too
+    assert "*data(payload)" in (ROOT / "installer" / "build.py").read_text()  # in the command
     assert setup_app.icon_path() == ICO  # from source
     (tmp_path / "cortex.ico").write_bytes(ICO.read_bytes())
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)

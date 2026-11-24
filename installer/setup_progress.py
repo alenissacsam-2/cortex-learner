@@ -133,8 +133,8 @@ def elapsed(seconds: float) -> str:
 
 # ---- the programs that keep Cortex in use ---------------------------------------------------
 
-CONNECTION, WINDOW, RECEIVER, OTHER = ("Claude's Cortex connection", "the Cortex window",
-                                       "the browsing receiver", "other Cortex programs")
+CONNECTION, WINDOW, RECEIVER, OTHER = ("Claude's Cortex connection", "The Cortex window",
+                                       "The browsing receiver", "Other Cortex programs")
 
 
 def kind(path: str) -> str:
