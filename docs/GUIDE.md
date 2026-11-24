@@ -8,6 +8,8 @@ It has two jobs:
 
 Cortex acts only when a chat (or you, in the app or a terminal) asks it to. The one exception is browsing: after your first browsing import, the app and the receiver import new history by themselves every few hours (section 6).
 
+**Welcome guide.** The first time you open the Cortex app, a small dialog walks you through it in six steps: what Cortex is, picking the folder for your notes (your vault), connecting your AI apps (you see the exact files first), the optional extras (the search model, your history, a local model), where each page is in the sidebar, and a first question for Chat. Every step can be skipped, and a step you already did elsewhere shows Done. Once you finish or skip it, it does not open by itself again; reopen it any time with **Show the welcome guide** on the Setup page or in Home's Help.
+
 ---
 
 ## 1. What happens without you doing anything

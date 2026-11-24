@@ -3348,6 +3348,10 @@
     const prose = el('div', 'prose');
     prose.append(el('p', null, `${greeting()}. Here is everything Cortex can do.`),
       el('p', 'muted', 'This page is read-only: buttons copy a command to paste into Claude; Claude does every write.'));
+    const wg = el('a', null, 'Show the welcome guide'), wgP = el('p', null, 'New to Cortex? ');
+    wg.href = '/manage#welcome';  // the app's step-by-step first-run dialog
+    wgP.append(wg);
+    prose.append(wgP);
     host.append(prose);
     const h = D.help || {};
     if (!h.commands_md) {

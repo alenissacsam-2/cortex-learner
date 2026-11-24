@@ -358,7 +358,8 @@ class App:
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
             "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
             "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
-            "/api/app/hotkey": self.hotkey_set, "/api/capture/hide": self.capture_hide,
+            "/api/app/welcome": self.welcome_set, "/api/app/hotkey": self.hotkey_set,
+            "/api/capture/hide": self.capture_hide,
             "/api/review/approve": self.review_approve, "/api/review/dismiss": self.review_dismiss,
             "/api/review/still": self.review_still, "/api/review/retire": self.review_retire,
             "/api/review/conflict": self.review_conflict,
@@ -1535,12 +1536,14 @@ class App:
 
     def setup(self) -> dict:
         from cortex import chats, cli, importers
+        from cortex.app import desktop
         if self.warming not in (None, threading.current_thread()):
             self.warming.join()  # the warm-up is asking the same probes: wait, not ask twice
         return {**wizard.state(self.root, self.scanned),
                 "connect": [{k: t[k] for k in ("id", "label", "detected", "connected")}
                             for t in targets.describe(self.entry())],
                 "first_prompts": list(cli.FIRST_PROMPTS), "connect_skipped": _connect_skipped(),
+                "welcome_done": desktop._app_cfg().get("welcome_done") is True,
                 "guides": {**chats.GUIDES, **importers.GUIDES},
                 "imports": status.imports(self.root if self.entry() else None),
                 "watched": self._watched()}
@@ -1808,6 +1811,15 @@ class App:
         on = _bool(body, "enabled")
         desktop._merge_app(lambda a: {**a, "chat_import": on})
         return {"enabled": chat_import.enabled()}
+
+    def welcome_set(self, body: dict) -> dict:
+        """The welcome guide was finished or skipped (`app.welcome_done`); it never opens by
+        itself again. Like first_run_hidden, only true is accepted."""
+        from cortex.app import desktop
+        if body != {"welcome_done": True}:
+            raise ValueError("welcome_done can only be true")
+        desktop._merge_app(lambda a: {**a, "welcome_done": True})
+        return {"welcome_done": True}
 
     def chat_begin(self, body: dict) -> tuple:
         """Check a chat turn and take the one chat slot: (vault, id or None, text). Busy while

@@ -749,6 +749,171 @@ def test_setup_shows_numbered_steps_with_progress(root_committed, tmp_path, monk
     assert five["marks"][5] == "6" and five["current"] == ["Try it"]
 
 
+WELCOME = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const S = () => DATA.routes['/api/setup'];
+const wgBtn = (text) => $('wg-body').querySelectorAll('button').find((b) => b.textContent === text);
+const state = () => ({ open: !!$('welcome').open, count: $('wg-count').textContent, current: $('wg-count').getAttribute('aria-current'),
+  title: $('wg-title').textContent, next: $('wg-next').textContent, back: $('wg-back').hidden, done: !$('wg-state').hidden,
+  now: $('wg-bar').getAttribute('aria-valuenow') });
+const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome').map((f) => f.body);
+(async () => {
+  try {
+    location.hash = DATA.hash || '';
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    out.boot = state();
+    if (DATA.walk) {
+      $('wg-skip').fire('click');  // Skip for now: closed, recorded once
+      await tick();
+      out.skipped = [state().open, welcomes()];
+      $('welcome-open').fire('click');  // Setup's header (Home's Help opens #welcome) reopens it at step 1
+      await tick();
+      out.reopened = state();
+      out.walk = [];
+      for (let i = 0; i < 5; i++) { $('wg-next').fire('click'); await tick(); out.walk.push(state()); }
+      $('wg-back').fire('click');
+      await tick();
+      out.walk.push(state());
+      out.tour = [$('wg-body').querySelectorAll('h3').map((x) => x.textContent),
+        $('wg-body').querySelectorAll('button').map((b) => b.getAttribute('aria-label'))];
+      for (let i = 0; i < 4; i++) { $('wg-back').fire('click'); await tick(); }
+      // step 2, no vault yet: the field holds Setup's default; Use this folder runs Setup's own job
+      S().vault.done = false;
+      $('wg-next').fire('click');
+      await tick();
+      out.vault = { state: state(), value: $('wg-path').value };
+      $('wg-path').value = 'D:\\My notes';
+      $('wg-path').fire('input');
+      wgBtn('Use this folder').fire('click');
+      await tick();
+      out.vault.posts = fetched.filter((f) => f.path === '/api/setup/vault').map((f) => f.body);
+      // the vault set up elsewhere: the step reads it and counts as done
+      S().vault.done = true;
+      $('wg-next').fire('click'); await tick();
+      $('wg-back').fire('click'); await tick();
+      out.vaultDone = { state: state(), text: $('wg-body').textContent };
+      // step 3: one app found; Connect asks with Connect's own plan and confirm, then applies it alone
+      $('wg-next').fire('click');
+      await tick();
+      out.connect = { text: $('wg-body').textContent };
+      $('wg-body').querySelectorAll('button').find((b) => b.getAttribute('aria-label') === 'Connect X').fire('click');
+      await tick();
+      out.connect.dialog = $('confirm').open ? $('confirm-title').textContent : null;
+      out.connect.applied = fetched.some((f) => f.path === '/api/connect/apply');
+      $('confirm-ok').onclick();
+      await tick();
+      out.connect.posts = fetched.filter((f) => f.path.startsWith('/api/connect/')).map((f) => [f.path, f.body]);
+      // step 4: a done extra says Done; the others open their Setup step
+      S().embed.done = true;
+      $('wg-next').fire('click');
+      await tick();
+      out.extras = $('wg-body').querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent, r.querySelector('.acts').textContent]);
+      // step 6: the question goes to Chat
+      $('wg-next').fire('click'); await tick();
+      $('wg-next').fire('click'); await tick();
+      $('wg-q').value = 'What did I learn about heaps?';
+      wgBtn('Ask').fire('click');
+      await tick();
+      out.ask = { open: state().open, chat: !$('s-chat').hidden,
+        sent: fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body.text), welcomes: welcomes() };
+      // a page named in step 5 closes the guide and opens that page
+      $('welcome-open').fire('click'); await tick();
+      for (let i = 0; i < 4; i++) { $('wg-next').fire('click'); await tick(); }
+      $('wg-body').querySelectorAll('button').find((b) => b.getAttribute('aria-label') === 'Open Status').fire('click');
+      await tick();
+      out.toured = [state().open, !$('s-status').hidden];
+    }
+    if (DATA.finish) {
+      for (let i = 0; i < 5; i++) { $('wg-next').fire('click'); await tick(); }
+      out.last = state();
+      $('wg-next').fire('click');  // Finish
+      await tick();
+      out.finished = [state().open, welcomes()];
+    }
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
+        root_committed, tmp_path, monkeypatch):
+    """WG: on a first run the guide opens by itself at step 1 (not once welcome_done is set);
+    Next and Back move through six steps; Skip and Finish record welcome_done; Setup's header
+    and Home's Help link (#welcome) reopen it; step 2 runs /api/setup/vault with the typed path;
+    step 3 connects one app through Connect's plan, confirm and apply; a done step shows Done;
+    step 6 sends the question in a new Chat."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    setup = routes["/api/setup"]
+    assert setup["welcome_done"] is False and setup["vault"]["done"] is True
+    setup["connect"] = [{"id": "x", "label": "X", "detected": True, "connected": False}]
+    setup["embed"]["done"] = False
+    routes["/api/chat"]["chats"] = []
+    routes["/api/chat/list"] = {"chats": []}
+    out = _run(node, tmp_path, "welcome", WELCOME, {"routes": routes, "walk": True, "stream": [
+        json.dumps({"t": "start", "id": CHAT_ID, "model": "m"}) + "\n"
+        + json.dumps({"t": "done", "id": CHAT_ID, "model": "m", "seconds": 1}) + "\n"]})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    step1 = {"open": True, "count": "Step 1 of 6", "current": "step", "title": "Welcome to Cortex",
+             "next": "Let’s start", "back": True, "done": False, "now": "1"}
+    assert out["boot"] == step1
+    assert out["skipped"] == [False, [{"welcome_done": True}]]
+    assert out["reopened"] == step1
+    assert [(s["count"], s["title"], s["next"], s["back"]) for s in out["walk"]] == [
+        ("Step 2 of 6", "Your vault", "Next", False),
+        ("Step 3 of 6", "Connect your AI apps", "Next", False),
+        ("Step 4 of 6", "Optional extras", "Next", False),
+        ("Step 5 of 6", "Where things are", "Next", False),
+        ("Step 6 of 6", "Try it", "Finish", False),
+        ("Step 5 of 6", "Where things are", "Next", False)]
+    assert out["tour"] == [["Every day", "Your setup", "Check"], [
+        "Open Home", "Open Tonight", "Open Chat", "Open Review", "Open Setup", "Open Connect AI apps",
+        "Open Local model", "Open Browsing", "Open Status", "Open Agent X-ray",
+        "Open Dashboard and vault"]]
+    assert out["vault"]["state"]["done"] is False
+    assert out["vault"]["value"] == str(root_committed)  # what Setup's vault step offers
+    assert out["vault"]["posts"] == [{"path": "D:\\My notes"}]
+    assert out["vaultDone"]["state"]["done"] is True
+    assert f"Your notes are in {root_committed}" in out["vaultDone"]["text"]
+    assert "Restart an app after connecting it." in out["connect"]["text"]
+    assert out["connect"]["dialog"] == "Apply these changes?"
+    assert out["connect"]["applied"] is False  # nothing written before the confirm
+    assert out["connect"]["posts"] == [["/api/connect/plan", {"want": {"x": True}}],
+                                       ["/api/connect/apply", {"want": {"x": True}}]]
+    assert out["extras"] == [["Search model", "✓ Done"], ["Your history", "Open in Setup"],
+                             ["Local model", "Open in Setup"]]
+    assert out["ask"] == {"open": False, "chat": True, "sent": ["What did I learn about heaps?"],
+                          "welcomes": [{"welcome_done": True}]}  # recorded once, at the Skip
+    assert out["toured"] == [False, True]
+
+    setup["welcome_done"] = True  # finished or skipped before: never by itself again
+    out = _run(node, tmp_path, "welcome2", WELCOME, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["boot"]["open"] is False
+
+    setup["welcome_done"] = False  # Setup done (an app connected): not by itself; #welcome opens it
+    setup["connect"][0]["connected"] = True
+    out = _run(node, tmp_path, "welcome3", WELCOME, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["boot"]["open"] is False
+    out = _run(node, tmp_path, "welcome4", WELCOME, {"routes": routes, "stream": [],
+                                                     "hash": "#welcome", "finish": True})
+    assert out["errors"] == [] and out["boot"] == step1
+    assert out["last"]["next"] == "Finish"
+    assert out["finished"] == [False, [{"welcome_done": True}]]
+
+
+def test_homes_help_links_to_the_welcome_guide():
+    """WG: Home's Help (dashboard.js) reopens the guide through /manage#welcome."""
+    js = (server.ASSETS.parent / "dashboard.js").read_text(encoding="utf-8")
+    help_ = js[js.index("function renderHelp()"):]
+    assert "'/manage#welcome'" in help_[:help_.index("\n  }\n")]
+
+
 def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):
     """A job with `progress` (server.Job.progress) reads "Step 3 of 5 · checking titles ·
     42% · about 2 min left" and fills its bar to the overall share; without, the moving bar."""

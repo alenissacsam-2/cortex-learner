@@ -305,6 +305,8 @@
         if (!j || (initial && !j.running)) break;  // on open: only a job still running
         initial = false;
         showJob(j);
+        const wl = wg.mine && $('wg-job');  // the welcome guide's own job: its line in the dialog too
+        if (wl) { wg.job = j; const n = wgJobLine(); wl.className = n.className; wl.textContent = n.textContent; }
         if (!j.running) { finish(j); break; }
         await sleep(600);
         await shown();
@@ -332,6 +334,10 @@
   function finish(j) {
     if (jobFailed(j)) toast.error(j.error || `${j.name}: failed.`);
     else if (j.name === 'Start at login') toast.ok('The receiver now starts at login.');  // server.login's job name
+    if (wg.mine) {  // the welcome guide's job ended: the step reads the new state
+      Object.assign(wg, { mine: false, job: j });
+      if (wg.open) wgLoad();
+    }
     if (guide && guide.wait && j.section === 'setup') {  // a guided import's own job: shown in its panel
       const w = guide.wait;
       guide.wait = null;
@@ -1006,6 +1012,7 @@
     chatS.d = d;
     if (chatS.busy) return;  // never rebuild under a streaming answer
     if (!d.vault) {
+      chatS.ask = false;
       $('chat').replaceChildren(board('Chat', {}, row('No vault yet', null, 'Set one up first.', [btn('Open Setup', () => show('setup', true))])));
       return;
     }
@@ -1058,6 +1065,10 @@
     drawFiles();
     if (chatS.focus && $('chat-input')) $('chat-input').focus();
     chatS.focus = false;
+    if (chatS.ask) {  // the welcome guide's question: sent as Enter sends it
+      chatS.ask = false;
+      send($('chat-input'), $('chat-send'), log);
+    }
   }
 
   // the page follows a streaming answer only while the reader is at the bottom; scrolled up,
@@ -2385,6 +2396,150 @@
   }
   let setupWas = null;  // the last Setup progress drawn: its fill value and its text
 
+  /* ---- the welcome guide: a first-run dialog, one step at a time. Every action is Setup's or
+     Connect's own route and job; every state comes from /api/setup (`wg.d`) ---- */
+  const WG_N = 6;
+  const wg = { step: 1, d: null, open: false, done: false, mine: false, job: null, path: null };
+  const wgConnected = (d) => d.connect.some((t) => t.connected);
+  const WG_EXTRAS = [['embed', 'Search model', (d) => `Finds notes by meaning; ${d.embed.size}, once.`, (d) => d.embed.done],
+    ['history', 'Your history', () => 'Old AI chats, notes and calendars.', (d) => d.history.done || Object.values(d.imports).some((x) => x.count)],
+    ['llm', 'Local model', () => 'A small AI on this computer for Chat.', (d) => d.test.done]];
+  const WG_TOUR = [
+    ['Every day', [['home', 'Home', 'What is due and your brain.'], ['tonight', 'Tonight', 'Close the day and see what comes tomorrow.'],
+      ['chat', 'Chat', 'Ask about your notes.'], ['review', 'Review', 'What Cortex wants you to check.']]],
+    ['Your setup', [['setup', 'Setup', 'These steps, any time.'], ['connect', 'Connect AI apps', 'Which apps use Cortex.'],
+      ['llm', 'Local model', 'The small AI for Chat.'], ['browse', 'Browsing', 'Your browser history, kept on this computer.']]],
+    ['Check', [['status', 'Status', 'Each part of Cortex, and what needs you.'], ['xray', 'Agent X-ray', 'What each AI app was given.'],
+      ['vault', 'Dashboard and vault', 'Your notes folder, backups and checks.']]]];
+  function wgOpen(at, d) {
+    const dlg = $('welcome');
+    Object.assign(wg, { step: at || 1, open: true });
+    if (d) wg.d = d;
+    if (!dlg.open) dlg.showModal();
+    wgDraw();
+    $('wg-next').focus();
+    return d ? null : wgLoad();
+  }
+  async function wgLoad() {
+    try { wg.d = await api('/api/setup'); } catch (e) { /* api() said why; the step keeps what it had */ }
+    if (wg.open) wgDraw();
+  }
+  // Finish, Skip for now, Esc, the corner button, or a page opened from the guide: never by itself again
+  function wgClosed() {
+    if (!wg.open) return;
+    wg.open = false;
+    if (!wg.done) { wg.done = true; post('/api/app/welcome', { welcome_done: true }); }
+  }
+  function wgClose() {
+    $('welcome').close();  // the browser puts focus back where it was before the guide opened
+    wgClosed();
+  }
+  function wgGo(s) {  // a page from the guide: close it, then open the page
+    wgClose();
+    if (s === 'home') location.assign('/');
+    else show(s, true);
+  }
+  // the job this guide started (the vault, a Connect): its line in the step, as the job line says it
+  function wgJobLine() {
+    const j = wg.job, p = h('p', { class: 'wg-job', id: 'wg-job', role: 'status' });
+    if (!j) return p;
+    const r = j.result || {};
+    if (j.running) p.textContent = `${j.name}… ${j.line || ''}`;
+    else if (jobFailed(j)) { p.classList.add('bad'); p.textContent = `${j.name}: failed. ${j.error || (r.lines || [])[0] || ''}`; }
+    else p.textContent = `${j.name}: done.`;
+    return p;
+  }
+  function wgSteps(d) {
+    const wait = [note('Loading…')];
+    return [
+      ['Welcome to Cortex', 'Cortex is your second brain on this computer. It keeps what you learn, decide and read as notes in one folder, and gives your AI apps (Claude, ChatGPT, Cursor and others) what they need to know about you, so you stop repeating yourself. Nothing leaves this computer unless you say so.',
+        false, [h('p', { class: 'wg-sub', text: 'What happens next:' }),
+          h('ol', { class: 'how' }, ['Pick a folder for your notes.', 'Connect your AI apps.', 'Ask Cortex a question.'].map((t) => h('li', { text: t })))]],
+      ['Your vault', 'Your vault is one folder on this computer where Cortex keeps your notes, as plain text files that Obsidian can open too.',
+        !!d && d.vault.done, !d ? wait : d.vault.done
+          ? [h('p', { class: 'wg-ok' }, h('span', { class: 'done-mark', text: '✓' }), ' Your notes are in ', h('span', { class: 'mono', text: d.vault.path })), wgJobLine()]
+          : (() => {
+            const moved = d.vault.moved;
+            const path = h('input', { type: 'text', id: 'wg-path', value: wg.path ?? (moved ? '' : d.vault.path || d.vault.default),
+              placeholder: moved ? 'The folder’s new location' : null, spellcheck: 'false' });
+            path.addEventListener('input', () => { wg.path = path.value; });
+            const use = () => { wg.mine = true; wg.job = null; return job('/api/setup/vault', { path: path.value }); };
+            path.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); use(); } });
+            return [moved ? h('p', { class: 'help', text: `Cortex used ${d.vault.path}, which is not there any more. Type the folder’s new location, or a new folder to start an empty vault.` }) : null,
+              h('div', { class: 'field' }, h('label', { for: 'wg-path', text: 'The folder for your notes' }),
+                h('div', { class: 'inline' }, path, btn('Use this folder', use, 'btn lit')),
+                h('p', { class: 'help', text: 'Cortex adds its own folders and a history there, and never changes notes you already have.' })),
+              wgJobLine()];
+          })()],
+      ['Connect your AI apps', 'Connecting lets an AI app read what Cortex knows about you and save what you teach it. You see the exact files first, and each one is backed up.',
+        !!d && wgConnected(d), !d ? wait : (() => {
+          const apps = d.connect.filter((t) => t.detected || t.connected);
+          const one = (t) => {
+            const want = { [t.id]: true };  // this app only: the others stay as they are
+            return post('/api/connect/plan', { want }, (p) => {
+              if (!p.rows.length) { toast('Nothing to change.'); return; }
+              confirmChanges(p.rows, () => { wg.mine = true; wg.job = null; job('/api/connect/apply', { want }); });
+            });
+          };
+          return [...(apps.length ? apps.map((t) => row(t.label, null, t.connected ? 'Connected.' : 'Found on this computer; not connected.',
+            [t.connected ? h('span', { class: 'done-mark', text: '✓ Connected' })
+              : btn('Connect', () => one(t), 'btn lit', { 'aria-label': `Connect ${t.label}`, disabled: !d.vault.done })]))
+            : [row('No AI app found on this computer', null, 'Install one, then come back to this step.', [ext('https://claude.ai/download', 'Get Claude Desktop')])]),
+          !d.vault.done && apps.length ? h('p', { class: 'help', text: 'Set up your vault first (step 2): each app is pointed at it.' }) : null,
+          h('p', { class: 'help', text: 'Restart an app after connecting it.' }), wgJobLine()];
+        })()],
+      ['Optional extras', 'Each of these is optional. Add them now or any time later from Setup.',
+        !!d && WG_EXTRAS.every((x) => x[3](d)), !d ? wait : WG_EXTRAS.map(([id, title, why, done]) => row(title, null, why(d),
+          [done(d) ? h('span', { class: 'done-mark', text: '✓ Done' })
+            : btn('Open in Setup', () => { opened.add(id); wgGo('setup'); }, 'btn', { 'aria-label': `Open in Setup: ${title}` })]))],
+      ['Where things are', 'Every page is in the sidebar on the left, in three groups.', false,
+        [h('div', { class: 'wg-tour' }, WG_TOUR.flatMap(([group, items]) => [h('h3', { text: group }),
+          h('ul', {}, items.map(([s, name, what]) => h('li', {}, btn(name, () => wgGo(s), 'linkbtn', { 'aria-label': `Open ${name}` }), h('span', { text: what }))))]))]],
+      ['Try it', 'Ask Cortex something about your notes. Chat answers on this computer and shows the pages it used.', false, (() => {
+        const q = h('input', { type: 'text', id: 'wg-q', spellcheck: 'true' });
+        const ask = () => {
+          const text = q.value.trim();
+          if (!text) { q.focus(); return; }
+          wgClose();
+          // a new chat with the question sent, as a Chat example fills the box and Enter sends it
+          if (!chatS.busy) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0, pages: [], draft: text, focus: true, ask: true }); }
+          show('chat', true);
+        };
+        q.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ask(); } });
+        return [h('div', { class: 'field' }, h('label', { for: 'wg-q', text: 'Ask Cortex something about your notes' }),
+          h('div', { class: 'inline' }, q, btn('Ask', ask, 'btn lit')))];
+      })()]];
+  }
+  function wgDraw() {
+    const n = wg.step, a = document.activeElement, body = $('wg-body');
+    const keep = a && a.id && body.contains(a) ? a.id : null;  // a redraw keeps focus on the same field
+    const [title, lead, done, kids] = wgSteps(wg.d)[n - 1];
+    $('wg-count').textContent = `Step ${n} of ${WG_N}`;
+    $('wg-count').setAttribute('aria-current', 'step');
+    $('wg-state').hidden = !done;
+    $('wg-bar').setAttribute('aria-valuenow', String(n));
+    $('wg-fill').style.setProperty('--f', String(n / WG_N));
+    $('wg-title').textContent = title;
+    body.replaceChildren(h('p', { class: 'wg-lead', id: 'wg-desc', text: lead }), ...kids.filter(Boolean));
+    const lost = a === $('wg-back') && n === 1;
+    $('wg-back').hidden = n === 1;
+    $('wg-next').textContent = n === 1 ? 'Let’s start' : n === WG_N ? 'Finish' : 'Next';
+    if (keep && $(keep)) $(keep).focus();
+    else if (lost || (a && body.contains(a))) $('wg-next').focus();
+  }
+  function wgMove(by) {
+    wg.step = Math.min(WG_N, Math.max(1, wg.step + by));
+    wgDraw();
+    if (wg.step >= 2 && wg.step <= 4) wgLoad();  // a step done elsewhere meanwhile shows Done
+  }
+  $('wg-x').append(icon('x'));
+  $('wg-x').addEventListener('click', wgClose);
+  $('wg-skip').addEventListener('click', wgClose);
+  $('wg-back').addEventListener('click', () => wgMove(-1));
+  $('wg-next').addEventListener('click', () => (wg.step === WG_N ? wgClose() : wgMove(1)));
+  $('welcome').addEventListener('close', wgClosed);  // Esc closes it as Skip does
+  $('welcome-open').addEventListener('click', () => wgOpen(1));
+
   const RENDER = { tonight: renderTonight, setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 
   /* ---- header: wordmark, theme, quit, nav ---- */
@@ -2431,6 +2586,14 @@
   } else if (SECTIONS.includes(want)) show(want);
   else if (SECTIONS.includes(lastSection)) show(lastSection);
   else { landing = true; show('status'); }
+  // the welcome guide: Home's Help link (#welcome) opens it at step 1; by itself once, on a first
+  // run (no vault, or Setup's key steps not done) until it is finished or skipped
+  if (want === 'welcome') wgOpen(1);
+  api('/api/setup').then((d) => {
+    if (!d.vault) return;  // no setup state in the answer: never open on a guess
+    wg.done = d.welcome_done;
+    if (!wg.open && !d.welcome_done && (!d.vault.done || !(d.connect_skipped || wgConnected(d)))) wgOpen(1, d);
+  }, () => {});
   idle();
   poll(true);
   if (current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});  // the nav's count; no vault yet: none
