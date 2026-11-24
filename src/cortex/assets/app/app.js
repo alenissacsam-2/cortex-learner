@@ -260,6 +260,8 @@
       acts && acts.length ? h('div', { class: 'acts' }, ...acts) : null);
   }
   function note(text) { return h('p', { class: 'pad ink-2', text }); }
+  // the vault's note count, in words (Status's vault row, Dashboard and vault's Notes row)
+  const noteCount = (n) => h('span', { class: 'count', text: `${Number(n).toLocaleString('en-US')} note${Number(n) === 1 ? '' : 's'}` });
   function fail(s, msg) {
     $(s).replaceChildren(board('Not available', {}, note(msg)));
   }
@@ -292,7 +294,8 @@
       $('jobline').style.setProperty('--pct', `${p.overall}%`);
       $('jobline').style.setProperty('--f', String(p.overall / 100));  // the bar is scaleX(--f), app.css
     }
-    $('job-line').textContent = p ? stepText(p) : j.running ? j.line : (j.error || '');
+    // a finished job's error is the toast's (finish), so it shows once; the line says only "failed"
+    $('job-line').textContent = p ? stepText(p) : j.running ? j.line : '';
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
     $('job-cancel').hidden = !(j.running && j.cancellable);
   }
@@ -500,7 +503,7 @@
           h('div', { class: 'line1' }, h('span', { class: 'ttl', text: r.label }), h('span', { class: 'val', text: fill(r.value), title })),
           h('span', { class: 'sub', text: fill(r.detail) }),
           r.login_hint ? h('span', { class: 'sub', text: LOGIN_HINT }) : null),
-        h('div', { class: 'acts' }, r.count != null ? dm(String(r.count), 2, String(r.count)) : null,
+        h('div', { class: 'acts' }, r.count != null ? noteCount(r.count) : null,
           r.import && r.import.length ? btn('Import new history now', () => job('/api/browse/import', { sources: r.import, from: 'browse' }), 'btn lit') : null,
           r.login_hint ? loginBtn() : null,
           r.resume ? btn('Resume', () => post('/api/review/resume', { producer: r.resume }, () => { toast.ok('Resumed: Review offers these cards again.'); load('status'); }), 'btn lit', { 'aria-label': `Resume: ${r.value}` }) : null,
@@ -1251,7 +1254,8 @@
       return h('div', { class: 'brow trow' + (t.detected || t.connected ? '' : ' off') }, cb,
         h('div', { class: 't' },
           h('div', { class: 'line1' }, h('label', { class: 'ttl', for: 'cb-' + t.id, text: t.label }),
-            t.connected ? h('span', { class: 'code-tag', text: 'Connected' }) : null),
+            t.stale ? h('span', { class: 'code-tag warn', text: 'Out of date' })
+              : t.connected ? h('span', { class: 'code-tag', text: 'Connected' }) : null),
           h('span', { class: 'sub', text: sub + (t.error ? ` ${t.error}` : '') }),
           paste ? h('span', { class: 'sub', text: t.paste }) : null,
           priv ? h('label', { class: 'check' }, priv, h('span', { text: 'Include private browsing search (this computer only)' })) : null,
@@ -1332,7 +1336,7 @@
       h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: title })),
         h('span', { class: 'sub', text: sub }), checks(list, title, key)));
     return board('Agent profiles', { note: 'what each AI app may read' },
-      ...data.profiles.map((p, i) => prow(`Apps named “${p.match}”`, 'The first name that matches the app wins.', p.scopes, i)),
+      ...data.profiles.map((p, i) => prow(`Apps whose name contains “${p.match}”`,'The first name that matches the app wins.', p.scopes, i)),
       prow('Any other app', 'Apps no name above matches.', data.unknown, 'other'),
       h('div', { class: 'foot', text: 'core: your pinned lines. projects: your project pages. learning: also the teaching contract. Each other scope: that section of your preferences. personal: your profile, goals, journal, people and past chats.' }),
       h('div', { class: 'foot', text: 'Private pages never go to an AI app over MCP, under any profile.' }));
@@ -1839,12 +1843,12 @@
           h('span', { class: 'sub', text: 'Open Connect AI apps and click Apply to move them.' })),
         h('div', { class: 'acts' }, btn('Open Connect AI apps', () => show('connect', true), 'btn lit'))) : null,
       h('div', { class: 'brow' }, h('div', { class: 't' }, h('div', { class: 'line1' }, h('span', { class: 'ttl', text: 'Notes' })),
-        h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, dm(String(d.notes), 3, `${d.notes} notes`))),
+        h('span', { class: 'sub', text: `Last indexed ${d.last_index || 'not yet'}.` })), h('div', { class: 'acts' }, noteCount(d.notes))),
       row('Snapshot', null, 'One page of your notes and the 3D brain that opens without Cortex. Private items are never in it.',
         [btn('Export snapshot', exportSnapshot)]),
       row('Backups', d.backups ? `${d.backups}, last ${d.last_backup}` : 'none yet', 'A zip of the whole vault in .cortex/backups. Copy it to another drive now and then.',
         [btn('Back up vault', () => job('/api/vault/backup', {}))]),
-      row('Health', null, 'Checks Python, the vault folder, git and a few common problems.', [btn('Run doctor', () => job('/api/vault/doctor', {}))])),
+      row('Health', null, 'Checks that Cortex and your notes folder are working, and finds common problems.', [btn('Check for problems', () => job('/api/vault/doctor', {}))])),
       gitBoard(d.git || { enabled: true, private_browsing: false }));
   }
   function gitBoard(g) {
@@ -2372,7 +2376,7 @@
       moved ? row('Did you move your vault?', null, `Cortex used ${d.vault.path}, which is not there any more. Paste the folder’s new location below, or a new folder to start an empty vault.`, null) : null,
       h('div', { class: 'field' }, h('label', { for: 'vault-path', text: 'The folder for your notes' }),
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
-        h('p', { class: 'help', text: 'Cortex adds its own folders and a git history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
+        h('p', { class: 'help', text: 'Cortex adds its own folders and a history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
       gi && !gi.found && gi.enabled !== false ? row('Git (history and undo)', 'not installed', 'Without git, Cortex keeps no history of your vault, so undo does nothing. Free.',
         gi.install.run ? [btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})), ext(gi.install.license, 'License')] : [ext(gi.install.page, 'Get Git')]) : null], first);
 
@@ -2523,7 +2527,8 @@
     if (!j || wg.at !== wg.step) return p;
     const r = j.result || {};
     if (j.running) p.textContent = `${j.name}… ${j.line || ''}`;
-    else if (jobFailed(j)) { p.classList.add('bad'); p.textContent = `${j.name}: failed. ${j.error || (r.lines || [])[0] || ''}`; }
+    // j.error is the toast's (finish): said once, so this line names only the failure
+    else if (jobFailed(j)) { p.classList.add('bad'); p.textContent = `${j.name}: failed.${j.error ? '' : ` ${(r.lines || [])[0] || ''}`}`.trim(); }
     else p.textContent = `${j.name}: done.`;
     return p;
   }
@@ -2578,6 +2583,7 @@
         const q = h('input', { type: 'text', id: 'wg-q', spellcheck: 'true', placeholder: 'For example: what do you know about me?' });
         const ask = () => {
           const text = q.value.trim() || 'What do you know about me?';
+          q.value = '';  // sent: the field is empty if the guide is seen again
           wgClose();
           // a new chat with the question sent, as a Chat example fills the box and Enter sends it
           if (!chatS.busy) { dropFiles(); Object.assign(chatS, { id: null, msgs: [], remembers: 0, pages: [], draft: text, focus: true, ask: true }); }
@@ -2678,6 +2684,8 @@
     else wgOpen(1, d);
   };
   api('/api/app/welcome').then((w) => {
+    // the nav's Review count, only once a vault exists (without one /api/review answers 400)
+    if (w.vault && current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});
     if (typeof w.welcome_done !== 'boolean' || w.welcome_done || wg.open) { wg.done = w.welcome_done === true; return null; }
     if (!w.vault) return wgAuto();
     return api('/api/setup').then((d) => {
@@ -2686,7 +2694,6 @@
   }).catch(() => {});
   idle();
   poll(true);
-  if (current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});  // the nav's count; no vault yet: none
   // the app starts the automatic history import by itself: the job line shows it within 15 s
   setInterval(() => { if (!dead && !document.hidden) poll(true); }, 15000);
   document.addEventListener('visibilitychange', () => { if (!dead && !document.hidden) poll(true); });  // shown again: the job line at once
