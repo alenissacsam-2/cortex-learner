@@ -103,6 +103,8 @@ setTimeout(() => {
   await send('Page.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: fs.readFileSync(cfg.helpers, 'utf8') });
   await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+  // a headless page is not focused, so focus() fires no focus event unless this says it is
+  if (cfg.focus) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   if (cfg.narrow) await send('Emulation.setDeviceMetricsOverride', { width: cfg.narrow, height: 812, deviceScaleFactor: 1, mobile: false });
   const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
@@ -812,8 +814,12 @@ MIRROR_SHOT = r"""
   if (document.documentElement.dataset.theme !== 'THEME') document.getElementById('theme').click();
   await new Promise((r) => setTimeout(r, 100));
   const live = document.querySelector('.mm-bar.live');
-  live.closest('.board').scrollIntoView({ block: 'start' });
   live.focus();
+  const top = live.closest('.board').previousElementSibling.getBoundingClientRect().top;  // its h2
+  window.scrollBy(0, top - document.getElementById('top').getBoundingClientRect().bottom - 8);
+  live.blur();
+  live.focus();  // its tooltip again, where the bar is now
+  await new Promise((r) => setTimeout(r, 100));
 })()
 """
 
@@ -851,12 +857,14 @@ def test_the_mind_mirror_shows_how_your_mind_changed(tmp_path, narrow):
     page.write_text(dashboard.snapshot(Vault(_mirror_vault(tmp_path)), now=NOW), encoding="utf-8")
     shots = [] if narrow else [[MIRROR_SHOT.replace("THEME", t), str(tmp_path / f"mirror-{t}.png")]
                                for t in ("night", "day")]
-    out = _run(tmp_path, page, probe=MIRROR_PROBE, shots=shots,
+    out = _run(tmp_path, page, probe=MIRROR_PROBE, shots=shots, focus=True,
                **({"narrow": narrow} if narrow else {}))
     assert out["errors"] == []
     p = out["probe"]
-    heads = p["heads"]  # after the first grid, before Your pages
-    assert heads.index("How your mind changed") == heads.index("Your pages") - 1
+    heads = p["heads"]  # after the first grid, its board's band, then Your pages
+    i = heads.index("How your mind changed")
+    assert heads[i - 1:i + 3] == ["How well Cortex knows you", "How your mind changed",
+                                  "Lines and decisions you replaced", "Your pages"]
     assert p["band"] == ["Lines and decisions you replaced", "11 changes"]
     if narrow:  # under 560 px: the list first; the timeline fits the page too
         assert p["narrow"] == {"rows": 8, "lanes": 0, "toggle": "Show as a timeline",

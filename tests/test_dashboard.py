@@ -429,7 +429,7 @@ def test_loops_and_you_hold_no_private_text(root):
     assert [r["id"] for r in d["follow_ups"]] == ["pick-db"]
     assert "pick-db" in {r["id"] for r in d["resurface"]}
     you = d["you"]
-    assert set(you) == {"know", "unconfirmed"}
+    assert set(you) == {"know", "unconfirmed", "changes"}
     assert {"page": "personality", "private": True} in you["know"]["pages"]
     text = json.dumps(d)
     assert "Secret" not in text and "<i>" not in text and "<b>" not in text
