@@ -1018,7 +1018,7 @@ def _names(id: str, title: str, also: list[str] = ()) -> list[tuple[str, ...]]:
     """The words a page is named by in other pages' text: its title without a trailing
     "(…)" ("Paper (PDF)" is said "Paper") and an id with a hyphen and a letter; a one-word
     name only of 5+ characters. R13d: `also` (its `aliases:`) are names too, of 2+ characters
-    (an owner chose them: "IITH" names the page), matched as whole words like the rest."""
+    (an owner chose them: "DSA" names the page), matched as whole words like the rest."""
     out = []
     for name in (re.sub(r"\s*\([^)]*\)\s*$", "", title), id if "-" in id and re.search(
             r"[^\W\d_]", id) else ""):

@@ -344,13 +344,13 @@ def _page(vault, rel, front, body):
 def _aliased(vault):
     _page(vault, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
           "# K-Graph\n\nA learner model.")
-    _page(vault, "people/iit-hyderabad.md",
-          "title: IIT Hyderabad\nkind: person\nprivate: false\naliases: IITH\n",
-          "# IIT Hyderabad\n\nMy college.")
+    _page(vault, "people/northwest-tech.md",
+          "title: Northwest Tech\nkind: person\nprivate: false\naliases: NWTU\n",
+          "# Northwest Tech\n\nMy college.")
     _page(vault, "people/ana.md", "title: Ana\nkind: person\naliases: [Zorbina]\n",
           "# Ana\n\nA friend.")  # a people page is private unless it says private: false
     _page(vault, "notes/mentions.md", "title: Mentions\n",
-          "# Mentions\n\nCortex and IITH, said in passing.")
+          "# Mentions\n\nCortex and NWTU, said in passing.")
     _page(vault, "notes/hidden.md", "title: Hidden\nprivate: true\naliases: [Zorblax]\n",
           "# Hidden\n\nA secret.")
 
@@ -359,7 +359,7 @@ def test_an_alias_finds_any_page_kind_as_its_title_does(vault):
     _aliased(vault)
     idx = Index(vault, Catalog.load(vault))
     assert ids(idx.find("Cortex"))[0] == "k-graph"  # a list alias, ranked over a mention
-    assert ids(idx.find("iith"))[0] == "iit-hyderabad"  # one string, any case
+    assert ids(idx.find("nwtu"))[0] == "northwest-tech"  # one string, any case
     assert ids(idx.find("K-Graph"))[0] == "k-graph"  # the title still
     assert idx.title_matches("Cortex", "project") == ["k-graph"]
     # a private page's alias does not reveal it
@@ -375,12 +375,12 @@ def test_aliases_hold_after_a_snapshot_load(vault):
     idx = Index(vault, Catalog.load(vault))
     assert idx._parsed == 0  # every page came from the snapshot
     assert ids(idx.find("Cortex"))[0] == "k-graph"
-    assert ids(idx.find("IITH"))[0] == "iit-hyderabad"
+    assert ids(idx.find("NWTU"))[0] == "northwest-tech"
     assert idx.find("Zorblax") == []
 
 
 def test_aliases_are_read_as_a_list_or_one_string():
     from cortex.index import aliases
     assert aliases({"aliases": ["Cortex", " ", None, "KG "]}) == ["Cortex", "KG"]
-    assert aliases({"aliases": "IITH"}) == ["IITH"]
+    assert aliases({"aliases": "NWTU"}) == ["NWTU"]
     assert aliases({}) == [] and aliases({"aliases": None}) == []
