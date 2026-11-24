@@ -441,11 +441,27 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
 
 @app.command()
 def doctor(vault: VaultOpt = None, privacy: Annotated[bool, typer.Option(
-        "--privacy", help="Print only where Cortex connects.")] = False) -> None:
+        "--privacy", help="Print only where Cortex connects.")] = False,
+        security: Annotated[bool, typer.Option(
+            "--security", help="Fire five memory attacks at a throwaway made-up vault "
+            "(never your notes) and say PASS or FAIL for each.")] = False) -> None:
     """Check Python/FTS5, the search model, PATH, the local model, OneDrive and the vault git,
-    then list where Cortex connects; exit 1 on any FAIL."""
+    then list where Cortex connects; exit 1 on any FAIL. --security: the offline red team
+    (cortex.redteam) instead."""
     if privacy:
         typer.echo("\n".join(doctor_mod.connects()))
+        return
+    if security:
+        from cortex import redteam
+
+        probes = redteam.run()
+        for p in probes:
+            typer.echo(p.line())
+        bad = sum(not p.ok for p in probes)
+        typer.echo(f"\n{len(probes) - bad} of {len(probes)} attacks stopped"
+                   + (f"; {bad} got through." if bad else "."))
+        if bad:
+            raise typer.Exit(1)
         return
     results = [doctor_mod.check_python(), doctor_mod.check_duplicate_servers(),
                doctor_mod.check_exclude(), doctor_mod.check_search_model(),

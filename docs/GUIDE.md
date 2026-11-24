@@ -127,6 +127,7 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex harvest status` | Harvest progress |
 | `cortex undo <session>` | Reverts one chat's changes |
 | `cortex doctor` | Health check, including which Claude apps are connected and when each last called Cortex, and per import source the page-length quartiles and the share of pages that are mostly links or numbers only (numbers only, never page text) |
+| `cortex doctor --security` | A self-test of Cortex's memory guards ([below](#the-security-self-test)) |
 | `cortex lint` / `cortex relink` | Find vault problems / fix the Obsidian links |
 | `cortex agent-text` | Every fixed text Cortex shows an AI app, with its size per app |
 | `cortex rollups [--since YYYY-MM]` | Writes the week, month and year summary pages in `rollups/` (below). The app also does this every 10 minutes |
@@ -138,6 +139,10 @@ Run these in any terminal. From a source checkout, prefix `uv run`.
 | `cortex kill` | Emergency stop for anything that acts as you |
 
 `cortex --help` lists everything.
+
+### The security self-test
+
+Whatever Cortex stores goes to every AI app you use, so a planted line would follow you from chat to chat. `cortex doctor --security` checks that the guards against this still hold, end to end, on the Cortex you have installed. It fires five attacks and prints PASS or FAIL for each: an AI app saving an image whose link would carry your text out, an imported chat telling every app to always recommend a product, an AI app saving a "playbook" that runs a command or sends your keys out, a line written into `me/core.md` behind Cortex's back, and something you told Cortex to forget (`cortex forget`) still readable somewhere on disk. Each attack runs on a made-up vault in a temporary folder that is deleted afterwards. Your own notes and settings are never read or changed, nothing goes online and no model is loaded. It exits with 1 if any attack gets through and names the guard that let it.
 
 ### Importing your history
 

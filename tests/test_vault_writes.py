@@ -26,6 +26,7 @@ ALLOWED = {
     "browse/store.py": "browse page zips: temp + os.replace under the browse job lock",
     "chats.py": "imported chat logs in the chats export folder (~/.cortex), not vault pages",
     "cli.py": "--out files the owner names and the model-ready mark in ~/.cortex/models",
+    "redteam.py": "P2's made-up chat export in the red team's own temp folder, not a vault file",
     "taint.py": "~/.cortex/config.yaml under its own lock (temp + os.replace)",
     "update.py": "the downloaded installer and its checksum in the update folder",
     "zotero.py": "copies Zotero's database into a temp folder to read it; never the vault",
