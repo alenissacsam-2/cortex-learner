@@ -323,9 +323,21 @@ a.icon-btn { color: inherit; }
 .seg button:hover { color: var(--lit); }
 .seg button[aria-pressed="true"]:hover { color: var(--band-ink); }
 .tbtn[aria-pressed="true"] { background: var(--band); color: var(--band-ink); border-color: var(--lit); }
-.scrub { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; font-size: 12.5px; color: var(--ink-2); }
+.scrub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; flex: 1 1 100%; font-size: 12.5px; color: var(--ink-2); }
+.scrub-row { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; flex-wrap: wrap; }
 .scrub input { flex: 1; min-width: 120px; accent-color: var(--lit); }
 .scrub output { color: var(--ink); min-width: 70px; }
+.scrub-span { display: inline-flex; gap: 4px; }
+.scrub-bars { display: flex; gap: 2px; align-items: flex-end; height: 32px; flex: 1 1 100%; }
+.scrub-bars .sb { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: pointer; }
+.scrub-bars .sb i { display: block; width: 100%; background: var(--ink-3); }
+.scrub-bars .sb.on i { background: var(--lit); }
+.home-brain > .scrub { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+.lens-bar { display: inline-flex; gap: 8px; align-items: center; }
+.lens-note { color: var(--ink-2); font-size: 12.5px; }
+.lens-note b { color: var(--ink); font-weight: 600; }
+:root[data-theme="day"] .lens-note, :root[data-theme="day"] .lens-note b { color: var(--band-ink); }
+.act[aria-pressed="true"] { color: var(--lit); border-color: var(--edge); }
 .band-tools { display: flex; gap: 6px; align-items: center; }
 .band-tools .seg { border-color: var(--band-ink); }
 .band-tools .seg button { color: var(--band-ink); padding: 2px 8px; }
