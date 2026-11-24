@@ -483,7 +483,7 @@
     cb.addEventListener('change', () => post('/api/app/chat-import', { enabled: cb.checked }, () => savedMark(cb)));
     return board('Past AI chats', {},
       h('div', { class: 'field' }, h('label', { class: 'check', for: 'chat-import' }, cb, h('span', { text: 'Save new AI chats to your notes automatically' })),
-        h('p', { class: 'help', text: 'Every 5 minutes, Claude Code chats and the chats you imported become chat pages: your own messages only (a coding session as a short summary of files and commits, never code), with keys and passwords removed. No AI model is used. Chats in a category you set to skip are never saved.' })));
+        h('p', { class: 'help', text: 'Every 5 minutes, your Claude Code, Codex, Gemini CLI and Copilot CLI sessions and the chats you imported become chat pages: your own messages only (a coding session as a short summary of files and commits, never code), with keys and passwords removed. No AI model is used. Chats in a category you set to skip are never saved.' })));
   }
 
   /* app.hotkey: quick capture's key, desktop app only; `taken`: another app holds it */
