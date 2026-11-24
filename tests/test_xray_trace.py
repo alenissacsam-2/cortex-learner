@@ -396,7 +396,12 @@ const out = { errors };
     await tick();
     out.plainEnter = posts().length;
     area.fire('keydown', { key: 'Enter', ctrlKey: true });
+    // busy while it runs: a second Ctrl+Enter or click posts nothing more
+    out.busy = [traceBtn().getAttribute('aria-busy')];
+    area.fire('keydown', { key: 'Enter', ctrlKey: true });
+    traceBtn().fire('click');
     await tick();
+    out.busy.push(traceBtn().getAttribute('aria-busy'), posts().length);
     out.traced = [notes(cc()), hits(cc())];
     cc().querySelectorAll('button').find((b) => b.textContent === 'Retire').fire('click');
     await tick();
@@ -425,7 +430,11 @@ const out = { errors };
     sel('b').value = 'mystery-app'; sel('b').fire('change');
     out.show.push(show().disabled);
     input.fire('keydown', { key: 'Enter' });
+    out.busy.push(show().getAttribute('aria-busy'));
+    input.fire('keydown', { key: 'Enter' });
+    show().fire('click');
     await tick();
+    out.busy.push(show().getAttribute('aria-busy'));
     const cols = () => cmp().querySelectorAll('.xray-col').map((c) => [c.querySelector('.lbl').textContent,
       c.querySelector('.help').textContent, c.querySelectorAll('.brow').map((r) => [r.querySelector('.ttl').textContent,
         r.querySelectorAll('.tag').map((t) => t.textContent), r.className])]);
@@ -457,7 +466,8 @@ def test_the_trace_compare_and_warning_page(tmp_path):
     racing = {**line, "id": "^c-fghij", "title": "Weekend motor racing fan."}
     call_ = {"ts": ts, "tool": "cortex_prime", "chars": 900,
              "served": [{"block": "related", "items": [engines]}], "trimmed": []}
-    wide = {"n": 64, "day": "2026-11-23", "end": "2026-11-23T10:14:00Z"}
+    end = (datetime.now(UTC) - timedelta(days=2)).strftime(xray.TS)  # 2 local days back
+    wide = {"n": 64, "day": end[:10], "end": end}
     profiles = {"profiles": [{"match": "claude", "scopes": ["all"]}], "unknown": ["core"]}
     clients = [{"client": "Claude Code", "name": "claude-code", "total": 1, "scopes": ["all"],
                 "rule": "claude", "shared": [], "often": [], "wide": wide, "calls": [call_]},
@@ -488,7 +498,7 @@ def test_the_trace_compare_and_warning_page(tmp_path):
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["boards"] == ["Pinned and muted", "Compare two apps", "Claude Code",
                              "mystery-app"]
-    said = ("Claude Code read 64 pages in 15 minutes on 2026-11-23. Chats rarely need that "
+    said = ("Claude Code read 64 pages in 15 minutes 2 days ago. Chats rarely need that "
             "many. If you didn't ask for it, narrow what it reads below, or remove the app "
             "under Connect.")
     assert out["warn"] == [said, ["Got it"], "Got it: Claude Code read 64 pages"]
@@ -497,6 +507,7 @@ def test_the_trace_compare_and_warning_page(tmp_path):
         ["What would Claude Code get for this prompt?", "xray-dry-0"],
         ["Paste a reply from Claude Code that surprised you", "xray-trace-0"]]]
     assert out["disabled"] == [True, True, False] and out["plainEnter"] == 0
+    assert out["busy"] == ["true", None, 1, "true", None]  # the app's busy dots (pressable)
     when = "served by {} · 3 hours ago"
     matched = ("Matched against what Cortex gave Claude Code in its last 3 calls · the reply "
                "was not saved")
@@ -535,7 +546,7 @@ def test_the_trace_compare_and_warning_page(tmp_path):
         ["/api/review/retire", {"id": "c-abcde"}],
         ["/api/xray/trace", {"client": "mystery-app", "text": "Something new."}],
         ["/api/xray/compare", {"prompt": "car motor", "a": "claude-code", "b": "mystery-app"}],
-        ["/api/xray/ack", {"client": "claude-code", "end": "2026-11-23T10:14:00Z"}]]
+        ["/api/xray/ack", {"client": "claude-code", "end": end}]]
 
 
 def test_compare_columns_stack_on_a_narrow_window():

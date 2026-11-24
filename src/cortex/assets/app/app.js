@@ -1945,6 +1945,9 @@
     // a dry run's prompt and answer survive a redraw; its Pin and Mute show the flags as now
     const pins = new Set(d.pinned.map((x) => x.id || x.token)), mutes = new Set(d.muted.map((x) => x.id || x.token));
     const now = (x) => ({ ...x, pinned: pins.has(x.id || x.token), muted: mutes.has(x.id || x.token) });
+    // R27b: an answer that lands after a redraw (a job's end, a second load) has lost its box;
+    // a fresh render draws it from the kept state
+    const fresh = (box, draw) => (document.body.contains(box) ? draw() : load('xray'));
     const dryRun = (g, k) => {
       const key = `${g.name}|${g.client}`, st = xrayDry.get(key) || { prompt: '', r: null }, id = `xray-dry-${k}`;
       xrayDry.set(key, st);
@@ -1957,7 +1960,7 @@
           ...r.trimmed.flatMap((b) => b.items.map((x) => item({ ...now(x), where: 'cut for space' }, b.block, 'cut'))),
           r.served.length || r.trimmed.length ? null : note('Nothing would be served.')] : []));
       };
-      const go = () => post('/api/xray/dryrun', { client: g.name, prompt: input.value }, (r) => { st.r = r; draw(); });
+      const go = () => post('/api/xray/dryrun', { client: g.name, prompt: input.value }, (r) => { st.r = r; fresh(out, draw); });
       const show = btn('Show', go);
       const sync = () => { st.prompt = input.value; show.disabled = !input.value.trim(); };
       input.addEventListener('input', sync);
@@ -1967,9 +1970,6 @@
       return [h('div', { class: 'field' }, h('label', { for: id, text: `What would ${g.client} get for this prompt?` }),
         h('div', { class: 'inline' }, input, show)), out];
     };
-    // R27b: an answer that lands after a redraw (a job's end, a second load) has lost its box;
-    // a fresh render draws it from the kept state
-    const fresh = (box, draw) => (document.body.contains(box) ? draw() : load('xray'));
     // R27b (C2): which served line a surprising reply came from; matched by the server with no
     // model, the reply kept nowhere. Text and results survive a redraw, as the dry run's do
     const trace = (g, k) => {
@@ -1995,8 +1995,9 @@
           ...(r.hits.length ? r.hits.map((x) => hit(now(x)))
             : [note(`None of what Cortex gave ${g.client} recently matches this reply. The reply may come from the app's own memory or the model itself.`)])] : []));
       };
-      const go = () => post('/api/xray/trace', { client: g.name, text: area.value }, (r) => { st.r = r; fresh(out, draw); });
-      const run = btn('Trace', go);
+      // Ctrl+Enter too marks the button busy (pressable) for the seconds a big vault takes
+      const run = btn('Trace', () => go());
+      const go = pressable(run, () => post('/api/xray/trace', { client: g.name, text: area.value }, (r) => { st.r = r; fresh(out, draw); }));
       const sync = () => { st.text = area.value; run.disabled = !area.value.trim(); };
       area.addEventListener('input', sync);
       area.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !run.disabled) { e.preventDefault(); go(); } });
@@ -2006,7 +2007,8 @@
         area, h('div', { class: 'inline' }, run)), out];
     };
     // R27b (G5b-5): an app that pulled many pages through find, recall or read in 15 minutes
-    const wide = (g) => (g.wide ? [row(`${g.client} read ${g.wide.n} pages in 15 minutes on ${g.wide.day}. Chats rarely need that many. If you didn't ask for it, narrow what it reads below, or remove the app under Connect.`,
+    const when = (ts) => { const s = daysAgo(ts); return /^\d{4}-/.test(s) ? `on ${s}` : s; };
+    const wide = (g) => (g.wide ? [row(`${g.client} read ${g.wide.n} pages in 15 minutes ${when(g.wide.end)}. Chats rarely need that many. If you didn't ask for it, narrow what it reads below, or remove the app under Connect.`,
       null, null, [btn('Got it', () => act('/api/xray/ack', { client: g.name, end: g.wide.end }, 'Hidden until it reads that widely again.'),
         null, { 'aria-label': `Got it: ${g.client} read ${g.wide.n} pages` })])] : []);
     // R27b (G5b-7): two apps' dry runs side by side, and the scopes each one's profile withholds
@@ -2015,12 +2017,13 @@
       if (!has(xrayCmp.a) || !has(xrayCmp.b)) { xrayCmp.a = apps[0].name; xrayCmp.b = apps[1].name; }
       const input = h('input', { type: 'text', id: 'xray-cmp-prompt', value: xrayCmp.prompt, maxlength: '2000', spellcheck: 'false', autocomplete: 'off' });
       const out = h('div', {});
-      const go = () => post('/api/xray/compare', { prompt: input.value, a: xrayCmp.a, b: xrayCmp.b }, (r) => {
+      // Enter too marks the button busy (pressable) for the seconds a big vault takes
+      const show = btn('Show', () => go());
+      const go = pressable(show, () => post('/api/xray/compare', { prompt: input.value, a: xrayCmp.a, b: xrayCmp.b }, (r) => {
         const name = (n) => apps.find((g) => g.name === n).client;
         xrayCmp.r = { ...r, an: name(xrayCmp.a), bn: name(xrayCmp.b) };
         fresh(out, draw);
-      });
-      const show = btn('Show', go);
+      }));
       const sync = () => { xrayCmp.prompt = input.value; show.disabled = !input.value.trim() || xrayCmp.a === xrayCmp.b; };
       const pick = (which, label) => {
         const s = h('select', { id: `xray-cmp-${which}` }, apps.map((g) => h('option', { value: g.name, text: g.client })));

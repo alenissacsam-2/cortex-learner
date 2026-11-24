@@ -154,14 +154,17 @@ PRIVATE = "a private page"
 OFTEN = 5  # "served most often" rows per AI app
 
 
-def _items(vault: Vault):
+def _items(vault: Vault, index=None):
     """(item(id), blocks({block: ids}), settings) as the app shows ids: resolved to titles
     now. A private or hidden page (planner.hidden) or a line of a private me/ page shows as
-    "a private page", without its id; its pin or mute keeps only a `token` to undo it."""
+    "a private page", without its id; its pin or mute keeps only a `token` to undo it.
+    `index`: an Index just refreshed, whose private flags planner.hidden reads instead of
+    walking the vault again (as the Index's own refresh does)."""
     from cortex import claims, planner
     from cortex.catalog import Catalog
 
-    hide = planner.hidden(vault, Catalog.load(vault))
+    hide = planner.hidden(vault, Catalog.load(vault)) if index is None else planner.hidden(
+        vault, index.catalog, index._flagged)
     s = settings(vault)
     lines = {claim(r["id"]): r for r in claims.rows(vault)}
     seen: dict[str, dict] = {}
@@ -336,22 +339,16 @@ def _words(text: str) -> list[str]:
     return [w for w in _WORD.findall(text.lower()) if len(w) >= 3 and w not in STOPWORDS]
 
 
-def _rarity(vault: Vault, words: list[str]) -> dict[str, float]:
-    """log((N + 1) / (df + 0.5)) per folded word, N and df over the vault's indexed pages (the
-    FTS table's document counts; private pages are not in it): a word few pages hold weighs
-    more, one every page holds next to nothing. A throwaway index that never saves."""
-    from cortex.catalog import Catalog
-    from cortex.index import Index
-
+def _rarity(idx, words: list[str]) -> dict[str, float]:
+    """log((N + 1) / (df + 0.5)) per folded word, N and df over the indexed pages of `idx` (a
+    throwaway Index that never saves; the FTS table's document counts, private pages not in
+    it): a word few pages hold weighs more, one every page holds next to nothing."""
     forms = sorted(set(words) | {_fold(w) for w in words})
-    idx = Index(vault, Catalog.load(vault), save=False)
-    try:
-        n = idx.db.execute("SELECT count(*) FROM fts").fetchone()[0]
-        idx.db.execute("CREATE VIRTUAL TABLE temp.vocab USING fts5vocab(main, fts, row)")
-        df = dict(idx.db.execute("SELECT term, doc FROM temp.vocab WHERE term IN (SELECT value "
-                                 "FROM json_each(?))", (json.dumps(forms),)))
-    finally:
-        idx.db.close()
+    n = idx.db.execute("SELECT count(*) FROM fts").fetchone()[0]
+    idx.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.vocab USING fts5vocab(main, fts, "
+                   "row)")
+    df = dict(idx.db.execute("SELECT term, doc FROM temp.vocab WHERE term IN (SELECT value "
+                             "FROM json_each(?))", (json.dumps(forms),)))
     most: dict[str, int] = {}
     for w in words:
         f = _fold(w)
@@ -407,7 +404,14 @@ def trace(vault: Vault, client: str, text: str) -> dict:
     words = _words(text)
     if not seen or not words:
         return {"calls": len(rs), "hits": []}
-    rare = _rarity(vault, words)
+    from cortex.catalog import Catalog
+    from cortex.index import Index
+
+    idx = Index(vault, Catalog.load(vault), save=False)
+    try:
+        rare = _rarity(idx, words)
+    finally:
+        idx.db.close()
     order = list(dict.fromkeys(_fold(w) for w in words))
     form: dict[str, str] = {}
     for w in words:
@@ -420,7 +424,7 @@ def trace(vault: Vault, client: str, text: str) -> dict:
         if (score := sum(rare[f] for f in shared)) > 0:
             scored.append((score, i, shared))
     scored.sort(key=lambda x: -x[0])
-    item, _, _ = _items(vault)
+    item, _, _ = _items(vault, idx)
     hits = []
     for _, i, shared in scored[:TRACE_HITS]:
         x, (tool, ts) = item(i), seen[i]
@@ -479,18 +483,31 @@ def _not_given(vault: Vault, scopes, full: dict | None, run: dict,
 def compare(vault: Vault, prompt: str, a: str, b: str) -> dict:
     """What a new chat's cortex_prime would serve the apps named `a` and `b` (the view's
     `name`s) for `prompt` (mcp_server.dry_prime), each as `present` shows a call plus its
-    `withheld` scopes (`_not_given`, against one run with every scope, made only when a profile
-    limits either app). Nothing is written or logged, the prompt included."""
+    `withheld` scopes (`_not_given`, against a run with every scope: the other app's when its
+    profile has them all, else one more run). Nothing is written or logged, the prompt
+    included."""
     from cortex import claims, profiles
+    from cortex.catalog import Catalog
+    from cortex.index import Index
     from cortex.mcp_server import dry_prime
 
     data = profiles.load(vault)
-    runs = {n: dry_prime(vault, n, prompt) for n in (a, b)}
     scopes = {n: profiles.scopes_for(data, "" if n == "unknown" else n) for n in (a, b)}
-    full = dry_prime(vault, "", prompt, every=True) if any(
-        s is not None for s in scopes.values()) else None
+    # one read-only index for the runs, each setting its own withhold; a core-only app's run
+    # withholds every page, so it goes last and no run after it adds them all back
+    def last(n):
+        return scopes[n] is not None and scopes[n] <= {"core"}
+
+    every = [n for n in (a, b) if scopes[n] is None or "all" in scopes[n]]
+    index = Index(vault, Catalog.load(vault), save=False)
+    try:
+        full = None if every else dry_prime(vault, "", prompt, every=True, index=index)
+        runs = {n: dry_prime(vault, n, prompt, index=index) for n in sorted((a, b), key=last)}
+    finally:
+        index.db.close()
+    full = runs[every[0]] if every else full
     lines = {claim(r["id"]): r for r in claims.rows(vault)}
-    _, blocks, _ = _items(vault)
+    _, blocks, _ = _items(vault, index)  # its flags: no second vault walk
     return {k: {"served": blocks(runs[n]["served"]), "trimmed": blocks(runs[n]["trimmed"]),
                 "chars": runs[n]["chars"],
                 "withheld": _not_given(vault, scopes[n], full, runs[n], lines)}

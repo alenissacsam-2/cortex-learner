@@ -4031,17 +4031,24 @@ CLOUD_CLIENTS = ("claude", "gemini", "chatgpt", "openai", "cursor", "copilot", "
                  "windsurf", "vscode", "code", "antigravity", "cline")
 
 
-def dry_prime(vault: Vault, client: str, prompt: str, every: bool = False) -> dict:
+def dry_prime(vault: Vault, client: str, prompt: str, every: bool = False,
+              index: Index | None = None) -> dict:
     """The app's X-ray dry run: what a new chat's cortex_prime would serve the owner's MCP
     client named `client` ("" or "unknown": one that sends no name) for `prompt`, by the same
     selection (Cortex._prime_select) under that client's profile, as {served, trimmed} ids by
     block and the context's `chars`. Nothing is written: no X-ray row, event, chat log, tag,
     session, index snapshot or vector cache, and the prompt is kept nowhere. `every`: with
-    every scope, as the owner's own view (the X-ray's compare, R27b)."""
+    every scope, as the owner's own view (the X-ray's compare, R27b). `index`: a read-only
+    (save=False) Index to reuse across runs (R27b's compare); its withhold becomes this
+    client's, and the selection's refresh moves the pages that changes, as a privacy change
+    does."""
     c = Cortex(vault, build=False)
     c.over_mcp = not every  # the client's profile applies, as over MCP
     c.sessions.client = None if client in ("", "unknown") else client
-    c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
+    if index is None:
+        c._index = Index(vault, c.catalog, withhold=c._index_withheld, save=False)
+    else:  # _prime_select's refresh applies the new withhold
+        index.withhold, c._index = c._index_withheld, index
     c._ready.set()
     parts, xr, _ = c._prime_select(prompt[:PRIME_PROMPT], save=False)
     return {**xr, "chars": len("\n\n".join(parts))}
