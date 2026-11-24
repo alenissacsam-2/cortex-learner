@@ -756,7 +756,7 @@ const wgBtn = (text) => $('wg-body').querySelectorAll('button').find((b) => b.te
 const state = () => ({ open: !!$('welcome').open, count: $('wg-count').textContent, current: $('wg-count').getAttribute('aria-current'),
   title: $('wg-title').textContent, next: $('wg-next').textContent, back: $('wg-back').hidden, done: !$('wg-state').hidden,
   now: $('wg-bar').getAttribute('aria-valuenow') });
-const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome').map((f) => f.body);
+const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome' && f.method === 'POST').map((f) => f.body);
 (async () => {
   try {
     location.hash = DATA.hash || '';
@@ -788,6 +788,12 @@ const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome').map(
       wgBtn('Use this folder').fire('click');
       await tick();
       out.vault.posts = fetched.filter((f) => f.path === '/api/setup/vault').map((f) => f.body);
+      // a message while the guide is open shows inside it (the top layer), above its backdrop
+      DATA.fail = true;
+      wgBtn('Use this folder').fire('click');
+      await tick();
+      DATA.fail = false;
+      out.toast = [$('welcome').contains($('toast')), $('toast-msg').textContent];
       // the vault set up elsewhere: the step reads it and counts as done
       S().vault.done = true;
       $('wg-next').fire('click'); await tick();
@@ -815,7 +821,7 @@ const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome').map(
       $('wg-q').value = 'What did I learn about heaps?';
       wgBtn('Ask').fire('click');
       await tick();
-      out.ask = { open: state().open, chat: !$('s-chat').hidden,
+      out.ask = { open: state().open, chat: !$('s-chat').hidden, toastBack: !$('welcome').contains($('toast')) && $('toast').parentNode === document.body,
         sent: fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body.text), welcomes: welcomes() };
       // a page named in step 5 closes the guide and opens that page
       $('welcome-open').fire('click'); await tick();
@@ -856,6 +862,8 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
     setup["embed"]["done"] = False
     routes["/api/chat"]["chats"] = []
     routes["/api/chat/list"] = {"chats": []}
+    welcome = routes["/api/app/welcome"] = server.App(root_committed).welcome()
+    assert welcome == {"welcome_done": False, "vault": True}  # a vault, no app: Setup decides
     out = _run(node, tmp_path, "welcome", WELCOME, {"routes": routes, "walk": True, "stream": [
         json.dumps({"t": "start", "id": CHAT_ID, "model": "m"}) + "\n"
         + json.dumps({"t": "done", "id": CHAT_ID, "model": "m", "seconds": 1}) + "\n"]})
@@ -873,12 +881,13 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
         ("Step 6 of 6", "Try it", "Finish", False),
         ("Step 5 of 6", "Where things are", "Next", False)]
     assert out["tour"] == [["Every day", "Your setup", "Check"], [
-        "Open Home", "Open Tonight", "Open Chat", "Open Review", "Open Setup", "Open Connect AI apps",
-        "Open Local model", "Open Browsing", "Open Status", "Open Agent X-ray",
-        "Open Dashboard and vault"]]
+        "Open Home", "Open Tonight", "Open Chat", "Open Review", "Open Setup",
+        "Open Connect AI apps", "Open Local model", "Open Browsing", "Open Status",
+        "Open Agent X-ray", "Open Dashboard and vault"]]
     assert out["vault"]["state"]["done"] is False
     assert out["vault"]["value"] == str(root_committed)  # what Setup's vault step offers
     assert out["vault"]["posts"] == [{"path": "D:\\My notes"}]
+    assert out["toast"] == [True, "boom /api/setup/vault"]
     assert out["vaultDone"]["state"]["done"] is True
     assert f"Your notes are in {root_committed}" in out["vaultDone"]["text"]
     assert "Restart an app after connecting it." in out["connect"]["text"]
@@ -888,15 +897,17 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
                                        ["/api/connect/apply", {"want": {"x": True}}]]
     assert out["extras"] == [["Search model", "✓ Done"], ["Your history", "Open in Setup"],
                              ["Local model", "Open in Setup"]]
-    assert out["ask"] == {"open": False, "chat": True, "sent": ["What did I learn about heaps?"],
+    assert out["ask"] == {"open": False, "chat": True, "toastBack": True,
+                          "sent": ["What did I learn about heaps?"],
                           "welcomes": [{"welcome_done": True}]}  # recorded once, at the Skip
     assert out["toured"] == [False, True]
 
-    setup["welcome_done"] = True  # finished or skipped before: never by itself again
+    welcome["welcome_done"] = True  # finished or skipped before: never by itself again
     out = _run(node, tmp_path, "welcome2", WELCOME, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["boot"]["open"] is False
 
-    setup["welcome_done"] = False  # Setup done (an app connected): not by itself; #welcome opens it
+    # Setup done (an app connected): not by itself; #welcome opens it
+    welcome["welcome_done"] = False
     setup["connect"][0]["connected"] = True
     out = _run(node, tmp_path, "welcome3", WELCOME, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["boot"]["open"] is False
@@ -905,13 +916,10 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
     assert out["errors"] == [] and out["boot"] == step1
     assert out["last"]["next"] == "Finish"
     assert out["finished"] == [False, [{"welcome_done": True}]]
-
-
-def test_homes_help_links_to_the_welcome_guide():
-    """WG: Home's Help (dashboard.js) reopens the guide through /manage#welcome."""
-    js = (server.ASSETS.parent / "dashboard.js").read_text(encoding="utf-8")
-    help_ = js[js.index("function renderHelp()"):]
-    assert "'/manage#welcome'" in help_[:help_.index("\n  }\n")]
+    # no vault: at once from the quick look, never waiting on Setup's answer (here it says done)
+    welcome["vault"] = False
+    out = _run(node, tmp_path, "welcome5", WELCOME, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["boot"] == step1
 
 
 def test_a_stepped_job_shows_its_step_percent_and_time_left(tmp_path):

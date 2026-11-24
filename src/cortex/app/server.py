@@ -301,7 +301,7 @@ class App:
         self.reviewing = threading.Lock()  # one Review click at a time
         self.get = {"/api/status": self.status, "/api/connect": self.connect,
                     "/api/app/autostart": self.autostart, "/api/app/notify": self.notify,
-                    "/api/app/hotkey": self.hotkey,
+                    "/api/app/hotkey": self.hotkey, "/api/app/welcome": self.welcome,
                     "/api/home": self.home, "/api/home/version": self.home_version,
                     "/api/home/delta": self.home_delta, "/api/home/site": self.home_site,
                     "/api/home/check": self.cold_check, "/api/import/pickup": self.pickup,
@@ -1811,6 +1811,13 @@ class App:
         on = _bool(body, "enabled")
         desktop._merge_app(lambda a: {**a, "chat_import": on})
         return {"enabled": chat_import.enabled()}
+
+    def welcome(self) -> dict:
+        """The welcome guide's quick look as the page opens, without Setup's slower probes:
+        finished or skipped before, and whether a vault is set up."""
+        from cortex.app import desktop
+        return {"welcome_done": desktop._app_cfg().get("welcome_done") is True,
+                "vault": self.root is not None and (self.root / ".cortex").is_dir()}
 
     def welcome_set(self, body: dict) -> dict:
         """The welcome guide was finished or skipped (`app.welcome_done`); it never opens by

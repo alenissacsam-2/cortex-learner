@@ -374,6 +374,8 @@ def test_the_welcome_guide_is_done_once_and_keeps_the_other_app_keys(app):
 
     taint.write_config({"app": {"other": 1, "first_run_hidden": True}})
     assert call(app, "GET", "/api/setup")[1]["welcome_done"] is False
+    # the page's quick look at boot: no probes, just the flag and whether a vault is set up
+    assert call(app, "GET", "/api/app/welcome")[1] == {"welcome_done": False, "vault": True}
     for bad in ({"welcome_done": False}, {"welcome_done": "yes"}, {},
                 {"welcome_done": True, "other": 2}):
         assert call(app, "POST", "/api/app/welcome", bad)[0] == 400, bad
@@ -382,6 +384,7 @@ def test_the_welcome_guide_is_done_once_and_keeps_the_other_app_keys(app):
         "welcome_done": True}
     assert taint.config()["app"] == {"other": 1, "first_run_hidden": True, "welcome_done": True}
     assert call(app, "GET", "/api/setup")[1]["welcome_done"] is True
+    assert call(app, "GET", "/api/app/welcome")[1]["welcome_done"] is True
 
 
 def test_llm_board_shows_a_refused_config(app):

@@ -1175,6 +1175,39 @@ def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
     assert [v[2] for v in seen.values()] == ["dismissed"]
 
 
+HELP_LINKS = ("__T.go('help').then(() => [...document.querySelectorAll('#view-help a')]"
+              ".map((a) => [a.getAttribute('href'), a.textContent]))")
+
+
+def test_help_links_to_the_welcome_guide_only_when_the_app_serves_home(tmp_path, monkeypatch):
+    """WG: the live Home's Help reopens the app's welcome guide (/manage#welcome); a snapshot
+    file has no app behind it, so it shows no such link."""
+    from test_app import _serve
+    from test_home import FIXTURES as HOME_FIXTURES
+
+    from cortex.app import server
+
+    monkeypatch.setattr(server, "_open", lambda url: None)
+    root = tmp_path / "vault"
+    shutil.copytree(HOME_FIXTURES / "vault_mini", root)
+    (root / ".cortex").mkdir()
+    welcome = ["/manage#welcome", "Show the welcome guide"]
+    (tmp_path / "live").mkdir()
+    (tmp_path / "file").mkdir()
+    srv, app = _serve(root)
+    try:
+        out = _run(tmp_path / "live", None, url=f"http://127.0.0.1:{app.port}/?t={app.token}",
+                   probe=HELP_LINKS)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert out["errors"] == [] and welcome in out["probe"]
+    page = tmp_path / "snapshot.html"
+    page.write_text(dashboard.snapshot(Vault(root), now=datetime.now(UTC)), encoding="utf-8")
+    out = _run(tmp_path / "file", page, probe=HELP_LINKS)
+    assert out["errors"] == [] and all(a[0] != "/manage#welcome" for a in out["probe"])
+
+
 def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, home,  # noqa: F811
                                                                  monkeypatch):
     """The live home's brain with a synthetic browsing store: websites in the stem, a chosen

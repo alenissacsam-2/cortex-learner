@@ -2416,6 +2416,7 @@
     Object.assign(wg, { step: at || 1, open: true });
     if (d) wg.d = d;
     if (!dlg.open) dlg.showModal();
+    dlg.append($('toast'));  // in the top layer with the guide, so a message shows above its backdrop
     wgDraw();
     $('wg-next').focus();
     return d ? null : wgLoad();
@@ -2428,6 +2429,7 @@
   function wgClosed() {
     if (!wg.open) return;
     wg.open = false;
+    document.body.append($('toast'));  // back to the page
     if (!wg.done) { wg.done = true; post('/api/app/welcome', { welcome_done: true }); }
   }
   function wgClose() {
@@ -2452,7 +2454,7 @@
   function wgSteps(d) {
     const wait = [note('Loading…')];
     return [
-      ['Welcome to Cortex', 'Cortex is your second brain on this computer. It keeps what you learn, decide and read as notes in one folder, and gives your AI apps (Claude, ChatGPT, Cursor and others) what they need to know about you, so you stop repeating yourself. Nothing leaves this computer unless you say so.',
+      ['Welcome to Cortex', 'Cortex is your second brain on this computer. It keeps what you learn, decide and read as notes in one folder, and gives your AI apps (Claude, Cursor, Codex, Gemini CLI and others) what they need to know about you, so you stop repeating yourself. Nothing leaves this computer unless you say so.',
         false, [h('p', { class: 'wg-sub', text: 'What happens next:' }),
           h('ol', { class: 'how' }, ['Pick a folder for your notes.', 'Connect your AI apps.', 'Ask Cortex a question.'].map((t) => h('li', { text: t })))]],
       ['Your vault', 'Your vault is one folder on this computer where Cortex keeps your notes, as plain text files that Obsidian can open too.',
@@ -2587,13 +2589,17 @@
   else if (SECTIONS.includes(lastSection)) show(lastSection);
   else { landing = true; show('status'); }
   // the welcome guide: Home's Help link (#welcome) opens it at step 1; by itself once, on a first
-  // run (no vault, or Setup's key steps not done) until it is finished or skipped
+  // run (no vault, or Setup's key steps not done) until it is finished or skipped. No vault: at
+  // once, from the quick look, while /api/setup loads for steps 2-4; a vault but no AI app
+  // connected needs Setup's answer first
   if (want === 'welcome') wgOpen(1);
-  api('/api/setup').then((d) => {
-    if (!d.vault) return;  // no setup state in the answer: never open on a guess
-    wg.done = d.welcome_done;
-    if (!wg.open && !d.welcome_done && (!d.vault.done || !(d.connect_skipped || wgConnected(d)))) wgOpen(1, d);
-  }, () => {});
+  api('/api/app/welcome').then((w) => {
+    if (typeof w.welcome_done !== 'boolean' || w.welcome_done || wg.open) { wg.done = w.welcome_done === true; return null; }
+    if (!w.vault) return wgOpen(1);
+    return api('/api/setup').then((d) => {
+      if (!wg.open && d.vault && !(d.connect_skipped || wgConnected(d))) wgOpen(1, d);
+    });
+  }).catch(() => {});
   idle();
   poll(true);
   if (current !== 'review') api('/api/review').then((d) => badge(d.count), () => {});  // the nav's count; no vault yet: none
