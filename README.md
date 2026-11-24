@@ -86,11 +86,11 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 **Setup** goes one step at a time, and every step can be skipped and done later.
 
-![Setup on a first run: the vault step, then Connect AI apps, search model, history, local model and Try it](docs/images/app-setup.png)
+![Setup as six numbered steps with a progress bar, beside the grouped sidebar: Vault and history done, Connect AI apps next, then search model, local model and Try it](docs/images/app-setup.png)
 
 **Status** shows each part of Cortex on this computer and what to do when one needs you.
 
-![Status: vault, search model, AI apps, local model, browsing and dashboard, each Ready or Off](docs/images/app-status.png)
+![Status: vault, Git, search model, AI apps, local model and browsing history, each Ready or Off, then the saved-chats switch](docs/images/app-status.png)
 
 **Add your history** has a three-step guide for each source: how to get the export, adding the file, then a check of what it found before anything is imported. When a claude.ai, ChatGPT or Google Takeout export lands in your Downloads folder, Home offers to import it in one click.
 
@@ -114,7 +114,7 @@ A **Private switch** in the header (Windows Hello) shows private notes and priva
 
 **Local model** shows the runner (Ollama or LM Studio) and the chosen model, with **Save choice**, **Load** and **Test**, and downloads another Ollama model by name. An optional **Model for background work** lets browsing imports and site descriptions use a larger, slower model than Chat; with 8 GB of graphics memory or less, keep it the same model.
 
-![Local model: Ollama with two models, LM Studio not found, the chosen model, the on switch and the Download board with the size this computer suits](docs/images/app-local-model.png)
+![Local model: Ollama and LM Studio not found, no model chosen yet, the on switch, the background-work model and the Download board](docs/images/app-local-model.png)
 
 ### The home page
 
@@ -134,7 +134,7 @@ The readiness forecast for a test stays hidden until Cortex has 30 checked revie
 
 The **Brain** tab draws your vault as a brain: each topic is a lobe with its own colour, bright fibres are your own links, faint fibres join pages with similar meaning, and a halo marks pages saved in the last 7 days. Below the brain, the stem holds your browsing: one dot per site, sized by visits, glowing by how recently you went there and coloured by category; the **Stem** button flies to it, and clicking a site shows its days and searches. Drag to turn, scroll to zoom, click a page to see its connections. A 2D map and a list are one click away. It uses WebGL2 (the browser's 3D graphics) and falls back to a flat drawing.
 
-![The 3D brain: lobes labelled Programming, Unfiled, About you and others, the stem of browsed websites below them, and filters with an outline on the left](docs/images/dashboard-brain.png)
+![The 3D brain: lobes labelled Programming, Unfiled, About you and others, and filters with an outline on the left](docs/images/dashboard-brain.png)
 
 ### Study planning
 
