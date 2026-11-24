@@ -6,6 +6,7 @@ with where. Temp home only (the `home` fixture); never the real registry or `cla
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,14 +40,13 @@ def test_an_app_installed_after_cortex_started_is_found(home, tmp_path, monkeypa
 
 
 def test_claude_code_from_github_needs_git_first(home, tmp_path, monkeypatch):
-    ran = []
+    ran, git = [], {"on": None}
     monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
-                        else None)
+                        else git["on"] if c == "git" else None)
     monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (ran.append(args),
                                                                     (True, "ok"))[1])
     monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: "owner/repo")
-    monkeypatch.setattr(session, "git_exe", lambda: None)
-    t = targets.by_id()["claude-code"]
+    t =targets.by_id()["claude-code"]
     (row,) = t.plan(True, ENTRY)
     assert row["change"] == "error" and row["detail"] == t.NO_GIT
     with pytest.raises(ValueError, match="needs Git"):
@@ -55,12 +55,12 @@ def test_claude_code_from_github_needs_git_first(home, tmp_path, monkeypatch):
     rows = targets.plan_all({"claude-code": True}, ENTRY)
     assert [r["change"] for r in rows] == ["error"]
     assert targets.apply_all({"claude-code": True}, ENTRY) == [] and ran == []
-    monkeypatch.setattr(session, "git_exe", lambda: "C:\\git\\git.exe")
+    git["on"] = "C:\\git\\git.exe"
     assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]
     t.apply(ENTRY)
     assert [a[1:3] for a in ran] == [["plugin", "marketplace"], ["plugin", "install"]]
     # a source checkout is a local marketplace: no clone, so no git needed
-    monkeypatch.setattr(session, "git_exe", lambda: None)
+    git["on"] = None
     monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: str(tmp_path))
     assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]
 
@@ -99,3 +99,24 @@ def test_the_pasted_text_shares_its_lines_with_the_server_and_the_rule_block():
     for where, file in ((targets.PASTE_CODE, "~/.claude/CLAUDE.md"),  # the files rows name
                         (targets.PASTE_COPILOT, "~/.copilot/copilot-instructions.md")):
         assert f"into {file}," in where and file in guide
+
+
+def test_git_counts_only_on_the_path_claude_runs_with(home, tmp_path, monkeypatch):
+    """A Program Files git that `claude`'s PATH misses cannot clone: NO_GIT, not a failed clone."""
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(session, "_registry_path", lambda: "")
+    monkeypatch.setattr(session, "git_exe", lambda: r"C:\Program Files\Git\cmd\git.exe")
+    monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: "owner/repo")
+    t = targets.by_id()["claude-code"]
+    assert t._no_git()
+    git_dir = _exe(tmp_path / "git", "git").parent
+    monkeypatch.setattr(session, "_registry_path", lambda: str(git_dir))
+    assert not t._no_git()
+
+
+def test_registry_path_adds_only_new_entries(monkeypatch, tmp_path):
+    a, b, c = (str(tmp_path / n) for n in "abc")
+    monkeypatch.setenv("PATH", os.pathsep.join((a, b)))
+    same_b = (b.upper() if sys.platform == "win32" else b) + "\\"
+    monkeypatch.setattr(session, "_registry_path", lambda: os.pathsep.join((a, same_b, c, c, "")))
+    assert targets._env()["PATH"].split(os.pathsep) == [a, b, c]

@@ -691,7 +691,9 @@ TODAY_FEED_PROBE = r"""
   for (let i = 0; i < 200 && !b.todayIds; i++) await sleep(50);
   await sleep(2500);
   const ids = b.todayIds || [];
-  return { today: ids, selected: b.selected, drawn: ids.map((id) => b.drawn(id)) };
+  const heads = [...document.querySelectorAll('#departures .dep-head span')]
+    .map((s) => s.textContent);
+  return { heads, today: ids, selected: b.selected, drawn: ids.map((id) => b.drawn(id)) };
 })()
 """
 
@@ -719,6 +721,7 @@ def test_today_selects_every_page_of_the_day(tmp_path, demo_vault):
     p = _run(tmp_path, page, probe=TODAY_FEED_PROBE)["probe"]
     assert p["today"] == [*taught, new_chat["id"], saved["id"]] and p["selected"] is None
     assert p["drawn"] == [{"a": 255, "ring": 153}] * 5
+    assert p["heads"] == ["TIME", "ITEM", "TOPIC", "STATUS", ""], p
 
 
 def test_an_empty_vault_says_how_to_fill_each_list(tmp_path):
@@ -912,7 +915,8 @@ NO_STUDY_PROBE = r"""
     home: [$('view-home').hidden, $('tab-home').getAttribute('aria-selected'), $('tab-home').tabIndex],
     heads: [...$('view-home').querySelectorAll('h2')].map((h) => h.textContent),
     steps: [...document.querySelectorAll('#departures .first-run .brow')].map((r) => [r.querySelector('.code').textContent, r.textContent]),
-    foot: [...$('departures').querySelectorAll('.foot')].map((f) => f.textContent) };
+    foot: [...$('departures').querySelectorAll('.foot')].map((f) => f.textContent),
+    dep: $('departures').querySelectorAll('.dep-head, .dep-row').length };
   $('tab-home').focus();
   $('tab-home').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
   await sleep(40);
@@ -955,6 +959,7 @@ def test_no_study_features_for_someone_who_does_not_study(tmp_path):
     p = _run(tmp_path, page2, probe=NO_STUDY_PROBE)["probe"]
     assert "Start here" not in p["heads"] and "Exams and deadlines" not in p["heads"], p
     assert p["foot"][0] == "Nothing next. Open loops and decisions that come due show here.", p
+    assert p["dep"] == 0, p  # only that line: no header, no placeholder rows that look like loading
 
 
 def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeypatch):  # noqa: F811

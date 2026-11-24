@@ -1797,7 +1797,7 @@
     }
     return items;
   }
-  // PLATFORM: the subject's lobe chip, else a chip of the subject's own title
+  // TOPIC: the subject's lobe chip, else a chip of the subject's own title
   function platChip(it) {
     if (!it.subject || LOBES.has(it.lobe)) return lobeChip(it.lobe);
     const s = el('span', 'code', code(it.subject.title));
@@ -2170,11 +2170,14 @@
       'Start a 90-second check of what is due') : null;
     if (coldBtn) coldBtn.id = 'cold-open';
     const b = board('Next up', { cls: 'departures', action: coldBtn });
-    const head = el('div', 'dep-head');
-    for (const h of ['TIME', 'ITEM', 'PLATFORM', 'STATUS', '']) head.append(el('span', null, h));
-    b.body.append(head);
     const times = [];
-    for (let k = 0; k < 8; k++) {
+    // nothing due: only the one-line message below, no header and no idle rows that look like loading
+    if (items.length) {
+      const head = el('div', 'dep-head');
+      for (const h of ['TIME', 'ITEM', 'TOPIC', 'STATUS', '']) head.append(el('span', null, h));
+      b.body.append(head);
+    }
+    for (let k = 0; k < (items.length ? 8 : 0); k++) {
       const it = items[k], r = el('div', 'dep-row' + (it ? '' : ' idle'));
       const tc = el('div', 'tcell'), d = dm(it ? it.time : '     ', 2, it ? it.time : 'empty');
       tc.append(d);
@@ -2777,7 +2780,7 @@
       return;
     }
     const table = el('table'), thead = el('thead'), htr = el('tr'), tbody = el('tbody');
-    for (const h of ['DATE', 'TITLE', 'KIND', 'PLATFORM', 'SOURCE', 'UPDATED']) {
+    for (const h of ['DATE', 'TITLE', 'KIND', 'TOPIC', 'SOURCE', 'UPDATED']) {
       const th = el('th', null, h);
       th.scope = 'col';
       htr.append(th);

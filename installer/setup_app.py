@@ -524,6 +524,15 @@ def ask_close(root, title: str, busy: list, verb: str, d: Path) -> bool:
     return bool(ok)
 
 
+def press_enter(focused, lit) -> None:
+    """Enter runs the button that has keyboard focus (ttk buttons answer only Space), else the
+    lit one (`lit`, or None)."""
+    if focused is not None and focused.winfo_class() == "TButton":
+        focused.invoke()
+    elif lit:
+        lit()
+
+
 # night colours from src/cortex/assets/app/app.css; rule is its amber .16 over the ground
 NIGHT = {"ground": "#0b0b0a", "panel": "#141412", "band": "#1b1a17", "ink": "#efe7d6",
          "ink2": "#b9ab90", "ink3": "#958870", "lit": "#ffb000", "rule": "#322509",
@@ -791,7 +800,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
     keys = {"enter": None, "esc": None}
 
     def buttons(items: list, esc=None) -> dict:
-        """(text, command, lit) in order; Enter runs the lit one, Esc `esc`."""
+        """(text, command, lit) in order; Enter: the focused button, else the lit one."""
         for b in actions.winfo_children():
             b.destroy()
         keys.update(enter=None, esc=esc)
@@ -805,7 +814,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
                 b.focus_set()
         return made
 
-    root.bind("<Return>", lambda _e: keys["enter"] and keys["enter"]())
+    root.bind("<Return>", lambda _e: press_enter(root.focus_get(), keys["enter"]))
     root.bind("<Escape>", lambda _e: keys["esc"] and keys["esc"]())
 
     def run_in_thread(fn, then) -> None:

@@ -689,3 +689,25 @@ def test_the_update_window_waits_for_the_app_itself(tmp_path, monkeypatch):
     seen.clear()
     assert setup_app.main(["--wait-pid", "9", "--dir", d]) == 0
     assert seen == [("wait", 9), ("window", False)]
+
+
+class _Widget:
+    def __init__(self, cls):
+        self.cls, self.ran = cls, 0
+
+    def winfo_class(self):
+        return self.cls
+
+    def invoke(self):
+        self.ran += 1
+
+
+def test_enter_runs_the_focused_button_else_the_lit_one():
+    lit = []
+    back = _Widget("TButton")
+    setup_app.press_enter(back, lambda: lit.append(1))
+    assert back.ran == 1 and lit == []  # Tab moved focus to Back: Enter means Back
+    for focused in (_Widget("TEntry"), None):
+        setup_app.press_enter(focused, lambda: lit.append(1))
+    assert lit == [1, 1]
+    setup_app.press_enter(None, None)  # no lit button: nothing happens

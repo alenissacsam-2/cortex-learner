@@ -36,9 +36,21 @@ def _env() -> dict:
     Git, is found by Cortex and by the commands it runs, without restarting Cortex."""
     from cortex import session
     env = dict(os.environ)
-    if extra := session._registry_path():
-        env["PATH"] = os.pathsep.join(p for p in (env.get("PATH", ""), extra) if p)
+    path = env.get("PATH", "")
+    # only the entries not on PATH yet: appending all of them would roughly double it
+    seen = {_path_key(p) for p in path.split(os.pathsep)}
+    for p in session._registry_path().split(os.pathsep):
+        if p.strip() and _path_key(p) not in seen:
+            seen.add(_path_key(p))
+            path = os.pathsep.join(x for x in (path, p) if x)
+    env["PATH"] = path
     return env
+
+
+def _path_key(p: str) -> str:
+    """One PATH entry as compared: case-insensitive on Windows, without trailing backslashes."""
+    p = p.strip().rstrip("\\/")
+    return p.lower() if sys.platform == "win32" else p
 
 
 def _which(cmd: str) -> str | None:  # tests replace this: never the real `claude`
@@ -745,10 +757,10 @@ class ClaudeCode:
 
     def _no_git(self) -> bool:
         """The marketplace is the GitHub repo (no source checkout here), which `claude plugin
-        marketplace add` clones with git, and git is not found (a new Windows laptop)."""
-        from cortex import session
+        marketplace add` clones with git, and git is not on the PATH `claude` runs with (a new
+        Windows laptop): a Program Files git that PATH misses does not help the clone."""
         src = self._source()
-        return src is not None and not Path(src).is_dir() and session.git_exe() is None
+        return src is not None and not Path(src).is_dir() and _which("git") is None
 
     @property
     def paste(self) -> str:
