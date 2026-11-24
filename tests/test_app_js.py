@@ -2305,3 +2305,87 @@ def test_review_cards_show_their_related_pages(tmp_path):
     assert out["buttons"] == [["linkbtn", "Open in Obsidian: Heap sort"],
                               ["linkbtn", "Open in Obsidian: Min <i>heap</i>"]]
     assert out["opened"] == [{"what": "page", "path": "notes/min-heap.md"}]
+
+
+CHANGE = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const btnIn = (label) => $('vault').querySelectorAll('button').find((b) => b.getAttribute('aria-label') === label || b.textContent === label);
+const field = () => [...$('vault').walk()].find((e) => e.id === 'vault-change') || null;
+const input = () => $('vault').querySelectorAll('input')[0];
+const posts = () => fetched.filter((f) => f.path === '/api/setup/vault').map((f) => f.body);
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'vault').fire('click');
+    await tick();
+    out.closed = !field() && !!btnIn('Change folder: Vault');
+    out.noWarning = !$('vault').textContent.includes('temporary folder');
+    btnIn('Change folder: Vault').fire('click');
+    await tick();
+    out.open = [!!field(), field().querySelector('label').textContent, input().getAttribute('placeholder'),
+      field().querySelector('.help').textContent, btnIn('Use this folder').disabled === true];
+    out.focused = document.activeElement === input();
+    input().value = 'D:\\Notes\\MyVault';
+    input().fire('input');
+    out.enabled = btnIn('Use this folder').disabled !== true;
+    DATA.routes['/api/job'] = { job: { name: 'Setting up the vault', section: 'setup', running: false, seconds: 1, error: null,
+      result: { ok: true, vault: 'D:\\Notes\\MyVault', kept: false, lines: [] } } };
+    btnIn('Use this folder').fire('click');
+    await tick();
+    out.posted = posts();
+    out.toast = [$('toast').className, $('toast-msg').textContent];
+    out.closedAfter = !field();
+    btnIn('Change folder: Vault').fire('click');
+    await tick();
+    field().fire('keydown', { key: 'Escape' });
+    out.escaped = !field();
+    btnIn('Change folder: Vault').fire('click');
+    await tick();
+    btnIn('Cancel').fire('click');
+    out.cancelled = !field();
+    out.postsAfter = posts().length;
+    // a vault in a temporary folder: the warning row with its own Change folder button
+    DATA.routes['/api/vault'].temp = true;
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'vault').fire('click');
+    await tick();
+    const warn = [...$('vault').querySelectorAll('.brow')].find((r) => (r.querySelector('.ttl') || {}).textContent === 'This vault is in a temporary folder');
+    out.warn = warn ? [warn.querySelector('.sub').textContent, warn.querySelectorAll('button').map((b) => b.textContent)] : null;
+    btnIn('Change folder: temporary vault').fire('click');
+    await tick();
+    out.warnOpens = !!field();
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp_path,
+                                                              monkeypatch):
+    """VC: Dashboard and vault's Change folder opens an inline field; Use this folder is disabled
+    while it is empty and posts /api/setup/vault with the typed path; Cancel and Escape close it;
+    a vault in a temporary folder shows the warning row with its own Change folder button."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/vault"]["temp"] = False
+    out = _run(node, tmp_path, "change", CHANGE, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["closed"] and out["noWarning"]
+    assert out["open"] == [True, "Use another folder for your notes", "C:\\Notes\\MyVault",
+                           "Cortex adds its own folders and a git history there, and never "
+                           "changes notes you already have. Obsidian can open it as a vault. "
+                           "Your current vault stays where it is.", True]
+    assert out["focused"] and out["enabled"]
+    assert out["posted"] == [{"path": "D:\\Notes\\MyVault"}]
+    assert out["toast"] == ["toast on ok", "Cortex now uses D:\\Notes\\MyVault."]
+    assert out["closedAfter"] and out["escaped"] and out["cancelled"]
+    assert out["postsAfter"] == 1  # Cancel and Escape send nothing
+    assert out["warn"] == ["Windows can empty it at any time. Use Change folder to pick your "
+                           "real vault.", ["Change folder"]]
+    assert out["warnOpens"]

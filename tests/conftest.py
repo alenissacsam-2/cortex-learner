@@ -51,6 +51,16 @@ def _no_real_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _own_temp_folder(tmp_path_factory, monkeypatch):
+    """The 'system temp folder' is a separate empty dir, so the vaults tests keep in tmp_path
+    are not 'in a temporary folder' (the warning in status/_init); a test that wants one
+    monkeypatches tempfile.gettempdir itself."""
+    import tempfile
+    t = tmp_path_factory.mktemp("systemp")
+    monkeypatch.setattr(tempfile, "tempdir", str(t))  # what gettempdir() returns once set
+
+
+@pytest.fixture(autouse=True)
 def _no_real_installs(tmp_path_factory, monkeypatch):
     """Tests find git only on PATH (never in the real Program Files or the registry's PATH),
     and never the real LM Studio `lms` on PATH (a test must not run it)."""
