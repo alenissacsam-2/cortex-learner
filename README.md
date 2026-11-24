@@ -1,5 +1,7 @@
 # Cortex
 
+![Cortex: a second brain on your own computer. Every AI app you use reads from it and adds to it. Nothing leaves your computer unless you turn it on.](docs/images/hero.png)
+
 Cortex is a second brain that lives on your own computer. It keeps what you read, decide, work on and study in a folder of plain files, and every AI app you connect (Claude, Cursor, VS Code, Codex, Gemini CLI and other MCP clients) reads from it and adds to it. A new chat already knows who you are, what you work on and what you decided.
 
 It is for anyone who works with AI apps every day:
