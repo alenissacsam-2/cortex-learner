@@ -117,7 +117,11 @@ class FakeIcon:
         self.updates += 1
 
     def item(self, text):
-        return next(i for i in self.menu.items if i.text == text)
+        return next(i for i in self.menu.items if FakeIcon.text(i) == text)
+
+    @staticmethod
+    def text(i):  # pystray: an item's text may be a callable, given the item
+        return i.text(i) if callable(i.text) else i.text
 
 
 @pytest.fixture
@@ -184,9 +188,9 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
         launch.main()  # Start with Windows while it runs: nothing
         seen["calls"] = list(w.calls)
         icon = FakeIcon.made[0]
-        seen["menu"] = [(i.text, i.default) for i in icon.menu.items]
+        seen["menu"] = [(FakeIcon.text(i), i.default) for i in icon.menu.items]
         icon.item("Quit").action()
-        assert w.destroyed.wait(10)
+        assert w.destroyed.wait(10) and wv.windows[1].destroyed.wait(10)
     gui(start)
     lines = []
     desktop.run(vault, echo=lines.append)
@@ -195,7 +199,9 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     assert seen["kw"]["hidden"] is False and seen["kw"]["width"] == desktop.SIZE[0]
     assert seen["alive"] is True
     assert seen["calls"] == ["hide", "show"]
-    assert seen["menu"] == [("Open Cortex", True), ("Start with Windows", False), ("Quit", False)]
+    key = " (Ctrl+Alt+Space)" if sys.platform == "win32" else ""  # the hotkey: Windows only
+    assert seen["menu"] == [("Open Cortex", True), (f"Quick capture{key}", False),
+                            ("Start with Windows", False), ("Quit", False)]
     assert FakeIcon.made[0].stopped.is_set() and ran == ["first_run"]
     assert not server.state_file().exists() and server.running_url() is None
     assert desktop.load_state()["window"] == {"width": 1000, "height": 700, "x": 50, "y": 60}
@@ -327,6 +333,55 @@ def test_the_tray_tells_the_page_it_is_hidden_and_it_sleeps_until_shown(monkeypa
     time.sleep(0.3)
     assert log == ["gui", "control hidden", "form hidden"]
     assert desktop._native(FakeWindow(), lambda f, c: log.append("ran")) is False  # not WinForms
+
+
+def test_the_capture_box_sleeps_while_hidden_and_a_show_keeps_it_awake(monkeypatch):
+    """UX-A: the quick-capture box is a second WebView2 window, hidden nearly all the time:
+    SLEEP_S after it is hidden, still hidden, its page sleeps; shown again before that, it
+    stays awake. (Its placement, _show_box, is WinForms only: _show stands in.)"""
+    log = []
+    system = types.ModuleType("System")
+    system.Type = object
+    system.Func = {object: lambda fn: fn}
+    monkeypatch.setitem(sys.modules, "System", system)
+    monkeypatch.setattr(desktop, "_show_box", desktop._show)
+    monkeypatch.setattr(desktop, "SLEEP_S", 0.1)
+
+    class Control:
+        Visible = True
+        CoreWebView2 = types.SimpleNamespace(TrySuspendAsync=lambda: log.append("suspend"))
+
+    class Form:
+        Visible = False  # made hidden
+        browser = types.SimpleNamespace(webview=Control())
+
+        def Invoke(self, fn):  # noqa: N802  (WinForms names)
+            fn()
+
+        def Hide(self):  # noqa: N802
+            self.Visible = False
+
+        def Show(self):  # noqa: N802
+            self.Visible = True
+
+        def Activate(self):  # noqa: N802
+            pass
+
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.win, d.box = FakeWindow(), FakeWindow()
+    d.box.native = Form()
+    d.sleep_later(d.box)  # as run does once the box is made
+    _until(lambda: log == ["suspend"])
+    del log[:]
+    assert d.capture() and d.box.native.Visible
+    assert d.hide_box() and not d.box.native.Visible
+    _until(lambda: log == ["suspend"])  # hidden SLEEP_S: asleep
+    del log[:]
+    d.capture()
+    d.hide_box()
+    d.capture()  # shown again before SLEEP_S: no suspend
+    time.sleep(0.3)
+    assert log == [] and d.box.native.Visible and d.box.calls == []
 
 
 def test_minimise_and_hide_to_the_tray_relock_the_private_switch(gui, vault, monkeypatch):
