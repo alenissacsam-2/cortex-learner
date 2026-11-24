@@ -335,6 +335,55 @@ def test_the_tray_tells_the_page_it_is_hidden_and_it_sleeps_until_shown(monkeypa
     assert desktop._native(FakeWindow(), lambda f, c: log.append("ran")) is False  # not WinForms
 
 
+def test_the_capture_box_sleeps_while_hidden_and_a_show_keeps_it_awake(monkeypatch):
+    """UX-A: the quick-capture box is a second WebView2 window, hidden nearly all the time:
+    SLEEP_S after it is hidden, still hidden, its page sleeps; shown again before that, it
+    stays awake. (Its placement, _show_box, is WinForms only: _show stands in.)"""
+    log = []
+    system = types.ModuleType("System")
+    system.Type = object
+    system.Func = {object: lambda fn: fn}
+    monkeypatch.setitem(sys.modules, "System", system)
+    monkeypatch.setattr(desktop, "_show_box", desktop._show)
+    monkeypatch.setattr(desktop, "SLEEP_S", 0.1)
+
+    class Control:
+        Visible = True
+        CoreWebView2 = types.SimpleNamespace(TrySuspendAsync=lambda: log.append("suspend"))
+
+    class Form:
+        Visible = False  # made hidden
+        browser = types.SimpleNamespace(webview=Control())
+
+        def Invoke(self, fn):  # noqa: N802  (WinForms names)
+            fn()
+
+        def Hide(self):  # noqa: N802
+            self.Visible = False
+
+        def Show(self):  # noqa: N802
+            self.Visible = True
+
+        def Activate(self):  # noqa: N802
+            pass
+
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.win, d.box = FakeWindow(), FakeWindow()
+    d.box.native = Form()
+    d.sleep_later(d.box)  # as run does once the box is made
+    _until(lambda: log == ["suspend"])
+    del log[:]
+    assert d.capture() and d.box.native.Visible
+    assert d.hide_box() and not d.box.native.Visible
+    _until(lambda: log == ["suspend"])  # hidden SLEEP_S: asleep
+    del log[:]
+    d.capture()
+    d.hide_box()
+    d.capture()  # shown again before SLEEP_S: no suspend
+    time.sleep(0.3)
+    assert log == [] and d.box.native.Visible and d.box.calls == []
+
+
 def test_minimise_and_hide_to_the_tray_relock_the_private_switch(gui, vault, monkeypatch):
     """The Private switch relocks when the window is minimised or hidden to the tray."""
     apps, seen, real = [], {}, server.start

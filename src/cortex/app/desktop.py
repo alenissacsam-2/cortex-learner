@@ -449,10 +449,13 @@ class Desktop:
         return True
 
     def hide_box(self) -> bool:
-        """Esc, Enter's saved line or the box losing focus: hide it (its text stays)."""
+        """Esc, Enter's saved line or the box losing focus: hide it (its text stays); SLEEP_S
+        later, still hidden, its page sleeps as the main window's does."""
         if self.box is None:
             return False
-        if not _native(self.box, _hide):
+        if _native(self.box, _hide):
+            self.sleep_later(self.box)
+        else:
             self.box.hide()
         return True
 
@@ -473,8 +476,11 @@ class Desktop:
             self.hotkey.change()
         self.refresh_tray()
 
-    def sleep_later(self) -> None:
-        t = threading.Timer(SLEEP_S, lambda: self.quitting or _native(self.win, _sleep))
+    def sleep_later(self, win=None) -> None:
+        """SLEEP_S from now, `win` (the main window by default, or the capture box) sleeps if
+        it is still hidden (`_sleep`); a show in between keeps it awake."""
+        w = win or self.win
+        t = threading.Timer(SLEEP_S, lambda: self.quitting or _native(w, _sleep))
         t.daemon = True
         t.start()
 
@@ -639,6 +645,7 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
             hidden=True, frameless=True, on_top=True, resizable=False, width=BOX[0],
             height=BOX[1], background_color=GROUND)
         d.box.events.closing += d.box_closing
+        d.sleep_later(d.box)  # hidden until the first press: no awake renderer meanwhile
         if sys.platform == "win32":
             d.hotkey = Hotkey(d.capture)
             d.hotkey.start()
