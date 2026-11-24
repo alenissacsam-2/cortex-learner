@@ -621,6 +621,23 @@
     return h('div', { class: 'chat-src' }, h('span', { class: 'ink-3 small', text: 'Sources' }),
       sources.map((s) => pill(s, `${s.n} · ${s.title || s.path}`)));
   }
+  // the evidence line under the sources of a finished answer (certainty, the span of the data when
+  // thin or none) and a line for each page that replaced another; plain words, never colour alone
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthYear = (ym) => { const [y, mo] = String(ym).split('-'); return MON[mo - 1] ? `${MON[mo - 1]} ${y}` : String(ym); };
+  const dayText = (d) => { const [y, mo, da] = String(d || '').split('-'); return MON[mo - 1] && da ? `${Number(da)} ${MON[mo - 1]} ${y}` : ''; };
+  function evidenceRows(m, live, pageLink) {
+    if (live || m.stopped || !m.certainty) return [];
+    const c = m.certainty, hz = m.horizon;
+    const head = c === 'exact' ? ['Exact: counted or quoted from your pages']
+      : c === 'grounded' ? [`From ${(m.sources || []).length} of your pages`]
+        : c === 'thin' ? [h('strong', { text: 'Thin' }), ': check the sources'] : ['No record'];
+    if ((c === 'thin' || c === 'none') && hz && hz.first && hz.last) head.push(` · Your data covers ${monthYear(hz.first)} to ${monthYear(hz.last)}`);
+    const day = (s) => (dayText(s.day) ? ` (${dayText(s.day)})` : '');
+    return [h('p', { class: 'chat-evidence' }, ...head),
+      ...(m.conflicts || []).map((x) => h('p', { class: 'chat-evidence chat-conflict' }, 'Changed: ', pageLink(x.new),
+        `${day(x.new)} replaces `, pageLink(x.old), day(x.old)))];
+  }
   // the facts Cortex computed (chat_facts), above the model's words: exactly as counted
   const FACT_NOUN = { notes: 'notes', chats: 'saved AI chats', journal: 'journal lines', browsing: 'visits', study: 'study events' };
   const FACT_SRC = { notes: 'notes', chats: 'chats', journal: 'journal', browsing: 'browsing', study: 'study' };
@@ -672,6 +689,7 @@
   function botMsg(m) {  // {text, sources, searched, model, stopped, facts, coverage, unquoted}; returns the element and its updater
     const body = h('div', { class: 'md' }), el = h('div', { class: 'msg bot' }), who = h('div', { class: 'who' });
     let live = false, shown = null, p = null;  // the source whose passage is open, and its fetch
+    const extra = {};  // a conflict's page that is not one of the sources, by path
     const open = async (s) => {
       if (s.kind === 'file') return;  // its text is not kept: the pill names the page
       if (shown === s) { shown = p = null; draw(live); return; }
@@ -705,7 +723,14 @@
       const copy = !streaming && m.text ? h('div', { class: 'msg-acts' }, copyBtn(() => m.text.replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, ''),
         'Copy failed; select the answer and copy it.', 'btn quiet', true)) : '';
       const cov = m.coverage;  // what the model read of what the search found
+      // a conflict's page opens as a source pill does (the same object when it is one)
+      const pageLink = (x) => {
+        const s = [...(m.sources || []), ...(m.searched || [])].find((y) => y.path === x.path)
+          || (extra[x.path] = extra[x.path] || { path: x.path, kind: 'note', at: 0, len: 0 });
+        return h('button', { class: 'linkbtn', type: 'button', 'aria-pressed': String(shown === s), text: x.title || x.path, onclick: () => open(s) });
+      };
       el.replaceChildren(who, m.facts ? factsBox(m.facts) : '', body, copy, sourceRow(m.sources, m.searched, open, shown) || '',
+        ...evidenceRows(m, streaming, pageLink),
         shown ? passageView(shown, p, () => open(shown)) : '',
         cov && !streaming ? h('p', { class: 'ink-3 small cov', text: `Read ${cov.read} of ${cov.matched}${cov.more ? '+' : ''} match${cov.matched === 1 && !cov.more ? '' : 'es'}`
           + (cov.also && cov.also.length ? ` · also searched: ${cov.also.join(', ')}` : '') }) : '',
@@ -1090,7 +1115,10 @@
           else if (ev.t === 'tok') m.text += ev.s;
           else if (ev.t === 'text') m.text = ev.s;
           else if (ev.t === 'facts') m.facts = ev.facts;
-          else if (ev.t === 'src') { m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || []; }
+          else if (ev.t === 'src') {
+            m.sources = ev.sources; m.searched = ev.searched || []; m.coverage = ev.coverage; m.unquoted = ev.unquoted || [];
+            m.certainty = ev.certainty; m.horizon = ev.horizon; m.conflicts = ev.conflicts || [];
+          }
           else if (ev.t === 'err') failed = ev;
           if (ev.t !== 'err') { bot.draw(ev.t !== 'done'); followEnd(); }
         }
