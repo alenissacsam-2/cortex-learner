@@ -246,6 +246,7 @@ LENS_PROBE = r"""
   const real2 = btns.find((x) => x !== real && x.dataset.lens !== id && x.dataset.lens !== 'ghost-private');
   real.click();
   if (real2) { real2.click(); out.moved = [b.lensIds && b.lensIds[0] === real2.dataset.lens, real.getAttribute('aria-pressed'), real2.getAttribute('aria-pressed')]; }
+  out.empty = [b.lens(['no-such-page']), !!b.lensIds && b.lensIds[0] === (real2 || real).dataset.lens, b.todayIds];
   real2 ? real2.click() : real.click();
   out.end = [b.lensIds, cam() === cam0 || 'moved'];
   return out;
@@ -275,3 +276,36 @@ def test_focus_lens_on_home_rows(tmp_path, page):
     assert p["esc"] == [None, None]
     assert p["today"] == {"lens": None, "note": None, "today": True, "pressed": "false"}
     assert p["end"][0] is None
+    assert p["empty"] == [0, True, None]  # no visible page: the lens stays as it was
+
+
+@pytest.fixture
+def uneven_page(tmp_path, demo_vault):  # noqa: F811
+    """Pages dated 1, 0, 4 and 2 to a month over four months, the rest undated."""
+    data = dashboard.build(Vault(demo_vault), now=datetime.now(UTC))
+    day = datetime.fromisoformat(data["day"][:10])
+    months = [(day.year * 12 + day.month - 1) - k for k in (3, 1, 1, 1, 1, 0, 0)]
+    for k, p in enumerate(data["pages"]):
+        m = months[k] if k < len(months) else None
+        p["date"] = f"{m // 12}-{m % 12 + 1:02d}-15" if m else None
+    f = tmp_path / "uneven.html"
+    f.write_text(dashboard.render_html(data), encoding="utf-8")
+    return f
+
+
+BARS_PROBE = r"""
+(async () => {
+  await __L.ready();
+  document.querySelector('#home-brain-tools [data-mode="growth"]').click();
+  const root = document.querySelector('.home-brain > .scrub');
+  return [...root.querySelectorAll('.sb')].map((x) => x.firstChild.offsetHeight);
+})()
+"""
+
+
+def test_bars_are_as_tall_as_the_months_count(tmp_path, uneven_page):
+    out = _run(tmp_path, uneven_page, probe=BARS_PROBE)
+    assert out["errors"] == []
+    h = out["probe"]
+    assert len(h) == 4 and h[1] == 0  # an empty month draws no bar
+    assert h[2] == 32 and abs(h[0] - 8) <= 1 and abs(h[3] - 16) <= 1  # 1, 4 and 2 of a peak of 4

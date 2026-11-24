@@ -3659,6 +3659,9 @@ void main() {
       // on them; no pulses, no stepping. `quiet` (a remount) keeps the camera; `cam0` is the view to
       // return to. Returns the number framed, or 0 (nothing changes).
       lens(list, quiet, cam0) {
+        let seen = 0;
+        for (const id of list || []) { const i = idIndex.get(String(id)); if (i !== undefined && i < SF && userVis[i]) seen++; }
+        if (!seen) return 0;  // nothing to show: nothing changes
         const keep = cam0 || (lensOn ? lensCam : Object.assign({}, cam));
         this.today(list, null, quiet, true);
         if (!lensOn) return 0;

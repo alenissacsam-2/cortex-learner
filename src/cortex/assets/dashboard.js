@@ -1303,8 +1303,8 @@
   const scrubs = [];
   const PLAY_MS = 6000;
   function buildScrub() {
-    const all = growthMonths().months, counts = growthMonths().counts;
-    let span = all, playing = false, raf = 0;
+    let all = growthMonths().months, counts = growthMonths().counts;
+    let span = all, yearOn = false, playing = false, raf = 0;
     const root = el('div', 'scrub'), bars = el('div', 'scrub-bars'), range = el('input'), out = el('output');
     root.hidden = !(brain && brain.mode === 'growth');
     bars.setAttribute('aria-hidden', 'true');
@@ -1332,8 +1332,8 @@
         b.append(i);
         return b;
       }));
-      yr.setAttribute('aria-pressed', String(span !== all));
-      whole.setAttribute('aria-pressed', String(span === all));
+      yr.setAttribute('aria-pressed', String(yearOn));
+      whole.setAttribute('aria-pressed', String(!yearOn));
     };
     const apply = () => {
       paint();
@@ -1343,6 +1343,7 @@
     };
     function setSpan(year) {
       stop();
+      yearOn = year;
       span = year ? all.slice(-12) : all;
       range.value = String(span.length - 1);
       draw();
@@ -1388,12 +1389,25 @@
     row.append(el('span', null, 'Up to'), range, out, seg, play);
     root.append(bars, row);
     if (!all.length) { range.disabled = true; for (const b of [yr, whole, play]) b.disabled = true; }
-    const me = { root, stop, set(month) {  // follow the other scrubber, without moving the brain
+    const me = { root, stop, refresh() {  // new data: the months and counts again, the chosen month kept
+      stop();
+      const keep = span[+range.value];
+      all = growthMonths().months;
+      counts = growthMonths().counts;
+      span = yearOn ? all.slice(-12) : all;
+      const k = span.indexOf(keep);
+      range.disabled = !all.length;
+      for (const b of [yr, whole, play]) b.disabled = !all.length;
+      draw();
+      range.value = String(k < 0 ? Math.max(0, span.length - 1) : k);
+      paint();
+    }, set(month) {  // follow the other scrubber, without moving the brain
       let k = span.indexOf(month);
       if (k < 0) k = month && month < span[0] ? 0 : span.length - 1;
       range.value = String(Math.max(0, k));
       paint();
     } };
+    for (let i = scrubs.length; i--;) if (!scrubs[i].root.isConnected) scrubs.splice(i, 1);  // a rerender's old ones
     scrubs.push(me);
     return me;
   }
@@ -4095,6 +4109,8 @@
     BRAIN_IDS.clear();
     if (D.brain && D.brain.nodes) for (const id of D.brain.nodes.ids) BRAIN_IDS.add(id);
     lensAdj = null;
+    growthData = null;
+    for (let i = scrubs.length; i--;) { if (scrubs[i].root.isConnected) scrubs[i].refresh(); else scrubs.splice(i, 1); }
     if (lensId && !BRAIN_IDS.has(lensId)) clearLens();  // its page is gone
     countDegrees();
     BACK = HAY = CMDS = null;
