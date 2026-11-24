@@ -1,6 +1,6 @@
 # Cortex
 
-![Cortex: a second brain on your own computer. Every AI app you use reads from it and adds to it. Nothing leaves your computer unless you turn it on.](docs/images/hero.png)
+![Cortex: a second brain on your own computer. Every AI app you use reads from it and adds to it. Nothing about you leaves your computer unless you turn it on.](docs/images/hero.png)
 
 *Every screenshot in this README shows the bundled sample vault of Sam, a made-up student, plus made-up demo data. None of it is a real person's.*
 
