@@ -13,6 +13,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYINSTALLER = "pyinstaller==6.22.3"
+# the icon app_exe stamps on Cortex.exe (the wheel's cortex/assets/cortex.ico): the setup's too
+ICON = ROOT / "src" / "cortex" / "assets" / "cortex.ico"
+
+
+def data(payload: Path) -> list[str]:
+    """PyInstaller's payload and icon options: the payload, Cortex's icon beside it for the
+    window (setup_app.icon_path), and the same icon on CortexSetup.exe itself (Explorer)."""
+    return ["--add-data", f"{payload}{os.pathsep}payload", "--add-data", f"{ICON}{os.pathsep}.",
+            "--icon", str(ICON)]
 
 
 def main() -> None:
@@ -37,7 +46,7 @@ def main() -> None:
     shutil.copy2(zpath, ROOT / "dist" / "cortex-skill.zip")
     subprocess.run([uv, "tool", "run", "--python", "3.12", "--from", PYINSTALLER, "pyinstaller",
                     "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "CortexSetup",
-                    "--add-data", f"{payload}{os.pathsep}payload",
+                    *data(payload),
                     "--distpath", str(ROOT / "dist"), "--workpath", str(stage / "work"),
                     "--specpath", str(stage), str(ROOT / "installer" / "setup_app.py")],
                    cwd=ROOT, check=True)

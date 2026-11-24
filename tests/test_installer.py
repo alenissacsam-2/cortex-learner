@@ -539,3 +539,153 @@ def test_make_shortcuts_on_update_rewrites_only_those_still_there(tmp_path, monk
     assert made == [(menu, exe, "-m cortex.app.launch", exe)]
     REAL_MAKE_SHORTCUTS(d, lambda s: None)
     assert [m[0] for m in made] == [menu, menu, desk]
+
+
+# ---- the setup window's pure parts (installer/setup_progress.py) ------------------------------
+
+sp = setup_app.sp
+# install()'s own lines around a first install's uv output, as the log has them
+FIRST_INSTALL = r"""Installing Cortex 0.6.0 into C:\X\Cortex (downloads Python and packages)...
+running: C:\X\Cortex\uv.exe tool install --force --reinstall-package cortex-learner
+Downloading cpython-3.12.12-windows-x86_64-none (download) (20.4MiB)
+ Downloaded cpython-3.12.12-windows-x86_64-none (download)
+Resolved 86 packages in 2.31s
+Downloading numpy (12.3MiB)
+Downloading onnxruntime (11.9MiB)
+ Downloaded numpy
+Downloading pillow (6.8MiB)
+ Downloaded pillow
+ Downloaded onnxruntime
+Prepared 86 packages in 41.20s
+Installed 86 packages in 5.37s
+Bytecode compiled 9233 files in 14.02s
+ + numpy==2.2.6
+ + cortex-learner==0.6.0
+Installed 3 executables: cortex, cortex-app, cortex-receiver
+app: C:\X\Cortex\tools\cortex-learner\app\Cortex.exe
+added to your PATH: C:\X\Cortex\bin (new terminals know cortex)
+shortcut: C:\X\Programs\Cortex.lnk
+added to Apps & Features (uninstall from there)
+Cortex is installed.""".splitlines()
+
+
+def _run(state, lines):
+    seen = [state]
+    for line in lines:
+        seen.append(sp.progress(seen[-1], line))
+    return seen
+
+
+def test_progress_follows_a_first_install_to_the_end():
+    seen = _run(sp.start("install", "0.6.0"), FIRST_INSTALL)
+    fractions = [s.fraction for s in seen]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    order = [k for k, _ in sp.steps("install")]
+    assert [order.index(s.step) for s in seen] == sorted(order.index(s.step) for s in seen)
+    assert seen[-1].step == "done" and seen[-1].status == "Cortex is installed."
+    statuses = [s.status for s in seen]
+    assert "Downloading Python 3.12 and packages (first install only)…" in statuses
+    assert "Installing 86 packages…" in statuses and "Making shortcuts…" in statuses
+    # package downloads move the bar inside the install step
+    assert seen[8].fraction > seen[5].fraction
+    assert sp.progress(seen[5], "Some new uv line") == seen[5]  # an unknown line: no move
+
+
+def test_progress_of_an_update_and_a_late_line():
+    s = sp.start("update", "0.6.0")
+    assert (s.step, s.fraction, s.status) == ("wait", 0.0, "Waiting for Cortex to close…")
+    lines = ["waiting for process 9 (the Cortex app) to exit",
+             "closing 2 programs that use Cortex: x (process 1); y (process 2)",
+             FIRST_INSTALL[0], "Resolved 80 packages in 3.57s",
+             "Prepared 1 package in 324ms", "Uninstalled 1 package in 118ms",
+             "Installed 1 package in 487ms", "Bytecode compiled 3490 files in 1.90s",
+             "Installed 3 executables: cortex, cortex-app, cortex-receiver",
+             r"app: C:\X\Cortex.exe", "Cortex is updated. AI apps connected to Cortex "
+             "reconnect when you restart them.", "opened the Cortex app"]
+    seen = _run(s, lines)
+    assert [x.fraction for x in seen] == sorted(x.fraction for x in seen)
+    assert [x.step for x in seen[1:4]] == ["wait", "close", "install"]
+    assert seen[-2].status == "Cortex is updated to 0.6.0. Opening it…"
+    assert (seen[-1].step, seen[-1].fraction) == ("open", 1.0)
+    assert seen[-1].status == ("Cortex is updated to 0.6.0. Restart Claude and your other AI "
+                               "apps so they reconnect.")
+    # a step never goes back: a late "waiting" line during the install changes nothing
+    assert sp.progress(seen[5], "waiting for process 9 (the Cortex app) to exit") == seen[5]
+    # an install has no "close" row: closing programs there keeps its step, and says so
+    s = sp.progress(sp.start("install"), "closing 1 program that use Cortex: x")
+    assert (s.step, s.fraction, s.status) == ("folder", 0, "Closing programs that use Cortex…")
+
+
+def test_step_lists_and_elapsed():
+    assert sp.steps("update", "0.6.0") == [
+        ("wait", "Waiting for Cortex to close"), ("close", "Closing programs that use Cortex"),
+        ("install", "Installing Cortex 0.6.0"), ("finish", "Finishing up"),
+        ("open", "Opening Cortex")]
+    assert sp.steps("install", "0.6.0") == [
+        ("folder", "Choose a folder"),
+        ("install", "Installing Cortex 0.6.0 (downloads Python and packages the first time)"),
+        ("finish", "Finishing up"), ("done", "Done")]
+    assert sp.steps("install")[1][1].startswith("Installing Cortex (downloads")  # no wheel
+    for mode in ("install", "update"):  # every row has its share of the bar, in order
+        assert [k for k, _ in sp.steps(mode)] == list(sp.SPANS[mode])
+    assert [sp.elapsed(t) for t in (0, 8.9, 60, 80)] == ["0 s", "8 s", "1 min 0 s",
+                                                          "1 min 20 s"]
+
+
+def test_in_use_is_grouped_in_plain_words():
+    d = r"C:\Users\x\AppData\Local\Programs\Cortex"
+    busy = [(11, d + r"\bin\cortex.exe"),
+            (12, d + r"\tools\cortex-learner\Scripts\python.exe"),  # cortex.exe's child
+            (13, d + r"\python\cpython-3.12\python.exe"),  # and its grandchild
+            (21, d + r"\tools\cortex-learner\app\Cortex.exe"),
+            (31, d + r"\bin\cortex-receiver.exe"),
+            (41, d + r"\uv.exe")]
+    parents = {11: 5, 12: 11, 13: 12, 21: 6, 31: 7, 41: 8}
+    assert sp.group_in_use(busy, parents) == [
+        "Claude's Cortex connection (1)", "The Cortex window (1)", "The browsing receiver (1)",
+        "Other Cortex programs (1)"]
+    two = [(11, d + r"\bin\cortex.exe"), (12, d + r"\BIN\CORTEX.EXE"),
+           (13, d + r"\bin\cortex-app.exe")]
+    assert sp.group_in_use(two, {}) == ["Claude's Cortex connection (2)",
+                                        "The Cortex window (1)"]
+    assert sp.group_in_use([], {}) == []
+    loop = [(1, d + r"\bin\cortex.exe"), (2, d + r"\tools\python.exe")]
+    assert sp.group_in_use(loop, {1: 2, 2: 1}) == ["Other Cortex programs (2)"]  # pid reuse
+
+
+def test_the_window_icon_is_bundled_and_found(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("build", ROOT / "installer" / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    args = build.data(tmp_path / "payload")
+    pairs = [args[i + 1] for i, a in enumerate(args) if a == "--add-data"]
+    assert f"{ICO}{os.pathsep}." in pairs and build.ICON == ICO and ICO.is_file()
+    assert args[args.index("--icon") + 1] == str(ICO)  # CortexSetup.exe's own icon too
+    assert "*data(payload)" in (ROOT / "installer" / "build.py").read_text()  # in the command
+    assert setup_app.icon_path() == ICO  # from source
+    (tmp_path / "cortex.ico").write_bytes(ICO.read_bytes())
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert setup_app.icon_path() == tmp_path / "cortex.ico"  # the one-file exe's copy
+
+
+def test_the_install_window_asks_and_fails_inside_itself():
+    """No system message box in the install and update window: the in-use question and
+    errors are panels in it (uninstall keeps Windows' own questions)."""
+    import inspect
+    src = inspect.getsource(setup_app.window)
+    assert "messagebox" not in src and "ask_close" not in src
+    assert "group_in_use" in src and "Copy log" in src
+
+
+def test_the_update_window_waits_for_the_app_itself(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(setup_app, "LOG", tmp_path / "setup.log")
+    monkeypatch.setattr(setup_app, "wait_pid", lambda pid: seen.append(("wait", pid)))
+    monkeypatch.setattr(setup_app, "window", lambda o, say: seen.append(("window", o.update)) or 0)
+    d = str(tmp_path / "Cortex")
+    assert setup_app.main(["--update", "--wait-pid", "9", "--dir", d]) == 0
+    assert seen == [("window", True)]  # its first step, so the window is never blank
+    monkeypatch.setattr(setup_app, "in_use", lambda d, procs=None: [])
+    seen.clear()
+    assert setup_app.main(["--wait-pid", "9", "--dir", d]) == 0
+    assert seen == [("wait", 9), ("window", False)]
