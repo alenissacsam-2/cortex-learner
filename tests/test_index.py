@@ -246,6 +246,33 @@ def test_refresh_edit_and_delete(vault, idx):
     assert idx.refresh() == 0
 
 
+def test_a_page_deleted_between_the_scan_and_its_read_is_skipped(vault, idx, monkeypatch):
+    """L1: a page the scan listed but gone before its read (a sync, an editor's save) costs
+    no refresh: the other changed page is indexed, the gone one is out, the next refresh
+    drops its stat and the one after has nothing to do."""
+    gone, kept = vault.root / "problems" / "lc-1.md", vault.root / "problems" / "lc-167.md"
+    gone.write_text(gone.read_text(encoding="utf-8").replace("Hash map", "Zebra map"),
+                    encoding="utf-8")
+    kept.write_text(kept.read_text(encoding="utf-8") + "- Quokka trick.\n", encoding="utf-8")
+    for p in (gone, kept):
+        _bump(p)
+    real = Index._scan
+
+    def scan_then_delete(self):
+        out = real(self)
+        gone.unlink()
+        return out
+
+    monkeypatch.setattr(Index, "_scan", scan_then_delete)
+    idx.refresh()
+    monkeypatch.setattr(Index, "_scan", real)
+    assert ids(idx.find("quokka")) == ["lc-167"]
+    assert idx.find("zebra") == [] and idx.find("hash") == []
+    with pytest.raises(VaultError):
+        idx.read("lc-1")
+    assert idx.refresh() == 1 and idx.refresh() == 0
+
+
 @pytest.mark.parametrize("flag", ["true", "yes", '"True"', "on", "1"])
 def test_refresh_note_turning_private(vault, idx, flag):
     p = vault.root / "problems" / "lc-1.md"
