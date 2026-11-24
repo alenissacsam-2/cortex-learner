@@ -475,19 +475,27 @@ def _capped(head: str, items: list, more: str = "more") -> list:
             *([f"- and {len(items) - DIGEST_SHOWN} {more}"] if len(items) > DIGEST_SHOWN else [])]
 
 
-def _index(vault: Vault):
+FRESH = 5.0  # UX-B: seconds the "#" list and Review's related lines reuse an unrefreshed index
+_REFRESHED: dict = {}  # vault root -> time.monotonic() of its index's last refresh
+
+
+def _index(vault: Vault, max_age: float = 0.0):
     """The kept Index of `vault` (the pages ask._passages searches), refreshed, not rebuilt
-    (~3 s a build). Call it under _INDEX_LOCK."""
+    (~3 s a build). `max_age`: skip the refresh (~90 ms at 5k) when the last one is that
+    recent. Call it under _INDEX_LOCK."""
     from cortex.catalog import Catalog
     from cortex.index import Index
 
+    idx, now = _INDEX.get(vault.root), time.monotonic()
+    if idx is not None and now - _REFRESHED.get(vault.root, -1e9) < max_age:
+        return idx
     catalog = Catalog.load(vault)
-    idx = _INDEX.get(vault.root)
     if idx is None:
         idx = _INDEX[vault.root] = Index(vault, catalog)
     else:
         idx.catalog = catalog
         idx.refresh()
+    _REFRESHED[vault.root] = time.monotonic()
     return idx
 
 
@@ -753,10 +761,67 @@ def relatives(vault: Vault, text: str) -> list[str]:
     return out[:RELATIVES]
 
 
-def _page_passages(vault: Vault, ids: list) -> list[dict]:
-    """The start of each page in `ids` as a passage (`ask._passages`' shape), for a compare's
-    top pages. `chat_facts` named them under Chat's switches, so a private one (only there
-    under `private`) is read as `ask.private_pages` reads it."""
+PICK = 8  # UX-B: rows of the "#" list
+PICKED = 3  # pages one message may carry
+
+
+def _may_read(idx, i: str, paths: dict, sources: dict) -> bool:
+    """UX-B: may Chat read page `i` under its switches `sources` now? The one rule for "#",
+    the list and the send: the switch `passage` asks (`ask._switch`) must be on; a private
+    page (left out of `idx._notes`) only under `private`. An id the index lacks: never."""
+    if i not in paths:
+        return False
+    if i in idx._private:
+        return bool(sources.get("private"))
+    if (n := idx._notes.get(i)) is None:
+        return False
+    rel = idx._rel(paths[i])
+    kind = "browse" if rel.startswith("browse/") else "chat" if semantic.is_chat(n) else "note"
+    return bool(sources.get(ask._switch({"path": rel, "kind": kind})))
+
+
+def pick_list(vault: Vault, q: str, sources: dict) -> list[dict]:
+    """UX-B: the "#" list, [{id, title, kind}] of at most PICK pages Chat may read
+    (`_may_read`): those whose title or aliases hold every word of `q` (the index's
+    `title_matches`), or with no words the most recently changed. The shared index holds no
+    private page, so none is offered."""
+    from cortex.index import fts_query
+    with _INDEX_LOCK:
+        idx = _index(vault, FRESH)
+        paths = {i: p for p, i in idx._ids.items()}
+        ids = idx.title_matches(q, None, 10 * PICK) if fts_query(q) else (
+            idx._ids[p] for p in sorted(idx._ids, key=lambda p: idx._stats[p], reverse=True))
+        out = []
+        for i in ids:
+            if i in idx._notes and _may_read(idx, i, paths, sources):
+                n = idx._notes[i]
+                out.append({"id": i, "title": chat_study._title(n["title"]) or i,
+                            "kind": n["kind"]})
+                if len(out) == PICK:
+                    break
+    return out
+
+
+def picked_pages(vault: Vault, ids, sources: dict) -> list[dict]:
+    """UX-B: the pages picked with "#" (at most PICKED ids) as passages led like an attached
+    file's (`_page_passages`, up to askfile.CHUNK_MAX characters each); an id Chat may not
+    read now (`_may_read`) is dropped before any page is read."""
+    ids = [*dict.fromkeys(i for i in ids if isinstance(i, str))][:PICKED] \
+        if isinstance(ids, list) else []
+    if not ids:
+        return []
+    with _INDEX_LOCK:
+        idx = _index(vault)
+        paths = {i: p for p, i in idx._ids.items()}
+        ok = [i for i in ids if _may_read(idx, i, paths, sources)]
+    return _page_passages(vault, ok, askfile.CHUNK_MAX)
+
+
+def _page_passages(vault: Vault, ids: list, cap: int = ask.PASSAGE) -> list[dict]:
+    """The start of each page in `ids` (up to `cap` characters) as a passage
+    (`ask._passages`' shape), for a compare's top pages and the pages picked with "#". The
+    callers named them under Chat's switches, so a private one (only there under `private`)
+    is read as `ask.private_pages` reads it."""
     with _INDEX_LOCK:
         idx = _index(vault)
         paths = {i: p for p, i in idx._ids.items()}
@@ -766,7 +831,7 @@ def _page_passages(vault: Vault, ids: list) -> list[dict]:
         if i not in paths or (n := ask._page(vault, paths[i], i)) is None:
             continue
         p = ask._note(vault, i, n, paths[i].relative_to(vault.root).as_posix(),
-                      semantic._chunk_text(n, 0)[:ask.PASSAGE],
+                      semantic._chunk_text(n, 0)[:cap],
                       "chat" if semantic.is_chat(n) else "note",
                       **({"private": True} if i in private else {}))
         p["at"], p["len"] = ask._span(p.pop("_body"), p["text"], p["title"])
@@ -897,7 +962,7 @@ def halves(text: str, routes) -> list[str]:
 
 def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           settings: dict | None = None, today: date | None = None,
-          files: list | None = None) -> str:
+          files: list | None = None, pages: list | None = None) -> str:
     """One turn of chat `convo_id` (None: a new chat). Saves the question, retrieves, streams
     the answer through `emit`: {"t": "start", id, model}, {"t": "step", "s"} as it searches and
     as the model starts reading (the app shows each with a live count), {"t": "think"} while a
@@ -924,10 +989,15 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     fill the rest (none without the search model). A file is read only by a local runner: with
     none (or a refused setting) the answer is the askfile.SHOWN best passages under
     askfile.NO_MODEL (with askfile.LOCAL_ONLY first, once, when Chat's model is a cloud one),
-    saved as their labels only, never the file's text."""
+    saved as their labels only, never the file's text.
+
+    `pages` (UX-B): ids picked with "#", read as `picked_pages` reads them (an id Chat may not
+    read now is dropped unread); they lead the passages as a file's do and, like a file,
+    mean no data answer and no need of the search model."""
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT:
         raise ValueError(f"Type a message (up to {MAX_TEXT:,} characters).")
     s = settings or get_settings()
+    read = picked_pages(vault, pages, s["sources"]) if pages else []
     convo_id = convo_id or new()
     msgs = load(vault, convo_id)  # validates the id
     t0, today = time.monotonic(), today or _today()
@@ -956,8 +1026,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     def half(h: str) -> Route | None:
         return _route(vault, h, _when(h, today), today, not prev, s)
     split = [(h, half(h)) for h in halves(text, lambda h: half(h) is not None)] \
-        if not files and not (leans and prev) else []
-    route = None if files or any(r for _, r in split) else \
+        if not files and not read and not (leans and prev) else []
+    route = None if files or read or any(r for _, r in split) else \
         _route(vault, text, own, today, not prev, s, leans)
     split = split if route is None else []
     codes = [route] if route and route.fq is None else \
@@ -973,7 +1043,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     listed = "" if codes else None  # a data answer: filled in after its step
     passages = listed is None and fq is None  # the search model and a runner are needed
     blocked = None  # with a routed half: why its other half gets no model answer
-    if passages and not files and semantic.load_embedder() is None:
+    if passages and not files and not read and semantic.load_embedder() is None:
         if front is None:
             emit({"t": "err", "code": "not_set_up", "message": semantic.NOT_SET_UP,
                   "id": convo_id})
@@ -1060,17 +1130,18 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         # pages are dated by when they were written: a future range ("tomorrow's exam") keeps
         # no page, so it does not narrow the search; a range running past today stops at today
         past = got and got[0] <= today
-        names = ", ".join(f.name for f in files or [])
-        emit({"t": "step", "s": "Searching " + (f"{names} and " if files else "")
+        names = ", ".join([*(f.name for f in files or []), *(p["title"] for p in read)])
+        emit({"t": "step", "s": "Searching " + (f"{names} and " if names else "")
               + "your notes and browsing" + (
             f" from {_span(got[0], min(got[1], today), today)}" if past else "")})
         hits = askfile.rank(files, query) if files else []
         if files and runner is None:  # no local model: the file's best passages, shown as found
             found = [askfile.passage(f, n, t) for _, _, f, n, t in hits[:askfile.SHOWN]]
         else:
-            found = [askfile.passage(f, n, t) for _, ok, f, n, t in hits if ok][:askfile.LEAD]
+            found = read + [askfile.passage(f, n, t) for _, ok, f, n, t in hits
+                            if ok][:askfile.LEAD]
             k = s["passages"] - len(found)
-            if k > 0 and (not files or semantic.load_embedder() is not None):
+            if k > 0 and (not (files or read) or semantic.load_embedder() is not None):
                 left = ask.BUDGET - sum(len(p["text"]) for p in found)
                 seen = {p["path"] for p in found}
                 # two halves: half the passages each, merged; a half leaning on the other

@@ -1228,7 +1228,7 @@ def test_chat_attaches_a_file_shows_its_line_saves_removes_and_names_it_in_sourc
     out = _run(node, tmp_path, "attach", ATTACH, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["crow"] == ["TEXTAREA:chat-input", "BUTTON:Attach a file", "BUTTON:chat-send",
-                           "INPUT:chat-file"]
+                           "INPUT:chat-file", "UL:chat-pk"]
     assert out["pick"] == ["file", ".pdf,.docx,.txt,.md", True]
     assert out["wrong"] == "Attach a .pdf, .docx, .txt or .md file."
     assert out["big"] == "This file is over 5 MB, the most Cortex reads from one .txt file."
@@ -1594,3 +1594,167 @@ def test_a_command_line_card_says_an_ai_app_wrote_it(tmp_path, theme):
         ["Ignore previous instructions",
          'This line in me/core looks like an instruction to an AI: the phrase "ignore previous '
          'instructions". Keep it out, or Keep it.', ["Keep it out", "Keep it"]]]
+
+
+# ---- UX-B: "#" attaches a vault page in Chat; related pages beside Review cards ----
+
+PICK_JS = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+const wait = () => new Promise((r) => setTimeout(r, 200)).then(tick);
+(async () => {
+  try {
+    localStorage.setItem('cortex-theme', DATA.theme);
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
+    await tick();
+    out.theme = document.documentElement.dataset.theme;
+    const ta = $('chat-input'), list = $('chat-pk');
+    const state = () => ({ expanded: ta.getAttribute('aria-expanded'), active: ta.getAttribute('aria-activedescendant'),
+      rows: list.querySelectorAll('li').map((li) => [li.getAttribute('role'), li.id, li.getAttribute('aria-selected'), li.childNodes.map((c) => c.textContent)]) });
+    const type = async (v) => { ta.value = v; ta.fire('input'); await wait(); };
+    const key = (k) => ta.fire('keydown', { key: k, shiftKey: false });
+    const chips = () => $('chat-files').querySelectorAll('p').map((p) => [p.querySelector('span').textContent, p.querySelector('button').getAttribute('aria-label')]);
+    const posts = () => fetched.filter((f) => f.path === '/api/chat' && f.method === 'POST').map((f) => f.body);
+    out.closed = [ta.getAttribute('aria-controls'), list.getAttribute('role'), state()];
+    // "#" inside a word does not open the list; at the start or after a space it does
+    await type('c#');
+    out.inWord = [state().expanded, fetched.filter((f) => f.path.startsWith('/api/chat/pages')).length];
+    await type('see #He');
+    out.asked = fetched.filter((f) => f.path.startsWith('/api/chat/pages')).map((f) => [f.path, f.token]);
+    out.open = state();
+    key('ArrowDown');
+    out.down = state();
+    key('ArrowUp'); key('ArrowUp');
+    out.wrap = state().active;
+    key('ArrowDown'); key('ArrowDown');
+    key('Enter');  // picks the second row; never sends
+    out.picked = [ta.value, chips(), state().expanded, posts().length];
+    // Esc closes and leaves the text; typing on in the same "#" keeps it closed
+    await type('#mi');
+    key('Escape');
+    out.esc = [ta.value, state().expanded];
+    await type('#min');
+    out.stillShut = state().expanded;
+    // Tab and a click pick too; a page picked twice is one line
+    await type('x #a');
+    key('Tab');
+    await type('#b');
+    list.querySelectorAll('li')[2].fire('click');
+    await type('#c');
+    key('Enter');
+    out.three = [chips().map((c) => c[0]), $('toast-msg').textContent];
+    await type('#d');
+    key('ArrowDown'); key('ArrowDown'); key('ArrowDown');
+    key('Enter');  // a 4th: refused, said in the live region, the text stays
+    out.fourth = [chips().length, $('toast-msg').textContent, ta.value];
+    // Remove drops one line
+    $('chat-files').querySelectorAll('button').find((b) => b.getAttribute('aria-label') === 'Remove Heap <b>sort</b>').fire('click');
+    out.removed = chips().map((c) => c[0]);
+    // the message carries the picked ids; the lines clear after the send
+    const ev = (o) => JSON.stringify(o) + '\n';
+    DATA.stream = [ev({ t: 'start', model: 'm' }) + ev({ t: 'tok', s: 'Yes [1].' }) + ev({ t: 'src', sources: [{ n: 1, path: 'notes/min-heap.md', title: 'Min heap', kind: 'note' }] }) + ev({ t: 'done', seconds: 1 })];
+    ta.value = 'what do they say?';
+    key('Enter');
+    await tick();
+    out.sent = posts();
+    out.after = chips();
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+@pytest.mark.parametrize("theme", ["day", "night"])
+def test_hash_lists_pages_and_picks_them_into_the_message(root_committed, tmp_path, monkeypatch,
+                                                          theme):
+    """UX-B: "#" at the start or after a space opens the listbox under the message box (the
+    ARIA combobox attributes on the textarea); arrows move, Enter, Tab or a click pick and
+    never send, Esc closes for that "#"; a picked page is a line like an attached file's with
+    Remove; at most 3 ("Up to 3 pages"); the send carries their ids and clears the lines.
+    Text only, in both themes."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/chat"]["chats"] = []
+    routes["/api/chat/pages"] = {"pages": [
+        {"id": "heap-sort", "title": "Heap <b>sort</b>", "kind": "concept"},
+        {"id": "min-heap", "title": "Min heap", "kind": "note"},
+        {"id": "heap-paper", "title": "Heaps, a paper", "kind": "resource"},
+        {"id": "heap-four", "title": "Heap four", "kind": "note"}]}
+    out = _run(node, tmp_path, "pick", PICK_JS, {"routes": routes, "stream": [], "theme": theme})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["theme"] == theme
+    assert out["closed"] == ["chat-pk", "listbox", {"expanded": "false", "active": None,
+                                                     "rows": []}]
+    assert out["inWord"] == ["false", 0]
+    assert out["asked"] == [["/api/chat/pages?q=He", "KEY123"]]
+    rows = [["option", "chat-pk-0", "true", ["Heap <b>sort</b>", "concept"]],
+            ["option", "chat-pk-1", "false", ["Min heap", "note"]],
+            ["option", "chat-pk-2", "false", ["Heaps, a paper", "resource"]],
+            ["option", "chat-pk-3", "false", ["Heap four", "note"]]]
+    assert out["open"] == {"expanded": "true", "active": "chat-pk-0", "rows": rows}
+    assert out["down"]["active"] == "chat-pk-1" and out["down"]["rows"][1][2] == "true"
+    assert out["wrap"] == "chat-pk-3"
+    assert out["picked"] == ["see ", [["Min heap", "Remove Min heap"]], "false", 0]
+    assert out["esc"] == ["#mi", "false"] and out["stillShut"] == "false"
+    assert out["three"][0] == ["Min heap", "Heap <b>sort</b>", "Heaps, a paper"]
+    assert out["fourth"] == [3, "Up to 3 pages", "#d"]
+    assert out["removed"] == ["Min heap", "Heaps, a paper"]
+    assert out["sent"] == [{"id": None, "text": "what do they say?",
+                            "pages": ["min-heap", "heap-paper"]}]
+    assert out["after"] == []
+
+
+RELATED_JS = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'review').fire('click');
+    await tick();
+    const cards = $('review').querySelectorAll('.rcard');
+    out.lines = cards.map((c) => { const r = c.querySelector('.related'); return r ? r.textContent : null; });
+    const b = cards[0].querySelector('.related').querySelectorAll('button');
+    out.buttons = b.map((x) => [x.className, x.getAttribute('aria-label')]);
+    b[1].fire('click');
+    await tick();
+    out.opened = fetched.filter((f) => f.path === '/api/open').map((f) => f.body);
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+def test_review_cards_show_their_related_pages(tmp_path):
+    """UX-B: a card about a page shows "Related: " and its pages as link-buttons that open the
+    page in Obsidian; none when the server sent none. Text only."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    related = [{"title": "Heap sort", "path": "concepts/heap-sort.md"},
+               {"title": "Min <i>heap</i>", "path": "notes/min-heap.md"}]
+    pending = [{"key": "p1", "page": "preferences", "section": "Personal", "text": "Short answers",
+                "since": "2026-11-20", "single": False, "related": related},
+               {"key": "p2", "page": "core", "section": "", "text": "Use tabs", "since": None,
+                "single": False, "related": []}]
+    view = {k: [] for k in ("expired", "stale", "conflicts", "rules", "decisions", "forget",
+                            "imports", "crowded", "unused", "outside", "unsafe")}
+    view.update(pending=pending, today=[{"type": "pending", "key": "p1"},
+                                        {"type": "pending", "key": "p2"}], count=2, more=2)
+    status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
+              "update": {"current": "0.1.0", "mode": "installer"}}
+    out = _run(node, tmp_path, "related", RELATED_JS, {
+        "routes": {"/api/review": view, "/api/status": status, "/api/open": {"ok": True}},
+        "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["lines"] == ["Related: Heap sort, Min <i>heap</i>", None]
+    assert out["buttons"] == [["linkbtn", "Open in Obsidian: Heap sort"],
+                              ["linkbtn", "Open in Obsidian: Min <i>heap</i>"]]
+    assert out["opened"] == [{"what": "page", "path": "notes/min-heap.md"}]

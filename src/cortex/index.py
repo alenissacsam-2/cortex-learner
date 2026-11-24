@@ -579,16 +579,17 @@ class Index:
         return [{**self._hit(i, "problem", self._notes[i]["title"], ""),
                  "status": self._notes[i]["fields"].get("status")} for i in ids[:limit]]
 
-    def title_matches(self, title: str, kind: str, limit: int = 3) -> list[str]:
-        """Ids of `kind` whose title or aliases hold every word of `title` (prefix, any case);
-        bodies are not searched, so a note that merely mentions the words is no match."""
+    def title_matches(self, title: str, kind: str | None, limit: int = 3) -> list[str]:
+        """Ids of `kind` (None: any kind) whose title or aliases hold every word of `title`
+        (prefix, any case); bodies are not searched, so a note that merely mentions the words
+        is no match."""
         match = fts_query(title)
         if not match:
             return []
         return [r[0] for r in self.db.execute(
-            "SELECT id FROM fts WHERE fts MATCH ? AND kind = ? "
-            f"ORDER BY {BM25} LIMIT ?",
-            (f"{{title aliases}} : ({match})", kind, limit))]
+            "SELECT id FROM fts WHERE fts MATCH ?" + (" AND kind = ?" if kind else "")
+            + f" ORDER BY {BM25} LIMIT ?",
+            (f"{{title aliases}} : ({match})", *([kind] if kind else []), limit))]
 
     def related(self, query: str, limit: int = 5) -> list[dict]:
         """FTS hits on `query`, then one graph hop around the top three; any kind, no private."""
