@@ -1542,3 +1542,157 @@ def test_home_and_manage_keep_the_theme_under_one_key():
         assert re.findall(r"localStorage\.setItem\('([\w-]+)'", text) == ["cortex-theme"], js
         assert ("localStorage.getItem('cortex-theme') || localStorage.getItem('cortex-app-theme')"
                 in text), js
+
+
+HOTKEY = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    const f = $('hotkey-field');
+    out.row = f.querySelectorAll('label').map((l) => l.textContent).concat(f.querySelectorAll('.help').map((p) => p.textContent));
+    const sel = $('hotkey');
+    if (sel) {
+      out.options = sel.querySelectorAll('option').map((o) => [o.value, o.textContent]);
+      out.value = sel.value;
+      sel.value = 'ctrl+alt+k';
+      sel.fire('change');
+      await tick();
+      out.posts = fetched.filter((x) => x.method === 'POST').map((x) => [x.path, x.body]);
+      out.taken = $('hotkey-taken').textContent;
+    }
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+@pytest.mark.parametrize("where", ["desktop", "browser"])
+def test_the_quick_capture_key_row_and_its_taken_note(root_committed, tmp_path, monkeypatch,
+                                                      where):
+    """Status's Quick capture board: in the desktop app a select of the four keys and, when
+    another app holds the key, "<key> is taken by another app. Pick another."; in the browser
+    app the row says it is only in the desktop app. Text only."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/status"]["first_run"] = False
+    hk = server.App(root_committed).hotkey()  # the server's own answer (no desktop here)
+    if where == "desktop":
+        hk.update(desktop=True, key="ctrl+alt+k", taken=True)
+    routes["/api/app/hotkey"] = hk
+    out = _run(node, tmp_path, "hotkey", HOTKEY, {"routes": routes, "stream": []})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    if where == "browser":
+        assert out["row"] == ["Only in the desktop app."] and "options" not in out
+        return
+    assert out["options"] == [["ctrl+alt+space", "Ctrl+Alt+Space"],
+                              ["win+alt+space", "Win+Alt+Space"],
+                              ["ctrl+alt+k", "Ctrl+Alt+K"], ["off", "Off"]]
+    assert out["value"] == "ctrl+alt+k"
+    assert out["row"] == ["Quick capture key", "Ctrl+Alt+K is taken by another app. Pick another."]
+    assert out["posts"] == [["/api/app/hotkey", {"hotkey": "ctrl+alt+k"}]]
+    assert out["taken"] == "Ctrl+Alt+K is taken by another app. Pick another."
+
+
+CAPTURE = r"""
+const fs = require('fs'), vm = require('vm');
+const [jsPath, dataPath] = process.argv.slice(2);
+const DATA = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+const errors = [], posts = [], winL = {}, docL = {};
+process.on('unhandledRejection', (e) => errors.push(String(e && e.stack || e)));
+const el = (id) => ({ id, value: '', textContent: '', className: '', listeners: {}, focused: 0,
+  addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); },
+  fire(t, ev) { for (const fn of this.listeners[t] || []) fn({ preventDefault() {}, ...ev }); },
+  focus() { this.focused += 1; } });
+const els = { cap: el('cap'), 'cap-hint': el('cap-hint') };
+const root = { dataset: {} };
+const store = new Map([['cortex-theme', DATA.theme]]);
+Object.assign(globalThis, {
+  window: globalThis, location: { search: '?t=KEY123' }, history: { replaceState() {} },
+  localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null) },
+  addEventListener: (t, fn) => (winL[t] = winL[t] || []).push(fn),
+  document: { documentElement: root, hidden: false, getElementById: (id) => els[id] || null,
+    addEventListener: (t, fn) => (docL[t] = docL[t] || []).push(fn) },
+  fetch: async (path, o) => {
+    const body = JSON.parse(o.body);
+    posts.push([path, body, o.headers['X-Cortex-Token']]);
+    if (path === '/api/capture' && body.text.includes('BAD')) return { status: 400, ok: false, json: async () => ({ error: '//fact line: refused' }) };
+    return { status: 200, ok: true, json: async () => (path === '/api/capture' ? { kind: 'journal', said: 'Added to today’s journal 14:05' } : { hidden: true }) };
+  },
+});
+const tick = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+const input = els.cap, hint = els['cap-hint'];
+const type = (t) => { input.value = t; input.fire('input'); return hint.textContent; };
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(jsPath, 'utf8'), { filename: jsPath });
+    out.theme = root.dataset.theme || null;
+    out.first = [hint.textContent, input.focused > 0];
+    out.kinds = ['call mom', '  https://example.com/a  ', '//fact: I live in Kochi', 'x //pref: short', '//forget: tabs', 'see https://a.b later']
+      .map(type);
+    type('//fact: BAD line');
+    input.fire('keydown', { key: 'Enter' });
+    await tick();
+    out.refused = [hint.textContent, hint.className, input.value];
+    type('call mom');
+    input.fire('keydown', { key: 'Enter' });
+    await tick();
+    out.saved = [hint.textContent, hint.className, input.value];
+    await new Promise((r) => setTimeout(r, 1400));
+    out.after = [hint.textContent, input.value];
+    type('kept');
+    input.fire('keydown', { key: 'Escape' });
+    await tick();
+    for (const fn of winL.blur || []) fn();
+    await tick();
+    out.posts = posts;
+    out.kept = input.value;
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+@pytest.mark.parametrize("theme", ["day", "night"])
+def test_the_capture_box_says_what_enter_does_saves_and_hides(tmp_path, theme):
+    """The /capture page: the hint line names what Enter does for each kind of line, a refusal
+    stays in the error colour with the text kept, a saved line shows its result, then clears
+    and hides; Esc and losing focus hide it with the text kept. In either theme."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    js = server.ASSETS / "capture.js"
+    assert not HTML_SINKS.findall(js.read_text(encoding="utf-8"))
+    (tmp_path / "cap.json").write_text(json.dumps({"theme": theme}), encoding="utf-8")
+    (tmp_path / "cap.cjs").write_text(CAPTURE, encoding="utf-8")
+    r = subprocess.run([node, str(tmp_path / "cap.cjs"), str(js), str(tmp_path / "cap.json")],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["errors"] == [], out["errors"]
+    assert out["theme"] == theme
+    journal = "Enter adds it to today’s journal · Esc closes"
+    assert out["first"] == [journal, True]
+    assert out["kinds"] == [journal, "Enter saves this link · Esc closes",
+                            "Enter saves it about you (//fact) · Esc closes",
+                            "Enter saves it as your preference (//pref) · Esc closes",
+                            "Enter forgets it about you (//forget) · Esc closes", journal]
+    assert out["refused"] == ["//fact line: refused", "cap-hint bad", "//fact: BAD line"]
+    assert out["saved"] == ["Added to today’s journal 14:05", "cap-hint ok", "call mom"]
+    assert out["after"] == [journal, ""]
+    assert out["kept"] == "kept"
+    assert [p[0] for p in out["posts"]] == ["/api/capture", "/api/capture", "/api/capture/hide",
+                                           "/api/capture/hide", "/api/capture/hide"]
+    assert out["posts"][1][1] == {"text": "call mom"} and {p[2] for p in out["posts"]} == {
+        "KEY123"}
+    css = (server.ASSETS / "app.css").read_text(encoding="utf-8")
+    assert ".cap-hint.bad { color: var(--refresh); }" in css  # both themes define --refresh
