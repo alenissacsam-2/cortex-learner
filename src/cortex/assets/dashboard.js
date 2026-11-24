@@ -59,6 +59,26 @@
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
   const motion = (ms) => (REDUCED.matches ? 0 : ms);  // a d3 transition's length: instant under reduced motion
 
+  /* A segmented control or tab list: when its pressed (or selected) button changes, the highlight (the
+     button's ::before, the tabs' underline ::after; dashboard.css) slides in from the button that lost
+     it, 200 ms ease-out, transform only. One observer, so no call site changes; off under reduced motion. */
+  const GLIDE = '.seg, .viewswitch, .presets, .scrub-span, .tabs';
+  const lit = (b) => b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-selected') === 'true';
+  new MutationObserver((recs) => {
+    if (REDUCED.matches) return;
+    const lost = recs.filter((r) => r.oldValue === 'true' && !lit(r.target)).map((r) => r.target);
+    for (const r of recs) {
+      const b = r.target, g = lit(b) && r.oldValue !== 'true' && b.closest(GLIDE);
+      const from = g && lost.find((o) => o !== b && g.contains(o));
+      if (!from) continue;  // a multi-select toggle, or a first draw: no glide
+      const a = from.getBoundingClientRect(), z = b.getBoundingClientRect();
+      if (!a.width || !z.width || !b.animate) continue;
+      b.animate([{ transform: `translate(${a.left + a.width / 2 - z.left - z.width / 2}px, ${a.top + a.height / 2 - z.top - z.height / 2}px) `
+        + `scale(${a.width / z.width}, ${a.height / z.height})` }, { transform: 'none' }],
+      { duration: 200, easing: 'cubic-bezier(.2,.7,.2,1)', pseudoElement: g.matches('.tabs') ? '::after' : '::before' });
+    }
+  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['aria-pressed', 'aria-selected'], attributeOldValue: true });
+
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -240,7 +260,9 @@
     if (!copyFaces.has(b)) copyFaces.set(b, [...b.childNodes]);
     const words = copyFaces.get(b).some((n) => n.textContent.trim());
     clearTimeout(copyTimers.get(b));
-    b.replaceChildren(icon('check'), ...(words ? [' Copied'] : []));
+    const ck = icon('check');
+    ck.classList.add('draw');  // the stroke is drawn (dashboard.css .ico.draw)
+    b.replaceChildren(ck, ...(words ? [' Copied'] : []));
     if (words) announce('Copied'); else toast('Copied. Paste it into Claude.');
     copyTimers.set(b, setTimeout(() => copyFace(b), 1500));
   }
@@ -2935,7 +2957,7 @@
       else {
         tiers(p.tiers).forEach((v, k) => {
           const b = el('div', 'tbar'), tr = el('div', 'track' + (TIER_ROWS[k][2] ? ' ask' : '')), f = el('span');
-          f.style.width = (100 * v / max) + '%';
+          f.style.setProperty('--f', String(v / max));  // the fill is scaleX(--f)
           tr.append(f);
           tr.setAttribute('role', 'img');
           tr.setAttribute('aria-label', `${v} lines ${TIER_ROWS[k][0]}`);
@@ -3215,7 +3237,7 @@
         const { pct, label } = readiness(r);
         bar.setAttribute('aria-label', label);
         const fill = el('span');
-        fill.style.width = pct + '%';
+        fill.style.setProperty('--f', String(pct / 100));  // the fill is scaleX(--f)
         bar.append(fill);
         wrap.append(bar);
         c.append(wrap, el('div', 'small muted', label));

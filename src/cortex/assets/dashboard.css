@@ -24,6 +24,7 @@
   --refresh: #993556; color-scheme: light;
 }
 :root {
+  --dur-1: 120ms; --dur-2: 200ms; --ease-out: cubic-bezier(.2,.7,.2,1); --ease-in: cubic-bezier(.4,0,1,1);
   --solid: #1D9E75; --learning: #BA7517; --hollow: var(--ink-3);
   --hdr: 56px;
   scrollbar-color: var(--unlit) transparent; scrollbar-width: thin;
@@ -48,11 +49,11 @@ h3 { font-size: 14px; margin: 18px 0 6px; }
 h4 { font-size: 13px; margin: 16px 0 4px; color: var(--ink-2); }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
-/* buttons: colour changes ease (never size or layout); a press sinks 1px with a tint (as the app) */
-button, .btn { transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out; }
+/* buttons: colour changes ease (never size or layout); a press scales to .97 with a tint (as the app) */
+button, .btn { transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out),
+  color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
 button:active:not(:disabled) {
-  transform: translateY(1px); background-image: linear-gradient(var(--rule), var(--rule));
-  transition-duration: .08s;
+  transform: scale(.97); background-image: linear-gradient(var(--rule), var(--rule));
 }
 section[role="tabpanel"]:not([hidden]) { animation: fade-in .12s ease-out; }
 @keyframes fade-in { from { opacity: 0; } }
@@ -94,7 +95,14 @@ input[type="search"]::placeholder { color: var(--ink-3); }
 }
 .top .tabs button { color: var(--band-ink); opacity: 1; }
 .tabs button[aria-selected="false"] { color: var(--ink-2); }
-.tabs button[aria-selected="true"] { border-bottom-color: var(--band-ink); font-weight: 600; }
+.tabs button[aria-selected="true"] { font-weight: 600; }
+/* a moving highlight: the pressed button's ::before is its fill (the tabs' underline: its ::after);
+   dashboard.js glide() slides it in from the button that lost it. Nothing else of the control moves. */
+:is(.seg, .viewswitch, .presets, .scrub-span, .tabs) button { position: relative; isolation: isolate; }
+:is(.seg, .viewswitch, .presets, .scrub-span) button[aria-pressed="true"]::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; background: var(--hl, var(--band)); }
+.tabs button[aria-selected="true"]::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: var(--band-ink); }
 .tabs button:hover { border-bottom-color: var(--rule); }
 .tabs button[aria-selected="false"]:hover { color: var(--band-ink); }
 .section-select { display: none; }
@@ -255,7 +263,8 @@ a.icon-btn { color: inherit; }
 .ready { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 4px; }  /* a long label wraps under the bar */
 .ready .sub { white-space: normal; }
 .bar { flex: 1; height: 8px; background: var(--unlit); border-radius: 2px; overflow: hidden; min-width: 120px; }
-.bar > span { display: block; height: 100%; background: var(--solid); }
+.bar > span { display: block; height: 100%; width: 100%; background: var(--solid);
+  transform: scaleX(var(--f, 0)); transform-origin: left; transition: transform var(--dur-2) var(--ease-out); }
 
 /* brain section */
 .brain-stage { position: relative; height: calc(100dvh - var(--hdr)); min-height: 460px; }
@@ -268,7 +277,7 @@ a.icon-btn { color: inherit; }
   border: 1px solid var(--edge); border-radius: 2px;
 }
 .viewswitch button { border: 0; background: none; padding: 6px 12px; color: var(--ink-2); }
-.viewswitch button[aria-pressed="true"] { background: var(--band); color: var(--band-ink); font-weight: 600; }
+.viewswitch button[aria-pressed="true"] { color: var(--band-ink); font-weight: 600; }
 .rail {
   position: absolute; top: 12px; left: 12px; bottom: 12px; width: 260px; z-index: 5;
   background: var(--panel); border: 1px solid var(--rule); border-radius: 2px; display: flex;
@@ -319,10 +328,11 @@ a.icon-btn { color: inherit; }
 .seg { display: inline-flex; border: 1px solid var(--edge); border-radius: 2px; }
 .seg button { border: 0; border-radius: 0; background: none; padding: 4px 10px; color: var(--ink-2); font-size: 12.5px; }
 .seg button + button { border-left: 1px solid var(--rule); }
-.seg button[aria-pressed="true"] { background: var(--band); color: var(--band-ink); font-weight: 600; }
+.seg button[aria-pressed="true"] { color: var(--band-ink); font-weight: 600; }
 .seg button:hover { color: var(--lit); }
 .seg button[aria-pressed="true"]:hover { color: var(--band-ink); }
 .tbtn[aria-pressed="true"] { background: var(--band); color: var(--band-ink); border-color: var(--lit); }
+.scrub-span .tbtn[aria-pressed="true"] { background: none; }  /* its fill is the glide's ::before */
 .scrub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; flex: 1 1 100%; font-size: 12.5px; color: var(--ink-2); }
 .scrub-row { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; flex-wrap: wrap; }
 .scrub input { flex: 1; min-width: 120px; accent-color: var(--lit); }
@@ -339,10 +349,10 @@ a.icon-btn { color: inherit; }
 :root[data-theme="day"] .lens-note, :root[data-theme="day"] .lens-note b { color: var(--band-ink); }
 .act[aria-pressed="true"] { color: var(--lit); border-color: var(--edge); }
 .band-tools { display: flex; gap: 6px; align-items: center; }
-.band-tools .seg { border-color: var(--band-ink); }
+.band-tools .seg { border-color: var(--band-ink); --hl: var(--band-ink); }
 .band-tools .seg button { color: var(--band-ink); padding: 2px 8px; }
 .band-tools .seg button + button { border-left-color: var(--band-ink); }
-.band-tools .seg button[aria-pressed="true"] { background: var(--band-ink); color: var(--band); }
+.band-tools .seg button[aria-pressed="true"] { color: var(--band); }
 .band-tools .band-btn { display: inline-flex; gap: 4px; align-items: center; }
 .today-group, .today-step { display: inline-flex; gap: 4px; align-items: center; }
 .today-at { font-size: 12.5px; white-space: nowrap; }
@@ -376,6 +386,7 @@ a.icon-btn { color: inherit; }
   border-color: var(--lit); color: var(--ink); background: var(--band);
 }
 :root[data-theme="day"] .chips button[aria-pressed="true"] { color: var(--band-ink); }
+.presets button[aria-pressed="true"] { background: var(--panel); }  /* its fill is the glide's ::before */
 .chip-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 button.chip { cursor: pointer; }
 /* Restart to update: a chip with its words; below 1300 px its icon alone */
@@ -526,7 +537,8 @@ caption { text-align: left; color: var(--ink-2); padding: 8px 10px; caption-side
 .tbar { display: grid; grid-template-columns: 150px minmax(0, 1fr) 36px; gap: 8px; align-items: center;
   font-size: 12.5px; color: var(--ink-2); }
 .tbar .track { height: 8px; background: var(--unlit); border-radius: 2px; overflow: hidden; }
-.tbar .track span { display: block; height: 100%; background: var(--lit); }
+.tbar .track span { display: block; height: 100%; width: 100%; background: var(--lit);
+  transform: scaleX(var(--f, 0)); transform-origin: left; transition: transform var(--dur-2) var(--ease-out); }
 .tbar .track.ask span { background: var(--ink-3); }
 .tbar .v { text-align: right; color: var(--ink); }
 .me-view { padding: 4px 16px 16px; }
@@ -645,7 +657,12 @@ table.props { margin-top: 2px; }
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40;
   background: var(--band); color: var(--band-ink); border: 1px solid var(--edge); border-radius: 2px;
   padding: 8px 16px; font-weight: 600;
+  /* arrives (hidden removed): 6px up and a fade; leaves: a fade only. CSS alone, no timers. */
+  opacity: 1; transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out),
+    display var(--dur-2) allow-discrete;
 }
+@starting-style { .toast { opacity: 0; transform: translateX(-50%) translateY(6px); } }
+.toast[hidden] { opacity: 0; transition: opacity var(--dur-1) var(--ease-in), display var(--dur-1) allow-discrete; }
 .toast.error { border-left: 4px solid var(--refresh); }
 .tip {
   position: fixed; z-index: 35; pointer-events: none; background: var(--band); color: var(--ink);
@@ -730,6 +747,9 @@ th button:hover, .outline-toggle:hover, .icon-btn:hover { background-image: line
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
   button:active:not(:disabled) { transform: none; }
 }
+/* Copied: the check is drawn (dashboard.js adds .draw); drawn at once under reduced motion above */
+.ico.draw path { stroke-dasharray: 24; animation: draw-check var(--dur-2) var(--ease-out); }
+@keyframes draw-check { from { stroke-dashoffset: 24; } }
 /* muted text on a band-coloured row stays at 4.5:1 in day (ink-3 on yellow is not) */
 .hit[aria-selected="true"] .sub, .hit:hover .sub, .outline .ti:hover .n,
 .outline [aria-selected="true"] > .ti .n, .lib-board tbody tr:hover .sum { color: var(--ink-2); }

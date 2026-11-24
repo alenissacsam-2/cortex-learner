@@ -208,12 +208,30 @@
     const b = btn('', () => Promise.resolve().then(() => navigator.clipboard.writeText(text())).then(() => {
       if (onOk) onOk();
       clearTimeout(timer);
-      b.replaceChildren(icon('check'), 'Copied');
+      const ck = icon('check');
+      ck.classList.add('draw');  // the stroke is drawn (app.css .ico.draw)
+      b.replaceChildren(ck, 'Copied');
       announce('Copied');
       timer = setTimeout(() => b.replaceChildren(...face()), 1500);
     }, () => (onFail ? onFail() : toast.error(failMsg))), cls);
     b.replaceChildren(...face());
     return b;
+  }
+
+  // Motion (U2) is off under prefers-reduced-motion; every Web Animations call checks this first.
+  const still = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // A number changed in place: the old text lies over it and fades out (--dur-1), the new fades in (--dur-2).
+  function crossFade(el, oldText) {
+    if (still() || !el.animate || !el.parentNode || !oldText) return;
+    const g = el.cloneNode(false);
+    g.className = (el.className ? el.className + ' ' : '') + 'xf-old';
+    g.textContent = oldText;
+    g.setAttribute('aria-hidden', 'true');
+    g.style.setProperty('left', el.offsetLeft + 'px');
+    g.style.setProperty('top', el.offsetTop + 'px');
+    el.after(g);
+    g.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'cubic-bezier(.4,0,1,1)' }).finished.then(() => g.remove(), () => g.remove());
+    el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'cubic-bezier(.2,.7,.2,1)' });
   }
 
   /* ---- boards and rows ---- */
@@ -268,6 +286,7 @@
     if (p) {
       $('jobline').classList.add('determinate');
       $('jobline').style.setProperty('--pct', `${p.overall}%`);
+      $('jobline').style.setProperty('--f', String(p.overall / 100));  // the bar is scaleX(--f), app.css
     }
     $('job-line').textContent = p ? stepText(p) : j.running ? j.line : (j.error || '');
     $('job-time').textContent = `${Math.round(j.seconds)} s`;
@@ -394,9 +413,16 @@
 
   /* ---- sections ---- */
   let current = null, landing = false;  // landing: Status opened in place of the app's own choice
+  // A person's switch glides the nav highlight (View Transitions; app.css side-hl); the page itself
+  // swaps at once. Without the API, or under reduced motion, it is the plain switch.
   function show(s, focus) {
-    if (!SECTIONS.includes(s)) s = 'status';
     if (focus) landing = false;  // the user chose: Status's answer does not move them
+    if (!focus || s === current || !document.startViewTransition || still() || document.hidden) return showNow(s, focus);
+    document.startViewTransition(() => showNow(s, focus)).ready.catch(() => {});  // skipped: no glide, no harm
+    return undefined;
+  }
+  function showNow(s, focus) {
+    if (!SECTIONS.includes(s)) s = 'status';
     current = s;
     try { sessionStorage.setItem('cortex.section', s); } catch (e) { /* storage off */ }
     for (const x of SECTIONS) $('s-' + x).hidden = x !== s;
@@ -1757,7 +1783,9 @@
      popups. Every text is the server's shown text, set with textContent. */
   function badge(n) {
     const k = Number(n) > 0 ? Number(n) : 0, b = $('review-badge'), o = $('review-option');
+    const was = b.textContent;
     b.textContent = k ? String(k) : '';
+    if (k && was && was !== String(k)) crossFade(b, was);
     b.hidden = !k;
     b.setAttribute('aria-label', `${k} waiting`);
     if (o) o.textContent = k ? `Review (${k})` : 'Review';
@@ -2345,9 +2373,17 @@
     const n = d.order.filter((k) => done[k]).length, total = stepIds.length;
     const fill = h('span', {});
     fill.style.setProperty('--pct', `${Math.round(100 * n / total)}%`);
+    // the fill is scaleX(--f); a changed value starts from the last one drawn, so it moves (app.css .setup-bar)
+    const f1 = String(n / total), f0 = setupWas ? setupWas.f : f1;
+    fill.style.setProperty('--f', still() ? f1 : f0);
     const bar = h('div', { class: 'setup-bar', role: 'progressbar', 'aria-label': 'Setup progress', 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(n) }, fill);
-    put('setup', h('div', { class: 'setup-prog' }, bar, h('span', { class: 'prog-text', text: `${n} of ${total} done` })), ...d.order.map((k) => steps[k]), sFinish);
+    const label = `${n} of ${total} done`, text = h('span', { class: 'prog-text', text: label });
+    put('setup', h('div', { class: 'setup-prog' }, bar, text), ...d.order.map((k) => steps[k]), sFinish);
+    if (f0 !== f1 && !still()) { void fill.offsetWidth; fill.style.setProperty('--f', f1); }  // flush, then move
+    if (setupWas && setupWas.label !== label) crossFade(text, setupWas.label);
+    setupWas = { f: f1, label };
   }
+  let setupWas = null;  // the last Setup progress drawn: its fill value and its text
 
   const RENDER = { tonight: renderTonight, setup: renderSetup, chat: renderChat, status: renderStatus, review: renderReview, xray: renderXray, connect: renderConnect, llm: renderLlm, browse: renderBrowse, vault: renderVault };
 

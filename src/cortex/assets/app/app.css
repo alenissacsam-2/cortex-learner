@@ -25,6 +25,7 @@
   --refresh: #993556; --ok-ink: #08603f; color-scheme: light;
 }
 :root {
+  --dur-1: 120ms; --dur-2: 200ms; --ease-out: cubic-bezier(.2,.7,.2,1); --ease-in: cubic-bezier(.4,0,1,1);
   --solid: #1D9E75; --learning: #BA7517; --hollow: var(--ink-3); --hdr: 56px;
   scrollbar-color: var(--unlit) transparent; scrollbar-width: thin;
 }
@@ -105,8 +106,8 @@ code, pre, .mono { font-family: ui-monospace, Consolas, "SF Mono", monospace; fo
 }
 @keyframes job-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 /* a stepped job: the bar fills to its overall share (--pct, set by app.js) */
-.jobline.running.determinate::after { width: var(--pct, 0%); animation: none; transform: none;
-  transition: width .3s ease-out; }
+.jobline.running.determinate::after { width: 100%; animation: none; transform: scaleX(var(--f, 0));
+  transform-origin: left; transition: transform var(--dur-2) var(--ease-out); }
 .jobline.ok { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); animation: job-ok 2.4s ease-out forwards; }
 @keyframes job-ok { 0%, 50% { background: color-mix(in srgb, var(--ok-ink) 16%, var(--panel)); } to { background: var(--panel); } }
 .jobline.bad { background: color-mix(in srgb, var(--refresh) 16%, var(--panel)); border-bottom-color: var(--refresh); }
@@ -133,7 +134,13 @@ body:has(.jobline.idle) :is(.side, .chat-side) { top: calc(var(--hdr) + 20px); }
 .side a { display: flex; align-items: center; text-decoration: none; }
 .side button:last-child { border-bottom: 0; }
 .side button:hover, .side a:hover { color: var(--ink); }
-.side button[aria-current="page"] { background: var(--band); color: var(--band-ink); font-weight: 600; }
+.side button[aria-current="page"] { background: var(--band); color: var(--band-ink); font-weight: 600;
+  view-transition-name: side-hl; }  /* only the current item's highlight glides (app.js show) */
+/* a section switch: the page swaps at once (the root's own cross-fade is off), only the highlight glides */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-old(root) { display: none; }
+::view-transition-group(side-hl), ::view-transition-old(side-hl), ::view-transition-new(side-hl) {
+  animation-duration: var(--dur-2); animation-timing-function: var(--ease-out); }
 /* the Review count: one small quiet badge in the nav */
 .badge { display: inline-block; min-width: 18px; margin-left: 8px; padding: 0 5px; border-radius: 2px;
   background: var(--unlit); color: var(--ink); font-size: 11.5px; font-weight: 600; line-height: 18px;
@@ -191,11 +198,11 @@ p.pad { margin: 0; }
 .g-ok { color: var(--solid); } .g-warn { color: var(--learning); } .g-off { color: var(--hollow); }
 .g-bad { color: var(--refresh); }
 
-/* buttons: colour changes ease (never size or layout); a press sinks 1px with a tint */
-button, .btn { transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out; }
+/* buttons: colour changes ease (never size or layout); a press scales to .97 with a tint */
+button, .btn { transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out),
+  color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
 button:active:not(:disabled):not([aria-busy="true"]) {
-  transform: translateY(1px); background-image: linear-gradient(var(--rule), var(--rule));
-  transition-duration: .08s;
+  transform: scale(.97); background-image: linear-gradient(var(--rule), var(--rule));
 }
 /* busy (a click waiting on the app): the label goes clear, keeping the width, and three dots pulse */
 button[aria-busy="true"], button[aria-busy="true"] * { color: transparent !important; }
@@ -309,7 +316,10 @@ td.n, th.n { text-align: right; }
 /* numbered steps: the progress line, then a marker, title and one plain line per step */
 .setup-prog { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; color: var(--ink-2); font-size: 12.5px; }
 .setup-bar { flex: 1; max-width: 360px; height: 4px; background: var(--edge); border-radius: 2px; overflow: hidden; }
-.setup-bar > span { display: block; height: 100%; width: var(--pct, 0%); background: var(--lit); }
+.setup-bar > span { display: block; height: 100%; width: 100%; background: var(--lit);
+  transform: scaleX(var(--f, 0)); transform-origin: left; transition: transform var(--dur-2) var(--ease-out); }
+/* a number that changed in place: the old text lies over the new one and fades out (crossFade in app.js) */
+.xf-old { position: absolute; margin: 0; pointer-events: none; }
 .step-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
   border: 1px solid var(--edge); font-size: 12px; line-height: 1; color: var(--ink-2); }
 .step.current .step-mark { border: 2px solid var(--lit); color: var(--lit); font-weight: 600; }
@@ -387,11 +397,14 @@ dialog.confirm h2 { margin: 0 0 10px; }
   position: fixed; left: 50%; bottom: 24px; z-index: 40; display: flex; gap: 12px; align-items: center;
   background: var(--band); color: var(--band-ink); border: 1px solid var(--edge); border-radius: 2px;
   padding: 8px 8px 8px 16px; font-weight: 600; max-width: 90vw;
-  opacity: 0; transform: translate(-50%, 8px); pointer-events: none;
-  transition: opacity .12s ease-in, transform .12s ease-in;
+  opacity: 0; transform: translate(-50%, 0); pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-in);  /* leaves with a fade only */
 }
-.toast.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto;
-  transition-duration: .16s; transition-timing-function: ease-out; }
+.toast.on { opacity: 1; pointer-events: auto; transition: none; animation: toast-in var(--dur-2) var(--ease-out); }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }  /* arrives: 6px up and a fade */
+/* Copied: the check is drawn */
+.ico.draw path { stroke-dasharray: 24; animation: draw-check var(--dur-2) var(--ease-out); }
+@keyframes draw-check { from { stroke-dashoffset: 24; } }
 .toast.ok { border-left: 4px solid var(--ok-ink); }
 .toast.error { border-left: 4px solid var(--refresh); }
 .toast-x { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0;
@@ -537,6 +550,7 @@ dialog.confirm h2 { margin: 0 0 10px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
   button:active:not(:disabled), .toast, .toast.on { transform: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
   .toast { left: 0; right: 0; margin: 0 auto; width: max-content; }
   button[aria-busy="true"]::after {
     content: '…'; inset: 0; left: 0; top: 0; width: auto; height: auto; margin: 0; display: grid;
