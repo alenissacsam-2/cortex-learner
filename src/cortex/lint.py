@@ -16,7 +16,7 @@ from cortex.catalog import slugify
 from cortex.events import DAY_ROLLOVER
 from cortex.index import EDGE_KEYS, STOPWORDS, _edge_targets
 from cortex.people import PREFIX
-from cortex.relink import TOKEN_RE, _hidden, _tgt
+from cortex.relink import TOKEN_RE, _tgt
 from cortex.render import plain
 from cortex.vault import Vault, is_private
 
@@ -74,7 +74,9 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
         if len(kinds) > 1 and not _is_private_id(notes, id):
             add("id_clash", id, f"used by {', '.join(kinds)}")
 
-    for copy, orig in _sync_copies(vault):
+    from cortex import sync_copies
+
+    for copy, orig in sync_copies.find_visible(vault)[0]:  # never a private page's
         add("sync_conflict", plain(copy), f"a sync conflict copy of {plain(orig)}: open both, "
             "keep what you want in the original, delete the copy")
 
@@ -148,21 +150,6 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
             shown[f["kind"]] += 1
             kept.append(f)
     return kept[:MAX_FINDINGS], dict(totals)
-
-
-def _sync_copies(vault: Vault) -> list[tuple[str, str]]:
-    """sync_copies.find, less the copies of a private page (relink._hidden on the copy or on
-    its original): their names are not reported either."""
-    from cortex import sync_copies
-
-    def hidden(rel: str) -> bool:
-        p = vault.root / rel
-        try:
-            return p.suffix == ".md" and p.is_file() and _hidden(
-                vault.root, p, p.read_bytes().decode("utf-8", errors="replace"))
-        except OSError:
-            return True
-    return [(c, o) for c, o in sync_copies.find(vault.root) if not (hidden(c) or hidden(o))]
 
 
 def _words(text) -> set[str]:

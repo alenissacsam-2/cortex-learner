@@ -295,16 +295,21 @@ SYNC_COPY_FIX = "Open both, keep what you want in the original, delete the copy.
 
 
 def check_sync_copies(root: Path) -> tuple[str, str, str, str]:
-    """WARN on a sync tool's conflict copies (sync_copies.find): a copied page is not read
-    (its edit lives only there); the event log reads each event once, copies included."""
+    """WARN on a sync tool's conflict copies (sync_copies.find_visible): a copied page is not
+    read (its edit lives only there); the event log reads each event once, copies included.
+    Up to 5 are named; a private page's copies are only counted, as an agent may run doctor."""
     from cortex import sync_copies
 
     name = "Sync conflict copies"
-    found = [c for c, _ in sync_copies.find(root)]
-    if not found:
+    shown, private = sync_copies.find_visible(Vault(root))
+    if not shown and not private:
         return "PASS", name, "none", ""
-    more = f" and {len(found) - 5} more" if len(found) > 5 else ""
-    return ("WARN", name, f"{len(found)} found: {', '.join(found[:5])}{more}",
+    parts = [", ".join(c for c, _ in shown[:5])] if shown else []
+    if len(shown) > 5:
+        parts.append(f"{len(shown) - 5} more")
+    if private:
+        parts.append(f"{private} cop{'y' if private == 1 else 'ies'} of private pages")
+    return ("WARN", name, f"{len(shown) + private} found: {' and '.join(parts)}",
             f"{SYNC_COPY_FIX} Cortex does not read a copied page, so an edit made on the "
             "other device is only in the copy.")
 

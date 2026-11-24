@@ -182,3 +182,24 @@ def test_lint_reports_each_copy_but_not_a_private_pages(root):
          "a sync conflict copy of events/2026/11/cli.jsonl: open both, keep what you want in "
          "the original, delete the copy")]
     assert totals["sync_conflict"] == 2 and findings[0]["kind"] == "sync_conflict"
+
+
+def test_a_private_pages_copy_is_counted_never_named(root):
+    """A copy of a page under a private area (planner.hidden) or with its own `private: true`
+    is never named by doctor (an agent may run it) or lint; doctor still counts it."""
+    area = root / "areas" / "dsa.arrays.md"
+    area.write_text(area.read_text(encoding="utf-8").replace(
+        'kind: "area"\n', 'kind: "area"\nprivate: true\n', 1), encoding="utf-8")
+    _copy(root, "concepts/two-pointers.md", "two-pointers-DESKTOP-AB12CD3.md")
+    _copy(root, "concepts/secret-diary.md",
+          "secret-diary.sync-conflict-20261124-101010-ABCDEF7.md")
+    _copy(root, "me/profile.md", "profile (conflicted copy 2026-11-24).md")
+    status, _, detail, fix = doctor.check_sync_copies(root)
+    assert status == "WARN" and detail == ("3 found: me/profile (conflicted copy 2026-11-24).md "
+                                           "and 2 copies of private pages")
+    findings, totals = lint.lint_report(Vault(root))
+    assert "two-pointers" not in detail + fix and "secret-diary" not in detail + fix
+    linted = " ".join(f"{f['id']} {f['detail']}" for f in findings)  # other kinds may name
+    assert "DESKTOP" not in linted and "sync-conflict" not in linted  # the pages themselves
+    assert [f["id"] for f in findings if f["kind"] == "sync_conflict"] == [
+        "me/profile (conflicted copy 2026-11-24).md"]

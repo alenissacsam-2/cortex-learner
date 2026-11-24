@@ -54,3 +54,30 @@ def find(root: Path) -> list[tuple[str, str]]:
         pre = "" if rel == "." else rel + "/"
         out += [(pre + n, pre + o) for n in files if (o := original(n, names)) is not None]
     return sorted(out)
+
+
+def find_visible(vault) -> tuple[list[tuple[str, str]], int]:
+    """(`find`'s copies a report may name, how many it may not): a private page's copies are
+    counted, never named. Private as the index has it: the copy's or the original's own front
+    matter or folder (relink._hidden: `private: true`, people pages, browse/private/), or an
+    original under a private subject (planner.hidden: a private domain, area or concept)."""
+    from cortex import planner
+    from cortex.catalog import Catalog
+    from cortex.relink import _hidden
+
+    found = find(vault.root)
+    if not found:
+        return [], 0
+    hide = planner.hidden(vault, Catalog.load(vault))
+
+    def private(rel: str) -> bool:
+        p = vault.root / rel
+        try:
+            return p.suffix == ".md" and p.is_file() and _hidden(
+                vault.root, p, p.read_bytes().decode("utf-8", errors="replace"))
+        except OSError:
+            return True
+
+    shown = [(c, o) for c, o in found
+             if Path(o).stem not in hide and not private(c) and not private(o)]
+    return shown, len(found) - len(shown)
