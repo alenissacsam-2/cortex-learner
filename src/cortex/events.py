@@ -224,6 +224,35 @@ def _extend(path: Path, key, p: _Parsed, data: bytes, skip: int) -> _Parsed:
     return p
 
 
+_WARNED: set[Path] = set()  # conflict copies already warned about: once per file
+
+
+def _merged(files: list[tuple[Path, _Parsed]], session: str | None = None) -> list[dict]:
+    """The events of `files`, each id once. A file not named <session>.jsonl is a sync tool's
+    conflict copy (Syncthing, OneDrive, Dropbox: `cortex doctor` names them): it adds only the
+    ids the session files lack (the other device's appends) and, when `session` is given, only
+    that session's events. An id held with other content keeps the session file's (a copy's,
+    between copies, the first by path), with one warning per copy."""
+    own = [SESSION_RE.fullmatch(path.stem) is not None for path, _ in files]
+    if all(own):  # no copies: nothing to merge
+        return [ev for _, p in files for ev in p.view]
+    seen: dict[str, dict] = {}
+    out = []
+    # session files first (a stable sort: path order within each)
+    for mine, (path, p) in sorted(zip(own, files, strict=True), key=lambda f: not f[0]):
+        for ev in p.view:
+            if not mine and session is not None and ev.get("session") != session:
+                continue
+            first = seen.setdefault(ev["id"], ev)
+            if first is ev:
+                out.append(ev)
+            elif first != ev and not mine and path not in _WARNED:
+                _WARNED.add(path)
+                log.warning("%s (a sync conflict copy) holds events that differ from another "
+                            "file's with the same id; the session file's are kept", path)
+    return out
+
+
 class EventLog:
     def __init__(self, vault: Vault):
         self.vault = vault
@@ -240,10 +269,11 @@ class EventLog:
         """All events (or one session's), sorted by (ts, id). Bad lines are logged and skipped."""
         if session is not None and not SESSION_RE.fullmatch(session):
             raise invalid("session must be s_<ULID>, cli or import.")
-        pattern = f"*/*/{session}.jsonl" if session else "*/*/*.jsonl"
+        # `<session>*`: its sync conflict copies too (`_merged` keeps only this session's events)
+        pattern = f"*/*/{session}*.jsonl" if session else "*/*/*.jsonl"
         # shortcut: shallow copies guard top-level edits only; nested dicts are shared and
         # no caller mutates them. Deep-copy here if one ever must.
-        out = [dict(ev) for ev in self._cached(pattern)]
+        out = [dict(ev) for ev in self._cached(pattern, session)]
         out.sort(key=lambda e: (e["ts"], e["id"]))
         return iter(out)
 
@@ -262,10 +292,10 @@ class EventLog:
             out.append((path, hit))
         return out
 
-    def _cached(self, pattern: str) -> list[dict]:
-        """The parse-cached events of the files matching `pattern`, unsorted and shared with
-        the cache: callers must not mutate them."""
-        return [ev for _, p in self._files(pattern) for ev in p.view]
+    def _cached(self, pattern: str, session: str | None = None) -> list[dict]:
+        """The parse-cached events of the files matching `pattern`, each id once (`_merged`),
+        unsorted and shared with the cache: callers must not mutate them."""
+        return _merged(self._files(pattern), session)
 
     def _key_map(self) -> dict[str, dict]:
         """key -> its first event (by ts, id), shared with the cache. Rebuilt whenever any file
@@ -275,9 +305,8 @@ class EventLog:
         sig = {path: p.key for path, p in files}
         if sig != self._sig:
             self._keys = {}
-            for _, p in files:
-                for ev in p.view:
-                    self._add_key(ev)
+            for ev in _merged(files):
+                self._add_key(ev)
             self._sig = sig
         return self._keys
 
