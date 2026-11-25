@@ -102,12 +102,15 @@ def install(say=print) -> None:
                                f"Install uv, or run: uv pip install {PIN}")
         cmd = [uv, "pip", "install", "--python", sys.executable, PIN]
         env = dict(os.environ)
+        cwd = None
         if d:  # the installer's pins and cache folder (installer/setup_app.py)
             if (d / "constraints.txt").is_file():
-                cmd += ["-c", str(d / "constraints.txt")]
+                # relative, run in `d`: uv 0.9.15 splits a -c path on spaces (uv#22290)
+                cmd += ["-c", "constraints.txt"]
+                cwd = str(d)
             env.update(UV_CACHE_DIR=str(d / "cache"), UV_NATIVE_TLS="1")
         say(f"installing {PIN} ...")
-        subprocess.run(cmd, check=True, env=env, creationflags=NO_WINDOW)
+        subprocess.run(cmd, check=True, env=env, cwd=cwd, creationflags=NO_WINDOW)
         importlib.invalidate_caches()
     from faster_whisper import download_model
     say(f"speech model {MODEL}: downloading if missing into {semantic.models_dir()} ...")

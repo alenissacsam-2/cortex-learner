@@ -24,10 +24,20 @@ def data(payload: Path) -> list[str]:
             "--icon", str(ICON)]
 
 
+def is_x64(exe: Path) -> bool:
+    """The PE header's machine field is AMD64 (0x8664): the setup runs this uv on every PC."""
+    b = exe.read_bytes()[:4096]
+    pe = int.from_bytes(b[0x3C:0x40], "little")
+    return b[:2] == b"MZ" and b[pe:pe + 4] == b"PE\0\0" and b[pe + 4:pe + 6] == b"\x64\x86"
+
+
 def main() -> None:
     if sys.platform != "win32":
         sys.exit("CortexSetup.exe builds on Windows only.")
     uv = shutil.which("uv") or sys.exit("uv is not on PATH.")
+    if not is_x64(Path(uv)):
+        sys.exit(f"{uv} is not an x64 build; the setup must bundle x64 uv.exe (it also runs "
+                 "on Windows on ARM). Install x64 uv and build again.")
     stage = ROOT / "dist" / "installer-build"
     shutil.rmtree(stage, ignore_errors=True)
     payload = stage / "payload"

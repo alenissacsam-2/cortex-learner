@@ -189,3 +189,28 @@ def test_model_download_voice_installs_the_pin_then_the_model(home, monkeypatch)
     monkeypatch.setattr(voice_memos.shutil, "which", lambda name: None)
     r = runner.invoke(app, ["model", "download", "--voice"])
     assert r.exit_code == 1 and "uv is not on PATH" in r.output
+
+
+def test_model_download_voice_uses_the_install_folders_pins_relatively(home, tmp_path,
+                                                                       monkeypatch):
+    """The installer's constraints.txt goes to uv as a relative `-c`, run inside the install
+    folder: uv 0.9.15 splits a -c path that has a space (John Smith)."""
+    import sys
+
+    from cortex import update
+    d = tmp_path / "John Smith" / "Cortex"
+    d.mkdir(parents=True)
+    (d / "uv.exe").write_bytes(b"uv")
+    (d / "constraints.txt").write_text("av==1\n")
+    ran = []
+    monkeypatch.setattr(voice_memos.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(update, "install_dir", lambda: d)
+    monkeypatch.setattr(voice_memos.subprocess, "run", lambda cmd, **k: ran.append((cmd, k)))
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(
+        download_model=lambda size, cache_dir: None))
+    r = runner.invoke(app, ["model", "download", "--voice"])
+    assert r.exit_code == 0, r.output
+    (cmd, k), = ran
+    assert cmd == [str(d / "uv.exe"), "pip", "install", "--python", sys.executable,
+                   voice_memos.PIN, "-c", "constraints.txt"]
+    assert k["cwd"] == str(d) and k["env"]["UV_CACHE_DIR"] == str(d / "cache")
