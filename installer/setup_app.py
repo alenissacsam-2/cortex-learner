@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.request
 from pathlib import Path
 
 import app_exe  # beside this file; PyInstaller bundles it
@@ -108,6 +109,12 @@ def uv_env(d: Path, base: dict | None = None) -> dict:
                UV_NATIVE_TLS="1",
                # compiled at install, so the first start (and Claude's first `cortex mcp`) is fast
                UV_COMPILE_BYTECODE="1")
+    # a school or work proxy set in Windows settings: uv reads only the environment
+    if not any(k.upper() in ("HTTPS_PROXY", "HTTP_PROXY") for k in env):
+        proxies = urllib.request.getproxies()
+        for scheme in ("https", "http"):
+            if proxies.get(scheme):
+                env[f"{scheme.upper()}_PROXY"] = proxies[scheme]
     return env
 
 
@@ -314,15 +321,19 @@ def in_use_text(procs: list[tuple[int, str]]) -> str:
 
 # ---- install and uninstall ------------------------------------------------------------------
 
-def run(args: list, env: dict, say) -> None:
+def run(args: list, env: dict, say, cwd: Path | None = None) -> None:
     say("running: " + subprocess.list2cmdline([str(a) for a in args]))
     p = subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, cwd=cwd,
                          creationflags=NO_WINDOW, text=True, encoding="utf-8", errors="replace")
+    error = ""  # the tool's own reason, shown before any advice
     for line in p.stdout:
         say(line.rstrip())
+        if line.lower().startswith("error:"):
+            error = line.strip()
     if p.wait():
-        raise SetupError(f"{Path(str(args[0])).name} stopped with exit code {p.returncode}.")
+        raise SetupError(f"{error + ' ' if error else ''}{Path(str(args[0])).name} stopped "
+                         f"with exit code {p.returncode}.")
 
 
 def check_dir(d: Path) -> None:
@@ -366,11 +377,15 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
     pins = []
     if (src / "constraints.txt").is_file():
         shutil.copy2(src / "constraints.txt", d / "constraints.txt")
-        pins = ["-c", d / "constraints.txt"]
+        # relative, run in `d`: uv 0.9.15 splits a -c path on spaces (uv#22290, fixed in 0.13)
+        pins = ["-c", "constraints.txt"]
     say(f"Installing Cortex {version_of(wheel)} into {d} (downloads Python and packages)...")
     try:
+        # x64 Python on every PC: Windows on ARM runs it emulated, and some pinned packages
+        # (cryptography, py-rust-stemmers) have no win_arm64 wheels
         run([d / "uv.exe", "tool", "install", "--force", "--reinstall-package", "cortex-learner",
-             "--python", "3.12", *pins, d / wheel.name], uv_env(d), say)
+             "--python", "cpython-3.12-windows-x86_64-none", *pins, d / wheel.name], uv_env(d),
+            say, cwd=d)
     except SetupError as e:
         raise SetupError(f"{e} Check your internet connection; a school or work network may "
                          "block the download, so another Wi-Fi can help. If Cortex is open, "

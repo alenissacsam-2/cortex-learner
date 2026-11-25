@@ -18,6 +18,7 @@ setup_app = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup_app)
 app_exe = setup_app.app_exe
 REAL_MAKE_SHORTCUTS = setup_app.make_shortcuts
+REAL_RUN = setup_app.run
 
 BIN = r"C:\Users\x\AppData\Local\Programs\Cortex\bin"
 
@@ -56,6 +57,60 @@ def test_uv_env_keeps_everything_in_the_folder(tmp_path):
     assert env["UV_PYTHON_PREFERENCE"] == "only-managed"
 
 
+def test_uv_env_fills_the_proxy_from_windows_settings_but_never_overrides(tmp_path,
+                                                                          monkeypatch):
+    """uv reads only HTTP(S)_PROXY; a school or work proxy set in Windows settings is copied
+    there (getproxies reads the registry), and a proxy already in the environment wins."""
+    system = {"http": "http://proxy.school:8080", "https": "http://proxy.school:8080"}
+    monkeypatch.setattr(setup_app.urllib.request, "getproxies", lambda: system)
+    env = setup_app.uv_env(tmp_path, {"PATH": "p"})
+    assert env["HTTPS_PROXY"] == env["HTTP_PROXY"] == "http://proxy.school:8080"
+    for mine in ({"https_proxy": "http://mine:1"}, {"HTTP_PROXY": "http://mine:1"}):
+        env = setup_app.uv_env(tmp_path, dict(mine))
+        assert {k: v for k, v in env.items() if k.upper().endswith("_PROXY")} == mine
+    monkeypatch.setattr(setup_app.urllib.request, "getproxies", lambda: {})
+    assert not any(k.endswith("_PROXY") for k in setup_app.uv_env(tmp_path, {"PATH": "p"}))
+
+
+def test_a_failed_uv_run_names_its_error_before_the_internet_advice(tmp_path, payload, calls,
+                                                                     monkeypatch):
+    """The last `error:` line uv printed leads, so a local problem (a path, a full disk) does
+    not read as a network one; the advice still follows."""
+    child = ("print('Resolved 3 packages'); print('error: File not found: `C:\\\\John`'); "
+             "raise SystemExit(2)")
+    monkeypatch.setattr(setup_app, "run", lambda args, env, say, cwd=None: REAL_RUN(
+        [sys.executable, "-c", child], env, say, cwd))
+    d = tmp_path / "Cortex"
+    with pytest.raises(setup_app.SetupError) as e:
+        setup_app.install(d, setup_app.parse_args(["--dir", str(d)]), lambda s: None,
+                          src=payload)
+    msg = str(e.value)
+    assert msg.startswith("error: File not found: `C:\\John` ")
+    assert "stopped with exit code 2." in msg and "internet connection" in msg
+    with pytest.raises(setup_app.SetupError, match=r"^python\.exe stopped with exit code 3"):
+        REAL_RUN([sys.executable, "-c", "raise SystemExit(3)"], {**os.environ}, lambda s: None)
+
+
+def test_build_bundles_only_an_x64_uv(tmp_path):
+    spec = importlib.util.spec_from_file_location("build", ROOT / "installer" / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+
+    def pe(machine: bytes) -> Path:
+        b = bytearray(512)
+        b[:2] = b"MZ"
+        b[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        b[0x80:0x86] = b"PE\0\0" + machine
+        f = tmp_path / f"uv-{machine.hex()}.exe"
+        f.write_bytes(bytes(b))
+        return f
+    assert build.is_x64(pe(b"\x64\x86"))
+    assert not build.is_x64(pe(b"\x64\xaa"))  # ARM64 (0xAA64)
+    assert not build.is_x64(pe(b"\x4c\x01"))  # x86 (0x014C)
+    (tmp_path / "junk.exe").write_bytes(b"not a program")
+    assert not build.is_x64(tmp_path / "junk.exe")
+
+
 def test_parse_args(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     a = setup_app.parse_args([])
@@ -88,7 +143,8 @@ def payload(tmp_path):
 @pytest.fixture
 def calls(monkeypatch):
     seen = []
-    monkeypatch.setattr(setup_app, "run", lambda args, env, say: seen.append(("run", args, env)))
+    monkeypatch.setattr(setup_app, "run",
+                        lambda args, env, say, cwd=None: seen.append(("run", args, env, cwd)))
     monkeypatch.setattr(setup_app, "get_user_path", lambda: r"C:\a")
     monkeypatch.setattr(setup_app, "set_user_path", lambda v: seen.append(("path", v)))
     monkeypatch.setattr(setup_app, "make_shortcuts",
@@ -109,10 +165,12 @@ def test_install_runs_uv_inside_the_folder(tmp_path, payload, calls):
     (d / "cortex_learner-0.1.0-py3-none-any.whl").write_bytes(b"old")
     opts = setup_app.parse_args(["--dir", str(d)])
     setup_app.install(d, opts, lambda s: None, src=payload)
-    (_, args, env), *rest = calls
+    (_, args, env, cwd), *rest = calls
     assert [str(a) for a in args] == [str(d / "uv.exe"), "tool", "install", "--force",
-                                      "--reinstall-package", "cortex-learner", "--python", "3.12",
+                                      "--reinstall-package", "cortex-learner", "--python",
+                                      "cpython-3.12-windows-x86_64-none",
                                       str(d / "cortex_learner-0.2.0-py3-none-any.whl")]
+    assert cwd == d
     assert env["UV_TOOL_BIN_DIR"] == str(d / "bin")
     assert rest == [("exe", "0.2.0"), ("path", rf"C:\a;{d / 'bin'}"), ("lnk", False),
                     ("reg", "0.2.0")]
@@ -217,7 +275,7 @@ def test_a_failed_disconnect_is_only_a_warning(tmp_path, calls, monkeypatch):
     _install_tree(d)
     (d / "bin" / "cortex.exe").write_bytes(b"x")
 
-    def fail(args, env, say):
+    def fail(args, env, say, cwd=None):
         raise setup_app.SetupError("cortex.exe stopped with exit code 1.")
     monkeypatch.setattr(setup_app, "run", fail)
     said = []
@@ -269,7 +327,9 @@ def test_install_pins_dependencies_and_survives_a_shortcut_failure(tmp_path, pay
     said = []
     setup_app.install(d, setup_app.parse_args(["--dir", str(d)]), said.append, src=payload)
     args = [str(a) for a in calls[0][1]]
-    assert args[args.index("-c") + 1] == str(d / "constraints.txt")
+    # relative, run in d: uv 0.9.15 splits a -c path that has a space (uv#22290)
+    assert args[args.index("-c") + 1] == "constraints.txt" and calls[0][3] == d
+    assert args[args.index("--python") + 1] == "cpython-3.12-windows-x86_64-none"
     assert (d / "constraints.txt").read_text() == "numpy==2.0.0\n"
     assert any(s.startswith("warning: no Start menu shortcut") for s in said)
     assert [c[0] for c in calls] == ["run", "exe", "path", "reg"]
