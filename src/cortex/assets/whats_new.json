@@ -1,4 +1,13 @@
 {
+  "0.6.1": {
+    "items": [
+      "Cortex installs and updates in a folder whose path has a space, such as C:\\Users\\John Smith. Before, setup stopped and blamed the internet connection.",
+      "When setup fails, it shows the real error first, before the advice about your internet connection.",
+      "Setup and updates use the proxy set in Windows, so they work on school and work networks that need one.",
+      "Windows on ARM laptops keep getting the x64 Python that Cortex's packages need."
+    ],
+    "do": []
+  },
   "0.6.0": {
     "items": [
       "A welcome guide for new users: six short steps that set up your notes folder, connect your AI apps and show you where things are. Reopen it any time from Setup.",

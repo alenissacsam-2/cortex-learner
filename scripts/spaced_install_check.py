@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # doctor prints arrows; a pipe
-    uv =shutil.which("uv") or sys.exit("uv is not on PATH.")
+    uv = shutil.which("uv") or sys.exit("uv is not on PATH.")
     tmp = Path(tempfile.mkdtemp(prefix="cortex-spaced-"))
     try:
         payload = tmp / "payload"
