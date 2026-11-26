@@ -934,18 +934,21 @@ def test_an_old_folder_is_removed_only_with_its_marker(tmp_path, payload, calls,
 def test_a_test_copy_leaves_run_values_and_tasks_alone(tmp_path, payload, calls, upgrade,
                                                        monkeypatch):
     """FX5: with the home folder moved to a temp folder, the Run values and Task Scheduler
-    are never changed."""
+    are never changed, and the real user's Cortex install (its Apps & Features entry) is
+    neither closed nor removed: a test copy does not see it."""
     monkeypatch.setattr(setup_app, "test_copy", lambda: True)
     old = _cortex_install(tmp_path / "Cortex")
+    files = sorted(p.name for p in old.iterdir())
     upgrade.keys[OLD_KEY] = old
     upgrade.run.update({"Cortex": "a", "Cortex browse receiver": 'r --vault "V"'})
     upgrade.task = '--vault "V"'
+    assert setup_app.old_install() is None and setup_app.folders(old) == [old]
     said = []
     opts = setup_app.parse_args([])
-    setup_app.install(opts.dir, opts, said.append, src=payload)
+    assert setup_app.install(opts.dir, opts, said.append, src=payload) is None  # no migrate
+    assert sorted(p.name for p in old.iterdir()) == files and OLD_KEY in upgrade.keys
     assert upgrade.run == {"Cortex": "a", "Cortex browse receiver": 'r --vault "V"'}
     assert upgrade.task == '--vault "V"' and "task" not in [c[0] for c in calls]
-    assert any("test copy" in s for s in said)
 
 
 def test_a_fresh_install_with_no_cortex_is_unchanged(tmp_path, payload, calls, upgrade):

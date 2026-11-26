@@ -93,8 +93,11 @@ def installed_dir() -> Path:
 
 def old_install() -> Path | None:
     """A Cortex install (0.6.1 and older): its Apps & Features entry, else its default folder;
-    only a folder that holds its marker."""
-    for p in (_location(OLD_UNINSTALL_KEY), old_default_dir()):
+    only a folder that holds its marker. A test copy skips the entry: it is the signed-in
+    user's real install, never to be closed or removed by a test (its default folder is under
+    the test home)."""
+    entry = None if test_copy() else _location(OLD_UNINSTALL_KEY)
+    for p in (entry, old_default_dir()):
         if p is not None and (p / OLD_MARKER).is_file():
             return p.resolve()
     return None

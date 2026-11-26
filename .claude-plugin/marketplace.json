@@ -12,7 +12,7 @@
       "name": "keepfold",
       "source": "./plugin",
       "description": "Keepfold learning sessions backed by the learner's local knowledge graph",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "author": {
         "name": "alenissacsam-2"
       },

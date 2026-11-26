@@ -1,4 +1,13 @@
 {
+  "0.6.3": {
+    "items": [
+      "keepfold doctor and the app now agree about Claude Code: a claude command on your PATH counts as installed.",
+      "keepfold import no longer waits on its \"who may read these pages?\" question when no one can answer it, such as a script or an AI app running the command; it uses the default and says so.",
+      "keepfold brief no longer starts with \"(BRIEF.md is missing)\" on a new vault.",
+      "A capture record an AI app sends without its resource now gets an error that names the missing field."
+    ],
+    "do": []
+  },
   "0.6.2": {
     "items": [
       "Cortex is now Keepfold: the app, its commands (keepfold), its tools (keepfold_*), the /keepfold skill and its folders (~/.keepfold) all have the new name, and your notes, settings and AI-app connections move over by themselves the first time it runs.",
