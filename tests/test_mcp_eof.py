@@ -85,3 +85,17 @@ def test_exits_while_a_call_waits_for_the_start_up_index(tmp_path):
     _call(p)
     time.sleep(0.5)  # the call is in flight, waiting for the index
     _closes_cleanly(p)
+
+
+def test_no_vault_set_exits_at_once_with_what_to_do(tmp_path):
+    """A registry install (`uvx keepfold mcp` before any setup) has no config: it exits 1 with
+    what to do while the client still holds stdin open, instead of serving or hanging."""
+    with subprocess.Popen([sys.executable, "-c", "from keepfold.taint import main\nmain()\n",
+                           "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, cwd=tmp_path, env=dict(os.environ)) as p:
+        try:  # 60: start-up included (~2 s alone, over 10 s under -n auto); a server never exits
+            assert p.wait(60) == 1
+        finally:
+            p.kill()
+        err = p.stderr.read().decode()
+    assert "No vault set" in err and "keepfold setup" in err and "KEEPFOLD_VAULT" in err
