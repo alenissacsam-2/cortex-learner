@@ -1,44 +1,795 @@
 {
- "generated": "2026-11-22T20:23:36+05:30",
- "git_sha": "4bffbb2",
+ "generated": "2026-11-27T04:23:47+05:30",
+ "git_sha": "b6f61d8",
  "machine": {
   "cpu": "AMD Ryzen 7 7435HS",
   "logical_cores": 16,
   "os": "Windows-11-10.0.26200-SP0",
   "python": "3.12.12"
  },
- "runs": 1,
- "statistic": "median of 1 runs",
- "quick": true,
+ "runs": 3,
+ "statistic": "median of 3 runs",
+ "quick": false,
+ "index": {
+  "script": "scripts/bench_index.py",
+  "points": [
+   {
+    "notes": 1000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_index.py",
+     "--notes",
+     "1000"
+    ],
+    "indexed_notes": 987,
+    "snapshot_mb": 4.0,
+    "cold_build_s": 3.01,
+    "snapshot_build_s": 0.29,
+    "mcp_first_start_s": 3.03,
+    "mcp_next_start_s": 2.81,
+    "runs": {
+     "cold_build_s": [
+      3.01,
+      3.05,
+      2.97
+     ],
+     "snapshot_build_s": [
+      0.28,
+      0.36,
+      0.29
+     ],
+     "mcp_first_start_s": [
+      3.03,
+      3.48,
+      3.02
+     ],
+     "mcp_next_start_s": [
+      2.81,
+      2.97,
+      2.7
+     ]
+    }
+   },
+   {
+    "notes": 2500,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_index.py",
+     "--notes",
+     "2500"
+    ],
+    "indexed_notes": 2475,
+    "snapshot_mb": 9.7,
+    "cold_build_s": 7.66,
+    "snapshot_build_s": 0.67,
+    "mcp_first_start_s": 3.25,
+    "mcp_next_start_s": 2.75,
+    "runs": {
+     "cold_build_s": [
+      7.31,
+      7.89,
+      7.66
+     ],
+     "snapshot_build_s": [
+      0.66,
+      0.76,
+      0.67
+     ],
+     "mcp_first_start_s": [
+      3.23,
+      3.25,
+      3.25
+     ],
+     "mcp_next_start_s": [
+      2.72,
+      2.75,
+      2.79
+     ]
+    }
+   },
+   {
+    "notes": 5000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_index.py",
+     "--notes",
+     "5000"
+    ],
+    "indexed_notes": 4955,
+    "snapshot_mb": 19.4,
+    "cold_build_s": 16.85,
+    "snapshot_build_s": 1.5,
+    "mcp_first_start_s": 4.39,
+    "mcp_next_start_s": 3.32,
+    "runs": {
+     "cold_build_s": [
+      15.09,
+      17.09,
+      16.85
+     ],
+     "snapshot_build_s": [
+      1.43,
+      1.53,
+      1.5
+     ],
+     "mcp_first_start_s": [
+      3.69,
+      4.39,
+      4.39
+     ],
+     "mcp_next_start_s": [
+      2.71,
+      3.32,
+      3.39
+     ]
+    }
+   },
+   {
+    "notes": 10000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_index.py",
+     "--notes",
+     "10000"
+    ],
+    "indexed_notes": 9919,
+    "snapshot_mb": 38.4,
+    "cold_build_s": 40.62,
+    "snapshot_build_s": 3.88,
+    "mcp_first_start_s": 6.66,
+    "mcp_next_start_s": 3.73,
+    "runs": {
+     "cold_build_s": [
+      33.95,
+      40.62,
+      47.83
+     ],
+     "snapshot_build_s": [
+      3.61,
+      3.88,
+      4.86
+     ],
+     "mcp_first_start_s": [
+      5.59,
+      6.66,
+      6.71
+     ],
+     "mcp_next_start_s": [
+      3.32,
+      4.61,
+      3.73
+     ]
+    }
+   }
+  ]
+ },
+ "finished": "2026-11-27T05:08:13+05:30",
+ "load": {
+  "cpu_percent_median": 48.0,
+  "cpu_percent_max": 72.0,
+  "before_each_run": [
+   {
+    "run": "bench_index.py --notes 1000 #1",
+    "cpu_percent": 72.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 1000 #2",
+    "cpu_percent": 20.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 1000 #3",
+    "cpu_percent": 9.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 2500 #1",
+    "cpu_percent": 0.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 2500 #2",
+    "cpu_percent": 8.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 2500 #3",
+    "cpu_percent": 10.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 5000 #1",
+    "cpu_percent": 7.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 5000 #2",
+    "cpu_percent": 5.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 5000 #3",
+    "cpu_percent": 48.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 10000 #1",
+    "cpu_percent": 49.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 10000 #2",
+    "cpu_percent": 48.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_index.py --notes 10000 #3",
+    "cpu_percent": 57.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 1000 #1",
+    "cpu_percent": 54.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 1000 #2",
+    "cpu_percent": 45.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 1000 #3",
+    "cpu_percent": 65.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 2500 #1",
+    "cpu_percent": 47.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 2500 #2",
+    "cpu_percent": 62.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 2500 #3",
+    "cpu_percent": 51.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 5000 #1",
+    "cpu_percent": 57.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 5000 #2",
+    "cpu_percent": 62.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 5000 #3",
+    "cpu_percent": 51.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 10000 #1",
+    "cpu_percent": 48.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 10000 #2",
+    "cpu_percent": 45.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py vectors --notes 10000 #3",
+    "cpu_percent": 54.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py browse --visits 50000 #1",
+    "cpu_percent": 62.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_scale.py browse --visits 50000 #2",
+    "cpu_percent": 63.0,
+    "python_processes": 12
+   },
+   {
+    "run": "bench_scale.py browse --visits 50000 #3",
+    "cpu_percent": 46.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_chat_data.py  #1",
+    "cpu_percent": 43.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_chat_data.py  #2",
+    "cpu_percent": 62.0,
+    "python_processes": 10
+   },
+   {
+    "run": "bench_chat_data.py  #3",
+    "cpu_percent": 43.0,
+    "python_processes": 10
+   }
+  ]
+ },
+ "vectors": {
+  "script": "scripts/bench_scale.py",
+  "points": [
+   {
+    "pages": 1011,
+    "chunks": 10011,
+    "notes_arg": 1000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_scale.py",
+     "vectors",
+     "--notes",
+     "1000"
+    ],
+    "query_s": 0.013,
+    "add_page_s": 0.031,
+    "cold_start_s": 0.075,
+    "first_build_s": 1.382,
+    "runs": {
+     "query_s": [
+      0.013,
+      0.012,
+      0.016
+     ],
+     "add_page_s": [
+      0.031,
+      0.029,
+      0.036
+     ],
+     "cold_start_s": [
+      0.075,
+      0.072,
+      0.088
+     ],
+     "first_build_s": [
+      1.271,
+      1.382,
+      1.479
+     ]
+    }
+   },
+   {
+    "pages": 2511,
+    "chunks": 25011,
+    "notes_arg": 2500,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_scale.py",
+     "vectors",
+     "--notes",
+     "2500"
+    ],
+    "query_s": 0.025,
+    "add_page_s": 0.065,
+    "cold_start_s": 0.196,
+    "first_build_s": 3.432,
+    "runs": {
+     "query_s": [
+      0.025,
+      0.023,
+      0.025
+     ],
+     "add_page_s": [
+      0.065,
+      0.065,
+      0.064
+     ],
+     "cold_start_s": [
+      0.214,
+      0.19,
+      0.196
+     ],
+     "first_build_s": [
+      3.432,
+      3.418,
+      3.451
+     ]
+    }
+   },
+   {
+    "pages": 5011,
+    "chunks": 50011,
+    "notes_arg": 5000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_scale.py",
+     "vectors",
+     "--notes",
+     "5000"
+    ],
+    "query_s": 0.036,
+    "add_page_s": 0.22,
+    "cold_start_s": 0.317,
+    "first_build_s": 5.371,
+    "runs": {
+     "query_s": [
+      0.036,
+      0.036,
+      0.047
+     ],
+     "add_page_s": [
+      0.22,
+      0.187,
+      0.244
+     ],
+     "cold_start_s": [
+      0.317,
+      0.305,
+      0.363
+     ],
+     "first_build_s": [
+      5.455,
+      5.371,
+      5.335
+     ]
+    }
+   },
+   {
+    "pages": 10011,
+    "chunks": 100011,
+    "notes_arg": 10000,
+    "command": [
+     "uv",
+     "run",
+     "python",
+     "scripts/bench_scale.py",
+     "vectors",
+     "--notes",
+     "10000"
+    ],
+    "query_s": 0.068,
+    "add_page_s": 0.215,
+    "cold_start_s": 0.614,
+    "first_build_s": 10.86,
+    "runs": {
+     "query_s": [
+      0.068,
+      0.069,
+      0.062
+     ],
+     "add_page_s": [
+      0.215,
+      0.235,
+      0.185
+     ],
+     "cold_start_s": [
+      0.761,
+      0.585,
+      0.614
+     ],
+     "first_build_s": [
+      10.86,
+      10.655,
+      11.251
+     ]
+    }
+   }
+  ]
+ },
+ "browse": {
+  "script": "scripts/bench_scale.py",
+  "visits": 50000,
+  "command": [
+   "uv",
+   "run",
+   "python",
+   "scripts/bench_scale.py",
+   "browse",
+   "--visits",
+   "50000"
+  ],
+  "first_import_s": 50.789,
+  "nothing_new_s": 0.09,
+  "live_read_50_s": 2.67,
+  "runs": {
+   "first_import_s": [
+    53.44,
+    50.789,
+    48.47
+   ],
+   "nothing_new_s": [
+    0.081,
+    0.09,
+    0.103
+   ],
+   "live_read_50_s": [
+    2.746,
+    2.67,
+    2.656
+   ]
+  }
+ },
+ "chat_data": {
+  "script": "scripts/bench_chat_data.py",
+  "command": [
+   "uv",
+   "run",
+   "python",
+   "scripts/bench_chat_data.py"
+  ],
+  "calls": {
+   "load_days": {
+    "first_s": 8.78,
+    "after_s": 8.76,
+    "runs": {
+     "first": [
+      8.78,
+      8.95,
+      8.52
+     ],
+     "after": [
+      8.76,
+      8.94,
+      8.31
+     ]
+    }
+   },
+   "lean_days": {
+    "first_s": 1.68,
+    "after_s": 0.0,
+    "runs": {
+     "first": [
+      1.68,
+      2.08,
+      1.62
+     ],
+     "after": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   "sides (build + every key)": {
+    "first_s": 10.44,
+    "after_s": 8.86,
+    "runs": {
+     "first": [
+      10.51,
+      10.44,
+      10.07
+     ],
+     "after": [
+      9.43,
+      8.86,
+      8.71
+     ]
+    }
+   },
+   "site_list all days": {
+    "first_s": 0.63,
+    "after_s": 0.57,
+    "runs": {
+     "first": [
+      0.69,
+      0.63,
+      0.58
+     ],
+     "after": [
+      0.57,
+      0.61,
+      0.57
+     ]
+    }
+   },
+   "site_list one day": {
+    "first_s": 0.05,
+    "after_s": 0.05,
+    "runs": {
+     "first": [
+      0.06,
+      0.05,
+      0.05
+     ],
+     "after": [
+      0.06,
+      0.05,
+      0.05
+     ]
+    }
+   },
+   "site_list one browser": {
+    "first_s": 0.94,
+    "after_s": 0.94,
+    "runs": {
+     "first": [
+      1.0,
+      0.94,
+      0.92
+     ],
+     "after": [
+      0.92,
+      0.94,
+      0.97
+     ]
+    }
+   },
+   "digest a day": {
+    "first_s": 58.36,
+    "after_s": 0.68,
+    "runs": {
+     "first": [
+      61.25,
+      58.36,
+      52.79
+     ],
+     "after": [
+      0.69,
+      0.68,
+      0.68
+     ]
+    }
+   },
+   "digest a week": {
+    "first_s": 1.08,
+    "after_s": 0.77,
+    "runs": {
+     "first": [
+      1.22,
+      1.08,
+      1.08
+     ],
+     "after": [
+      0.89,
+      0.77,
+      0.76
+     ]
+    }
+   },
+   "study plan": {
+    "first_s": 0.86,
+    "after_s": 0.82,
+    "runs": {
+     "first": [
+      0.98,
+      0.83,
+      0.86
+     ],
+     "after": [
+      0.92,
+      0.82,
+      0.82
+     ]
+    }
+   },
+   "study due": {
+    "first_s": 0.19,
+    "after_s": 0.18,
+    "runs": {
+     "first": [
+      0.19,
+      0.18,
+      0.19
+     ],
+     "after": [
+      0.17,
+      0.18,
+      0.18
+     ]
+    }
+   },
+   "study weak": {
+    "first_s": 0.19,
+    "after_s": 0.19,
+    "runs": {
+     "first": [
+      0.24,
+      0.19,
+      0.19
+     ],
+     "after": [
+      0.21,
+      0.19,
+      0.19
+     ]
+    }
+   },
+   "study range": {
+    "first_s": 0.53,
+    "after_s": 0.53,
+    "runs": {
+     "first": [
+      0.54,
+      0.5,
+      0.53
+     ],
+     "after": [
+      0.53,
+      0.53,
+      0.51
+     ]
+    }
+   },
+   "study progress": {
+    "first_s": 0.2,
+    "after_s": 0.19,
+    "runs": {
+     "first": [
+      0.19,
+      0.23,
+      0.2
+     ],
+     "after": [
+      0.19,
+      0.18,
+      0.2
+     ]
+    }
+   },
+   "reply (site question)": {
+    "first_s": 0.13,
+    "after_s": 0.13,
+    "runs": {
+     "first": [
+      0.14,
+      0.13,
+      0.13
+     ],
+     "after": [
+      0.13,
+      0.13,
+      0.13
+     ]
+    }
+   }
+  }
+ },
  "chat_test": {
   "source": "keepfold.chat_eval.run(use_model=False) (`keepfold chat eval --no-model`)",
   "result": "BLOCKED",
   "model_note": "model questions turned off",
-  "total": 40,
-  "ran": 14,
-  "passed": 14,
+  "total": 60,
+  "ran": 15,
+  "passed": 15,
   "failed": 0,
-  "needs_model": 26,
+  "needs_model": 45,
   "by_query_kind": {
    "exact_id": {
     "pass": 3,
     "fail": 0,
-    "needs_model": 4
+    "needs_model": 5
    },
    "multi_gold": {
     "pass": 0,
     "fail": 0,
-    "needs_model": 4
+    "needs_model": 11
    },
    "lexical": {
-    "pass": 8,
+    "pass": 9,
     "fail": 0,
-    "needs_model": 5
+    "needs_model": 9
    },
    "conflicting_history": {
     "pass": 0,
     "fail": 0,
-    "needs_model": 4
+    "needs_model": 8
    },
    "stale_negative": {
     "pass": 0,
@@ -48,12 +799,12 @@
    "synonym": {
     "pass": 0,
     "fail": 0,
-    "needs_model": 5
+    "needs_model": 6
    },
    "unanswerable": {
     "pass": 3,
     "fail": 0,
-    "needs_model": 2
+    "needs_model": 4
    }
   },
   "by_kind": {
@@ -111,6 +862,36 @@
     "pass": 0,
     "fail": 0,
     "needs_model": 3
+   },
+   "multi_hop": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 3
+   },
+   "point_in_time": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "injection": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 4
+   },
+   "roleplay": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 3
+   },
+   "compound": {
+    "pass": 1,
+    "fail": 0,
+    "needs_model": 2
+   },
+   "arithmetic": {
+    "pass": 0,
+    "fail": 0,
+    "needs_model": 3
    }
   },
   "retrieval_cases": 0,
@@ -137,12 +918,11 @@
     "state": "not run"
    }
   ],
-  "latency_median_s": 0.09,
-  "latency_max_s": 0.16
+  "latency_median_s": 0.05,
+  "latency_max_s": 0.08
  },
  "tests": {
-  "collected": 3265,
+  "collected": 4845,
   "command": "uv run pytest --collect-only -q"
- },
- "note": "Only the load-independent sections (chat_test, tests) are kept, from a --quick run; the timing sections were not measured on a quiet machine yet."
+ }
 }

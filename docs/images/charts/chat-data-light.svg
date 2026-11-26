@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="394" viewBox="0 0 720 394" role="img" aria-labelledby="t d" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif'>
+<title id="t">Chat's answers from your own data</title>
+<desc id="d">Bar chart. Every site I visited: 570 ms; Sites on one day: 50 ms; Sites in one browser: 940 ms; Summarize my day: 680 ms; Summarize my week: 770 ms; What should I study today?: 820 ms; What's due?: 180 ms; Where am I weak?: 190 ms; How am I doing?: 190 ms; A whole Chat reply (site question): 130 ms</desc>
+<text x="0.0" y="20.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Chat's answers from your own data</text>
+<text x="0.0" y="40.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Median of 3 runs, after the first call; heavy synthetic vault (scripts/bench_chat_data.py)</text>
+<line x1="250.0" x2="250.0" y1="58" y2="368" stroke="#c3c2b7" stroke-width="1"/>
+<text x="250.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">0</text>
+<line x1="326.0" x2="326.0" y1="58" y2="368" stroke="#e1e0d9" stroke-width="1"/>
+<text x="326.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">200</text>
+<line x1="402.0" x2="402.0" y1="58" y2="368" stroke="#e1e0d9" stroke-width="1"/>
+<text x="402.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">400</text>
+<line x1="478.0" x2="478.0" y1="58" y2="368" stroke="#e1e0d9" stroke-width="1"/>
+<text x="478.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">600</text>
+<line x1="554.0" x2="554.0" y1="58" y2="368" stroke="#e1e0d9" stroke-width="1"/>
+<text x="554.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">800</text>
+<line x1="630.0" x2="630.0" y1="58" y2="368" stroke="#e1e0d9" stroke-width="1"/>
+<text x="630.0" y="384.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">1,000 ms</text>
+<text x="240.0" y="80.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Every site I visited</text>
+<path d="M250.0,68.0h212.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-212.6z" fill="#2a78d6"><title>Every site I visited: 570 ms</title></path>
+<text x="472.6" y="80.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">570 ms</text>
+<text x="240.0" y="110.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Sites on one day</text>
+<path d="M250.0,98.0h15.0a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-15.0z" fill="#2a78d6"><title>Sites on one day: 50 ms</title></path>
+<text x="275.0" y="110.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">50 ms</text>
+<text x="240.0" y="140.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Sites in one browser</text>
+<path d="M250.0,128.0h353.2a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-353.2z" fill="#2a78d6"><title>Sites in one browser: 940 ms</title></path>
+<text x="613.2" y="140.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">940 ms</text>
+<text x="240.0" y="170.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Summarize my day</text>
+<path d="M250.0,158.0h254.4a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-254.4z" fill="#2a78d6"><title>Summarize my day: 680 ms</title></path>
+<text x="514.4" y="170.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">680 ms</text>
+<text x="240.0" y="200.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Summarize my week</text>
+<path d="M250.0,188.0h288.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-288.6z" fill="#2a78d6"><title>Summarize my week: 770 ms</title></path>
+<text x="548.6" y="200.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">770 ms</text>
+<text x="240.0" y="230.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">What should I study today?</text>
+<path d="M250.0,218.0h307.6a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-307.6z" fill="#2a78d6"><title>What should I study today?: 820 ms</title></path>
+<text x="567.6" y="230.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">820 ms</text>
+<text x="240.0" y="260.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">What's due?</text>
+<path d="M250.0,248.0h64.4a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-64.4z" fill="#2a78d6"><title>What's due?: 180 ms</title></path>
+<text x="324.4" y="260.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">180 ms</text>
+<text x="240.0" y="290.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">Where am I weak?</text>
+<path d="M250.0,278.0h68.2a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-68.2z" fill="#2a78d6"><title>Where am I weak?: 190 ms</title></path>
+<text x="328.2" y="290.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">190 ms</text>
+<text x="240.0" y="320.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">How am I doing?</text>
+<path d="M250.0,308.0h68.2a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-68.2z" fill="#2a78d6"><title>How am I doing?: 190 ms</title></path>
+<text x="328.2" y="320.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">190 ms</text>
+<text x="240.0" y="350.0" font-size="12" fill="#0b0b0b" text-anchor="end" font-weight="400">A whole Chat reply (site question)</text>
+<path d="M250.0,338.0h45.4a4,4 0 0 1 4,4v8.0a4,4 0 0 1 -4,4h-45.4z" fill="#2a78d6"><title>A whole Chat reply (site question): 130 ms</title></path>
+<text x="305.4" y="350.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">130 ms</text>
+</svg>

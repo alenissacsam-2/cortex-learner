@@ -349,7 +349,7 @@ uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.p
 The first script writes [docs/benchmarks/results.json](docs/benchmarks/results.json) (numbers only, with each benchmark's exact arguments); the second draws the charts and fills in the tables of this section.
 
 <!-- numbers:machine -->
-Measured on 2026-11-22 at commit `4bffbb2`, on AMD Ryzen 7 7435HS (16 logical cores), Windows-11-10.0.26200-SP0, Python 3.12.12. A section that says *Not measured yet* has no numbers in this run.
+Measured on 2026-11-27 at commit `b6f61d8`, on AMD Ryzen 7 7435HS (16 logical cores), Windows-11-10.0.26200-SP0, Python 3.12.12; each time is the median of 3 runs.
 <!-- /numbers:machine -->
 
 ### Start-up and indexing
@@ -357,7 +357,14 @@ Measured on 2026-11-22 at commit `4bffbb2`, on AMD Ryzen 7 7435HS (16 logical co
 When an AI app starts Keepfold, it can call Keepfold's tools once the MCP server has answered its first message. The first time Keepfold opens a vault it builds a search index of every note; after that it starts from a saved snapshot and reads only the notes that changed. Script: [scripts/bench_index.py](scripts/bench_index.py) (a vault with the mix of note kinds and lengths of a real one).
 
 <!-- numbers:startup -->
-*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/startup-dark.svg"><img src="docs/images/charts/startup-light.svg" alt="Index and MCP start time by vault size: 1,000 notes: cold build 3.0 s, from the snapshot 290 ms, MCP server ready 2.8 s; 2,500 notes: cold build 7.7 s, from the snapshot 670 ms, MCP server ready 2.8 s; 5,000 notes: cold build 16.9 s, from the snapshot 1.5 s, MCP server ready 3.3 s; 10,000 notes: cold build 40.6 s, from the snapshot 3.9 s, MCP server ready 3.7 s"></picture>
+
+| Notes | Cold index build | Index from its snapshot | MCP ready, first start | MCP ready, later starts |
+|---|---|---|---|---|
+| 1,000 | 3.0 s | 290 ms | 3.0 s | 2.8 s |
+| 2,500 | 7.7 s | 670 ms | 3.2 s | 2.8 s |
+| 5,000 | 16.9 s | 1.5 s | 4.4 s | 3.3 s |
+| 10,000 | 40.6 s | 3.9 s | 6.7 s | 3.7 s |
 <!-- /numbers:startup -->
 
 ### Search by meaning
@@ -365,34 +372,54 @@ When an AI app starts Keepfold, it can call Keepfold's tools once the MCP server
 Search by meaning scores every chunk of every page against your question. Adding a page embeds only that page, so the store stays current as you write. These runs use a fast stand-in for the search model, so they time Keepfold's own vector store and scoring; the real model adds the time it takes to embed your question. Script: [scripts/bench_scale.py](scripts/bench_scale.py) `vectors`.
 
 <!-- numbers:semantic -->
-*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/semantic-dark.svg"><img src="docs/images/charts/semantic-light.svg" alt="Semantic search time by vault size: 1,011 pages: search 13 ms, first search after a start 75 ms, add one page 31 ms; 2,511 pages: search 25 ms, first search after a start 196 ms, add one page 65 ms; 5,011 pages: search 36 ms, first search after a start 317 ms, add one page 220 ms; 10,011 pages: search 68 ms, first search after a start 614 ms, add one page 215 ms"></picture>
+
+| Pages | Chunks | Search by meaning (warm) | First search after a start | Add one page |
+|---|---|---|---|---|
+| 1,011 | 10,011 | 13 ms | 75 ms | 31 ms |
+| 2,511 | 25,011 | 25 ms | 196 ms | 65 ms |
+| 5,011 | 50,011 | 36 ms | 317 ms | 220 ms |
+| 10,011 | 100,011 | 68 ms | 614 ms | 215 ms |
 <!-- /numbers:semantic -->
 
 ### Chat's answers from your own data
 
-Questions such as "which sites did I visit this week?", "summarize my day" or "what's due?" are answered from Keepfold's records, not by a model. The vault here is heavy on purpose: 90 days of browsing with 2,000 sites a day, 10,000 notes and 20,000 study events. The first call after an import also reads the data into memory; later calls reuse it. Script: [scripts/bench_chat_data.py](scripts/bench_chat_data.py).
+Questions such as "which sites did I visit this week?", "summarize my day" or "what's due?" are answered from Keepfold's records, not by a model. The vault here is heavy on purpose: 90 days of browsing with 2,000 sites a day, 10,000 notes and 20,000 study events. The first call after an import also reads the data into memory; later calls reuse it. In this run "Summarize my day" is the first question that needs the notes, so its first call also builds the search index of all 10,000 notes from scratch, which Keepfold does once per vault (see [Start-up and indexing](#start-up-and-indexing)). Script: [scripts/bench_chat_data.py](scripts/bench_chat_data.py).
 
 <!-- numbers:chat-data -->
-*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/chat-data-dark.svg"><img src="docs/images/charts/chat-data-light.svg" alt="Chat's answers from your own data: Every site I visited 570 ms; Sites on one day 50 ms; Sites in one browser 940 ms; Summarize my day 680 ms; Summarize my week 770 ms; What should I study today? 820 ms; What's due? 180 ms; Where am I weak? 190 ms; How am I doing? 190 ms; A whole Chat reply (site question) 130 ms"></picture>
+
+| Question | First call after an import | Later calls |
+|---|---|---|
+| Every site I visited | 630 ms | 570 ms |
+| Sites on one day | 50 ms | 50 ms |
+| Sites in one browser | 940 ms | 940 ms |
+| Summarize my day | 58.4 s | 680 ms |
+| Summarize my week | 1.1 s | 770 ms |
+| What should I study today? | 860 ms | 820 ms |
+| What's due? | 190 ms | 180 ms |
+| Where am I weak? | 190 ms | 190 ms |
+| How am I doing? | 200 ms | 190 ms |
+| A whole Chat reply (site question) | 130 ms | 130 ms |
 <!-- /numbers:chat-data -->
 
 ### The Chat test
 
-The Chat test asks Chat 40 questions about a made-up person and scores each answer in code, with no AI judge (`keepfold chat eval`, or **Run Chat test** in the app). These runs never load a model, so only the questions Keepfold answers from its own data (counts, first and last dates, study states, an empty month, a private project with Private off) can run. The others are shown as needing a local model, not as failures. Source: [src/keepfold/chat_eval.py](src/keepfold/chat_eval.py), run by `readme_numbers.py` as `keepfold chat eval --no-model` does.
+The Chat test asks Chat 60 questions about a made-up person and scores each answer in code, with no AI judge (`keepfold chat eval`, or **Run Chat test** in the app). These runs never load a model, so only the questions Keepfold answers from its own data (counts, first and last dates, study states, an empty month, a private project with Private off) can run. The others are shown as needing a local model, not as failures. Source: [src/keepfold/chat_eval.py](src/keepfold/chat_eval.py), run by `readme_numbers.py` as `keepfold chat eval --no-model` does.
 
 <!-- numbers:chat-test -->
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/chat-test-dark.svg"><img src="docs/images/charts/chat-test-light.svg" alt="The Chat test with no model: 14 of 14 data questions passed, 26 need a local model. An exact name: 3 pass, 0 fail, 4 need a model; Plain words: 8 pass, 0 fail, 5 need a model; Other words: 0 pass, 0 fail, 5 need a model; Several pages: 0 pass, 0 fail, 4 need a model; A changed history: 0 pass, 0 fail, 4 need a model; An outdated fact: 0 pass, 0 fail, 2 need a model; Nothing to find: 3 pass, 0 fail, 2 need a model"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/charts/chat-test-dark.svg"><img src="docs/images/charts/chat-test-light.svg" alt="The Chat test with no model: 15 of 15 data questions passed, 45 need a local model. An exact name: 3 pass, 0 fail, 5 need a model; Plain words: 9 pass, 0 fail, 9 need a model; Other words: 0 pass, 0 fail, 6 need a model; Several pages: 0 pass, 0 fail, 11 need a model; A changed history: 0 pass, 0 fail, 8 need a model; An outdated fact: 0 pass, 0 fail, 2 need a model; Nothing to find: 3 pass, 0 fail, 4 need a model"></picture>
 
 | The search a question needs | Pass | Fail | Needs a local model |
 |---|---|---|---|
-| An exact name | 3 | 0 | 4 |
-| Plain words | 8 | 0 | 5 |
-| Other words | 0 | 0 | 5 |
-| Several pages | 0 | 0 | 4 |
-| A changed history | 0 | 0 | 4 |
+| An exact name | 3 | 0 | 5 |
+| Plain words | 9 | 0 | 9 |
+| Other words | 0 | 0 | 6 |
+| Several pages | 0 | 0 | 11 |
+| A changed history | 0 | 0 | 8 |
 | An outdated fact | 0 | 0 | 2 |
-| Nothing to find | 3 | 0 | 2 |
-| **All 40** | **14** | **0** | **26** |
+| Nothing to find | 3 | 0 | 4 |
+| **All 60** | **15** | **0** | **45** |
 <!-- /numbers:chat-test -->
 
 ### Browsing history
@@ -400,13 +427,17 @@ The Chat test asks Chat 40 questions about a made-up person and scores each answ
 The first import reads a whole year of history once. After that the app reads only what is new every 10 minutes, so a live read stays short. Script: [scripts/bench_scale.py](scripts/bench_scale.py) `browse` (no local model).
 
 <!-- numbers:browse -->
-*Not measured yet.* Run `uv run python scripts/readme_numbers.py && uv run python scripts/readme_charts.py` on a quiet machine to fill this in.
+| Browsing history (synthetic, 5,000 sites over a year) | Time |
+|---|---|
+| First import of 50,000 visits | 50.8 s |
+| The next import with nothing new | 90 ms |
+| A live read of 50 new visits (the app does this every 10 minutes) | 2.7 s |
 <!-- /numbers:browse -->
 
 ### Tests
 
 <!-- numbers:tests -->
-3,265 automated tests (`uv run pytest --collect-only -q`).
+4,845 automated tests (`uv run pytest --collect-only -q`).
 <!-- /numbers:tests -->
 They use only made-up data in `tests/fixtures/` and temp folders.
 

@@ -400,8 +400,8 @@ def chat_test_block(r: dict) -> dict[str, str]:
                                    "need a model" for n, c in rows2)) + "\n\n" + table(
         ["The search a question needs", "Pass", "Fail", "Needs a local model"],
         [[n, c["pass"], c["fail"], c["needs_model"]] for n, c in rows2]
-        + [["**All 40**", f"**{ct['passed']}**", f"**{ct['failed']}**",
-            f"**{ct['needs_model']}**"]])
+        + [[f"**All {ct['passed'] + ct['failed'] + ct['needs_model']}**", f"**{ct['passed']}**",
+            f"**{ct['failed']}**", f"**{ct['needs_model']}**"]])
     return out
 
 

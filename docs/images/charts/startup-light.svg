@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" role="img" aria-labelledby="t d" font-family='system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif'>
+<title id="t">Index and MCP start time by vault size</title>
+<desc id="d">Line chart. Cold index build: 1,000 notes 3.0 s, 2,500 notes 7.7 s, 5,000 notes 16.9 s, 10,000 notes 40.6 s; Index from its snapshot: 1,000 notes 290 ms, 2,500 notes 670 ms, 5,000 notes 1.5 s, 10,000 notes 3.9 s; MCP server ready (later starts): 1,000 notes 2.8 s, 2,500 notes 2.8 s, 5,000 notes 3.3 s, 10,000 notes 3.7 s</desc>
+<text x="0.0" y="20.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Index and MCP start time by vault size</text>
+<text x="0.0" y="40.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Median of 3 runs, seconds; synthetic vaults (scripts/bench_index.py)</text>
+<line x1="56" x2="490" y1="308.0" y2="308.0" stroke="#c3c2b7" stroke-width="1"/>
+<text x="48.0" y="312.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">0</text>
+<line x1="56" x2="490" y1="259.2" y2="259.2" stroke="#e1e0d9" stroke-width="1"/>
+<text x="48.0" y="263.2" font-size="11" fill="#898781" text-anchor="end" font-weight="400">10</text>
+<line x1="56" x2="490" y1="210.4" y2="210.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="48.0" y="214.4" font-size="11" fill="#898781" text-anchor="end" font-weight="400">20</text>
+<line x1="56" x2="490" y1="161.6" y2="161.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="48.0" y="165.6" font-size="11" fill="#898781" text-anchor="end" font-weight="400">30</text>
+<line x1="56" x2="490" y1="112.8" y2="112.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="48.0" y="116.8" font-size="11" fill="#898781" text-anchor="end" font-weight="400">40</text>
+<line x1="56" x2="490" y1="64.0" y2="64.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="48.0" y="68.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">50</text>
+<text x="48.0" y="52.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">s</text>
+<text x="99.4" y="326.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">1,000</text>
+<text x="164.5" y="326.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">2,500</text>
+<text x="273.0" y="326.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">5,000</text>
+<text x="490.0" y="326.0" font-size="11" fill="#898781" text-anchor="middle" font-weight="400">10,000</text>
+<text x="273.0" y="350.0" font-size="12" fill="#52514e" text-anchor="middle" font-weight="400">Notes in the vault</text>
+<polyline points="99.4,293.3 164.5,270.6 273.0,225.8 490.0,109.8" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="99.4" cy="293.3" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>Cold index build, 1,000: 3.0 s</title></circle>
+<circle cx="164.5" cy="270.6" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>Cold index build, 2,500: 7.7 s</title></circle>
+<circle cx="273.0" cy="225.8" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>Cold index build, 5,000: 16.9 s</title></circle>
+<circle cx="490.0" cy="109.8" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"><title>Cold index build, 10,000: 40.6 s</title></circle>
+<polyline points="99.4,306.6 164.5,304.7 273.0,300.7 490.0,289.1" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="99.4" cy="306.6" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>Index from its snapshot, 1,000: 290 ms</title></circle>
+<circle cx="164.5" cy="304.7" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>Index from its snapshot, 2,500: 670 ms</title></circle>
+<circle cx="273.0" cy="300.7" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>Index from its snapshot, 5,000: 1.5 s</title></circle>
+<circle cx="490.0" cy="289.1" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"><title>Index from its snapshot, 10,000: 3.9 s</title></circle>
+<polyline points="99.4,294.3 164.5,294.6 273.0,291.8 490.0,289.8" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="99.4" cy="294.3" r="4" fill="#1baf7a" stroke="#ffffff" stroke-width="2"><title>MCP server ready (later starts), 1,000: 2.8 s</title></circle>
+<circle cx="164.5" cy="294.6" r="4" fill="#1baf7a" stroke="#ffffff" stroke-width="2"><title>MCP server ready (later starts), 2,500: 2.8 s</title></circle>
+<circle cx="273.0" cy="291.8" r="4" fill="#1baf7a" stroke="#ffffff" stroke-width="2"><title>MCP server ready (later starts), 5,000: 3.3 s</title></circle>
+<circle cx="490.0" cy="289.8" r="4" fill="#1baf7a" stroke="#ffffff" stroke-width="2"><title>MCP server ready (later starts), 10,000: 3.7 s</title></circle>
+<line x1="495" y1="109.8" x2="501" y2="94.7" stroke="#898781" stroke-width="1"/>
+<line x1="504" x2="518" y1="94.7" y2="94.7" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<text x="524.0" y="98.7" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="400">Cold index build</text>
+<text x="524.0" y="113.7" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">40.6 s at 10,000</text>
+<line x1="495" y1="289.1" x2="501" y2="274.0" stroke="#898781" stroke-width="1"/>
+<line x1="504" x2="518" y1="274.0" y2="274.0" stroke="#eb6834" stroke-width="2" stroke-linecap="round"/>
+<text x="524.0" y="278.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="400">Index from its snapshot</text>
+<text x="524.0" y="293.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">3.9 s at 10,000</text>
+<line x1="495" y1="289.8" x2="501" y2="304.0" stroke="#898781" stroke-width="1"/>
+<line x1="504" x2="518" y1="304.0" y2="304.0" stroke="#1baf7a" stroke-width="2" stroke-linecap="round"/>
+<text x="524.0" y="308.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="400">MCP server ready (later starts)</text>
+<text x="524.0" y="323.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">3.7 s at 10,000</text>
+</svg>
