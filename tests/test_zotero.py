@@ -1,5 +1,5 @@
 """Zotero (R18): finding the library, reading a temp copy of a made-up zotero.sqlite (the
-Zotero 5-7 tables cortex.zotero reads, cut to the columns it uses plus their keys), one page per
+Zotero 5-7 tables keepfold.zotero reads, cut to the columns it uses plus their keys), one page per
 item, updates by item key, and a watched library that copies nothing while it is unchanged."""
 
 import json
@@ -13,9 +13,9 @@ import pytest
 from test_more_sources import _pdf
 from typer.testing import CliRunner
 
-from cortex import sources, watch, zotero
-from cortex.cli import app
-from cortex.vault import Vault, VaultError
+from keepfold import sources, watch, zotero
+from keepfold.cli import app
+from keepfold.vault import Vault, VaultError
 
 runner = CliRunner()
 C = sources.Audience.CLOUD

@@ -1,8 +1,8 @@
-"""Plan v9 item 8: what other agents get. The Cortex block in Cursor, VS Code (Copilot) and
+"""Plan v9 item 8: what other agents get. The Keepfold block in Cursor, VS Code (Copilot) and
 Codex rules files (add, refresh, remove; the rest of the file untouched; backups), per-agent
 profiles enforced over MCP (a restricted client gets no personality, profile, journal or
 people text; profiles are set from the app only), and the context packs (at most 1,500
-or 5,000 characters, never a private page or a hidden subject) with `cortex pack`."""
+or 5,000 characters, never a private page or a hidden subject) with `keepfold pack`."""
 
 import json
 import re
@@ -14,10 +14,10 @@ from mcp import Client
 from mcp.types import Implementation
 from typer.testing import CliRunner
 
-from cortex import access, mcp_server, packs, profiles
-from cortex.app import targets
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import access, mcp_server, packs, profiles
+from keepfold.app import targets
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -46,7 +46,7 @@ domains:
 @pytest.fixture
 def vroot(tmp_path):
     r = tmp_path / "vault"
-    (r / ".cortex").mkdir(parents=True)
+    (r / ".keepfold").mkdir(parents=True)
     (r / "catalog.yaml").write_text(CATALOG, encoding="utf-8")
     note(r, "concepts/zq4q-tarot.md", "id: zq4q-tarot\ntitle: Tarot reading\nprivate: true\n",
          "# Tarot reading")
@@ -65,11 +65,11 @@ def vroot(tmp_path):
 
 
 def entry(root):
-    return {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", str(root)]}
+    return {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", str(root)]}
 
 
 def _baks(p):
-    return sorted(p.parent.glob(p.name + ".cortex-*.bak"))
+    return sorted(p.parent.glob(p.name + ".keepfold-*.bak"))
 
 
 # ---- rules-file blocks -------------------------------------------------------------------
@@ -107,14 +107,37 @@ def test_codex_agents_md_block_add_refresh_remove(home, vroot):
     assert md.read_text(encoding="utf-8") == "# My rules\n\nEdited by me.\n"
 
 
+def test_a_passing_error_never_strips_the_core_from_rules_files(home, vroot, monkeypatch):
+    """D1 §2.4: when the block cannot be built (a busy vault, a bad profiles.json), the
+    periodic refresh leaves the file as it is and Connect shows an error, never a bare block."""
+    from keepfold.vault import VaultError
+    (home / ".codex").mkdir()
+    md = home / ".codex" / "AGENTS.md"
+    t = targets.by_id()["codex"]
+    t.apply(entry(vroot))
+    note(vroot, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Alex.\n")  # stale
+    before, baks = md.read_bytes(), _baks(md)
+
+    def busy(*a, **k):
+        raise VaultError("vault_locked", "The vault is busy; try again in a moment.")
+    monkeypatch.setattr(profiles, "load", busy)
+    assert targets.refresh_rules(entry(vroot)) == []
+    assert md.read_bytes() == before and _baks(md) == baks
+    assert ("error", "The vault is busy; try again in a moment.") in [
+        (r["change"], r["detail"]) for r in t.plan(True, entry(vroot))]
+    with pytest.raises(VaultError):
+        t.apply(entry(vroot))
+    assert md.read_bytes() == before and _baks(md) == baks
+
+
 def test_an_approve_into_the_core_refreshes_the_block_at_once(home, vroot, monkeypatch):
-    from cortex.app import server
+    from keepfold.app import server
     (home / ".codex").mkdir()
     md = home / ".codex" / "AGENTS.md"
     targets.by_id()["codex"].apply(entry(vroot))
     assert "Call me Sam." in md.read_text(encoding="utf-8")
-    core = mcp_server.Cortex(Vault(vroot))
-    out = core._call("cortex_patch", core.cortex_patch, {
+    core = mcp_server.Keepfold(Vault(vroot))
+    out = core._call("keepfold_patch", core.keepfold_patch, {
         "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use metric units."})
     assert out["queued"] is True  # no yes: it waits for the app's Approve
     core.sessions.close(summary="test")
@@ -128,7 +151,7 @@ def test_an_approve_into_the_core_refreshes_the_block_at_once(home, vroot, monke
         raise RuntimeError("rules file locked")
 
     monkeypatch.setattr(targets, "refresh_rules", boom)  # logged, never raised
-    core._call("cortex_patch", core.cortex_patch, {
+    core._call("keepfold_patch", core.keepfold_patch, {
         "id": "me/core", "op": "append_to_section", "target": "Core", "text": "Use 24 h time."})
     core.sessions.close(summary="test")
     p = next(x for x in a.review()["pending"] if x["page"] == "core")
@@ -140,9 +163,9 @@ def test_cursor_and_vscode_rules_files(home, vroot):
     vs = targets._vscode_user()
     vs.mkdir(parents=True)
     assert str(vs).startswith(str(home))
-    for tid, path, head in (("cursor", home / ".cursor" / "rules" / "cortex.mdc",
+    for tid, path, head in (("cursor", home / ".cursor" / "rules" / "keepfold.mdc",
                              targets.CURSOR_HEAD),
-                            ("vscode", vs / "prompts" / "cortex.instructions.md",
+                            ("vscode", vs / "prompts" / "keepfold.instructions.md",
                              targets.VSCODE_HEAD)):
         t = targets.by_id()[tid]
         t.apply(entry(vroot))
@@ -152,12 +175,12 @@ def test_cursor_and_vscode_rules_files(home, vroot):
         assert str(path) in next(r for r in targets.describe(entry(vroot))
                                  if r["id"] == tid)["files"]
         t.remove()
-        assert not path.exists() and len(_baks(path)) == 1  # only Cortex's own rule was in it
+        assert not path.exists() and len(_baks(path)) == 1  # only Keepfold's own rule was in it
 
 
 def test_rules_file_with_owner_text_keeps_it(home, vroot):
     (home / ".cursor").mkdir()
-    p = home / ".cursor" / "rules" / "cortex.mdc"
+    p = home / ".cursor" / "rules" / "keepfold.mdc"
     p.parent.mkdir()
     own = b"---\r\nalwaysApply: false\r\n---\r\nMy own rule.\r\n"  # a Windows file
     p.write_bytes(own)
@@ -204,7 +227,7 @@ def test_private_core_and_hidden_subjects_stay_out(home, vroot):
 
 
 def test_a_core_line_muted_in_the_xray_stays_out_of_rules_and_packs(home, vroot):
-    from cortex import xray
+    from keepfold import xray
     note(vroot, "me/core.md", "id: core\n",
          "# Core\n\n## Core\n- Call me Sam.\n- CANARY-MUTE-4Q is muted. ^c-mmmmm\n")
     v = Vault(vroot)
@@ -225,14 +248,14 @@ def test_rules_files_follow_each_apps_profile(home, vroot):
     (home / ".codex").mkdir()
     for tid in ("cursor", "codex"):
         targets.by_id()[tid].apply(entry(vroot))
-    cursor = (home / ".cursor" / "rules" / "cortex.mdc").read_text(encoding="utf-8")
+    cursor = (home / ".cursor" / "rules" / "keepfold.mdc").read_text(encoding="utf-8")
     codex = (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
     assert "Call me Sam." not in cursor and packs.PRIME_LINE in cursor
     assert "Call me Sam." in codex  # Codex's default profile has the core
     # the periodic pass keeps each file to its own profile
     note(vroot, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Alex.\n")
     targets.refresh_rules(entry(vroot))
-    assert "Call me Alex." not in (home / ".cursor" / "rules" / "cortex.mdc").read_text(
+    assert "Call me Alex." not in (home / ".cursor" / "rules" / "keepfold.mdc").read_text(
         encoding="utf-8")
     assert "Call me Alex." in (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
 
@@ -275,7 +298,7 @@ ROLE_LINES = {"Python first": {"review"}, "Short answers": {"interview", "resear
 
 
 def test_role_packs_hold_only_their_scopes(vroot):
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     note(vroot, "me/preferences.md", "id: preferences\n", ROLE_PREFS)
     v = Vault(vroot)
     EventLog(v).append(session="cli", kind="change", source="tutor", fields={"payload": {
@@ -294,7 +317,7 @@ def test_role_packs_hold_only_their_scopes(vroot):
 
 
 def test_unconfirmed_lines_are_not_packed(vroot):
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     note(vroot, "me/preferences.md", "id: preferences\n",
          "# P\n\n## Coding\n- Typed by me.\n- Agent guessed this. ^c-bbbbb\n")
     EventLog(Vault(vroot)).append(session="cli", kind="change", source="tutor",
@@ -306,7 +329,7 @@ def test_unconfirmed_lines_are_not_packed(vroot):
 
 
 def test_empty_vault_has_no_pack(tmp_path):
-    (tmp_path / ".cortex").mkdir()
+    (tmp_path / ".keepfold").mkdir()
     assert packs.pack(Vault(tmp_path), "general") == ""
     with pytest.raises(ValueError):
         packs.pack(Vault(tmp_path), "poetry")
@@ -340,19 +363,19 @@ def serve(root, client, body):
 
 
 async def _sweep(call):
-    out = [await call("cortex_prime", {"prompt": "help me write python code and walk"}),
-           await call("cortex_context", {"scope": "all"}),
-           await call("cortex_context", {"scope": "personal"}),
-           await call("cortex_find", {"query": "zebracorn"}),
-           await call("cortex_find", {"query": "walks"}),
-           await call("cortex_find", {"query": "quokka"}),
-           await call("cortex_read", {"id": "quokka"}),
-           await call("cortex_read", {"id": "teaching-contract"}),
-           await call("cortex_read", {"id": "2026-11-20"}),
-           await call("cortex_read", {"id": "profile"}),
-           await call("cortex_read", {"id": "personality"}),
-           await call("cortex_chats", {}),
-           await call("cortex_start", {"mode": "home"})]
+    out = [await call("keepfold_prime", {"prompt": "help me write python code and walk"}),
+           await call("keepfold_context", {"scope": "all"}),
+           await call("keepfold_context", {"scope": "personal"}),
+           await call("keepfold_find", {"query": "zebracorn"}),
+           await call("keepfold_find", {"query": "walks"}),
+           await call("keepfold_find", {"query": "quokka"}),
+           await call("keepfold_read", {"id": "quokka"}),
+           await call("keepfold_read", {"id": "teaching-contract"}),
+           await call("keepfold_read", {"id": "2026-11-20"}),
+           await call("keepfold_read", {"id": "profile"}),
+           await call("keepfold_read", {"id": "personality"}),
+           await call("keepfold_chats", {}),
+           await call("keepfold_start", {"mode": "home"})]
     return json.dumps(out)
 
 
@@ -383,9 +406,9 @@ def _g2_vault(vroot, setup_front="id: setup\n"):
 
 async def _g2(call):
     return [json.dumps(await call(name, args)) for name, args in (
-        ("cortex_prime", {"prompt": "help me start a python project"}),
-        ("cortex_context", {"scope": "all"}), ("cortex_context", {"scope": "coding"}),
-        ("cortex_context", {"scope": "environment"}), ("cortex_start", {"mode": "home"}))]
+        ("keepfold_prime", {"prompt": "help me start a python project"}),
+        ("keepfold_context", {"scope": "all"}), ("keepfold_context", {"scope": "coding"}),
+        ("keepfold_context", {"scope": "environment"}), ("keepfold_start", {"mode": "home"}))]
 
 
 @pytest.mark.parametrize("client, scopes, seen", [
@@ -402,7 +425,7 @@ def test_workflow_and_setup_reach_the_apps_whose_scopes_hold_them(vroot, client,
         profiles.save(v, data)
     prime, ctx_all, ctx_coding, ctx_env, home = serve(vroot, client, _g2)
     for canary in ("WKFL", "HARD"):
-        for got in (prime, ctx_all, home):  # home: cortex_context(scope='all')'s claims
+        for got in (prime, ctx_all, home):  # home: keepfold_context(scope='all')'s claims
             assert (f"CANARY-{canary}-4Q" in got) == (canary in seen), (client, canary, got)
     if seen:
         assert "[Workflow] CANARY-WKFL-4Q" in prime and "CANARY-WKFL-4Q" in ctx_coding
@@ -426,12 +449,12 @@ def test_setup_and_workflow_in_packs_and_never_a_private_setup(home, vroot):
 
 
 def test_an_agents_setup_line_waits_for_approve(home, vroot, monkeypatch):
-    from cortex.app import server
+    from keepfold.app import server
     _g2_vault(vroot)
     before = (vroot / "me/setup.md").read_bytes()
 
     async def body(call):
-        return await call("cortex_patch", {"id": "me/setup", "op": "append_to_section",
+        return await call("keepfold_patch", {"id": "me/setup", "op": "append_to_section",
                                            "target": "Software", "text": "Uses Neovim."})
 
     out = serve(vroot, "cursor-vscode", body)
@@ -473,13 +496,13 @@ def test_no_mcp_tool_can_set_profiles(vroot):
             return (await c.list_tools()).tools
 
     for tool in anyio.run(main):
-        assert not any("profile" in k or "scope" == k and tool.name != "cortex_context"
+        assert not any("profile" in k or "scope" == k and tool.name != "keepfold_context"
                        for k in (tool.input_schema.get("properties") or {})), tool.name
     assert not (vroot / profiles.PATH).exists()
 
 
 def test_in_process_callers_see_everything(vroot):
-    core = mcp_server.Cortex(Vault(vroot))  # the app, the CLI: no MCP client
+    core = mcp_server.Keepfold(Vault(vroot))  # the app, the CLI: no MCP client
     assert core._scopes() is None and core._withheld() == set()  # nothing marked private
 
 
@@ -530,7 +553,7 @@ def test_changed_since_your_last_copy(vroot):
     Connect says a pack changed only when it was copied before and its text differs now."""
     from test_app import _serve, call
 
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
 
     def coding(js, size=1500):
         return next(s for p in js["packs"] if p["id"] == "coding" for s in p["sizes"]
@@ -572,7 +595,7 @@ def test_connect_reads_the_event_log_once(vroot, monkeypatch):
     """R32a review: six packs at two sizes and the copy fold share one read of the log."""
     from test_app import _serve, call
 
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     reads = []
     real = EventLog.iter_events
     monkeypatch.setattr(EventLog, "iter_events",
@@ -599,7 +622,7 @@ def test_copied_takes_the_latest_copy_by_time():
 def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
     """Audit 21 Nov: `private: true` on a me/ page kept it out of the index only; prime,
     context, start and the Claude Code hook still served it to every cloud app."""
-    from cortex import prime_hook
+    from keepfold import prime_hook
 
     note(vroot, "me/preferences.md", "id: preferences\nprivate: true\n", PREFS)
     note(vroot, "me/profile.md", "id: profile\nprivate: true\n"
@@ -615,14 +638,14 @@ def test_a_private_me_page_reaches_no_mcp_client_nor_the_hook(vroot):
     hook = (prime_hook._light(vroot, "help me write python code and walk") or ("",))[0]
     assert "Call me Sam." in hook
     assert "CANARY-PERS-4Q" not in hook and "Python first" not in hook
-    core = mcp_server.Cortex(Vault(vroot))  # in-process (the app): private me pages too
+    core = mcp_server.Keepfold(Vault(vroot))  # in-process (the app): private me pages too
     assert core._withheld() == {"preferences", "profile"}
 
 
 def test_the_claude_code_hook_applies_its_profile(vroot):
     """Audit 21 Nov: the prime hook ignored per-agent profiles; a Claude Code profile limited
     to the core still got coding preferences, personality and the journal from the hook."""
-    from cortex import prime_hook
+    from keepfold import prime_hook
 
     prompt = "help me write python code and walk"
     assert "Python first" in (prime_hook._light(vroot, prompt) or ("",))[0]  # default: everything

@@ -8,8 +8,8 @@ from collections import namedtuple
 
 import pytest
 
-from cortex import session
-from cortex.app import targets, wizard
+from keepfold import session
+from keepfold.app import targets, wizard
 
 
 def test_without_an_nvidia_card_the_recommendation_stops_at_4b():

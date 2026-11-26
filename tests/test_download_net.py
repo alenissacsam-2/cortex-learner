@@ -11,8 +11,8 @@ import types
 import pytest
 from typer.testing import CliRunner
 
-from cortex import _proc, cli, semantic, update
-from cortex.app import actions, status, wizard
+from keepfold import _proc, cli, semantic, update
+from keepfold.app import actions, status, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
 NO_PROXY_ENV = {k: "" for k in _proc._PROXY_VARS}
@@ -66,7 +66,7 @@ def test_each_failure_is_one_plain_sentence_and_exit_1(monkeypatch, trust, err, 
     r = _download(monkeypatch, err)
     assert r.exit_code == 1, r.output
     assert words in r.output and "Traceback" not in r.output
-    log = home / ".cortex" / "logs" / "model-download.log"
+    log = home / ".keepfold" / "logs" / "model-download.log"
     assert f"Details are in the log: {log}" in r.output
     assert "Traceback" in log.read_text(encoding="utf-8")  # the detail goes to the log only
     if "disk" not in words:
@@ -75,7 +75,7 @@ def test_each_failure_is_one_plain_sentence_and_exit_1(monkeypatch, trust, err, 
 
 
 def test_truststore_only_in_the_download_and_its_absence_is_fine(monkeypatch, trust):
-    import cortex  # noqa: F401  (importing cortex never injects)
+    import keepfold  # noqa: F401  (importing keepfold never injects)
     assert trust == []
     monkeypatch.setitem(sys.modules, "truststore", None)  # import fails
     r = _download(monkeypatch, ConnectionError("getaddrinfo failed"))
@@ -116,14 +116,14 @@ def test_download_children_get_the_system_proxy(monkeypatch):
         monkeypatch.setenv(k, "")
     envs = []
     monkeypatch.setattr(actions, "_popen", lambda args, **k: (envs.append(k["env"]), _Proc())[1])
-    monkeypatch.setattr(wizard, "_cortex", lambda: "cortex")
+    monkeypatch.setattr(wizard, "_keepfold", lambda: "keepfold")
     monkeypatch.setattr(wizard, "ollama_exe", lambda: "ollama")
     monkeypatch.setattr(status, "ollama_models", lambda: [])
     assert wizard.embed(_Job(), None)["ok"]
     assert wizard.pull_ollama(_Job(), "qwen3.5:2b")["ok"]
     started = []
     monkeypatch.setattr(update.subprocess, "Popen", lambda args, **k: started.append(k["env"]))
-    update.launch(update.Path("CortexSetup.exe"), 1)
+    update.launch(update.Path("KeepfoldSetup.exe"), 1)
     for env in [*envs, *started]:
         assert env["HTTPS_PROXY"] == "http://proxy.campus:8080"
     assert started[0]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

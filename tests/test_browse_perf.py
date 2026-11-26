@@ -17,9 +17,9 @@ import numpy as np
 import pytest
 from test_browse import hubbed
 
-from cortex import localllm
-from cortex.browse import Settings, build, forget, sites, sources, store, titles
-from cortex.vault import Vault
+from keepfold import localllm
+from keepfold.browse import Settings, build, forget, sites, sources, store, titles
+from keepfold.vault import Vault
 
 LINK = 0x30000000
 NOW = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)

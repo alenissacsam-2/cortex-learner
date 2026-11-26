@@ -11,10 +11,10 @@ from conftest import note
 from mcp import Client
 from mcp.types import Implementation
 
-from cortex import delta, prime, prime_hook, xray
-from cortex.index import _wrap
-from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from keepfold import delta, prime, prime_hook, xray
+from keepfold.index import _wrap
+from keepfold.mcp_server import build_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -35,15 +35,15 @@ def vault(root, monkeypatch):
         "---\nid: personality\ntitle: Personality\nprivate: true\n---\n"
         "# Personality\n\n## Communication\n"
         "- Email tone: warm, never stiff.\n", encoding="utf-8")
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     # Claude Code's profile leaves out Personal; the owner muted the Career line
-    (root / ".cortex/profiles.json").write_text(json.dumps({"profiles": [
+    (root / ".keepfold/profiles.json").write_text(json.dumps({"profiles": [
         {"match": "claude", "scopes": ["core", "coding", "communication", "learning",
                                        "career"]}], "unknown": ["core"]}), encoding="utf-8")
     cid = next(c for (p, s, t), c in prime.claim_ids(Vault(root)).items()
                if t.startswith("Email recruiters"))
     (root / xray.SETTINGS).write_text(json.dumps({"mute": [cid]}), encoding="utf-8")
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     return root
 
 
@@ -75,7 +75,7 @@ def test_a_new_topic_brings_only_its_new_lines_once(vault):
     assert len(rows) == 2 and len(rows[1]["served"]["preferences"]) == 2  # the delta's ids
 
 
-@pytest.mark.parametrize("prompt", ["thanks!", "ok", "Hello", "yes please", "/cortex email"])
+@pytest.mark.parametrize("prompt", ["thanks!", "ok", "Hello", "yes please", "/keepfold email"])
 def test_greetings_acks_and_slash_commands_add_nothing(vault, prompt):
     hook("Revise DBMS normalisation")
     assert hook(prompt) == ""
@@ -124,7 +124,7 @@ def test_lines_match_a_prompt_word_and_skip_served_ids(monkeypatch):
     assert delta.lines(None, "the database", parts, set()) == ("", [])
 
 
-@pytest.mark.parametrize("first", ["ok thanks", "Hello!", "/cortex"])
+@pytest.mark.parametrize("first", ["ok thanks", "Hello!", "/keepfold"])
 def test_a_trivial_first_prompt_leaves_the_prime_for_the_next(vault, first):
     """QA 22 Nov: "ok thanks" as a chat's first prompt took the prime, and the real first
     question then got nothing."""
@@ -137,8 +137,8 @@ def test_a_trivial_first_prompt_leaves_the_prime_for_the_next(vault, first):
 
 def snapshot(root):
     """The MCP server's index snapshot, as a running server leaves it."""
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
 
     v = Vault(root)
     Index(v, Catalog.load(v)).save_snapshot()
@@ -178,7 +178,7 @@ def test_no_snapshot_means_no_playbook_and_no_error(vault):
     note(vault, "notes/cv-bullets.md", PB.format(t="Writing CV bullets", s="verb"), "# CV\n")
     hook("Revise DBMS normalisation")
     assert "[[cv-bullets]]" not in hook("Help me with my CV bullets for the internship")
-    (vault / ".cortex/index-snapshot.json").write_text("{not json", encoding="utf-8")
+    (vault / ".keepfold/index-snapshot.json").write_text("{not json", encoding="utf-8")
     assert delta._books(Vault(vault)) == {}
 
 
@@ -201,10 +201,10 @@ def test_chat_turn_returns_new_lines_as_context_and_nudges_every_8th(vault):
     got = []
 
     async def body(call):
-        cid = (await call("cortex_prime", {"prompt": "Revise DBMS normalisation"}))["chat"]
+        cid = (await call("keepfold_prime", {"prompt": "Revise DBMS normalisation"}))["chat"]
         for user in ["Write an email to my professor", "Another email for the dean",
                      *(f"more on joins {i}" for i in range(4, 17))]:
-            got.append(await call("cortex_log", {"kind": "chat_turn", "payload": {
+            got.append(await call("keepfold_log", {"kind": "chat_turn", "payload": {
                 "chat": cid, "user": user, "gist": "ok"}}))
 
     serve(vault, body)

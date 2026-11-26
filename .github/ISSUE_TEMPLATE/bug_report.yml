@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Cortex does not work as it should.
+description: Something in Keepfold does not work as it should.
 labels: ["bug"]
 body:
   - type: markdown
@@ -32,7 +32,7 @@ body:
     id: details
     attributes:
       label: Details for a bug report
-      description: In Cortex, open Status, then Something not working?, then Copy details, and paste here. Or run `cortex doctor --report`.
+      description: In Keepfold, open Status, then Something not working?, then Copy details, and paste here. Or run `keepfold doctor --report`.
       render: text
     validations:
       required: true
@@ -46,9 +46,9 @@ body:
   - type: dropdown
     id: install
     attributes:
-      label: How did you install Cortex?
+      label: How did you install Keepfold?
       options:
-        - CortexSetup.exe
+        - KeepfoldSetup.exe
         - uv
         - Other
     validations:

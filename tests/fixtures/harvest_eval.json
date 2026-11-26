@@ -1,5 +1,5 @@
 {
- "about": "R6d: labelled user turns for fact_harvest.tier0 (`cortex eval harvest-facts`). A made-up person (Meera, a data analyst in Kochi); no real data. `expect` lists the facts a turn states about its writer, worded as about-me lines; a turn of any other kind expects none, except a negation, which expects its negated line. An extracted fact is right when its content words (review._bag) and polarity equal an expected one's.",
+ "about": "R6d: labelled user turns for fact_harvest.tier0 (`keepfold eval harvest-facts`). A made-up person (Meera, a data analyst in Kochi); no real data. `expect` lists the facts a turn states about its writer, worded as about-me lines; a turn of any other kind expects none, except a negation, which expects its negated line. An extracted fact is right when its content words (review._bag) and polarity equal an expected one's.",
  "items": [
   {"kind": "fact", "turn": "I live in Kochi, near the backwaters.", "expect": ["Lives in Kochi"]},
   {"kind": "fact", "turn": "I'm a data analyst and I mostly work with SQL.", "expect": ["Is a data analyst"]},

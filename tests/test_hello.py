@@ -1,4 +1,4 @@
-"""The Private switch's Windows Hello check (cortex/app/hello.py) against a fake winrt module:
+"""The Private switch's Windows Hello check (keepfold/app/hello.py) against a fake winrt module:
 no test shows a real prompt (conftest also blocks `hello.verify` for every other test)."""
 
 import sys
@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from cortex.app import hello
+from keepfold.app import hello
 
 VERIFY = hello.verify  # the real function; conftest replaces the module's for other tests
 LEAF = "winrt.windows.security.credentials.ui"
@@ -53,6 +53,6 @@ def test_verified_unlocks_and_everything_else_says_why(winrt):
 def test_no_winrt_or_not_windows_refuses_with_no_password(winrt, monkeypatch):
     monkeypatch.setitem(sys.modules, LEAF, None)  # the package is missing: import fails
     ok, why = VERIFY()
-    assert ok is False and "reinstall Cortex" in why and winrt.asked == []
+    assert ok is False and "reinstall Keepfold" in why and winrt.asked == []
     monkeypatch.setattr(sys, "platform", "linux")
     assert VERIFY() == (False, "The Private switch needs Windows Hello, which only Windows has.")

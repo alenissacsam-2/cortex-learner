@@ -1,4 +1,4 @@
-"""Rollup pages (`cortex.rollups`): a week, month and year page built by code from notes, saved
+"""Rollup pages (`keepfold.rollups`): a week, month and year page built by code from notes, saved
 AI chats, journal lines, study events and browsing; private material only in the private
 variant; no rewrite when nothing changed; the CLI; never a model. Made-up data, temp vaults."""
 
@@ -11,20 +11,20 @@ from test_chat import _study_events
 from test_chat_facts import _visit
 from typer.testing import CliRunner
 
-from cortex import chat, localllm, rollups
-from cortex.browse import store
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.index import Index
-from cortex.vault import Vault
+from keepfold import chat, localllm, rollups
+from keepfold.browse import store
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
 
 @pytest.fixture
 def vault(root, home):
-    (home / ".cortex").mkdir()
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold" / "config.yaml").write_text(
         "browse:\n  private_domains: [secret.example]\n", encoding="utf-8")
     note(root, "notes/helm.md", "title: Helm charts\ndate: 2026-11-17\n",
          "# Helm charts\n\nDeploying to kubernetes with helm.")
@@ -134,7 +134,7 @@ def test_study_also_on_a_private_subject_is_private(vault):
     """Audit 21 Nov C9: an event whose `also` names a private concept goes on the private page."""
     from datetime import datetime
 
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
 
     EventLog(vault).append(session="cli", kind="grade", source="tutor",
                            now=datetime(2026, 11, 12, 12).astimezone(),
@@ -150,7 +150,7 @@ def test_no_rewrite_when_nothing_changed(vault):
     page = vault.root / "rollups" / "rollup-2026-11.md"
     before = page.stat().st_mtime_ns
     assert rollups.run(vault) is None  # the stamp: nothing read
-    (vault.root / ".cortex" / "rollups.json").unlink()
+    (vault.root / ".keepfold" / "rollups.json").unlink()
     again = rollups.run(vault)  # a full pass, every text the same
     assert again["written"] == 0 and again["kept"] > 0
     assert page.stat().st_mtime_ns == before

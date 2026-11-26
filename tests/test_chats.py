@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex import chats
-from cortex.vault import VaultError
+from keepfold import chats
+from keepfold.vault import VaultError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "chats"
 ALPHA, BETA = "D--proj-alpha/aaaa-1111", "D--proj-beta/cccc-3333"
@@ -18,7 +18,7 @@ def chats_dir(tmp_path, monkeypatch):
     shutil.copytree(FIXTURES, d)
     for i, rel in enumerate((ALPHA, "D--proj-alpha/bbbb-2222", BETA)):
         os.utime(d / f"{rel}.jsonl", (1_000_000 + i, 1_000_000 + i))
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(d))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
     return d
 
 

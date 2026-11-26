@@ -1,4 +1,4 @@
-"""E1: every way data can leave Cortex is in `cortex.egress.REGISTRY`. The scan walks src/cortex
+"""E1: every way data leaves Keepfold is in `keepfold.egress.REGISTRY`. The scan walks src/keepfold
 for network imports (urllib.request, http.client, socket, ssl, requests, httpx, aiohttp,
 websocket(s), ftplib, smtplib), network calls (`urlopen`, `HTTPConnection`, `HTTPSConnection`,
 `create_connection`, `download_model`, fastembed's `TextEmbedding`/`TextCrossEncoder` without
@@ -12,10 +12,10 @@ import os
 import sys
 from pathlib import Path
 
-from cortex import egress
+from keepfold import egress
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src" / "cortex"
+SRC = ROOT / "src" / "keepfold"
 NET_MODULES = {"urllib.request", "http.client", "socket", "ssl", "requests", "httpx", "aiohttp",
                "websocket", "websockets", "ftplib", "smtplib"}
 NET_CALLS = {"urlopen", "HTTPConnection", "HTTPSConnection", "create_connection",
@@ -27,6 +27,8 @@ NET_VERBS = {"push", "fetch", "clone", "pull", "marketplace"}
 # module: why it is flagged though nothing leaves the PC (so it is not in REGISTRY)
 ALLOWED = {
     "vault.py": "socket.gethostname() names this PC in the vault lock; no connection",
+    "migrate.py": "asks 127.0.0.1 only whether an old Cortex app still runs, and names this "
+                  "PC in the old lock (socket.gethostname()); nothing leaves the PC",
 }
 
 
@@ -81,7 +83,7 @@ def test_every_module_that_reaches_the_network_is_registered():
     known = {e.module for e in egress.REGISTRY} | set(ALLOWED)
     bad = {m: h for m, h in _flagged(SRC).items() if m not in known}
     assert not bad, ("this code can send data off the PC; add an entry for it to "
-                     f"cortex.egress.REGISTRY (where, what, when): {bad}")
+                     f"keepfold.egress.REGISTRY (where, what, when): {bad}")
 
 
 def test_every_registry_entry_is_still_reached():
@@ -126,7 +128,7 @@ def test_the_scan_finds_each_kind(tmp_path):
 def test_the_model_download_turns_off_hugging_face_telemetry(monkeypatch):
     """Without it huggingface_hub asks huggingface.co for its list of AI agents and puts the
     agent it detects and the torch version in its User-Agent; an explicit setting is kept."""
-    from cortex import _proc, cli
+    from keepfold import _proc, cli
     monkeypatch.setattr(_proc.urllib.request, "getproxies", lambda: {})
     monkeypatch.setitem(sys.modules, "truststore", None)  # never injected into this process
     monkeypatch.setenv("HF_HUB_DISABLE_TELEMETRY", "x")  # restored after the test
@@ -138,13 +140,13 @@ def test_the_model_download_turns_off_hugging_face_telemetry(monkeypatch):
     assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "0"
 
 
-def test_doctor_prints_where_cortex_connects():
+def test_doctor_prints_where_keepfold_connects():
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
     r = CliRunner().invoke(app, ["doctor", "--privacy"])
     assert r.exit_code == 0, r.output
-    assert r.output.splitlines() == ["Where Cortex connects:",
+    assert r.output.splitlines() == ["Where Keepfold connects:",
                                      *(f"  {s}" for s in egress.summary())]
 
 
@@ -153,7 +155,7 @@ def test_summary_is_one_line_per_outside_destination():
     outside = [e for e in egress.REGISTRY if not e.loopback]
     assert len(lines) == len({(e.dest, e.what) for e in outside}) < len(outside)
     assert all(isinstance(s, str) and s for s in lines) and len(set(lines)) == len(lines)
-    plugin = [s for s in lines if "Cortex plugin" in s]  # cli.py and app/targets.py: one line
+    plugin = [s for s in lines if "Keepfold plugin" in s]  # cli.py and app/targets.py: one line
     assert len(plugin) == 1 and "you say yes, or when you connect Claude Code" in plugin[0]
     assert all(not e.dest.startswith("localhost") for e in outside)
     assert any(s.startswith("github.com") for s in lines)

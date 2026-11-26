@@ -1,5 +1,5 @@
-"""Where a long-lived Cortex process's memory goes, on a synthetic vault only (a temp folder
-and a temp HOME; the real vault and ~/.cortex/config.yaml are never read).
+"""Where a long-lived Keepfold process's memory goes, on a synthetic vault only (a temp folder
+and a temp HOME; the real vault and ~/.keepfold/config.yaml are never read).
 
 A child process makes the vault: --notes pages (most short, some long: the long ones fill a
 batch of 64 heads with ~400 tokens each, as a real vault's do) and a browse import of
@@ -7,13 +7,13 @@ batch of 64 heads with ~400 tokens each, as a real vault's do) and a browse impo
 browse/ pages). This process then takes the steps a long-lived MCP server or the app takes
 and prints its working set and private bytes (Windows, GetProcessMemoryInfo) after each:
 
-  import cortex, open the MCP core, load the embedder, build the semantic index (as
-  `cortex model build`), load the reranker, recall, the background copy embedding the private
+  import keepfold, open the MCP core, load the embedder, build the semantic index (as
+  `keepfold model build`), load the reranker, recall, the background copy embedding the private
   browse vectors, a browse search, the app's home (dashboard.build_data and its caches),
   then idle: the models dropped as after IDLE_UNLOAD (when semantic has `drop_idle`), the C
   heap trimmed, and the first recall after it (the reload).
 
-The models must already be in ~/.cortex/models (only `cortex model download` fetches them;
+The models must already be in ~/.keepfold/models (only `keepfold model download` fetches them;
 this never does); without them the model steps are skipped and say so.
 
     uv run python scripts/memory_probe.py [--notes 1500] [--visits 30000] [--trace]
@@ -28,10 +28,10 @@ vault instead (its window shows on the screen) and prints its WebView2 processes
 per window state (`app_probe`). --launch starts the app as the installer does and, idle, prints
 its memory and loaded search models each minute (`launch_probe`); with --busy a person searches
 once at the start and new visits and chat pages keep coming, so the live browse import and the
-safety net run on their schedules. --mcp starts one `cortex mcp` connection, sends a prime and a
+safety net run on their schedules. --mcp starts one `keepfold mcp` connection, sends a prime and a
 recall over stdio and prints its memory and loaded models each idle minute (`mcp_probe`).
 --scale shortens the schedules and the minute alike. The probe caps numpy's BLAS threads as
-Cortex's entry points do (`taint.cap_blas`); set OPENBLAS_NUM_THREADS to measure another count.
+Keepfold's entry points do (`taint.cap_blas`); set OPENBLAS_NUM_THREADS to measure another count.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TESTS = HERE.parent / "tests"
-MODELS = Path.home() / ".cortex" / "models"  # read before HOME moves to the temp folder
+MODELS = Path.home() / ".keepfold" / "models"  # read before HOME moves to the temp folder
 MB = 2 ** 20
 WORDS = ("graph tree heap stack queue sort cache memory thread index model vector learning "
          "network chess cooking physics history python recursion pointer array binary search "
@@ -127,8 +127,8 @@ def make(tmp: Path, notes: int, visits: int, models: Path | None = None) -> None
     sys.path.insert(0, str(TESTS))
     from test_browse_perf import NOW, Embed, heavy_history
 
-    from cortex.browse import Settings, build, sources, store
-    from cortex.vault import Vault
+    from keepfold.browse import Settings, build, sources, store
+    from keepfold.vault import Vault
 
     root = tmp / "vault"
     shutil.copytree(TESTS / "fixtures" / "vault_mini", root)
@@ -153,16 +153,16 @@ def make(tmp: Path, notes: int, visits: int, models: Path | None = None) -> None
               embed=Embed(per_text=0),
               runner=None, tz=UTC, now=NOW + timedelta(minutes=1), summaries=False,
               keep_local=False, ask=False)
-    for p in (root / ".cortex").glob("vectors*"):  # the fake embedder's: the probe builds anew
+    for p in (root / ".keepfold").glob("vectors*"):  # the fake embedder's: the probe builds anew
         p.unlink()
     if models is not None and models.is_dir():  # --launch: the index a real install has
-        from cortex import semantic
-        from cortex.mcp_server import Cortex
+        from keepfold import semantic
+        from keepfold.mcp_server import Keepfold
         semantic.models_dir = lambda: models
-        core = Cortex(v)
+        core = Keepfold(v)
         core._ready.wait()
         embed = semantic.load_embedder()
-        semantic.vectors(core.index, embed, len(semantic._embed(embed, ["cortex"])[0]))
+        semantic.vectors(core.index, embed, len(semantic._embed(embed, ["keepfold"])[0]))
     print(f"made {notes} notes, {sum(1 for _ in (root / 'browse').rglob('*.md'))} browse pages",
           flush=True)
 
@@ -174,7 +174,7 @@ def _history() -> Path:
 
 
 def _home(tmp: Path) -> dict:
-    """A temp HOME, so the real ~/.cortex is never read or written."""
+    """A temp HOME, so the real ~/.keepfold is never read or written."""
     h = tmp / "home"
     h.mkdir(parents=True, exist_ok=True)
     env = {"HOME": str(h), "USERPROFILE": str(h), "APPDATA": str(h / "APPDATA"),
@@ -193,18 +193,18 @@ def probe(tmp: Path, trace: bool) -> None:
         tracemalloc.start(8)
     r = Report(trace)
     r.step("python started")
-    _, s = timed(lambda: __import__("cortex.mcp_server"))
-    import cortex.home  # noqa: F401
-    from cortex import semantic
-    from cortex.mcp_server import Cortex
-    from cortex.vault import Vault
-    r.step("import cortex (mcp_server, semantic, home)", s)
-    semantic.models_dir = lambda: MODELS  # the real models, read only; nothing else of ~/.cortex
+    _, s = timed(lambda: __import__("keepfold.mcp_server"))
+    import keepfold.home  # noqa: F401
+    from keepfold import semantic
+    from keepfold.mcp_server import Keepfold
+    from keepfold.vault import Vault
+    r.step("import keepfold (mcp_server, semantic, home)", s)
+    semantic.models_dir = lambda: MODELS  # the real models, read only; nothing else of ~/.keepfold
 
     v = Vault(tmp / "vault")
 
     def core_open():
-        c = Cortex(v)
+        c = Keepfold(v)
         c._ready.wait()
         return c
     core, s = timed(core_open)
@@ -215,7 +215,7 @@ def probe(tmp: Path, trace: bool) -> None:
         print(f"!! no embedding model in {MODELS}: the model steps are skipped")
     else:
         r.step("embedder loaded", s)
-        dim = len(semantic._embed(embed, ["cortex"])[0])
+        dim = len(semantic._embed(embed, ["keepfold"])[0])
         stack, s = timed(lambda: semantic.vectors(core.index, embed, dim))
         r.step(f"semantic index built ({len(stack[3])} chunks)", s)
     ce, s = timed(semantic.load_reranker)
@@ -224,11 +224,11 @@ def probe(tmp: Path, trace: bool) -> None:
     else:
         r.step("reranker loaded", s)
     queries = [f"what do I know about {a} and {b}" for a, b in zip(WORDS, WORDS[5:], strict=False)]
-    _, s = timed(lambda: core.cortex_recall(queries[0]))
+    _, s = timed(lambda: core.keepfold_recall(queries[0]))
     r.step("first recall", s)
     lat = []
     for q in queries[1:13]:
-        lat.append(timed(lambda q=q: core.cortex_recall(q))[1])
+        lat.append(timed(lambda q=q: core.keepfold_recall(q))[1])
     r.step(f"12 recalls (median {statistics.median(lat) * 1000:.0f} ms)", sum(lat))
     q_lat = []
     if embed is not None:
@@ -237,7 +237,7 @@ def probe(tmp: Path, trace: bool) -> None:
         print(f"   query embedding median {statistics.median(q_lat) * 1000:.1f} ms, "
               f"p90 {sorted(q_lat)[int(len(q_lat) * 0.9)] * 1000:.1f} ms")
 
-    from cortex.browse import vectors as browse_vectors
+    from keepfold.browse import vectors as browse_vectors
     if embed is not None:
         def bg():
             with semantic.background():
@@ -247,7 +247,7 @@ def probe(tmp: Path, trace: bool) -> None:
         _, s = timed(lambda: browse_vectors.search(v, queries[3]))
         r.step("private browse search", s)
 
-    from cortex.home import HomeCache
+    from keepfold.home import HomeCache
     home = HomeCache(v)
     _, s = timed(lambda: home.get(False))
     r.step("app home (build_data, feed, caches)", s)
@@ -267,7 +267,7 @@ def probe(tmp: Path, trace: bool) -> None:
     if embed is not None:
         _, s = timed(lambda: embed([semantic.QUERY_PREFIX + queries[20]]))
         r.step("first query embedding after idle (reload)", s)
-        _, s = timed(lambda: core.cortex_recall(queries[21]))
+        _, s = timed(lambda: core.keepfold_recall(queries[21]))
         r.step("recall after idle (reranker reload)", s)
         lat = [timed(lambda q=q: embed([semantic.QUERY_PREFIX + q]))[1] for q in queries[:30]]
         print(f"   query embedding after reload: median {statistics.median(lat) * 1000:.1f} ms")
@@ -340,9 +340,9 @@ def _fake_app() -> tuple[list, int]:
     import types
     from datetime import datetime
 
-    from cortex import localllm
-    from cortex.app import actions, desktop, server
-    (Path.home() / ".cortex").mkdir(exist_ok=True)
+    from keepfold import localllm
+    from keepfold.app import actions, desktop, server
+    (Path.home() / ".keepfold").mkdir(exist_ok=True)
     desktop.first_run = lambda echo=print: None  # never the real Run key
     actions.migrate_login = lambda root: None
     desktop._tray = lambda d: types.SimpleNamespace(
@@ -378,7 +378,7 @@ def app_probe(tmp: Path, seconds: int, hidden: bool) -> None:
     `hidden`: started as Start with Windows starts it, first measured before it is ever shown."""
     import threading
 
-    from cortex.app import desktop
+    from keepfold.app import desktop
     apps, port = _fake_app()
     me = os.getpid()
     print(f"{'window':<28}{'CPU s':>7}{'CPU %':>7}{'ws MB':>7}{'priv MB':>8}{'procs':>6}  page")
@@ -437,7 +437,7 @@ def _scale(f: float) -> None:
     """Every schedule M3 measures times `f` (the models' idle unload and its check, the live
     browse import's, the chat passes' with the safety net), so N minutes take N * f; the model
     loads and the work itself stay real."""
-    from cortex import browse_serve, chat_import, semantic
+    from keepfold import browse_serve, chat_import, semantic
     semantic.IDLE_UNLOAD *= f
     semantic.IDLE_CHECK *= f
     browse_serve.AUTO_FIRST_S *= f
@@ -454,7 +454,7 @@ def _feed(root: Path, minute: float, stop) -> None:
     sys.path.insert(0, str(TESTS))
     from test_browse_perf import heavy_history
 
-    from cortex.vault import Vault
+    from keepfold.vault import Vault
     v, n = Vault(root), 0
     while not stop.wait(minute):
         n += 1
@@ -471,7 +471,7 @@ def _feed(root: Path, minute: float, stop) -> None:
 
 def launch_probe(tmp: Path, minutes: int, hidden: bool, busy: bool = False,
                  scale: float = 1.0) -> None:
-    """The app as the installer starts it (`Cortex.exe -m cortex.app.launch [--hidden]`:
+    """The app as the installer starts it (`Keepfold.exe -m keepfold.app.launch [--hidden]`:
     launch.main, made safe by _fake_app) on the made-up vault, the real models readable and no
     job started; its window stays as it starts. Each minute: this (the app's) process's memory,
     its WebView2 processes', which search models are loaded and how long unused, and what used
@@ -482,9 +482,9 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool, busy: bool = False,
     import traceback
     from contextlib import contextmanager
 
-    from cortex import semantic
-    from cortex.app import launch
-    os.environ["CORTEX_VAULT"] = str(tmp / "vault")  # the vault, as a config would name it
+    from keepfold import semantic
+    from keepfold.app import launch
+    os.environ["KEEPFOLD_VAULT"] = str(tmp / "vault")  # the vault, as a config would name it
     semantic.models_dir = lambda: MODELS
     _scale(scale)
     minute = 60 * scale
@@ -498,9 +498,9 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool, busy: bool = False,
     names, uses, real_use = {id(h): n for n, h in held.items()}, [], semantic._Held.use
 
     @contextmanager
-    def use(self, *a, **k):  # who keeps a model warm: the thread and the Cortex frames
+    def use(self, *a, **k):  # who keeps a model warm: the thread and the Keepfold frames
         where = [f"{Path(f.filename).stem}.{f.name}" for f in traceback.extract_stack()[:-2]
-                 if "cortex" in f.filename and Path(f.filename).stem != "semantic"]
+                 if "keepfold" in f.filename and Path(f.filename).stem != "semantic"]
         uses.append(f"{names.get(id(self), '?')}: {threading.current_thread().name} "
                     f"({' < '.join(where[:-4:-1])})")
         with real_use(self, *a, **k) as m:
@@ -545,13 +545,13 @@ def launch_probe(tmp: Path, minutes: int, hidden: bool, busy: bool = False,
 
 
 def serve_child(tmp: Path, models: Path, scale: float) -> None:
-    """`cortex mcp --vault` as an AI app starts it (taint.main), on the made-up vault with the
+    """`keepfold mcp --vault` as an AI app starts it (taint.main), on the made-up vault with the
     real models readable. On stderr every minute: `@@` and its memory and loaded models.
-    cortex.semantic is imported first, to point it at the models and scale its idle unload:
+    keepfold.semantic is imported first, to point it at the models and scale its idle unload:
     numpy then loads before the handshake instead of in the warm-up a moment after."""
     import threading
 
-    from cortex import semantic, taint
+    from keepfold import semantic, taint
     semantic.models_dir = lambda: models
     semantic.IDLE_UNLOAD *= scale
     semantic.IDLE_CHECK *= scale
@@ -568,13 +568,13 @@ def serve_child(tmp: Path, models: Path, scale: float) -> None:
             sys.stderr.write(f"@@{minute:4d}{ws:8.0f}{priv:9.0f}  {loaded}\n")
             sys.stderr.flush()
     threading.Thread(target=watch, daemon=True, name="probe-watch").start()
-    sys.argv = ["cortex", "mcp", "--vault", str(tmp / "vault")]
+    sys.argv = ["keepfold", "mcp", "--vault", str(tmp / "vault")]
     taint.main()
 
 
 def mcp_probe(tmp: Path, minutes: int, scale: float) -> None:
-    """One `cortex mcp` connection (`serve_child`), driven over stdio as an AI app does:
-    initialize, one cortex_prime, one cortex_recall, then idle `minutes` (each 60 * `scale` s,
+    """One `keepfold mcp` connection (`serve_child`), driven over stdio as an AI app does:
+    initialize, one keepfold_prime, one keepfold_recall, then idle `minutes` (each 60 * `scale` s,
     the idle unload scaled alike); then a prime and a recall again. Prints the calls' seconds
     and the server's memory and loaded models each minute."""
     import json
@@ -618,10 +618,11 @@ def mcp_probe(tmp: Path, minutes: int, scale: float) -> None:
         print(f"   {label}: {time.perf_counter() - t:.2f} s", flush=True)
 
     def tools(when: str) -> None:
-        timed_call(f"cortex_prime{when}", "tools/call", {"name": "cortex_prime", "arguments": {
+        timed_call(f"keepfold_prime{when}", "tools/call", {"name": "keepfold_prime", "arguments": {
             "prompt": "what do I know about graphs and binary search"}})
-        timed_call(f"cortex_recall{when}", "tools/call", {"name": "cortex_recall", "arguments": {
-            "query": "dynamic programming interview notes"}})
+        timed_call(f"keepfold_recall{when}", "tools/call", {
+            "name": "keepfold_recall",
+            "arguments": {"query": "dynamic programming interview notes"}})
 
     t0 = time.monotonic()
     timed_call("initialize", "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -652,17 +653,17 @@ def main() -> None:
                     help="--launch: a person's search at the start, then new visits and chat "
                          "pages, so the live import and the safety net run (M3)")
     ap.add_argument("--mcp", type=int, default=0, metavar="MINUTES",
-                    help="one `cortex mcp` connection: a prime and a recall, then idle MINUTES")
+                    help="one `keepfold mcp` connection: a prime and a recall, then idle MINUTES")
     ap.add_argument("--scale", type=float, default=1.0,
                     help="--launch, --mcp: every schedule and the minute times this (0.2: a "
                          "minute takes 12 s)")
     ap.add_argument("--make", help=argparse.SUPPRESS)  # the child: make the vault there
     ap.add_argument("--models", help=argparse.SUPPRESS)  # the child: and index it with these
-    ap.add_argument("--serve", help=argparse.SUPPRESS)  # the child: `cortex mcp` on that vault
+    ap.add_argument("--serve", help=argparse.SUPPRESS)  # the child: `keepfold mcp` on that vault
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # each line as it comes, into a file too
-    from cortex import taint
-    taint.cap_blas()  # as every Cortex entry point does, before numpy loads
+    from keepfold import taint
+    taint.cap_blas()  # as every Keepfold entry point does, before numpy loads
     if args.make:
         _home(Path(args.make))
         make(Path(args.make), args.notes, args.visits, args.models and Path(args.models))
@@ -671,7 +672,7 @@ def main() -> None:
         _home(Path(args.serve))
         serve_child(Path(args.serve), Path(args.models), args.scale)
         return
-    tmp = Path(tempfile.mkdtemp(prefix="cortex-memory-probe-"))
+    tmp = Path(tempfile.mkdtemp(prefix="keepfold-memory-probe-"))
     try:
         env = _home(tmp)
         subprocess.run([sys.executable, __file__, "--make", str(tmp), "--notes",

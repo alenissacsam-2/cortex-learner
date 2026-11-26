@@ -1,11 +1,11 @@
 """Chat's data answers on a heavy synthetic vault: site lists, digests, study answers and a
 whole `chat.reply`, each timed (best of --repeat runs after one warm-up).
 
-Builds, in a temp folder only, `.cortex/browse/site-days.json` with --days days of --keys
+Builds, in a temp folder only, `.keepfold/browse/site-days.json` with --days days of --keys
 site keys each (page maps of --urls URLs, browser counts, hours, a few searches; read into
 the browsing store's site_days table as an import does), a sites
 cache of --sites entries, --notes notes and --events events. Every domain (s123.example),
-title and term is made up. A temp HOME holds the config, so the real ~/.cortex is never read.
+title and term is made up. A temp HOME holds the config, so the real ~/.keepfold is never read.
 
     uv run python scripts/bench_chat_data.py [--days 90] [--keys 2000] [--urls 20]
         [--profile "site_list all"] [--keep | --vault <a folder kept by --keep>]
@@ -128,23 +128,23 @@ def build(root: Path, *, days: int, keys: int, urls: int, sites: int, notes: int
     mistakes = sorted(p.stem for p in (root / "mistakes").glob("*.md"))
     (root / "catalog.yaml").write_text(catalog(concepts), encoding="utf-8")
     events(rng, root, n_events, concepts, mistakes)
-    browse = root / ".cortex" / "browse"
+    browse = root / ".keepfold" / "browse"
     browse.mkdir(parents=True)
     (browse / "site-days.json").write_text(
         json.dumps(site_days(rng, days, keys, urls, sites), separators=(",", ":")),
         encoding="utf-8")
     (browse / "sites.json").write_text(json.dumps({"llm": llm_cache(rng, sites), "hashes": {}}),
                                        encoding="utf-8")
-    from cortex.browse import legacy
-    from cortex.vault import Vault
+    from keepfold.browse import legacy
+    from keepfold.vault import Vault
 
     legacy.migrate(Vault(root))  # the counts in the browsing store, as an import does
 
 
 def calls(vault) -> dict:
     """{name: zero-argument call}: every data answer Chat gives."""
-    from cortex import chat, chat_study
-    from cortex.browse import load_settings, sites
+    from keepfold import chat, chat_study
+    from keepfold.browse import load_settings, sites
 
     def when(q):
         return chat._when(q, TODAY)
@@ -202,24 +202,24 @@ def main() -> None:
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
     ap.add_argument("--vault", type=Path, help="reuse a temp folder kept by --keep")
     args = ap.parse_args()
-    tmp = args.vault or Path(tempfile.mkdtemp(prefix="cortex-bench-chat-"))
+    tmp = args.vault or Path(tempfile.mkdtemp(prefix="keepfold-bench-chat-"))
     home, root = tmp / "home", tmp / "vault"
     for var in ("HOME", "USERPROFILE"):
         os.environ[var] = str(home)
     try:
         t = time.perf_counter()
         if not args.vault:
-            (home / ".cortex").mkdir(parents=True)
+            (home / ".keepfold").mkdir(parents=True)
             # a few private domains, one a subdomain: sites._sides checks page URLs for it
-            (home / ".cortex" / "config.yaml").write_text(
+            (home / ".keepfold" / "config.yaml").write_text(
                 "browse:\n  private_domains: [s1.example, docs.s2.example, s3.example]\n",
                 encoding="utf-8")
             build(root, days=args.days, keys=args.keys, urls=args.urls, sites=args.sites,
                   notes=args.notes, n_events=args.events)
         # the import's one-time migration renamed it after reading it into the store
-        size = (root / ".cortex/browse/site-days.json.migrated").stat().st_size / 1e6
+        size = (root / ".keepfold/browse/site-days.json.migrated").stat().st_size / 1e6
         print(f"built in {time.perf_counter() - t:.1f} s: site-days.json {size:.0f} MB")
-        from cortex.vault import Vault
+        from keepfold.vault import Vault
         vault = Vault(root)
         for name, fn in calls(vault).items():
             if args.profile and name.startswith(args.profile):

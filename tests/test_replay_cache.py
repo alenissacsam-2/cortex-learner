@@ -1,6 +1,6 @@
 """F1: levels.replay keeps its last whole-log fold, and problem_concepts its last parse, in
 memory; both must give exactly the uncached answers after our own writes, edits made outside
-Cortex and a day change. A warm cortex_find stays quick on the 5k-note vault. Made-up vaults
+Keepfold and a day change. A warm keepfold_find stays quick on the 5k-note vault. Made-up vaults
 only."""
 
 import dataclasses
@@ -15,11 +15,11 @@ from pathlib import Path
 import pytest
 from test_home import _big, _note
 
-from cortex import levels, mcp_server, planner
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.index import Index
-from cortex.vault import Vault
+from keepfold import levels, mcp_server, planner
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TODAY = local_day(datetime.now(UTC))
@@ -73,7 +73,7 @@ def test_the_cached_fold_follows_every_change_it_reads(vault):
     after_append = _states(vault)
     assert after_append != first
 
-    # an event file edited outside Cortex: the wrong becomes a partial
+    # an event file edited outside Keepfold: the wrong becomes a partial
     path = next((root / "events").glob("*/*/cli.jsonl"))
     text = path.read_bytes()
     assert b'"verdict":"wrong"' in text
@@ -82,7 +82,7 @@ def test_the_cached_fold_follows_every_change_it_reads(vault):
     edited = _states(vault)
     assert edited != after_append
 
-    # a problem note's concepts changed outside Cortex: its grades land elsewhere
+    # a problem note's concepts changed outside Keepfold: its grades land elsewhere
     _grade(vault, "problem:lc-167", "correct", 2)
     on_two_pointers = _states(vault)
     lc = root / "problems" / "lc-167.md"
@@ -106,7 +106,7 @@ def test_the_cached_fold_follows_every_change_it_reads(vault):
     assert later != outside
     assert _states(vault) == outside
 
-    # a problem note added and deleted outside Cortex
+    # a problem note added and deleted outside Keepfold
     _note(root, "problems", "lc-2", {"id": "lc-2", "concepts": ["[[two-pointers]]"]})
     _grade(vault, "problem:lc-2", "correct", 0)
     _states(vault)
@@ -188,13 +188,13 @@ FINDS = [("two pointers", None), ("", "due"), ("", "weak"), ("", "ready"), ("sum
 
 
 def _answers(cx) -> list:
-    out = [cx.cortex_find(q, kind).get("hits") for q, kind in FINDS]
-    return out + [cx.cortex_read("two-pointers").get("text")]
+    out = [cx.keepfold_find(q, kind).get("hits") for q, kind in FINDS]
+    return out + [cx.keepfold_read("two-pointers").get("text")]
 
 
 def test_find_and_read_answer_as_uncached_across_changes(vault):
     root = vault.root
-    cx = mcp_server.Cortex(vault)
+    cx = mcp_server.Keepfold(vault)
     cx._ready.wait()
 
     def same():
@@ -223,18 +223,18 @@ def test_find_and_read_answer_as_uncached_across_changes(vault):
 def test_a_warm_find_stays_quick_on_5k_notes(tmp_path, capsys):
     root = tmp_path / "big"
     _big(root)
-    cx = mcp_server.Cortex(Vault(root))
+    cx = mcp_server.Keepfold(Vault(root))
     cx._ready.wait()
-    cx.cortex_find("array list")  # the first call folds the log and warms the caches
+    cx.keepfold_find("array list")  # the first call folds the log and warms the caches
     times = []
     for _ in range(7):
         t = time.perf_counter()
-        out = cx.cortex_find("array list")
+        out = cx.keepfold_find("array list")
         times.append(time.perf_counter() - t)
     assert out["hits"]
     warm = statistics.median(times)
     with capsys.disabled():
-        print(f"\nwarm cortex_find on 5k notes: {warm * 1000:.0f} ms (median of 7)")
+        print(f"\nwarm keepfold_find on 5k notes: {warm * 1000:.0f} ms (median of 7)")
     assert warm < BUDGET
 
 

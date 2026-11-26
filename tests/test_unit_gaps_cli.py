@@ -1,4 +1,4 @@
-"""TEST-PLAN §2 items 8-9: one CliRunner smoke per `cortex` command on vault_mini (exit 0, no
+"""TEST-PLAN §2 items 8-9: one CliRunner smoke per `keepfold` command on vault_mini (exit 0, no
 traceback, no private text in the output), then the item-9 functions that matter most.
 Nothing here needs the network, a real model or a real browser profile."""
 
@@ -8,8 +8,8 @@ import pytest
 from conftest import FakeEmbed, git, note
 from typer.testing import CliRunner
 
-from cortex import semantic
-from cortex.cli import app
+from keepfold import semantic
+from keepfold.cli import app
 
 pytestmark = pytest.mark.usefixtures("home")
 PRIV = "PRIVMARKER"  # only in private pages: no command may print it
@@ -19,7 +19,7 @@ PRIV = "PRIVMARKER"  # only in private pages: no command may print it
 def vault(root, home, monkeypatch):
     """vault_mini with private text in a private concept, a private note and a private
     browse page; the home config points at it; a fake embedder; no browser found."""
-    from cortex.browse import sources
+    from keepfold.browse import sources
 
     p = root / "concepts" / "secret-diary.md"
     p.write_text(p.read_text(encoding="utf-8") + f"\n{PRIV} diary line\n", encoding="utf-8")
@@ -31,8 +31,8 @@ def vault(root, home, monkeypatch):
          "private: true\n", f"# Browsing\n\n- {PRIV} search · google\n")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "private pages")
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(f"vault: {json.dumps(str(root))}\n",
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(f"vault: {json.dumps(str(root))}\n",
                                                   encoding="utf-8")
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     real = sources.discover  # the selftest passes its own temp folders; nothing else is read
@@ -125,8 +125,8 @@ def test_exclude_add_list_remove_round_trip(vault, tmp_path):
 def test_dashboard_index_and_html_leave_private_pages_out(vault):
     from datetime import UTC, datetime
 
-    from cortex import dashboard
-    from cortex.vault import Vault
+    from keepfold import dashboard
+    from keepfold.vault import Vault
     assert CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(vault)]
                               ).exit_code == 0
     index = (vault / "index.md").read_text(encoding="utf-8")
@@ -140,7 +140,7 @@ def test_dashboard_index_and_html_leave_private_pages_out(vault):
 def test_recall_at_forgets_over_time():
     from datetime import UTC, datetime, timedelta
 
-    from cortex.levels import ConceptState, recall_at
+    from keepfold.levels import ConceptState, recall_at
 
     t0 = datetime(2026, 11, 1, 9, tzinfo=UTC)
     assert recall_at(None, t0) == 0.0
@@ -166,7 +166,7 @@ def test_best_chunks_picks_each_pages_best_chunk_and_its_offset():
 
 
 def test_changed_lines_never_names_a_person_and_caps():
-    from cortex import render
+    from keepfold import render
 
     person = {"kind": "person", "id": "asha", "tool": "patch", "op": "set_field"}
     lines = render.changed_lines([person, person])

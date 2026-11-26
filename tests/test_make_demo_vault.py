@@ -5,10 +5,10 @@ import importlib.util
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cortex import dashboard, learning_eval, planner
-from cortex.cli import _init
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import dashboard, learning_eval, planner
+from keepfold.cli import _init
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("make_demo_vault",
@@ -18,7 +18,7 @@ spec.loader.exec_module(demo)
 
 
 def test_demo_vault(tmp_path, monkeypatch):
-    from cortex import taint
+    from keepfold import taint
 
     root = tmp_path / "vault"
     _init(root)  # the first init on a fresh home also makes it the configured vault
@@ -41,11 +41,11 @@ def test_demo_refuses_a_real_vault(tmp_path, monkeypatch):
     # D17: made-up grades are permanent history in a real learner model
     import pytest
 
-    from cortex import taint
+    from keepfold import taint
 
     root = tmp_path / "vault"
     _init(root)
-    monkeypatch.delenv("CORTEX_VAULT", raising=False)
+    monkeypatch.delenv("KEEPFOLD_VAULT", raising=False)
     monkeypatch.setattr(taint, "config", lambda: {"vault": str(root)})
     with pytest.raises(SystemExit):
         demo.main([str(root)])

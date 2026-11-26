@@ -3,9 +3,9 @@ scores 0.5, an (ask) line 0.5 × 0.3 (bets and surprisal were removed on 20 Nov 
 
 import pytest
 
-from cortex import claims
-from cortex.mcp_server import LEGEND, Cortex
-from cortex.vault import Vault
+from keepfold import claims
+from keepfold.mcp_server import LEGEND, Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -26,7 +26,7 @@ def served(root, monkeypatch):
 
 
 def test_labels_order_legend_and_ids_stripped(served):
-    out = Cortex(Vault(served)).cortex_context()["context"]
+    out = Keepfold(Vault(served)).keepfold_context()["context"]
     body = out.split("## Coding\n")[1].split("\n</untrusted_note>")[0].splitlines()
     # the user's own lines (typed, legacy, confirmed) score 0.5 and come first, newest first;
     # agent and exposed lines score 0.15 and are labelled; the non-list line stays first
@@ -40,7 +40,7 @@ def test_labels_order_legend_and_ids_stripped(served):
 
 def test_no_label_no_legend(served, monkeypatch):
     monkeypatch.setattr(claims, "tiers", lambda v, ev, log=None: [])  # nothing labelled
-    out = Cortex(Vault(served)).cortex_context()["context"]
+    out = Keepfold(Vault(served)).keepfold_context()["context"]
     assert LEGEND not in out and "## How to read the claims" not in out
     assert "- A fact line\n" in out
 

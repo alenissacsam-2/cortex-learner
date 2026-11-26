@@ -2,9 +2,9 @@
 
 Runs the existing benchmarks (scripts/bench_index.py, scripts/bench_scale.py and
 scripts/bench_chat_data.py), each as its own process, --runs times, and keeps the median; runs
-the offline Chat test with no model (`cortex.chat_eval.run(use_model=False)`); counts the
+the offline Chat test with no model (`keepfold.chat_eval.run(use_model=False)`); counts the
 tests (`pytest --collect-only`). Everything runs in temp folders under a temp HOME, so the
-real ~/.cortex, vault and browsing are never read; no model is ever loaded or downloaded.
+real ~/.keepfold, vault and browsing are never read; no model is ever loaded or downloaded.
 Writes docs/benchmarks/results.json (numbers only), saved after each section, so a stopped run
 keeps the sections that finished; readme_charts.py leaves out any section that is missing.
 
@@ -172,10 +172,10 @@ def chat_data(args: list[str], runs: int, loads: list) -> dict:
 
 def chat_test() -> dict:
     """The offline Chat test with no model: model questions come back blocked, never failed."""
-    from cortex import chat_eval
+    from keepfold import chat_eval
 
     r = chat_eval.run(use_model=False)
-    return {"source": "cortex.chat_eval.run(use_model=False) (`cortex chat eval --no-model`)",
+    return {"source": "keepfold.chat_eval.run(use_model=False) (`keepfold chat eval --no-model`)",
             "result": r["result"], "model_note": r["model_note"], "total": r["total"],
             "ran": r["ran"], "passed": r["passed"], "failed": r["failed"],
             "needs_model": r["blocked"],
@@ -222,7 +222,7 @@ def main() -> None:
         args.runs, args.index_sizes, args.vector_sizes, args.visits = 1, "200,400", "100,200", 2000
         args.chat_data = args.chat_data or ("--days 5 --keys 50 --sites 100 --notes 300 "
                                             "--events 500 --repeat 1")
-    tmp = Path(tempfile.mkdtemp(prefix="cortex-readme-"))
+    tmp = Path(tempfile.mkdtemp(prefix="keepfold-readme-"))
     temp_home(tmp)
     loads: list = []
     result = {"generated": datetime.now().astimezone().isoformat(timespec="seconds"),

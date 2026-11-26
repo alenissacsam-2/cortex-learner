@@ -1,23 +1,23 @@
 {
-  "name": "cortex",
+  "name": "keepfold",
   "owner": {
     "name": "alenissacsam-2",
     "url": "https://github.com/alenissacsam-2"
   },
   "metadata": {
-    "description": "Marketplace for Cortex, a local-first learner model and second brain for Claude"
+    "description": "Marketplace for Keepfold, a local-first learner model and second brain for Claude"
   },
   "plugins": [
     {
-      "name": "cortex",
+      "name": "keepfold",
       "source": "./plugin",
-      "description": "Cortex learning sessions backed by the learner's local knowledge graph",
-      "version": "0.6.1",
+      "description": "Keepfold learning sessions backed by the learner's local knowledge graph",
+      "version": "0.6.2",
       "author": {
         "name": "alenissacsam-2"
       },
-      "homepage": "https://github.com/alenissacsam-2/cortex-learner",
-      "repository": "https://github.com/alenissacsam-2/cortex-learner",
+      "homepage": "https://github.com/alenissacsam-2/keepfold",
+      "repository": "https://github.com/alenissacsam-2/keepfold",
       "license": "MIT",
       "keywords": ["learning", "spaced-repetition", "second-brain", "obsidian", "mcp", "local-first"],
       "category": "learning"

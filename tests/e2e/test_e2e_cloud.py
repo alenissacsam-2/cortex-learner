@@ -1,5 +1,5 @@
 """E4 Cloud opt-in (docs/design/v6/TEST-PLAN.md §4; data-access.md §2-3), in-process through
-the CLI: `cortex browse deepen` with a real config file, the real CloudRunner over a fake HTTPS
+the CLI: `keepfold browse deepen` with a real config file, the real CloudRunner over a fake HTTPS
 opener and the fake Ollama as the local model. Off by default; when on, only cloud-audience
 site pages are sent, a secret is skipped and counted, one counts-only audit line is written,
 the switch stops the next call, max_items caps a run, and ask and import never use the cloud.
@@ -18,12 +18,12 @@ from ruamel.yaml import YAML
 from test_browse import Embed, hubbed
 from typer.testing import CliRunner
 
-from cortex import cloudllm, localllm, semantic
-from cortex.app import status as app_status
-from cortex.browse import sites
-from cortex.cli import app
-from cortex.vault import Vault
 from e2e.fake_ollama import FakeOllama
+from keepfold import cloudllm, localllm, semantic
+from keepfold.app import status as app_status
+from keepfold.browse import sites
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -68,7 +68,7 @@ class World:
                              **cloudllm_extra}}
         if local:
             data["localllm"] = {"enabled": True, "url": self.ollama.url}
-        p = self.home / ".cortex" / "config.yaml"
+        p = self.home / ".keepfold" / "config.yaml"
         p.parent.mkdir(exist_ok=True)
         with p.open("w", encoding="utf-8") as f:
             YAML(typ="safe").dump(data, f)

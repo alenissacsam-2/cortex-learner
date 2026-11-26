@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import planner
-from cortex.catalog import Catalog, sync
-from cortex.cli import app
-from cortex.dashboard import build_data
-from cortex.index import Index
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault, VaultError
+from keepfold import planner
+from keepfold.catalog import Catalog, sync
+from keepfold.cli import app
+from keepfold.dashboard import build_data
+from keepfold.index import Index
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault, VaultError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
 EMPTY = {"adopted": [], "updated": [], "materialised": [], "skipped": []}
@@ -123,21 +123,21 @@ def test_add_concept_with_areas(vault):
     assert sync(vault) == EMPTY
 
 
-def test_cortex_add_areas_over_mcp(vault):
-    core = Cortex(vault)
-    core._call("cortex_start", core.cortex_start, {})
-    core._call("cortex_add", core.cortex_add, {"kind": "area", "title": "DP", "parent": "dsa"})
-    out = core._call("cortex_add", core.cortex_add, {
+def test_keepfold_add_areas_over_mcp(vault):
+    core = Keepfold(vault)
+    core._call("keepfold_start", core.keepfold_start, {})
+    core._call("keepfold_add", core.keepfold_add, {"kind": "area", "title": "DP", "parent": "dsa"})
+    out = core._call("keepfold_add", core.keepfold_add, {
         "kind": "concept", "title": "Knapsack", "parent": "dsa.dp", "areas": ["dsa.arrays"]})
     assert out["id"] == "knapsack", out
     assert Catalog.load(vault).entries["knapsack"].areas == ["dsa.arrays"]
-    bad = core._call("cortex_add", core.cortex_add, {
+    bad = core._call("keepfold_add", core.keepfold_add, {
         "kind": "problem", "title": "LC 9", "areas": ["dsa.arrays"]})
     assert bad["error"] == "invalid_argument"
 
 
 def test_cli_catalog_sync_and_replay(vault, monkeypatch):
-    monkeypatch.setenv("CORTEX_VAULT", str(vault.root))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault.root))
     runner = CliRunner()
     assert "catalog in sync" in runner.invoke(app, ["catalog", "sync"]).output
     hand_notes(vault)

@@ -11,10 +11,10 @@ import pytest
 from conftest import events, note
 from test_review import app, changes, today  # noqa: F401  (app is a fixture)
 
-from cortex import claims, review, xray
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import claims, review, xray
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -30,7 +30,7 @@ def ids(root, name):
     return {r["text"]: r["id"] for r in claims.rows(Vault(root)) if r["page"] == name}
 
 
-def primes(root, rows, tool="cortex_prime"):
+def primes(root, rows, tool="keepfold_prime"):
     """X-ray rows: each a (served claim ids, trimmed claim ids)."""
     v = Vault(root)
     for s, t in rows:
@@ -55,7 +55,7 @@ def cards(root, events_=None, day=None):
 # ---- near-duplicates ----
 
 def test_near_duplicates_are_never_a_card(root, app):  # noqa: F811
-    """22 Nov (D1): Cortex keeps one of near-copies itself (test_review_auto); Review never
+    """22 Nov (D1): Keepfold keeps one of near-copies itself (test_review_auto); Review never
     asks about them, and a clash among them is still a conflict card."""
     page(root, "preferences", [
         "Uses Vim for editing code", "Uses Vim for code editing",
@@ -85,7 +85,7 @@ def test_a_line_cut_in_most_primes_is_offered_and_keep_pins_it(root, app):  # no
                                  "Cut sometimes"))
     primes(root, [([b], [a, d])] * 3 + [([b, d], [a])] * 2 + [([a, b, d], [])])
     primes(root, [([], [c])] * 4)  # cut every time, but offered only 4 times: too few to judge
-    primes(root, [([], [b])] * 9, tool="cortex_context")  # not a prime: not counted
+    primes(root, [([], [b])] * 9, tool="keepfold_context")  # not a prime: not counted
     view = cards(root)
     assert [(x["id"], x["cut"], x["seen"], x["window"]) for x in view["crowded"]] == [
         (a, 5, 6, 10)]  # d was cut in 3 of 6: not most
@@ -145,7 +145,7 @@ def test_unused_playbooks_keep_and_open(root, app, monkeypatch):  # noqa: F811
     book(root, "old-private", 90, private=True)
     note(root, "notes/plain.md", "title: Plain\nkind: note\n", "# Not a playbook")
     assert cards(root)["unused"] == []  # an empty X-ray shows nothing to judge by
-    xray.record(Vault(root), "cortex_prime", "cursor", {"playbooks": ["old-served"]}, {}, 10)
+    xray.record(Vault(root), "keepfold_prime", "cursor", {"playbooks": ["old-served"]}, {}, 10)
     (x,) = cards(root)["unused"]
     assert (x["id"], x["title"], x["path"], x["calls"], x["since"]) == (
         "old-unused", "Book old-unused", "notes/old-unused.md", 1, today())

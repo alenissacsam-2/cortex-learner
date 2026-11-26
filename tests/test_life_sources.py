@@ -5,9 +5,9 @@ import re
 
 from typer.testing import CliRunner
 
-from cortex import importers, life_sources, sources
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import importers, life_sources, sources
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 runner = CliRunner()
 C = sources.Audience.CLOUD

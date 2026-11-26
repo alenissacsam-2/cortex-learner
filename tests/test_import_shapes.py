@@ -1,8 +1,8 @@
-"""RR-38: `cortex doctor`'s import shapes: per source, page-length quartiles and the share of
+"""RR-38: `keepfold doctor`'s import shapes: per source, page-length quartiles and the share of
 pages that are mostly links or numbers only; numbers and known labels only, never page text."""
 
-from cortex import doctor
-from cortex.vault import Vault
+from keepfold import doctor
+from keepfold.vault import Vault
 
 
 def _page(v: Vault, nid: str, head: str, body: str) -> None:

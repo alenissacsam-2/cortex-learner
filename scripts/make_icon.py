@@ -1,14 +1,14 @@
-"""Write src/cortex/assets/cortex.ico, the app icon, from `cortex.app.desktop.mark`:
+"""Write src/keepfold/assets/keepfold.ico, the app icon, from `keepfold.app.desktop.mark`:
 `uv run python scripts/make_icon.py [preview-folder]`. Each size is drawn on its own; with a
-folder, it also saves cortex-<size>.png there to look at. The .ico is committed."""
+folder, it also saves keepfold-<size>.png there to look at. The .ico is committed."""
 
 import sys
 from pathlib import Path
 
-from cortex.app.desktop import mark
+from keepfold.app.desktop import mark
 
 SIZES = (16, 24, 32, 48, 64, 128, 256)
-ICO = Path(__file__).resolve().parent.parent / "src" / "cortex" / "assets" / "cortex.ico"
+ICO = Path(__file__).resolve().parent.parent / "src" / "keepfold" / "assets" / "keepfold.ico"
 
 
 def main() -> None:
@@ -20,7 +20,7 @@ def main() -> None:
         out = Path(sys.argv[1])
         out.mkdir(parents=True, exist_ok=True)
         for s, img in zip(SIZES, imgs, strict=True):
-            img.save(out / f"cortex-{s}.png")
+            img.save(out / f"keepfold-{s}.png")
         print(f"previews in {out}")
 
 

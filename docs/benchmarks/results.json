@@ -11,7 +11,7 @@
  "statistic": "median of 1 runs",
  "quick": true,
  "chat_test": {
-  "source": "cortex.chat_eval.run(use_model=False) (`cortex chat eval --no-model`)",
+  "source": "keepfold.chat_eval.run(use_model=False) (`keepfold chat eval --no-model`)",
   "result": "BLOCKED",
   "model_note": "model questions turned off",
   "total": 40,

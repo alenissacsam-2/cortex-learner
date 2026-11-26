@@ -9,7 +9,7 @@ from pathlib import Path
 
 from e2e.fake_ollama import FakeOllama
 
-from cortex.browse import sources
+from keepfold.browse import sources
 
 fake_ollama = FakeOllama  # `with fake_ollama() as f:`; f.url, f.requests, f.chats()
 EXPORTS = Path(__file__).parents[1] / "fixtures" / "exports"

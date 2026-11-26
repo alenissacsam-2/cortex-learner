@@ -1,4 +1,4 @@
-"""`cortex browse forget` and the settings refilter, second review: a category also covers
+"""`keepfold browse forget` and the settings refilter, second review: a category also covers
 the site table, local-model verdicts and URL-path words; a national domain takes its search
 lines; the private index is redone with no day held; a browse-wide lock keeps a forget from
 being undone by an import or a deepen pass; browse/private never wedges the vault's git.
@@ -17,9 +17,9 @@ from test_browse import LINK, Embed, chromium, hubbed, m
 from test_browse_sites import OWNER
 from typer.testing import CliRunner
 
-from cortex import cli, localllm, session
-from cortex.browse import build, forget, sites, sources
-from cortex.vault import Vault, VaultError
+from keepfold import cli, localllm, session
+from keepfold.browse import build, forget, sites, sources
+from keepfold.vault import Vault, VaultError
 
 ROWS = [
     (m(0), "https://lichess.org/study/abc", "Chess openings for beginners", 300),
@@ -194,14 +194,14 @@ def test_untrack_a_staged_private_page_and_commits_go_on(root):
     note = root / "notes" / "n.md"
     note.parent.mkdir(exist_ok=True)
     note.write_text("x\n", encoding="utf-8")
-    assert session._commit(v, "cortex: s", [note], before="other changes")
+    assert session._commit(v, "keepfold: s", [note], before="other changes")
     assert git(root, "ls-tree", "-r", "--name-only", "HEAD", PRIV.as_posix()) == ""
     assert "notes/n.md" in git(root, "ls-files", "notes")
 
 
 def test_a_commit_leaves_out_a_private_page_still_in_the_index(root):
     v = Vault(root)
-    (root / ".gitignore").write_text(".cortex/*\n" + forget.PRIVATE_IGNORE + "\n",
+    (root / ".gitignore").write_text(".keepfold/*\n" + forget.PRIVATE_IGNORE + "\n",
                                      encoding="utf-8")
     git(root, "add", ".gitignore")
     git(root, "commit", "-q", "-m", "ignore")
@@ -210,7 +210,7 @@ def test_a_commit_leaves_out_a_private_page_still_in_the_index(root):
     note = root / "notes" / "n.md"
     note.parent.mkdir(exist_ok=True)
     note.write_text("x\n", encoding="utf-8")
-    assert session._commit(v, "cortex: everything")
+    assert session._commit(v, "keepfold: everything")
     assert git(root, "ls-tree", "-r", "--name-only", "HEAD", PRIV.as_posix()) == ""
     assert "notes/n.md" in git(root, "ls-tree", "-r", "--name-only", "HEAD")
 
@@ -224,7 +224,7 @@ def test_undo_never_reverts_or_deletes_a_current_private_page(root, home):
                     encoding="utf-8")
     note = root / "concepts" / "arrays-basics.md"
     note.write_text(note.read_text(encoding="utf-8") + "- session edit\n", encoding="utf-8")
-    git(root, "commit", "-qam", f"cortex: session {sid} learn")
+    git(root, "commit", "-qam", f"keepfold: session {sid} learn")
     assert forget.untrack_private(Vault(root))
     git(root, "add", ".gitignore")
     git(root, "commit", "-q", "-m", "ignore")
@@ -253,7 +253,7 @@ def test_refilter_with_no_held_day_redoes_the_private_index(vault, hist, tmp_pat
 
 def test_forget_drops_torn_site_day_copies(vault, hist):
     imp(vault, hist)
-    torn = vault / ".cortex" / "browse" / "site-days.json.bad-20260101T000000Z"
+    torn = vault / ".keepfold" / "browse" / "site-days.json.bad-20260101T000000Z"
     torn.write_text('{"2026-11-09": {"lichess.org||0": ', encoding="utf-8")
     forget.purge(Vault(vault), forget.Rule(hosts=("lichess.org",)), settings=OWNER)
     assert not torn.exists()
@@ -263,17 +263,17 @@ def test_forget_drops_torn_site_day_copies(vault, hist):
 def test_forget_reaches_a_site_days_json_not_read_in_yet(vault, hist, store_kept):
     """Audit 21 Nov I1: an old site-days.json still waiting for `legacy.migrate` (with the
     store there or not yet made) neither keeps a forgotten site on disk nor brings it back."""
-    from cortex.browse import legacy
+    from keepfold.browse import legacy
     v = Vault(vault)
     imp(vault, hist)
     sites._save(v, sites.DAYS, sites.load_days(v)[0])  # as an older version kept them
     if not store_kept:
-        for p in (vault / ".cortex" / "browse").glob("store.db*"):
+        for p in (vault / ".keepfold" / "browse").glob("store.db*"):
             p.unlink()
     forget.purge(v, forget.Rule(hosts=("lichess.org",)), settings=OWNER)
     legacy.migrate(v)
     assert "lichess" not in json.dumps(sites.load_days(v)[0])
-    for p in (vault / ".cortex" / "browse").glob("site-days.json*"):
+    for p in (vault / ".keepfold" / "browse").glob("site-days.json*"):
         assert "lichess" not in p.read_text(encoding="utf-8"), p.name
 
 

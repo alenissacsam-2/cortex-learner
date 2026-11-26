@@ -1,6 +1,6 @@
 """E1 New user (docs/design/v6/TEST-PLAN.md §4): init, doctor, the app's setup and a ChatGPT
 import, a Chrome history import, ask, the dashboard, the MCP tools over stdio, then Quit. Every
-process is a real `cortex` subprocess on a fresh home; nothing private leaks to stdout or MCP."""
+process is a real `keepfold` subprocess on a fresh home; nothing private leaks to stdout or MCP."""
 
 import http.client
 import json
@@ -16,9 +16,9 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from ruamel.yaml import YAML
 
-from cortex import dashboard
-from cortex.vault import Vault
 from e2e.conftest import CLI
+from keepfold import dashboard
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.slow
 
@@ -49,7 +49,7 @@ class Api:
     def call(self, method: str, path: str, body=None, raw: bytes | None = None,
              headers: dict | None = None) -> tuple[int, dict]:
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
-        h = {"X-Cortex-Token": self.token, **(headers or {})}
+        h = {"X-Keepfold-Token": self.token, **(headers or {})}
         data = raw
         if body is not None:
             data, h["Content-Type"] = json.dumps(body).encode(), "application/json"
@@ -86,7 +86,7 @@ def _wait_for_url(log, proc: subprocess.Popen, timeout: float = 60) -> tuple[int
 
 
 def _set_config(home, **keys) -> None:
-    p = home / ".cortex" / "config.yaml"
+    p = home / ".keepfold" / "config.yaml"
     yaml = YAML(typ="safe")
     data = yaml.load(p.read_text(encoding="utf-8")) or {}
     data.update(keys)
@@ -95,24 +95,24 @@ def _set_config(home, **keys) -> None:
 
 
 async def _mcp(env, vault) -> dict:
-    """list_tools, then cortex_find, cortex_recall and cortex_read over stdio."""
+    """list_tools, then keepfold_find, keepfold_recall and keepfold_read over stdio."""
     params = StdioServerParameters(command=CLI[0], args=[*CLI[1:], "mcp", "--vault", str(vault)],
                                    env=env, cwd=str(vault.parent))
     out = {}
     async with Client(params) as client:
         out["tools"] = {t.name for t in (await client.list_tools()).tools}
-        for name, args in (("cortex_find", {"query": "spanning tree"}),
-                           ("cortex_find", {"query": "video callback token key"}),
-                           ("cortex_recall", {"query": "minimum spanning tree"}),
-                           ("cortex_recall", {"query": "adult video callback token Dijkstra"})):
+        for name, args in (("keepfold_find", {"query": "spanning tree"}),
+                           ("keepfold_find", {"query": "video callback token key"}),
+                           ("keepfold_recall", {"query": "minimum spanning tree"}),
+                           ("keepfold_recall", {"query": "adult video callback token Dijkstra"})):
             r = await client.call_tool(name, args)
             assert not r.is_error, r.content
             out.setdefault(name, []).append(r)
-        hits = out["cortex_find"][0].structured_content["hits"]
-        assert hits, out["cortex_find"][0].structured_content
-        r = await client.call_tool("cortex_read", {"id": hits[0]["id"]})
+        hits = out["keepfold_find"][0].structured_content["hits"]
+        assert hits, out["keepfold_find"][0].structured_content
+        r = await client.call_tool("keepfold_read", {"id": hits[0]["id"]})
         assert not r.is_error, r.content
-        out["cortex_read"] = [r]
+        out["keepfold_read"] = [r]
     return out
 
 
@@ -125,15 +125,15 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
     # 1. init: folders, a git repo, and the pointer at the vault
     r = run_cli("init", vault)
     assert r.returncode == 0, r.stderr
-    assert (vault / ".git").is_dir() and (vault / ".cortex").is_dir() and (vault / "me").is_dir()
-    cfg = YAML(typ="safe").load((home / ".cortex" / "config.yaml").read_text(encoding="utf-8"))
+    assert (vault / ".git").is_dir() and (vault / ".keepfold").is_dir() and (vault / "me").is_dir()
+    cfg = YAML(typ="safe").load((home / ".keepfold" / "config.yaml").read_text(encoding="utf-8"))
     assert cfg["vault"] == str(vault.resolve())
 
-    # 2. doctor: no model and no `cortex` on PATH are warnings, never a failure
+    # 2. doctor: no model and no `keepfold` on PATH are warnings, never a failure
     r = run_cli("doctor")
     assert r.returncode == 0, r.stdout + r.stderr
     assert re.search(r"^WARN\s+Search model:", r.stdout, re.M), r.stdout
-    assert re.search(r"^WARN\s+`cortex` on PATH:", r.stdout, re.M), r.stdout
+    assert re.search(r"^WARN\s+`keepfold` on PATH:", r.stdout, re.M), r.stdout
     assert not re.search(r"^FAIL", r.stdout, re.M), r.stdout
 
     # 3. the app in the background; its URL carries the token
@@ -161,9 +161,9 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
 
         data = chatgpt_zip(tmp_path / "exports").read_bytes()
         code, up = api.call("POST", "/api/import/upload", raw=data, headers={
-            "Content-Type": "application/octet-stream", "X-Cortex-Name": "export.zip"})
+            "Content-Type": "application/octet-stream", "X-Keepfold-Name": "export.zip"})
         assert code == 200 and up["size"] == len(data), up
-        assert len(list((home / ".cortex" / "tmp").glob("upload-*"))) == 1
+        assert len(list((home / ".keepfold" / "tmp").glob("upload-*"))) == 1
         job = api.job("POST", "/api/import/preview", {"source": "chatgpt",
                                                       "upload": up["upload"]})
         assert job["error"] is None and job["result"]["kind"] == "import-preview", job
@@ -171,7 +171,7 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
         assert found >= 1 and job["result"]["already"] == 0
         job = api.job("POST", "/api/import/run", {"source": "chatgpt", "upload": up["upload"]})
         assert job["error"] is None and job["result"]["counts"]["conversations"] == found, job
-        assert len(list((home / ".cortex" / "claude-chat" / "chatgpt").glob("*.jsonl"))) == found
+        assert len(list((home / ".keepfold" / "claude-chat" / "chatgpt").glob("*.jsonl"))) == found
 
         # 5. a Chrome history import from a synthetic profile: counts only on stdout
         fake_profile_root(home / "AppData" / "Local", {"chrome": _history(datetime.now(UTC))})
@@ -200,15 +200,15 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
         r = run_cli("dashboard", "--no-open")
         assert r.returncode == 0, r.stdout + r.stderr
         assert (vault / "index.md").is_file()
-        assert not (vault / ".cortex" / "dashboard.html").exists()
+        assert not (vault / ".keepfold" / "dashboard.html").exists()
         html = dashboard.snapshot(Vault(vault), now=datetime.now(UTC))
         assert "default-src 'none'" in html
 
         # 8. the MCP tools over stdio: nothing private, no secret
         got = anyio.run(_mcp, env, vault)
-        assert {"cortex_find", "cortex_recall", "cortex_read"} <= got["tools"]
-        assert "spanning" in _text(got["cortex_find"][0]).lower()
-        for name in ("cortex_find", "cortex_recall", "cortex_read"):
+        assert {"keepfold_find", "keepfold_recall", "keepfold_read"} <= got["tools"]
+        assert "spanning" in _text(got["keepfold_find"][0]).lower()
+        for name in ("keepfold_find", "keepfold_recall", "keepfold_read"):
             for res in got[name]:
                 text = _text(res)
                 assert not any(s in text for s in SECRETS), (name, text)
@@ -216,7 +216,7 @@ def test_e1_new_user(tmp_path, env, run_cli, fake_ollama):
         # 9. Quit: the process ends within 5 s and no upload is left behind
         assert api.call("POST", "/api/quit", {})[0] == 200
         assert app.wait(timeout=5) == 0
-        assert not list((home / ".cortex" / "tmp").glob("upload-*"))
+        assert not list((home / ".keepfold" / "tmp").glob("upload-*"))
     finally:
         if app.poll() is None:
             app.kill()

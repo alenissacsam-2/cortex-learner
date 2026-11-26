@@ -1,0 +1,612 @@
+"""The one shape every `keepfold import` source plugs into (v9 item 13).
+
+A `Source` says what it is (id, label, what it reads, its default tier) and yields `Item`s, or a
+reason string for each entry it skips. `run` does the rest, the same for every source: the
+never-capture filter (`scrub`), secret redaction, the quality gate (`unreadable`: garbled,
+symbol, link-list and repeated text is kept out), the tier, dedupe, the page write through the
+vault, the dry run and the report counts (`importers.report_line` prints them).
+
+Two page shapes. `page="item"`: one `resource` page per item, `<prefix>-<title slug>`, deduped by
+a sha of the item's text (notes; PDFs, highlights and mail fit here). `page="month"`: one page per
+month, `<prefix>-YYYY-MM` (`<prefix>-private-YYYY-MM` when private, so private items never join a
+public page), a line per item, deduped by the line (calendars; location, photo dates and Spotify
+fit here). Both carry a `Source: <label> · Date: …` line (see importers' docstring). An item
+source that sets `updates` dedupes by `key` (a repo's path, a book) and rewrites that page when
+a re-import brings a changed text (the header's `body:` sha), keeping the owner's frontmatter,
+instead of adding a second page; an unchanged text leaves the page alone.
+
+Tiers reuse `access.Audience`: `--tier private|normal|skip` is LOCAL (pages `private: true`),
+CLOUD (normal pages) or SKIP (nothing imported). The last choice per source is kept in TIERS_FILE.
+
+What Keepfold never captures (docs/PRIVACY.md), and where each line is enforced:
+- secrets, keys, passwords: `scrub` here for every source (chats.redact), and
+  vault.scan_secrets on every write;
+- sign-in, payment and bank pages: browse.privacy.drop_reason (browse.lists AUTH/PAY/BANK);
+- adult browsing: browse.privacy.Settings.adult defaults to "skip";
+- AI replies in chat imports: chat_import keeps the user's own turns only;
+- code, diffs, command output from AI chats and coding sessions: chat_import (user turns only;
+  a coding session keeps paths and commit subjects only). A source of such text sets
+  `drops_code` and `scrub` drops its fenced code; the owner's own notes keep their code;
+- image or audio content: an Item is text only; importers' notes source skips non-text files
+  and drops embeds;
+- other people's quoted text in mail: `scrub` here, for a source that sets `strips_quotes`
+  (mail); the owner's own notes and calendar keep what they quote;
+- location finer than a city: `scrub` here rounds coordinates to 0.1 degree (about 10 km), for
+  a source that sets `coarse_place` (location, photos); notes and calendar keep theirs;
+- inferred health, sexuality, religion or politics labels: no code infers labels about the
+  person; browse.lists' categories with those names only keep such visits local.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import unicodedata
+from collections import defaultdict
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
+
+from ruamel.yaml.comments import CommentedMap
+
+from keepfold import chats
+from keepfold.access import Audience
+from keepfold.catalog import slugify
+from keepfold.vault import Vault, VaultError, _dump_fm, _to_yaml, is_private
+
+TIERS_FILE = ".keepfold/import-tiers.json"  # {source id: "local" | "cloud" | "skip"}
+WORDS = {"private": Audience.LOCAL, "normal": Audience.CLOUD, "skip": Audience.SKIP}
+CODE_LEFT_OUT = "[code left out]"
+
+_HASH = re.compile(r"· sha: ([0-9a-f]{16})$", re.M)
+_DAY_LINE = re.compile(r"- (\d{4}-\d\d-\d\d): ")  # a month page's per-day summary line
+# an item page's header line: label, date, origin, and (RR-18, by_origin sources) a body sha
+HEADER = re.compile(r"^Source: (.+?) · Date: (\S+)(?: · From: (.*?))?"
+                    r"(?: · body: ([0-9a-f]{16}))? · sha: [0-9a-f]{16}$", re.M)
+SHOWN_EDITED = 5  # Review cards of hand-edited imported pages shown at a time
+EDITED = "you edited the page; it was left as it is"  # a `keeps_edits` source's skip reason
+_WIKI = re.compile(r"(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]")
+_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+# "On Tue, 3 Nov 2026 at 09:30, Asha <her address> wrote:", which mail clients may wrap once
+_ATTRIBUTION = re.compile(r"^On [^\n]{1,200}(?:\n[^\n]{0,200})?wrote:[ \t]*\r?$", re.M)
+_QUOTED = re.compile(r"^[ \t]*>[^\n]*(?:\n|\Z)", re.M)
+_FORWARDED = re.compile(r"^[ \t]*-{2,}[ \t]*(?:Original Message|Forwarded message)[ \t]*-{2,}",
+                        re.M | re.I)
+# shortcut: only "lat, lon" pairs with 4+ decimals (about 10 m); a source that reads a location
+# history (item 14) reduces its own places to a city per day
+_COORDS = re.compile(r"(?<![\d.])(-?\d{1,2}\.\d{4,})(\s*,\s*)(-?\d{1,3}\.\d{4,})(?![\d.])")
+# the quality gate (`unreadable`): an item under GATE_MIN characters is never judged
+GATE_MIN = 200
+UNREADABLE = ("garbled", "mostly symbols", "link list", "repetitive")  # the report's order
+_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+
+
+@dataclass
+class Item:
+    title: str
+    date: str  # YYYY-MM-DD
+    text: str  # an item page's body, or a month page's line
+    origin: str = ""  # the file path or URL it came from, shown as `From:`
+    tags: list[str] = field(default_factory=list)
+    private: bool = False  # the item itself asks to be private (a note's frontmatter)
+    key: str = ""  # what dedupe hashes when it is not `text` (a note: with its frontmatter)
+    who: str = ""  # R3-6: the person the item is by or with, when the source knows (an author)
+    summary: str = ""  # R3-6: the item's own summary, when it has one (a note's frontmatter)
+    aliases: list[str] = field(default_factory=list)  # R13d-2: a note's checked `aliases:`
+
+
+@dataclass
+class Source:
+    id: str  # the key its tier is remembered under: "notes", "calendar"
+    label: str  # its pages' `Source:` line: "Obsidian", "Calendar"
+    reads: str  # "folder" or "file"
+    items: Callable[[], Iterable[Item | str]]  # a str is an entry skipped, and why
+    default_tier: Audience = Audience.CLOUD
+    page: str = "item"  # "item" or "month"
+    prefix: str = ""  # page ids; the id when empty
+    noun: str = "items"  # a month page's heading and summary: "events"
+    skips: tuple[str, ...] = ()  # the skip reasons, in the order the report lists them
+    # the never-capture filters past secrets, for text that is not the owner's own writing
+    drops_code: bool = False  # AI or tool text: fenced code becomes CODE_LEFT_OUT
+    strips_quotes: bool = False  # mail: other people's quoted text is dropped
+    coarse_place: bool = False  # location, photos: coordinates rounded to 0.1 degree
+    updates: bool = False  # a known `key` rewrites its page when the text changed (repos)
+    # `updates`: a page's figure (Spotify hours, mail messages); a re-import with a smaller one
+    # (a partial export) leaves the page as it is
+    size: Callable[[str], float] | None = None
+    # R17 (docs) `updates`: a page is rewritten only while its body is as the import wrote it
+    # (`_edited`); an owner-edited page stays as it is, counted under EDITED. A page another
+    # source wrote, or whose body is the same, is a duplicate
+    keeps_edits: bool = False
+    not_summary: re.Pattern | None = None  # lines never taken as a page's summary (docs' headings)
+    # RR-18 (notes): a changed file at a known `From:` origin rewrites that page when its body
+    # is as the import wrote it (the header's `body:` sha); `walk_errors` (folders the walk
+    # could not read) keeps the report from counting pages as gone from the folder
+    by_origin: bool = False
+    walk_errors: list = field(default_factory=list)
+    # G5b-10 (notes: loops.from_notes): called (vault, item, page id, private, report) for each
+    # item page written or rewritten, never in a dry run
+    made: Callable[[Vault, Item, str, bool, dict], None] | None = None
+    vault: Vault | None = None  # set by `run`, for items that need it (voice memos' prompt)
+
+
+def tier(value: str | Audience) -> Audience:
+    """`private`, `normal` or `skip` (the CLI's words), or an Audience value (the app's)."""
+    try:
+        return WORDS.get(value) or Audience(value)
+    except ValueError:
+        raise ValueError(f"tier must be one of {', '.join(WORDS)}.") from None
+
+
+def word(t: Audience) -> str:
+    return next(w for w, a in WORDS.items() if a is t)
+
+
+def remembered(vault: Vault) -> dict[str, Audience]:
+    try:
+        d = json.loads((vault.root / TIERS_FILE).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: Audience(v) for k, v in d.items() if v in set(Audience)} \
+        if isinstance(d, dict) else {}
+
+
+def pick_tier(vault: Vault, src: Source, given: str | None = None,
+              ask: Callable[[Source], str] | None = None,
+              save: bool = True, said: Callable[[str], object] | None = None
+              ) -> tuple[Audience, str]:
+    """(tier, how it was chosen): `given` (the --tier flag or the app's click), else the last
+    choice for this source, else `ask` (a real terminal), else the source's default. A given or
+    asked choice is remembered when `save` (not in a dry run), and a stricter one reaches the
+    pages already imported (`tighten`); its one line goes to `said`."""
+    last = remembered(vault)
+    if given is None and src.id in last:
+        return last[src.id], "your last choice"
+    if given is None and ask is None:
+        return src.default_tier, "the default"
+    t = tier(given if given is not None else ask(src))
+    if save:
+        vault.write_text(vault.root / TIERS_FILE, json.dumps(
+            {k: v.value for k, v in {**last, src.id: t}.items()}, indent=1, sort_keys=True)
+            + "\n")
+        if (line := tighten(vault, src, last.get(src.id, src.default_tier), t)) and said:
+            said(line)
+    return t, "chosen"
+
+
+_STRICT = (Audience.CLOUD, Audience.LOCAL, Audience.SKIP)  # loosest first
+
+
+def _labels(src: Source) -> set[str]:
+    """Every `Source:` label a tier key's pages carry: notes import as Obsidian, Notion or
+    Notes, highlights as Highlights or Pocket."""
+    from keepfold import importers  # it imports this module
+    return {src.label, *{"notes": importers.LABELS.values(),
+                         "highlights": ("Highlights", "Pocket")}.get(src.id, ())}
+
+
+def source_pages(vault: Vault, src: Source) -> list[Path]:
+    """The pages earlier imports of `src`'s tier key wrote: resources/ pages whose header line
+    (just under the title) is `Source: <one of its labels> · Date: …`."""
+    labels, out = _labels(src), []
+    for p in sorted((vault.root / "resources").glob("*.md")):
+        try:  # an import page's frontmatter is short: its first 8 KB hold the header line
+            with p.open("rb") as f:
+                head = f.read(8192).decode("utf-8", "replace").split("\n---\n", 1)[-1]
+        except OSError:
+            continue
+        m = re.search(r"^Source: (.+?) · Date: ", "\n".join(head.split("\n")[:6]), re.M)
+        if m and m.group(1) in labels:
+            out.append(p)
+    return out
+
+
+def tighten(vault: Vault, src: Source, old: Audience, new: Audience) -> str | None:
+    """RR-29: a stricter tier reaches the pages already imported. To private: each of
+    `source_pages` not private yet gets `private: true` (through the vault). To skip: nothing
+    is deleted; the line says how many pages are still there and how to forget them. A looser
+    or the same tier changes nothing (never un-privates). The line to show, or None."""
+    if _STRICT.index(new) <= _STRICT.index(old):
+        return None
+    pages = source_pages(vault, src)
+    if new is Audience.SKIP:
+        n = len(pages)
+        return (f"{n:,} page{'s' * (n != 1)} from {src.label} {'are' if n != 1 else 'is'} "
+                f"still in your vault; to forget them, delete the pages in resources/ that say "
+                f"\"Source: {src.label}\" under their title.") if n else None
+    made = 0
+    for p in pages:
+        try:
+            if is_private(vault.read_path(p)):
+                continue
+            vault._edit_fields("resource", p.stem, {"private": True})
+        except VaultError:  # a page with broken frontmatter is left as it is
+            continue
+        made += 1
+    return f"Made {made:,} earlier page{'s' * (made != 1)} from {src.label} private." \
+        if made else None
+
+
+def _coarse(m: re.Match) -> str:
+    lat, lon = float(m.group(1)), float(m.group(3))
+    if abs(lat) > 90 or abs(lon) > 180:
+        return m.group(0)
+    return f"{lat:.1f}{m.group(2)}{lon:.1f}"
+
+
+def scrub(text: str, src: Source | None = None) -> str:
+    """The never-capture filter every imported text passes: secrets become [redacted], always.
+    Per `src`: `drops_code` turns fenced code blocks into CODE_LEFT_OUT, `strips_quotes` drops
+    quoted mail (the `>` lines after an "On … wrote:" line, and everything from an "Original
+    Message" or "Forwarded message" line on), `coarse_place` rounds coordinates to 0.1 degree."""
+    drops_code = bool(src and src.drops_code)
+    out, fence = [], ""
+    for line in text.splitlines(keepends=True) if drops_code else ():
+        if fence:
+            s = line.strip()
+            if s.startswith(fence) and not s.strip(fence[0]):
+                fence = ""
+            continue
+        if m := _FENCE.match(line):
+            fence = m.group(1)
+            out.append(CODE_LEFT_OUT + ("\n" if line.endswith("\n") else ""))
+            continue
+        out.append(line)
+    text = "".join(out) if drops_code else text
+    if src and src.strips_quotes:
+        if m := _ATTRIBUTION.search(text):
+            text = text[:m.start()] + _QUOTED.sub("", text[m.end():])
+        if m := _FORWARDED.search(text):
+            text = text[:m.start()]
+    if src and src.coarse_place:
+        text = _COORDS.sub(_coarse, text)
+    return chats.redact(text)
+
+
+def link_lines(lines: list[str]) -> int:
+    """How many of `lines` are mostly a web address (over half their non-space characters)."""
+    return sum(2 * sum(len(u) for u in _URL.findall(ln)) > len(ln.replace(" ", ""))
+               for ln in lines)
+
+
+def unreadable(text: str) -> str | None:
+    """Why an item's text is garbage (an UNREADABLE reason), or None when it reads as text:
+    U+FFFD over 5% of its non-space characters (a bad decode), letters, digits and marks under
+    25% of them, over 60% of its non-empty lines mostly a URL, or 10+ lines of which under 30%
+    are distinct. Text under GATE_MIN characters always passes."""
+    chars = [c for c in text if not c.isspace()]
+    if len(text) < GATE_MIN or not chars:
+        return None
+    if text.count("�") > 0.05 * len(chars):
+        return "garbled"
+    # a mark counts: a Devanagari or Tamil vowel sign is a mark, not a letter
+    if sum(c.isalnum() or unicodedata.category(c)[0] == "M" for c in chars) < 0.25 * len(chars):
+        return "mostly symbols"
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if link_lines(lines) > 0.6 * len(lines):
+        return "link list"
+    if len(lines) >= 10 and len(set(lines)) < 0.3 * len(lines):
+        return "repetitive"
+    return None
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _free_id(vault: Vault, base: str, taken: set[str]) -> str:
+    """`base`, or `base-2`, `-3`… when a page of any kind (ids are unique across kinds) or this
+    import already has it."""
+    nid, n = base, 2
+    while nid in taken or any((vault.root / d / f"{nid}.md").exists()
+                              for k in vault.KIND_DIRS for d in vault.dirs(k)):
+        nid = f"{base[:78].rstrip('-.')}-{n}"
+        n += 1
+    taken.add(nid)
+    return nid
+
+
+def _known_hashes(vault: Vault) -> dict[str, Path | None]:
+    """sha -> the page that carries it."""
+    return {h: p for p in (vault.root / "resources").glob("*.md")
+            for h in _HASH.findall(p.read_text("utf-8", errors="replace"))}
+
+
+def run(vault: Vault, src: Source, tier: Audience = Audience.CLOUD,
+        dry_run: bool = False) -> dict:
+    """Import `src` at `tier`. The report: `read` (entries, skipped ones too), `imported` (new
+    pages for item sources, new lines for month sources), `private`, `duplicate`, `reasons`
+    (skip reason -> count), `items` (items read), `pages` (pages they belong on) and `updated`
+    (pages rewritten by a source that `updates` or `by_origin`), `unreadable` (quality-gate
+    reason -> count: the items `unreadable` kept out, for every source) and, for a `by_origin`
+    source, `gone` (earlier pages whose file was not in this walk: counted, never deleted, and
+    not counted when the walk had errors), and the counts a `made` hook adds (notes: `loops`,
+    `loops_over`, `loops_unsafe`)."""
+    r = {"read": 0, "imported": 0, "private": 0, "duplicate": 0, "updated": 0,
+         "reasons": dict.fromkeys(src.skips, 0), "items": 0, "pages": 0, "tier": tier.value,
+         "unreadable": {}}
+    if tier is Audience.SKIP:
+        return r
+    src.vault = vault
+    (_items if src.page == "item" else _months)(vault, src, tier is Audience.LOCAL, dry_run, r)
+    return r
+
+
+def _read(src: Source, r: dict, walked: set[str] | None = None):
+    for it in src.items():
+        r["read"] += 1
+        if isinstance(it, str):
+            r["reasons"][it] = r["reasons"].get(it, 0) + 1
+            continue
+        if walked is not None:  # every origin the walk saw, a gated item's too
+            walked.add(scrub(it.origin, src))
+        it.text = it.text.replace("\r\n", "\n")  # as `untouched` reads a page back
+        if bad := unreadable(it.text):
+            r["unreadable"][bad] = r["unreadable"].get(bad, 0) + 1
+        else:
+            r["items"] += 1
+            yield it
+
+
+def _items(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
+    known, seen, taken, todo = _known_hashes(vault), set(), set(), []
+    origins, walked = (_by_origin(vault, src), set()) if src.by_origin else ({}, None)
+    for it in _read(src, r, walked):
+        h = _sha(it.key or it.text)
+        old = known.get(h)
+        if h in seen or (h in known and not (src.updates and old)):
+            r["duplicate"] += 1
+            continue
+        seen.add(h)
+        if old:  # `updates`: compared with its page below; a private page stays private
+            todo.append((old.stem, it, h, private or it.private or _was_private(vault, old),
+                          old))
+            continue
+        at = origins.get(scrub(it.origin, src)) if it.origin else None
+        if at and untouched(at[1]):  # RR-18: a hand-edited page keeps its text: a new page
+            todo.append((at[0].stem, it, h, private or it.private or _was_private(vault, at[0]),
+                         at[0]))
+            continue
+        # the id comes from the filtered title, so a key in a title never reaches a file name
+        slug = slugify(scrub(it.title, src)) or "untitled"
+        nid = _free_id(vault, f"{src.prefix or src.id}-{slug}"[:81].rstrip("-."), taken)
+        todo.append((nid, it, h, private or it.private, None))
+    if walked is not None and not src.walk_errors:
+        r["gone"] = sum(o not in walked for o in origins)
+    new = [t for t in todo if t[4] is None]
+    r["imported"], r["pages"] = len(new), len(todo)
+    r["private"] = sum(t[3] for t in new)
+    if dry_run and len(new) == len(todo):
+        return
+    # [[Title]] links between this import's public pages keep working; others become plain text
+    ids = {slugify(it.title): nid for nid, it, _, hidden, _ in todo if not hidden}
+
+    def link(m):
+        if m.group(1):  # an embedded image or file
+            return ""
+        to = ids.get(slugify(PurePosixPath(m.group(2)).stem))
+        text = m.group(3) or m.group(2)
+        return f"[[{to}|{text}]]" if to else text
+
+    def made(it, text):  # the body text (no facts) the import writes for `it` holding `text`
+        return scrub(_WIKI.sub(link, text), src).strip().removeprefix(f"# {it.title}\n")
+
+    for nid, it, h, hidden, old in todo:
+        body = made(it, it.text)
+        first = next((s.strip("# ").strip() for s in body.splitlines() if s.strip("# ").strip()
+                      and not (src.not_summary and src.not_summary.fullmatch(s.strip()))),
+                     it.title)
+        fields = {"title": scrub(it.title, src), "kind": "resource", "resource_type": "other",
+                  "status": "reference", "covers": [], "related": [], "date": it.date,
+                  "summary": first[:160]}
+        if it.tags:
+            fields["tags"] = list(it.tags)
+        if it.aliases:
+            fields["aliases"] = [scrub(a, src) for a in it.aliases]
+        if hidden:
+            fields["private"] = True
+        origin = f" · From: {scrub(it.origin, src)}" if it.origin else ""
+        body = f"{facts(it, src)}\n\n{body}".strip()
+        # the facts are body too
+        mark = f" · body: {_sha(body)}" if src.by_origin or src.updates else ""
+        page = (f"# {fields['title']}\n\nSource: {src.label} · Date: {it.date}{origin}{mark}"
+                f" · sha: {h}\n\n{body}\n")
+        if old is None:
+            if not dry_run:
+                vault.create_note("resource", nid, fields, page)
+                if src.made:
+                    src.made(vault, it, nid, hidden, r)
+            continue
+        cur = old.read_text("utf-8", errors="replace")
+        if not src.by_origin and (m := HEADER.search(cur)) and m.group(4) == _sha(body):
+            r["duplicate"] += 1  # `updates`: the same text as last time; the owner's edits stay
+            continue
+        was = made(it, it.key or it.text) if src.keeps_edits else ""  # as its key's page holds
+        if src.keeps_edits and (m := HEADER.search(cur)) and (
+                m.group(1) not in _labels(src) or _rest(cur, m) == body
+                or (it.origin and m.group(3) and m.group(3) != scrub(it.origin, src))):
+            # another source's page, the same body (no mark yet), or another file that opens
+            # with the same text (the key): never rewrite a page another file made
+            r["duplicate"] += 1
+            continue
+        if src.keeps_edits and _edited(cur, was):
+            r["reasons"][EDITED] = r["reasons"].get(EDITED, 0) + 1
+            continue
+        if src.size and src.size(body) < src.size(cur):
+            r["reasons"]["less than the page already has"] = \
+                r["reasons"].get("less than the page already has", 0) + 1
+            continue
+        # the owner's tags, links and status stay; the import's own keys move
+        fields = {**(_fields(vault, old) or fields),
+                  **{k: fields[k] for k in ("title", "date", "summary", "aliases") if k in fields},
+                  **({"private": True} if hidden else {})}
+        text = _note_text(nid, fields, page)
+        if cur == text:
+            r["duplicate"] += 1
+            continue
+        r["updated"] += 1
+        r["private"] += hidden
+        if not dry_run:  # by_origin, keeps_edits: a page edited since the check keeps its edit
+            vault.update_text(old, lambda cur, t=text, was=was: cur if (
+                src.by_origin and untouched(cur) is False) or (
+                src.keeps_edits and _edited(cur, was)) else t)
+            if src.made:
+                src.made(vault, it, nid, hidden, r)
+
+
+SUMMARY_CHARS = 200
+
+
+def facts(it: Item, src: Source) -> str:
+    """R3-6: the fact header an item page's body starts with, so the page's first passage
+    answers alone: `When:` (the item's date), then `Who:` and `Summary:` only when the source
+    knows them (a book's author; a note's own `summary:` or `description:`), cut at a word.
+    Nothing is inferred. The `Source:` header line above it is unchanged."""
+    out = [f"When: {it.date}"]
+    for name, value in (("Who", it.who), ("Summary", it.summary)):
+        if value := " ".join(value.split()):
+            if len(value) > SUMMARY_CHARS:
+                value = value[:SUMMARY_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+            out.append(f"{name}: {scrub(value, src)}")
+    return "\n".join(out)
+
+
+def untouched(text: str) -> bool | None:
+    """RR-18: whether an imported page's body is as its import wrote it (the header's `body:`
+    sha); None for a page with no body sha (imported before RR-18, or by another source)."""
+    m = HEADER.search(text)
+    if not m or not m.group(4):
+        return None
+    return _sha(_rest(text, m)) == m.group(4)
+
+
+def _rest(text: str, m: re.Match) -> str:
+    """An imported page's body under its header line, as `untouched` hashes it."""
+    return text[m.end():].replace("\r\n", "\n").strip()
+
+
+def _edited(cur: str, was: str) -> bool:
+    """R17: whether the owner edited an imported page: its body no longer matches its `body:`
+    sha, or (a page written with no sha: the docs import before R17) its text under the fact
+    lines is no longer `was`, the text the import wrote; a page whose header is gone too."""
+    m = HEADER.search(cur)
+    if not m:
+        return True
+    return untouched(cur) is False if m.group(4) else _rest(cur, m).split("\n\n", 1)[-1] != was
+
+
+def _by_origin(vault: Vault, src: Source) -> dict[str, tuple[Path, str]]:
+    """RR-18: origin -> (the newest page an earlier import of `src`'s labels wrote for it, its
+    text); newest by header Date, then id length and id (`x-2` is newer than `x`)."""
+    labels, best = _labels(src), {}
+    for p in source_pages(vault, src):
+        text = p.read_text("utf-8", errors="replace")
+        m = HEADER.search(text)
+        if m and m.group(3) and m.group(1) in labels:
+            rank = (m.group(2), len(p.stem), p.stem)
+            if m.group(3) not in best or rank > best[m.group(3)][0]:
+                best[m.group(3)] = (rank, p, text)
+    return {o: (p, text) for o, (_, p, text) in best.items()}
+
+
+def _fields(vault: Vault, page: Path) -> dict:
+    try:
+        return {k: v for k, v in vault.read_path(page).fields.items() if k != "id"}
+    except VaultError:
+        return {}
+
+
+def edited_pages(vault: Vault, events) -> list[dict]:
+    """RR-18's Review cards: an imported page edited by hand (its body no longer matches its
+    `body:` sha) that a later import of the same file left alone, writing a newer page
+    instead. {key, page, new, title, private}, at most SHOWN_EDITED; Dismiss (a `dismiss`
+    change on id `imports` holding the key) closes one. Nothing is stored: a fold over the
+    header lines."""
+    from keepfold import importers, review, voice_memos  # they import modules that import this
+    events = list(events)
+    groups = defaultdict(list)
+    # by_origin sources' labels (notes, voice memos): an `updates` page has no -2
+    notes = {*importers.LABELS.values(), voice_memos.LABEL}
+    for p in sorted((vault.root / "resources").glob("*.md")):
+        text = p.read_text("utf-8", errors="replace")
+        if (m := HEADER.search(text)) and m.group(3) and m.group(1) in notes:
+            groups[m.group(1), m.group(3)].append(((m.group(2), len(p.stem), p.stem), p, text))
+    out = []
+    for pages in groups.values():
+        pages.sort()
+        newest = pages[-1][1]
+        for _, p, text in pages[:-1]:
+            key = review.text_hash(f"{p.stem} {newest.stem}")
+            if untouched(text) is False and not review.dismissed(events, "imports", key):
+                f = _fields(vault, p)
+                out.append({"key": key, "page": p.stem, "new": newest.stem,
+                            "title": str(f.get("title") or p.stem),
+                            "private": _was_private(vault, p)})
+    return out[:SHOWN_EDITED]
+
+
+def _was_private(vault: Vault, page: Path) -> bool:
+    """Whether a page an `updates` import rewrites is private now (set by an earlier private
+    import or by hand); a page that does not parse counts as private (fail closed)."""
+    try:
+        return is_private(vault.read_path(page))
+    except VaultError:
+        return True
+
+
+def _note_text(nid: str, fields: dict, body: str) -> str:
+    """The text `Vault.create_note` writes, to compare with and rewrite an updated page."""
+    data = CommentedMap((k, _to_yaml(v)) for k, v in {"id": nid, **fields}.items())
+    return "---\n" + _dump_fm(data, "\n") + "---\n" + body
+
+
+def _months(vault: Vault, src: Source, private: bool, dry_run: bool, r: dict) -> None:
+    months = defaultdict(set)
+    for it in _read(src, r):
+        months[it.date[:7], private or it.private].add(f"- {scrub(it.text, src)}")
+    r["pages"] = len(months)
+    for (month, hidden), lines in sorted(months.items()):
+        prefix = src.prefix or src.id
+        nid = f"{prefix}-private-{month}" if hidden else f"{prefix}-{month}"
+        p = vault.path_for("resource", nid)
+        # the other tier's page of the month too: a tier made stricter (or looser) since then
+        # never writes the same line twice
+        twin = vault.path_for("resource", f"{prefix}-{month}" if hidden
+                              else f"{prefix}-private-{month}")
+        mine = set(p.read_text("utf-8").splitlines()) if p.is_file() else set()
+        theirs = set(twin.read_text("utf-8").splitlines()) if twin.is_file() else set()
+        add = sorted(lines - mine - theirs)
+        # a per-day summary line ("- YYYY-MM-DD: …", photos and location) replaces that day's,
+        # never in a public page from a private import
+        if hidden and theirs and not _was_private(vault, twin):
+            theirs = set()
+        old = {m.group(1): ln for ln in mine | theirs if (m := _DAY_LINE.match(ln))}
+        swap = {old[m.group(1)]: ln for ln in add
+                if (m := _DAY_LINE.match(ln)) and m.group(1) in old}
+        add = [ln for ln in add if ln not in swap.values()]
+        r["imported"] += len(add)
+        r["updated"] += len(swap)
+        r["private"] += len(add) if hidden else 0
+        if dry_run or not (add or swap):
+            continue
+        heading = src.noun.capitalize()
+        for q in (p, twin) if swap else ():  # in whichever page holds the day's line
+            if q.is_file() and (q == p or theirs):
+                vault.update_text(q, lambda t, s=swap: "".join(
+                    s.get(x.rstrip("\r\n"), x.rstrip("\r\n")) + x[len(x.rstrip("\r\n")):]
+                    for x in t.splitlines(keepends=True)))
+        if mine or not add:
+            # shortcut: later imports append, so a month is sorted within each import only
+            if add:
+                vault.append_to_section("resource", nid, heading, "\n".join(add))
+            continue
+        fields = {"title": f"{src.label} {month}", "kind": "resource", "resource_type": "other",
+                  "status": "reference", "covers": [], "related": [], "date": f"{month}-01",
+                  "summary": f"{src.label} {src.noun} in {month}"}
+        if hidden:
+            fields["private"] = True
+        vault.create_note("resource", nid, fields, f"# {src.label} {month}\n\nSource: "
+                          f"{src.label} · Date: {month}-01\n\n## {heading}\n" + "\n".join(add)
+                          + "\n")
+    r["duplicate"] = r["items"] - r["imported"] - r["updated"]

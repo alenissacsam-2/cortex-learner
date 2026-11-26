@@ -12,10 +12,10 @@ from test_review import app, changes, wait_line  # noqa: F401  (app is a fixture
 from test_review_conflicts import corrections_vault
 from ulid import ULID
 
-from cortex import review
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import review
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -26,7 +26,7 @@ def ev(change, session=None, id_=None):
             "payload": {"note": "patched", "change": change}}
 
 
-def click(producer, tool="cortex_patch", **c):
+def click(producer, tool="keepfold_patch", **c):
     return ev({"tool": tool, "producer": producer, "confirm": "clicked", **c})
 
 
@@ -98,7 +98,7 @@ def test_a_paused_producer_leaves_review_and_status_offers_resume(root, app):  #
 
 
 def test_clicks_stamp_their_producer(root, app):  # noqa: F811
-    wait_line(root, "Tabs over spaces")  # D3: only an older Cortex queued about-me lines
+    wait_line(root, "Tabs over spaces")  # D3: only an older Keepfold queued about-me lines
     (p,) = app.review()["pending"]
     app.review_dismiss({"key": p["key"]})
     (c,) = [c for c in changes(root, "preferences") if c.get("op") == "reject"]

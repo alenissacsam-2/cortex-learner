@@ -10,8 +10,8 @@ import itertools
 import numpy as np
 import pytest
 
-from cortex import fact_harvest as fh
-from cortex import review, semantic
+from keepfold import fact_harvest as fh
+from keepfold import review, semantic
 
 # the lead's table and the outside review's Q1 (pairs only): each side holds a fact the other
 # does not, or a model would be needed to know they agree: never one line
@@ -84,7 +84,7 @@ def rows_of(a, b, tiers, newer_first):
     return [row(a, tiers[0], 0, days[0]), row(b, tiers[1], 1, days[1])]
 
 
-def update(old, new):  # a guessed `update_of` pair cortex_patch recorded
+def update(old, new):  # a guessed `update_of` pair keepfold_patch recorded
     return [{"kind": "change", "id": "e1", "payload": {"change": {
         "id": "preferences", "claim": new["id"],
         "update_of": {"page": "preferences", "claim": old["id"]}}}}]

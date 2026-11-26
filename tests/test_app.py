@@ -1,4 +1,4 @@
-"""`cortex app` (docs/design/cortex-app.md): auth, GET never changes anything, every connector
+"""`keepfold app` (docs/design/keepfold-app.md): auth, GET never changes anything, every connector
 on a temp home (add, remove, other keys kept, backups, bad files refused), the status shapes,
 the Setup steps, and browsing answers that hold counts only. Nothing runs `claude`, installs or
 downloads: every subprocess, opener and runner probe is faked."""
@@ -19,11 +19,11 @@ from urllib.parse import quote
 
 import pytest
 
-from cortex import clients, update
-from cortex.app import actions, server, status, targets, wizard
+from keepfold import clients, update
+from keepfold.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
-ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\notes \"v\""]}
+ENTRY = {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", "C:\\notes \"v\""]}
 REAL_KEPT = status.kept  # before conftest's fixture makes every probe fresh
 MARKERS = (b"TITLEMARKER",b"URLMARKER", b"SEARCHMARKER", b"markerdomain", b"EXCERPTMARKER")
 
@@ -37,7 +37,7 @@ def _free_port() -> int:
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch):
     """Record what would run; nothing real starts, opens or answers."""
-    from cortex import localllm
+    from keepfold import localllm
 
     calls: list = []
 
@@ -64,7 +64,7 @@ def fakes(monkeypatch):
 
 @pytest.fixture
 def vault(root_committed):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     return root_committed
 
 
@@ -88,7 +88,7 @@ def call(app, method, path, body=None, *, token=True, host=None, origin=None,
     c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
     headers = {"Host": host or f"127.0.0.1:{app.port}"}
     if token:
-        headers["X-Cortex-Token"] = app.token if token is True else token
+        headers["X-Keepfold-Token"] = app.token if token is True else token
     if origin:
         headers["Origin"] = origin
     data = None
@@ -148,7 +148,7 @@ def test_no_token_401_and_the_page_takes_it_from_the_url(app):
     assert "innerHTML" not in js and "insertAdjacentHTML" not in js
     # FX4: the browser asks for /favicon.ico without the key: the app's icon, not a 401
     st, _, body, r = call(app, "GET", "/favicon.ico", token=False)
-    assert st == 200 and body == (server.ASSETS.parent / "cortex.ico").read_bytes()
+    assert st == 200 and body == (server.ASSETS.parent / "keepfold.ico").read_bytes()
     assert r.getheader("Content-Type") == "image/x-icon"
     assert call(app, "GET", "/favicon.png", token=False)[0] == 401  # only that path
 
@@ -236,7 +236,7 @@ def test_get_never_changes_anything(app, vault, home, fakes):
                         else (200, 405)), path
     after = snapshot(home, vault)
     # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
-    after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
+    after.pop(str(vault / ".keepfold" / "brain-layout.json"), None)
     assert after == before
     assert app.jobs.cur is None and not app.stop.is_set()
     assert fakes == []  # A1/A10: no page load runs a program (no schtasks query any more)
@@ -249,7 +249,7 @@ def test_status_shapes(app, vault):
     _, js, _, _ = call(app, "GET", "/api/status")
     assert js["first_run"] is False and js["vault"] == str(vault.resolve())
     ids = [r["id"] for r in js["rows"]]
-    assert ids == ["vault", "git", "embed", "apps", "llm", "history"]
+    assert ids == ["vault", "git", "embed", "apps", "llm", "history"]  # "moved": had Cortex only
     for r in js["rows"]:
         assert r["state"] in ("ok", "warn", "off") and r["label"] and r["detail"]
     v = js["rows"][0]
@@ -338,7 +338,7 @@ def test_setup_keeps_its_slow_probes_and_the_warm_up_asks_them(app, monkeypatch)
 def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
     """T8: a runner that is not running stays silent; a bug is logged and still reads as
     "not available"."""
-    from cortex import browse, localllm
+    from keepfold import browse, localllm
 
     assert status.ollama_models() is None and status.browse_settings()["available"] is True
     assert not caplog.records  # the fixture's runner raises OSError: an expected state
@@ -355,8 +355,8 @@ def test_status_logs_only_unexpected_errors(monkeypatch, caplog):
 
 def test_lands_on_setup_until_the_vault_and_an_app_or_a_skipped_connect(app, monkeypatch):
     """R5 F3 (decided): Status once the vault is set up and an AI app is connected, or Connect
-    was skipped; the skip is kept in ~/.cortex/config.yaml and un-skipping clears it."""
-    from cortex import taint
+    was skipped; the skip is kept in ~/.keepfold/config.yaml and un-skipping clears it."""
+    from keepfold import taint
 
     taint.write_config({"app": {"other": 1}})
     assert call(app, "GET", "/api/status")[1]["land"] == "setup"  # vault only
@@ -376,7 +376,7 @@ def test_lands_on_setup_until_the_vault_and_an_app_or_a_skipped_connect(app, mon
 def test_the_welcome_guide_is_done_once_and_keeps_the_other_app_keys(app):
     """WG: Finish, Skip, Esc or close posts welcome_done: true into config.yaml's `app:` (the
     other keys kept); only true is accepted, and /api/setup reports it."""
-    from cortex import taint
+    from keepfold import taint
 
     taint.write_config({"app": {"other": 1, "first_run_hidden": True}})
     assert call(app, "GET", "/api/setup")[1]["welcome_done"] is False
@@ -395,7 +395,7 @@ def test_the_welcome_guide_is_done_once_and_keeps_the_other_app_keys(app):
 
 def test_llm_board_shows_a_refused_config(app):
     """R5 F4: the Local model page reads `localllm.status`, so a cloud model says why."""
-    from cortex import taint
+    from keepfold import taint
 
     taint.write_config({"localllm": {"enabled": True, "model": "gpt-oss:120b-cloud"}})
     _, llm, _, _ = call(app, "GET", "/api/llm")
@@ -437,7 +437,7 @@ def test_run_prints_the_link_and_quits(vault, monkeypatch):
     port, token = int(url.split(":")[2].split("/")[0]), url.split("?t=")[1]
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     c.request("POST", "/api/quit", body=b"{}", headers={
-        "Host": f"127.0.0.1:{port}", "X-Cortex-Token": token,
+        "Host": f"127.0.0.1:{port}", "X-Keepfold-Token": token,
         "Content-Type": "application/json"})
     assert c.getresponse().status == 200
     t.join(15)
@@ -453,7 +453,7 @@ JSON_TARGETS = {"antigravity": ".gemini/config/mcp_config.json", "cursor": ".cur
 
 
 def _baks(p: Path) -> list[Path]:
-    return sorted(p.parent.glob(p.name + ".cortex-*.bak"))
+    return sorted(p.parent.glob(p.name + ".keepfold-*.bak"))
 
 
 @pytest.mark.parametrize("tid", JSON_TARGETS)
@@ -473,14 +473,14 @@ def test_json_connector_add_remove_keep_backup(home, tid):
     t.apply(ENTRY)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["theme"] == "dark" and data[key]["other"] == {"command": "x"}
-    assert data[key]["cortex"] == ({"type": "stdio", **ENTRY} if tid == "vscode" else ENTRY)
+    assert data[key]["keepfold"] == ({"type": "stdio", **ENTRY} if tid == "vscode" else ENTRY)
     assert t.connected() and t.plan(True, ENTRY) == []
     writes = 2 if tid == "gemini-cli" else 1  # R7: Gemini's settings.json also gets the hooks
     baks = [b.read_bytes() for b in _baks(path)]
     assert original in baks and len(baks) == writes
     t.remove()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "cortex" not in data[key] and data[key]["other"] == {"command": "x"}
+    assert "keepfold" not in data[key] and data[key]["other"] == {"command": "x"}
     assert data["theme"] == "dark" and not t.connected() and len(_baks(path)) == 2 * writes
     assert "hooks" not in data
 
@@ -492,17 +492,17 @@ def test_antigravity_moves_to_its_2_0_config_file(home):
     old = home / ".gemini" / "antigravity" / "mcp_config.json"
     new = home / ".gemini" / "config" / "mcp_config.json"
     old.parent.mkdir(parents=True)
-    old.write_text(json.dumps({"mcpServers": {"cortex": ENTRY}}), encoding="utf-8")
+    old.write_text(json.dumps({"mcpServers": {"keepfold": ENTRY}}), encoding="utf-8")
     t = targets.by_id()["antigravity"]
     assert t.detect() and t.connected() and t.paths() == [new]
     assert [r["change"] for r in t.plan(True, ENTRY)] == ["add"]  # describe: stale
     t.apply(ENTRY)
-    assert json.loads(new.read_text(encoding="utf-8"))["mcpServers"]["cortex"] == ENTRY
+    assert json.loads(new.read_text(encoding="utf-8"))["mcpServers"]["keepfold"] == ENTRY
     assert t.plan(True, ENTRY) == []
     t.remove()
     assert not t.connected()
     for p in (old, new):
-        assert "cortex" not in json.loads(p.read_text(encoding="utf-8"))["mcpServers"]
+        assert "keepfold" not in json.loads(p.read_text(encoding="utf-8"))["mcpServers"]
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[1, 2]", '{"mcpServers": []}',
@@ -524,7 +524,7 @@ def test_new_file_gets_no_backup(home):
     t = targets.by_id()["cursor"]
     t.apply(ENTRY)
     p = home / ".cursor" / "mcp.json"
-    assert json.loads(p.read_text())["mcpServers"]["cortex"] == ENTRY and not _baks(p)
+    assert json.loads(p.read_text())["mcpServers"]["keepfold"] == ENTRY and not _baks(p)
 
 
 def test_claude_desktop_uses_its_config_folder(home):
@@ -539,7 +539,7 @@ def test_claude_desktop_uses_its_config_folder(home):
     assert t.detect() and t.plan(True, ENTRY)[0]["file"] == str(cfg)
     t.apply(ENTRY)
     data = json.loads(cfg.read_text())
-    assert data["preferences"] == {"x": 1} and data["mcpServers"]["cortex"] == ENTRY
+    assert data["preferences"] == {"x": 1} and data["mcpServers"]["keepfold"] == ENTRY
     t.remove()
     assert json.loads(cfg.read_text())["mcpServers"] == {} and len(_baks(cfg)) == 2
 
@@ -583,7 +583,7 @@ def test_codex_toml_exact_writer(home):
     assert t.detect() and not t.connected()
     t.apply(ENTRY)
     data = tomllib.loads(p.read_text(encoding="utf-8"))
-    assert data["mcp_servers"]["cortex"] == ENTRY and data["model"] == "o3"
+    assert data["mcp_servers"]["keepfold"] == ENTRY and data["model"] == "o3"
     assert data["mcp_servers"]["other"]["env"] == {"KEY": "v"}
     assert data["profiles"]["fast"]["model"] == "o4-mini"
     assert p.read_text(encoding="utf-8").startswith(CODEX.rstrip("\n"))
@@ -596,7 +596,7 @@ def test_codex_refuses_bad_or_inline_toml(home):
     p = home / ".codex" / "config.toml"
     p.parent.mkdir()
     t = targets.by_id()["codex"]
-    for bad in ('model = "o3\n', 'mcp_servers = { cortex = { command = "x" } }\n'):
+    for bad in ('model = "o3\n', 'mcp_servers = { keepfold = { command = "x" } }\n'):
         p.write_text(bad, encoding="utf-8")
         assert t.plan(True, ENTRY)[0]["change"] == "error"
         with pytest.raises(ValueError):
@@ -604,14 +604,14 @@ def test_codex_refuses_bad_or_inline_toml(home):
         assert p.read_text(encoding="utf-8") == bad and not _baks(p)
 
 
-def test_codex_sub_table_of_cortex_goes_too(home):
+def test_codex_sub_table_of_keepfold_goes_too(home):
     p = home / ".codex" / "config.toml"
     p.parent.mkdir()
-    p.write_text('[mcp_servers.cortex]\ncommand = "old"\n\n[mcp_servers.cortex.env]\nA = "1"\n'
+    p.write_text('[mcp_servers.keepfold]\ncommand = "old"\n\n[mcp_servers.keepfold.env]\nA = "1"\n'
                  '\n[tui]\nx = 1\n', encoding="utf-8")
     targets.by_id()["codex"].apply(ENTRY)
     data = tomllib.loads(p.read_text(encoding="utf-8"))
-    assert data["mcp_servers"]["cortex"] == ENTRY and data["tui"] == {"x": 1}
+    assert data["mcp_servers"]["keepfold"] == ENTRY and data["tui"] == {"x": 1}
 
 
 def test_claude_code_plugin_via_cli(home, monkeypatch, fakes):
@@ -622,18 +622,18 @@ def test_claude_code_plugin_via_cli(home, monkeypatch, fakes):
     t = targets.by_id()["claude-code"]
     assert t.detect() and not t.connected()
     plan = t.plan(True, ENTRY)
-    assert len(plan) == 1 and "claude plugin install cortex@cortex" in plan[0]["detail"]
+    assert len(plan) == 1 and "claude plugin install keepfold@keepfold" in plan[0]["detail"]
     t.apply(ENTRY)
-    from cortex import cli
+    from keepfold import cli
     assert fakes[-2:] == [["C:\\bin\\claude.exe", "plugin", "marketplace", "add",
                            str(cli._marketplace())],
-                          ["C:\\bin\\claude.exe", "plugin", "install", "cortex@cortex"]]
+                          ["C:\\bin\\claude.exe", "plugin", "install", "keepfold@keepfold"]]
     s = home / ".claude" / "settings.json"
     s.parent.mkdir()
-    s.write_text('{"enabledPlugins": {"cortex@cortex": true}}', encoding="utf-8")
+    s.write_text('{"enabledPlugins": {"keepfold@keepfold": true}}', encoding="utf-8")
     assert t.connected() and t.plan(True, ENTRY) == []
     t.remove()
-    assert fakes[-1] == ["C:\\bin\\claude.exe", "plugin", "uninstall", "cortex@cortex"]
+    assert fakes[-1] == ["C:\\bin\\claude.exe", "plugin", "uninstall", "keepfold@keepfold"]
 
 
 def test_claude_code_without_cli_edits_claude_json(home):
@@ -644,9 +644,9 @@ def test_claude_code_without_cli_edits_claude_json(home):
     t.apply(ENTRY)
     data = json.loads(p.read_text())
     assert data["numStartups"] == 3 and data["mcpServers"]["x"] == {"command": "y"}
-    assert data["mcpServers"]["cortex"] == ENTRY and t.connected()
+    assert data["mcpServers"]["keepfold"] == ENTRY and t.connected()
     t.remove()
-    assert "cortex" not in json.loads(p.read_text())["mcpServers"]
+    assert "keepfold" not in json.loads(p.read_text())["mcpServers"]
 
 
 def test_connect_over_the_api(app, home, vault):
@@ -654,25 +654,25 @@ def test_connect_over_the_api(app, home, vault):
     _, js, _, _ = call(app, "GET", "/api/connect")
     rows = {r["id"]: r for r in js["targets"]}
     assert len(rows) == 13 and rows["cursor"]["detected"] and not rows["windsurf"]["detected"]
-    from cortex import packs  # CN: Copy instructions copies this, on rows saying where
+    from keepfold import packs  # CN: Copy instructions copies this, on rows saying where
     assert js["instructions"] == packs.USE_TEXT and rows["cursor"]["paste"] == targets.PASTE_CURSOR
     assert str(vault.resolve()) in json.loads(rows["cursor"]["snippet"])[
-        "mcpServers"]["cortex"]["args"]
+        "mcpServers"]["keepfold"]["args"]
     want = {"cursor": True, "windsurf": True}
     _, plan, _, _ = call(app, "POST", "/api/connect/plan", {"want": want})
-    rule = home / ".cursor" / "rules" / "cortex.mdc"
+    rule = home / ".cursor" / "rules" / "keepfold.mdc"
     assert [(r["id"], r["change"], r["file"]) for r in plan["rows"]] == [  # windsurf: not found
         ("cursor", "add", str(home / ".cursor" / "mcp.json")), ("cursor", "add", str(rule))]
     assert not (home / ".cursor" / "mcp.json").exists()
     assert call(app, "POST", "/api/connect/apply", {"want": want})[0] == 200
     job = wait_job(app)
     assert job["error"] is None and [r["id"] for r in job["result"]["rows"]] == ["cursor"] * 2
-    assert "cortex" in json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]
-    assert "cortex_prime" in rule.read_text(encoding="utf-8")
+    assert "keepfold" in json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"]
+    assert "keepfold_prime" in rule.read_text(encoding="utf-8")
     call(app, "POST", "/api/connect/apply", {"want": {"cursor": False}})
     wait_job(app)
     assert json.loads((home / ".cursor" / "mcp.json").read_text())["mcpServers"] == {}
-    assert not rule.exists()  # only Cortex's own rule was in it
+    assert not rule.exists()  # only Keepfold's own rule was in it
     assert call(app, "POST", "/api/connect/plan", {"want": {"cursor": "yes"}})[0] == 400
 
 
@@ -682,7 +682,7 @@ def test_connect_over_the_api(app, home, vault):
 def _browsing(home: Path, vault: Path) -> None:
     """Synthetic history and an inbox the old extension left, every text field carrying a
     marker."""
-    from cortex.browse.selftest import _chromium
+    from keepfold.browse.selftest import _chromium
 
     now = datetime.now(UTC) - timedelta(days=1)
     _chromium(home / "LOCALAPPDATA" / "Google" / "Chrome" / "User Data" / "Default" / "History",
@@ -690,7 +690,7 @@ def _browsing(home: Path, vault: Path) -> None:
                (now + timedelta(minutes=5), "https://www.google.com/search?q=SEARCHMARKER",
                 "SEARCHMARKER - Google"),
                (now + timedelta(minutes=9), "https://example.org/a", "Algebra TITLEMARKER")])
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     rec = {"url": "https://markerdomain.example/x?URLMARKER=1", "title": "Read TITLEMARKER",
            "start": now.strftime("%Y-%m-%dT%H:%M:%S.000Z"), "active_ms": 60000,
@@ -723,7 +723,7 @@ def test_browsing_answers_hold_counts_only(app, home, vault):
 
 
 def test_past_history_scan_then_import_mocked(app, home, monkeypatch):
-    from cortex.browse import build, sources
+    from keepfold.browse import build, sources
 
     found = [sources.Source("chrome", "Default", home / "a"),
              sources.Source("comet", "Default", home / "b")]
@@ -744,7 +744,7 @@ def test_past_history_scan_then_import_mocked(app, home, monkeypatch):
                 "visible_to_claude": False}
 
     monkeypatch.setattr(build, "run", fake_run)
-    from cortex import semantic
+    from keepfold import semantic
     call(app, "POST", "/api/browse/import", {"sources": ["chrome/Default"]})
     job = wait_job(app)  # no search model: it stops first and offers the download
     assert job["result"]["need"] == "embed" and "search model first" in job["result"]["lines"][0]
@@ -798,8 +798,8 @@ def test_the_live_import_reads_new_history_quietly(app, vault, home, monkeypatch
     """The app's live import (every 10 minutes): no job, only the browsers imported before,
     only after a first import, not with browse.auto_import_hours 0, not while a job runs or
     the browse lock is held, not without the search model. Whatever the last import's age."""
-    from cortex import semantic
-    from cortex.browse import build, sites, sources
+    from keepfold import semantic
+    from keepfold.browse import build, sites, sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source("chrome", "Default", home / "a"),
         sources.Source("comet", "Default", home / "b")])
@@ -807,7 +807,7 @@ def test_the_live_import_reads_new_history_quietly(app, vault, home, monkeypatch
     runs = []
     monkeypatch.setattr(build, "run", lambda v, srcs, settings, **kw: runs.append(
         sorted(s.key for s in srcs)) or {"sources": len(srcs)})
-    cfg = home / ".cortex" / "config.yaml"
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text("browse: {}\n", encoding="utf-8")  # no browsers filter: every one found
     assert app.auto_import() is None  # never imported: the first import is the user's
@@ -829,7 +829,7 @@ def test_the_live_import_reads_new_history_quietly(app, vault, home, monkeypatch
     cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
     assert app.auto_import() is None
     cfg.write_text("browse: {}\n", encoding="utf-8")
-    from cortex.app import status
+    from keepfold.app import status
     real = status.embedding
     monkeypatch.setattr(status, "embedding", lambda: {**real(), "downloaded": False})
     assert app.auto_import() is None  # no search model: the job would only stop at once
@@ -845,13 +845,13 @@ def test_an_untick_at_import_keeps_the_profile_out_of_automatic_imports(app, vau
                                                                         monkeypatch):
     """The import request's unticked keys go to browse.skip_profiles (other browse keys kept),
     the history list sends them as skip, auto_sources leaves them out; ticking again clears."""
-    from cortex import browse_serve
-    from cortex.browse import build, sources
-    from cortex.vault import Vault
+    from keepfold import browse_serve
+    from keepfold.browse import build, sources
+    from keepfold.vault import Vault
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source("chrome", "Default", home / "a"),
         sources.Source("comet", "Default", home / "b")])
-    cfg = home / ".cortex" / "config.yaml"
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text("browse:\n  auto_import_hours: 3\n", encoding="utf-8")
     state = vault / build.STATE
@@ -883,11 +883,11 @@ def test_an_untick_at_import_keeps_the_profile_out_of_automatic_imports(app, vau
 def test_process_now_reads_only_the_automatic_imports_profiles(vault, home, monkeypatch):
     """The app's Process now does what the popup's button does: only the profiles imported
     before, never one unticked or never ticked."""
-    from cortex import browse_serve
-    from cortex.browse import build, sources
+    from keepfold import browse_serve
+    from keepfold.browse import build, sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source(b, "Default", home / b) for b in ("chrome", "comet", "edge")])
-    cfg = home / ".cortex" / "config.yaml"
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text("browse:\n  skip_profiles: [comet/Default]\n", encoding="utf-8")
     state = vault / build.STATE
@@ -902,14 +902,14 @@ def test_process_now_reads_only_the_automatic_imports_profiles(vault, home, monk
 
 
 def _vault(root):
-    from cortex.vault import Vault
+    from keepfold.vault import Vault
     return Vault(root)
 
 
 def test_auto_import_setting_saved_and_checked(app, home):
     assert call(app, "GET", "/api/browse")[1]["settings"]["auto_import_hours"] == 6
     assert call(app, "POST", "/api/browse/auto", {"hours": 12})[0] == 200
-    from cortex import taint
+    from keepfold import taint
     assert taint.config()["browse"]["auto_import_hours"] == 12
     assert call(app, "GET", "/api/browse")[1]["settings"]["auto_import_hours"] == 12
     assert call(app, "POST", "/api/browse/auto", {"hours": 0})[0] == 200
@@ -924,14 +924,14 @@ def test_the_extension_routes_are_gone(app, vault):
     for path in ("/api/browse/pair", "/api/browse/receiver", "/api/browse/setup"):
         assert call(app, "POST", path, {"on": True})[0] == 404, path
     assert call(app, "POST", "/api/open", {"what": "extension"})[0] == 400
-    assert not (vault / ".cortex" / "browse" / "token").exists()
+    assert not (vault / ".keepfold" / "browse" / "token").exists()
 
 
 def test_browse_settings_saved_and_checked(app, home):
     body = {"visible_to_claude": False, "adult": "private", "sensitive": "private",
             "deny": "a.example\nB.example", "allow": [], "private": ["c.example"]}
     assert call(app, "POST", "/api/browse/settings", body)[0] == 200
-    from cortex import taint
+    from keepfold import taint
     b = taint.config()["browse"]
     assert b["deny_domains"] == ["a.example", "b.example"] and b["adult"] == "private"
     assert call(app, "POST", "/api/browse/settings", {**body, "adult": "x"})[0] == 400
@@ -947,7 +947,7 @@ def test_vault_actions(app, vault, fakes):
     assert job["error"] is None and any("Python" in x for x in job["result"]["lines"])
     call(app, "POST", "/api/vault/backup", {})
     job = wait_job(app)
-    assert job["result"]["ok"] and list((vault / ".cortex" / "backups").glob("*.zip"))
+    assert job["result"]["ok"] and list((vault / ".keepfold" / "backups").glob("*.zip"))
     assert call(app, "POST", "/api/open", {"what": "vault"})[0] == 200
     assert fakes[-1][1].startswith("obsidian://open?path=")
     assert call(app, "POST", "/api/open", {"what": "../etc"})[0] == 400
@@ -967,7 +967,7 @@ def test_export_snapshot_downloads_in_the_browser_and_saves_by_dialog_in_the_win
     assert r.getheader("Content-Disposition") == f'attachment; filename="{server.snapshot_name()}"'
     assert b"default-src 'none'" in raw and b"PRIVMARKER" not in raw
     assert call(app, "GET", "/api/vault/snapshot", token=False)[0] == 401
-    assert not (vault / ".cortex" / "dashboard.html").exists()
+    assert not (vault / ".keepfold" / "dashboard.html").exists()
     dest, asked = tmp_path / "out" / "snap.html", []
     dest.parent.mkdir()
     webview = SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30))
@@ -987,7 +987,7 @@ def test_export_snapshot_downloads_in_the_browser_and_saves_by_dialog_in_the_win
 def test_save_picture_downloads_in_the_browser_and_saves_by_dialog_in_the_window(
         app, vault, monkeypatch, tmp_path):
     """POST /api/brain/picture: the browser app downloads the PNG itself; the desktop window
-    asks where (Downloads first, cortex-brain-<day>.png) and writes only there; a bad payload,
+    asks where (Downloads first, keepfold-brain-<day>.png) and writes only there; a bad payload,
     a non-PNG and one over 8 MB are refused with one sentence; no key, no picture."""
     import base64
     from types import SimpleNamespace
@@ -1005,7 +1005,7 @@ def test_save_picture_downloads_in_the_browser_and_saves_by_dialog_in_the_window
     downloads, dest, asked = tmp_path / "dl", tmp_path / "chosen" / "mine.png", []
     downloads.mkdir()
     dest.parent.mkdir()
-    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(downloads))
+    monkeypatch.setenv("KEEPFOLD_DOWNLOADS_DIR", str(downloads))
     monkeypatch.setitem(__import__("sys").modules, "webview",
                         SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30)))
 
@@ -1016,11 +1016,11 @@ def test_save_picture_downloads_in_the_browser_and_saves_by_dialog_in_the_window
     assert call(app, "POST", "/api/brain/picture", body)[:2] == (200, {"saved": "mine.png"})
     assert dest.read_bytes() == png
     assert call(app, "POST", "/api/brain/picture", body)[:2] == (200, {"cancelled": True})
-    assert asked == [(30, str(downloads), "cortex-brain-2026-11-24.png")] * 2
+    assert asked == [(30, str(downloads), "keepfold-brain-2026-11-24.png")] * 2
     assert list(downloads.iterdir()) == [] and snapshot(vault) == before  # nothing else written
     odd_day = {**body, "day": "../x"}
     assert call(app, "POST", "/api/brain/picture", odd_day)[:2] == (200, {"cancelled": True})
-    assert asked[-1][2] == f"cortex-brain-{time.strftime('%Y-%m-%d')}.png"
+    assert asked[-1][2] == f"keepfold-brain-{time.strftime('%Y-%m-%d')}.png"
 
 
 def test_llm_page_lists_both_runners_chat_models_and_the_recommendation(app, monkeypatch):
@@ -1038,7 +1038,7 @@ def test_llm_page_lists_both_runners_chat_models_and_the_recommendation(app, mon
 
 
 def test_llm_settings_store_the_runner(app):
-    from cortex import taint
+    from keepfold import taint
 
     def saved():
         c = taint.config()["localllm"]
@@ -1188,7 +1188,7 @@ def test_setup_install_runs_only_the_shown_command(app, monkeypatch):
 
 
 def test_setup_test_turns_the_model_on(app, monkeypatch):
-    from cortex import localllm, taint
+    from keepfold import localllm, taint
 
     class Fake:
         def describe(self):
@@ -1209,7 +1209,7 @@ def test_setup_test_turns_the_model_on(app, monkeypatch):
 
 
 def test_runner_states_and_a_stopped_test_says_start(app, monkeypatch):
-    from cortex import localllm
+    from keepfold import localllm
 
     assert wizard.runner_state("ollama") == "not_installed"
     assert wizard.runner_state("lmstudio") == "not_installed"
@@ -1259,7 +1259,7 @@ def test_start_ollama_detached_then_waits_until_it_answers(monkeypatch, home):
 
 
 def test_start_lmstudio_runs_lms_server_start(monkeypatch, fakes):
-    from cortex import localllm
+    from keepfold import localllm
 
     ports = [None]
     monkeypatch.setattr(status, "lms_path", lambda: "C:\\lms\\lms.exe")
@@ -1279,12 +1279,12 @@ def test_start_lmstudio_runs_lms_server_start(monkeypatch, fakes):
 
 
 @pytest.mark.parametrize("plat,systemd,rel,on_cmds", [
-    ("darwin", False, "Library/LaunchAgents/cortex-browse-receiver.plist",
+    ("darwin", False, "Library/LaunchAgents/keepfold-browse-receiver.plist",
      [["launchctl", "load", "-w"]]),
-    ("linux", True, ".config/systemd/user/cortex-browse-receiver.service",
+    ("linux", True, ".config/systemd/user/keepfold-browse-receiver.service",
      [["systemctl", "--user", "daemon-reload"],
-      ["systemctl", "--user", "enable", "cortex-browse-receiver.service"]]),
-    ("linux", False, ".config/autostart/cortex-browse-receiver.desktop", []),
+      ["systemctl", "--user", "enable", "keepfold-browse-receiver.service"]]),
+    ("linux", False, ".config/autostart/keepfold-browse-receiver.desktop", []),
 ])
 def test_start_at_login_outside_windows(monkeypatch, home, fakes, plat, systemd, rel, on_cmds):
     """G6: a LaunchAgent, a systemd user unit, or an XDG autostart entry; shown first, written
@@ -1307,7 +1307,7 @@ def test_start_at_login_outside_windows(monkeypatch, home, fakes, plat, systemd,
     assert status.login_task() == {"supported": True, "exists": True}
     if plat == "darwin":
         p = plistlib.loads(f.read_bytes())
-        assert p["Label"] == "cortex-browse-receiver" and p["RunAtLoad"] is True
+        assert p["Label"] == "keepfold-browse-receiver" and p["RunAtLoad"] is True
         assert p["ProgramArguments"][1:] == ["browse", "serve", "--vault", str(root)]
         on_cmds = [on_cmds[0] + [str(f)]]
     elif systemd:
@@ -1328,9 +1328,9 @@ def test_setup_vault_creates_and_points(app, tmp_path, home):
     target = tmp_path / "new vault"
     call(app, "POST", "/api/setup/vault", {"path": str(target)})
     job = wait_job(app)
-    assert job["error"] is None and (target / ".cortex").is_dir()
+    assert job["error"] is None and (target / ".keepfold").is_dir()
     assert app.root == target.resolve()
-    from cortex import taint
+    from keepfold import taint
     assert Path(taint.config()["vault"]) == target.resolve()
     code, out, _, _ = call(app, "POST", "/api/setup/vault", {"path": "relative/path"})
     assert code == 400 and "full path" in out["error"]  # refused before any job starts
@@ -1338,11 +1338,11 @@ def test_setup_vault_creates_and_points(app, tmp_path, home):
 
 def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tmp_path, home,
                                                                   monkeypatch):
-    """FX1 1: with a real vault in use, a temp folder is refused before `cortex init` makes
+    """FX1 1: with a real vault in use, a temp folder is refused before `keepfold init` makes
     anything there; a first setup (no vault yet) may still use one (Status warns later)."""
     import tempfile
 
-    from cortex import cli, taint
+    from keepfold import cli, taint
     systemp = tmp_path / "systemp"
     systemp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(systemp))
@@ -1355,18 +1355,18 @@ def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tm
     taint.write_config({"vault": None})  # a new user: their only choice is not blocked
     out = wizard.make_vault(type("Job", (), {"say": lambda self, s: None})(),
                             str(systemp / "first"))[1]
-    assert out["ok"] and (systemp / "first" / ".cortex").is_dir()
+    assert out["ok"] and (systemp / "first" / ".keepfold").is_dir()
 
 
 def test_change_folder_leaves_another_installs_start_at_login_alone(
         app, vault, tmp_path, monkeypatch, _no_real_run_key):
-    """A login entry this Cortex did not make for the old folder (another install's receiver,
+    """A login entry this Keepfold did not make for the old folder (another install's receiver,
     or another vault) is never re-pointed by a vault move: a test copy once took over the
     owner's real entry this way."""
     monkeypatch.setattr(targets, "_which", lambda c: None)
     logins = []
     monkeypatch.setattr(actions, "login", lambda job, root, on: logins.append((root, on)))
-    theirs = r'"C:\Program Files\Other\cortex-receiver.exe" --vault "D:\TheirVault"'
+    theirs = r'"C:\Program Files\Other\keepfold-receiver.exe" --vault "D:\TheirVault"'
     _no_real_run_key[status.LOGIN_TASK] = theirs
     call(app, "POST", "/api/setup/vault", {"path": str(tmp_path / "moved")})
     job = wait_job(app)
@@ -1422,14 +1422,14 @@ def test_setup_state_and_no_download_without_a_click(app, monkeypatch):
 
 
 def _private_on(home, on=True):
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(
         f"vault: x\nbrowse:\n  private_mcp: {'true' if on else 'false'}\n", encoding="utf-8")
 
 
 def _home_bytes(home) -> bytes:
     return b"".join(p.read_bytes() for p in home.rglob("*") if p.is_file()
-                    and ".cortex" not in p.parts)
+                    and ".keepfold" not in p.parts)
 
 
 def test_no_target_writes_private_but_lm_studio_opt_in(home):
@@ -1456,9 +1456,9 @@ def test_no_target_writes_private_but_lm_studio_opt_in(home):
         assert b"--private" not in _home_bytes(home)
     targets.apply_all({"lmstudio": "private"}, ENTRY)
     lms = home / ".lmstudio" / "mcp.json"
-    assert json.loads(lms.read_text())["mcpServers"]["cortex"]["args"][-1] == "--private"
+    assert json.loads(lms.read_text())["mcpServers"]["keepfold"]["args"][-1] == "--private"
     assert targets.by_id()["lmstudio"].private()
-    rest = [p for p in home.rglob("*") if p.is_file() and p != lms and ".cortex" not in p.parts
+    rest = [p for p in home.rglob("*") if p.is_file() and p != lms and ".keepfold" not in p.parts
             and not p.name.endswith(".bak")]
     assert not [p for p in rest if b"--private" in p.read_bytes()]
     targets.apply_all({"lmstudio": True}, ENTRY)  # unticking the opt-in takes it out
@@ -1482,15 +1482,15 @@ def test_connect_offers_private_only_for_lm_studio_when_on(app, home):
 
 
 def test_browsing_privacy_defaults_and_categories(app, home):
-    from cortex import taint
-    from cortex.browse import lists
+    from keepfold import taint
+    from keepfold.browse import lists
     s = call(app, "GET", "/api/browse")[1]["settings"]
     assert s["visible_to_claude"] is False and s["private_mcp"] is False  # a new user
     assert s["hidden_from_claude"] == s["categories"] == list(lists.CATEGORIES)
     assert s["skip_categories"] == ["adult"]
 
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(
         "vault: V\nrerank: false\nbrowse:\n  browsers: [chrome]\n", encoding="utf-8")
     body = {"visible_to_claude": True, "private_mcp": True, "deny": [], "allow": [],
             "private": [], "hidden_from_claude": ["health", "adult"],
@@ -1527,9 +1527,9 @@ def upload(app, data: bytes, name: str, *, length: int | None = None,
     """A raw upload; `length` may claim more than is sent (the body is then not sent)."""
     with socket.create_connection(("127.0.0.1", app.port), timeout=30) as s:
         head = ["POST /api/import/upload HTTP/1.1", f"Host: 127.0.0.1:{app.port}",
-                f"Content-Type: {ctype}", f"X-Cortex-Name: {name}",
+                f"Content-Type: {ctype}", f"X-Keepfold-Name: {name}",
                 f"Content-Length: {len(data) if length is None else length}",
-                "Connection: close"] + ([f"X-Cortex-Token: {app.token}"] if token else [])
+                "Connection: close"] + ([f"X-Keepfold-Token: {app.token}"] if token else [])
         s.sendall(("\r\n".join(head) + "\r\n\r\n").encode() + (data if length is None else b""))
         raw = b""
         while chunk := s.recv(65536):
@@ -1554,13 +1554,13 @@ def test_upload_is_capped_named_by_the_app_and_typed(app, home):
     data = (EXPORTS / "chatgpt_conversations.json").read_bytes()
     code, body = upload(app, data, "..%5C..%5Cevil%20name.JSON")  # the client's path is ignored
     assert code == 200 and body["size"] == len(data)
-    files = list((home / ".cortex" / "tmp").iterdir())
+    files = list((home / ".keepfold" / "tmp").iterdir())
     assert [p.name for p in files] == [f"upload-{body['upload']}-evilname.json"]
     assert files[0].read_bytes() == data and app.uploads[body["upload"]] == files[0]
 
 
 def test_guided_chat_import_previews_then_imports(app, home):
-    from cortex import chats
+    from keepfold import chats
     data = (EXPORTS / "chatgpt_conversations.json").read_bytes()
     _, up = upload(app, data, "conversations.json")
     out = chats.export_root() / "chatgpt"
@@ -1571,12 +1571,12 @@ def test_guided_chat_import_previews_then_imports(app, home):
     assert job["error"] is None and r["kind"] == "import-preview" and r["already"] == 0
     assert r["found"] >= 1 and r["lines"][0].startswith("Found ")
     assert not out.exists()  # a dry run: nothing imported
-    assert list((home / ".cortex" / "tmp").iterdir()) == [app.uploads[up["upload"]]]
+    assert list((home / ".keepfold" / "tmp").iterdir()) == [app.uploads[up["upload"]]]
     call(app, "POST", "/api/import/run", {"source": "chatgpt", "upload": up["upload"]})
     job = wait_job(app)
     assert job["error"] is None and job["result"]["counts"]["conversations"] == r["found"]
     assert len(list(out.glob("*.jsonl"))) == r["found"] and str(out) in job["result"]["lines"][0]
-    assert up["upload"] not in app.uploads and not list((home / ".cortex" / "tmp").iterdir())
+    assert up["upload"] not in app.uploads and not list((home / ".keepfold" / "tmp").iterdir())
     # the path field, and the card's status
     call(app, "POST", "/api/import/preview", {"source": "chatgpt",
                                               "path": str(EXPORTS / "chatgpt_conversations.json")})
@@ -1596,8 +1596,8 @@ def test_guided_chat_import_previews_then_imports(app, home):
 
 
 def test_google_activity_goes_through_the_browse_import(app, home, monkeypatch):
-    from cortex import semantic
-    from cortex.browse import build, sources
+    from keepfold import semantic
+    from keepfold.browse import build, sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
     path = str(EXPORTS / "takeout_MyActivity.json")
     seen: list[bytes] = []
@@ -1626,7 +1626,7 @@ def test_google_activity_goes_through_the_browse_import(app, home, monkeypatch):
 
 
 def test_setup_start_and_one_click_model(app, monkeypatch):
-    from cortex import localllm, taint
+    from keepfold import localllm, taint
     started = []
     monkeypatch.setattr(wizard, "start", lambda r: (started.append(r),
                                                      {"ok": True, "lines": ["running"]})[1],
@@ -1662,7 +1662,7 @@ def test_setup_start_and_one_click_model(app, monkeypatch):
 def embed(monkeypatch):
     from conftest import FakeEmbed
 
-    from cortex import semantic
+    from keepfold import semantic
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
 
 
@@ -1671,7 +1671,7 @@ def llm(monkeypatch):
     """A fake Ollama streaming an answer that cites passage 1; `localllm.find` returns it."""
     from test_chat import Stream
 
-    from cortex import cloudllm, localllm
+    from keepfold import cloudllm, localllm
     s = Stream("ollama", ["Move the pointer", " on the smaller side [1]."], delay=0.01)
     monkeypatch.setattr(localllm, "find", lambda config=None, **_: s.runner())
     monkeypatch.setattr(cloudllm, "find", lambda *a, **k: pytest.fail("cloud runner used"))
@@ -1684,7 +1684,7 @@ def chat_stream(app, body, *, token=True, origin=None):
     c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
     headers = {"Host": f"127.0.0.1:{app.port}", "Content-Type": "application/json"}
     if token:
-        headers["X-Cortex-Token"] = app.token
+        headers["X-Keepfold-Token"] = app.token
     if origin:
         headers["Origin"] = origin
     c.request("POST", "/api/chat", body=json.dumps(body).encode(), headers=headers)
@@ -1697,7 +1697,7 @@ def chat_stream(app, body, *, token=True, origin=None):
 
 
 def test_chat_test_runs_as_a_job_on_a_click(app, monkeypatch):
-    from cortex import chat_eval
+    from keepfold import chat_eval
 
     asked = []
     q = {"id": "Q01", "question": "How many?", "status": "fail", "why": ["missing '23'"],
@@ -1743,7 +1743,7 @@ def test_chat_needs_the_key_and_the_origin(app):
 
 
 def test_chat_state_names_every_missing_piece(app, monkeypatch):
-    from cortex import localllm
+    from keepfold import localllm
     monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     code, js, _, _ = call(app, "GET", "/api/chat")
     assert code == 200 and js["missing"] == ["embed", "llm"] and js["chats"] == []
@@ -1766,7 +1766,7 @@ def test_chat_streams_ndjson_and_keeps_the_chat(app, embed, llm, vault):
     src = next(e for e in ev if e["t"] == "src")["sources"]
     assert src[0]["n"] == 1 and src[0]["path"].endswith(".md")
     cid = ev[-1]["id"]
-    assert (vault / ".cortex" / "browse" / "chat" / f"{cid}.jsonl").is_file()
+    assert (vault / ".keepfold" / "browse" / "chat" / f"{cid}.jsonl").is_file()
     assert call(app, "GET", "/api/chat/list")[1]["chats"][0]["id"] == cid
     got = call(app, "GET", f"/api/chat/get?id={cid}")[1]
     assert [m["role"] for m in got["messages"]] == ["user", "assistant"]
@@ -1818,7 +1818,7 @@ def test_a_closed_page_cancels_and_keeps_the_partial_answer(app, embed, llm, vau
     llm.delay = 0.02
     body = json.dumps({"text": "two pointers"}).encode()
     s = sock.create_connection(("127.0.0.1", app.port))
-    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Cortex-Token: %s\r\n"
+    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Keepfold-Token: %s\r\n"
               b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n"
               % (app.port, app.token.encode(), len(body)) + body)
     got = b""
@@ -1830,8 +1830,8 @@ def test_a_closed_page_cancels_and_keeps_the_partial_answer(app, embed, llm, vau
             break
         time.sleep(0.05)
     assert not app.chatting.locked() and llm.sent < 200
-    from cortex import chat
-    from cortex.vault import Vault
+    from keepfold import chat
+    from keepfold.vault import Vault
     last = chat.load(Vault(vault), chat.list(Vault(vault))[0]["id"])[-1]
     assert last["role"] == "assistant" and last["stopped"] is True
 
@@ -1841,12 +1841,12 @@ def test_a_page_closed_while_the_model_reasons_frees_the_slot_early(app, embed, 
     # reasoning chunks write nothing to the page; the keepalive notices the closed page
     import socket as sock
 
-    from cortex.app import server as srv
+    from keepfold.app import server as srv
     monkeypatch.setattr(srv, "KEEPALIVE_S", 0.05)
     llm.kind, llm.think, llm.delay, llm.pieces = "openai", 400, 0.01, ["late"]
     body = json.dumps({"text": "two pointers"}).encode()
     s = sock.create_connection(("127.0.0.1", app.port))
-    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Cortex-Token: %s\r\n"
+    s.sendall(b"POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Keepfold-Token: %s\r\n"
               b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n"
               % (app.port, app.token.encode(), len(body)) + body)
     got = b""
@@ -1873,7 +1873,7 @@ def test_chat_settings_round_trip(app, home):
 def test_open_page_only_inside_the_vault(app, fakes, vault):
     assert call(app, "POST", "/api/open", {"what": "page", "path": "notes/x.md"})[0] == 400
     for bad in ("../outside.md", str(vault / "concepts" / "two-pointers.md"), "concepts/none.md",
-                ".cortex/config.md", 5):
+                ".keepfold/config.md", 5):
         assert call(app, "POST", "/api/open", {"what": "page", "path": bad})[0] == 400, bad
 
 
@@ -1883,10 +1883,10 @@ def _browse_body(**extra):
 
 
 def test_audience_control_round_trip(app, home):
-    from cortex import taint
-    from cortex.browse import lists, load_settings, privacy
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(
+    from keepfold import taint
+    from keepfold.browse import lists, load_settings, privacy
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(
         "vault: V\nbrowse:\n  browsers: [chrome]\n  cloud_processing: true\n", encoding="utf-8")
     want = {c: "local" for c in lists.CATEGORIES} | {"adult": "skip", "betting": "skip",
                                                      "money": "cloud"}
@@ -1907,13 +1907,13 @@ def test_audience_control_round_trip(app, home):
 
 
 def test_cloud_settings_off_by_default_https_and_no_key_field(app, home, vault, monkeypatch):
-    from cortex import cloudllm, taint
+    from keepfold import cloudllm, taint
     cloud = call(app, "GET", "/api/browse")[1]["cloud"]
     assert cloud["cloud_processing"] is False and cloud["provider"] is None
     assert cloud["key_set"] is False and cloud["runs"] == []
     assert set(cloud["presets"]) == set(cloudllm.PRESETS)
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(
         "vault: V\ncloudllm:\n  max_items: 50\nbrowse:\n  visible_to_claude: true\n",
         encoding="utf-8")
     body = {"cloud_processing": True, "provider": "custom", "model": "gpt-x",
@@ -1936,7 +1936,7 @@ def test_cloud_settings_off_by_default_https_and_no_key_field(app, home, vault, 
     assert "base_url" not in taint.config()["cloudllm"]  # a preset's base is its own
 
     monkeypatch.setenv("MY_CLOUD_KEY", "sk-VALUEMARKER0123456789")
-    (vault / ".cortex" / "cloud-log.jsonl").write_text(
+    (vault / ".keepfold" / "cloud-log.jsonl").write_text(
         '{"ts": "2026-11-18T10:00:00Z", "provider": "openai", "model": "gpt-x", "items": 3, '
         '"chars": 900, "skipped": 1}\nnot json\n', encoding="utf-8")
     _, js, raw, _ = call(app, "GET", "/api/browse")
@@ -1955,12 +1955,12 @@ def test_setup_order_connects_apps_before_the_local_model(app):
 
 
 def test_import_preview_writes_nothing(app, home):
-    from cortex import chats
+    from keepfold import chats
     call(app, "POST", "/api/import/preview", {
         "source": "chatgpt", "path": str(EXPORTS / "chatgpt_conversations.json")})
     r = wait_job(app)["result"]
     assert r["found"] >= 1 and r["already"] == 0 and not list(chats.export_root().rglob("*"))
-    assert "CORTEX_CHAT_EXPORT_DIR" not in (Path(actions.__file__)).read_text(encoding="utf-8")
+    assert "KEEPFOLD_CHAT_EXPORT_DIR" not in (Path(actions.__file__)).read_text(encoding="utf-8")
 
 
 # ---- board2 fixes: the import front door, Ask's missing pieces, cloud form, hardening -----
@@ -1968,8 +1968,8 @@ def test_import_preview_writes_nothing(app, home):
 
 def test_notes_and_calendar_cards_go_through_importers(app, home, vault):
     """R3-1: the notes and calendar cards have guides, preview with the importer's dry run
-    (nothing written) and import as `cortex import` does."""
-    from cortex import importers
+    (nothing written) and import as `keepfold import` does."""
+    from keepfold import importers
     _, s, _, _ = call(app, "GET", "/api/setup")
     for kind in ("notes", "calendar"):
         assert s["guides"][kind]["steps"] == importers.GUIDES[kind]["steps"]
@@ -1999,8 +1999,8 @@ def test_notes_and_calendar_cards_go_through_importers(app, home, vault):
 def test_notes_and_calendar_import_asks_the_tier_and_remembers_it(app, home, vault):
     """C2: the preview names the tier to preselect (last choice, else the default); Import
     sends the page's choice, which is remembered."""
-    from cortex import sources
-    from cortex.vault import Vault
+    from keepfold import sources
+    from keepfold.vault import Vault
     ics = {"source": "calendar", "path": str(EXPORTS / "calendar.ics")}
     call(app, "POST", "/api/import/preview", ics)
     assert wait_job(app)["result"]["tier"] == "cloud"
@@ -2080,7 +2080,7 @@ def test_docs_repos_and_highlights_cards(app, home, vault, tmp_path):
 def test_last_indexed_is_one_answer(app, vault):
     """QA 4: Setup's "Index my notes", Status and Dashboard and vault read the same file (the
     vector cache Index my notes writes), so they never disagree."""
-    from cortex import semantic
+    from keepfold import semantic
 
     def seen():
         _, s, _, _ = call(app, "GET", "/api/setup")
@@ -2089,26 +2089,26 @@ def test_last_indexed_is_one_answer(app, vault):
         row = next(r for r in st["rows"] if r["id"] == "vault")
         return s["embed"]["indexed"], v["last_index"], row["detail"]
 
-    (vault / ".cortex" / "index-snapshot.json").write_text("{}", encoding="utf-8")
+    (vault / ".keepfold" / "index-snapshot.json").write_text("{}", encoding="utf-8")
     assert seen() == (None, None, "Last indexed not yet.")  # the count is its own label
     (vault / semantic.CACHE).write_bytes(b"x")
     a, b, detail = seen()
     assert a and a == b and detail == f"Last indexed {a}."
 
 
-def test_doctor_in_the_app_points_at_setup_not_at_cortex_app(app, vault):
-    """QA 8: inside the app, "Run `cortex app`" is circular; the fix names the Setup step.
+def test_doctor_in_the_app_points_at_setup_not_at_keepfold_app(app, vault):
+    """QA 8: inside the app, "Run `keepfold app`" is circular; the fix names the Setup step.
     The CLI's own doctor output keeps its wording."""
-    from cortex import doctor
+    from keepfold import doctor
 
     class Job:
         def say(self, line):
             pass
 
     lines = actions.doctor(Job(), vault)["lines"]
-    assert not any("cortex app" in x or "Start menu" in x for x in lines), lines
+    assert not any("keepfold app" in x or "Start menu" in x for x in lines), lines
     assert "      fix: in this app, Setup → Search model → Download search model." in lines
-    assert "cortex app" in doctor.check_search_model()[3]
+    assert "keepfold app" in doctor.check_search_model()[3]
 
 
 def test_capture_takes_only_its_own_threads_output(capsys):
@@ -2146,7 +2146,7 @@ def test_capture_takes_only_its_own_threads_output(capsys):
 def test_llm_settings_refuse_no_model_but_keep_the_switch(app):
     """QA 6: Save with no model is refused (never `model: null`); the on/off switch alone
     still saves; the page gets Ollama's state in Setup's words."""
-    from cortex import taint
+    from keepfold import taint
     call(app, "POST", "/api/llm/settings", {"model": "qwen3.5:4b", "runner": "ollama"})
     for bad in ({"model": None}, {"model": ""}, {"model": None, "runner": "ollama"}):
         code, body, _, _ = call(app, "POST", "/api/llm/settings", bad)
@@ -2167,9 +2167,9 @@ def test_llm_page_says_ollama_state_like_setup(app, monkeypatch, exe, want):
 
 def test_claude_code_plugin_route_is_labelled_as_commands(vault, monkeypatch):
     """QA 8: Claude Code's plugin route shows commands, not a config entry."""
-    from cortex import clients
+    from keepfold import clients
     monkeypatch.setattr(targets.ClaudeCode, "_plugin_route", lambda self: True)
-    base = clients.server_entry("cortex", vault)
+    base = clients.server_entry("keepfold", vault)
     rows = {t["id"]: t for t in targets.describe(base)}
     assert rows["claude-code"]["commands"] is True
     assert rows["claude-code"]["snippet"].startswith("claude plugin ")
@@ -2184,7 +2184,7 @@ def test_claude_code_plugin_route_is_labelled_as_commands(vault, monkeypatch):
 ])
 def test_a_card_refuses_another_kind_and_names_the_right_card(app, vault, source, name, card):
     """R3-1: a Notion folder in the Claude guide is not imported as Perplexity chats."""
-    from cortex import chats
+    from keepfold import chats
     call(app, "POST", "/api/import/preview", {"source": source, "path": str(EXPORTS / name)})
     job = wait_job(app)
     assert job["result"] is None and card in job["error"], job
@@ -2193,7 +2193,7 @@ def test_a_card_refuses_another_kind_and_names_the_right_card(app, vault, source
 
 def test_uploaded_my_activity_is_still_google_activity(app, vault):
     """An upload keeps a cleaned copy of its name, so `detect` tells MyActivity.json apart
-    from a chat export's single .json file, as `cortex import` does with the real name."""
+    from a chat export's single .json file, as `keepfold import` does with the real name."""
     data = (EXPORTS / "takeout_MyActivity.json").read_bytes()
     _, up = upload(app, data, "MyActivity.json")
     call(app, "POST", "/api/import/preview", {"source": "google-activity",
@@ -2204,7 +2204,7 @@ def test_uploaded_my_activity_is_still_google_activity(app, vault):
 
 def test_html_my_activity_uploads_for_google_activity_and_gemini(app, vault):
     """G6: Takeout's HTML is read, so the page takes .html and no hint asks for JSON."""
-    from cortex.browse import takeout
+    from keepfold.browse import takeout
     html = EXPORTS / "takeout_html" / "Takeout" / "My Activity"
     for card, sub in (("google-activity", "Search"), ("gemini", "Gemini Apps")):
         status, up = upload(app, (html / sub / "MyActivity.html").read_bytes(),
@@ -2214,12 +2214,12 @@ def test_html_my_activity_uploads_for_google_activity_and_gemini(app, vault):
         job = wait_job(app)
         assert job["error"] is None, job
     assert "English" in takeout.READ_HINT and "export again" not in takeout.READ_HINT
-    js = (Path(__file__).parents[1] / "src/cortex/assets/app/app.js").read_text("utf-8")
+    js = (Path(__file__).parents[1] / "src/keepfold/assets/app/app.js").read_text("utf-8")
     assert ".html" in js[js.index("id: 'imp-file'"):][:120]
 
 
 def test_chat_preview_and_import_copy(app, home):
-    """R3-9: no "(those are updated)" after 0, and no /cortex hint while no app is connected."""
+    """R3-9: no "(those are updated)" after 0, and no /keepfold hint while no app is connected."""
     path = str(EXPORTS / "chatgpt_conversations.json")
     call(app, "POST", "/api/import/preview", {"source": "chatgpt", "path": path})
     line = wait_job(app)["result"]["lines"][0]
@@ -2233,7 +2233,7 @@ def test_chat_preview_and_import_copy(app, home):
 
 def test_google_activity_preview_says_the_search_model_is_needed(app, monkeypatch):
     """R3-3: the need shows at Check, not after Import, and the result is not ok."""
-    from cortex.browse import sources
+    from keepfold.browse import sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
     call(app, "POST", "/api/import/preview", {"source": "google-activity",
                                               "path": str(EXPORTS / "takeout_MyActivity.json")})
@@ -2249,7 +2249,7 @@ def test_voice_memos_ask_to_install_then_count_without_transcribing(app, vault, 
     with it, Check counts the recordings and only Import transcribes them."""
     from types import SimpleNamespace
 
-    from cortex import voice_memos
+    from keepfold import voice_memos
     d = tmp_path / "Recordings"
     d.mkdir()
     (d / "20241103 memo.m4a").write_bytes(b"audio")
@@ -2277,10 +2277,10 @@ def test_voice_memos_ask_to_install_then_count_without_transcribing(app, vault, 
 
 def test_anki_card_uploads_an_export_previews_and_imports(app, vault, tmp_path):
     """R22: the Anki card takes an uploaded .apkg (and .colpkg), asks the tier, and imports one
-    page per deck, linked to its parent deck's, as `cortex import` does."""
+    page per deck, linked to its parent deck's, as `keepfold import` does."""
     from test_anki_import import _legacy_apkg
 
-    from cortex import importers
+    from keepfold import importers
     _, s, _, _ = call(app, "GET", "/api/setup")
     assert s["guides"]["anki"]["steps"] == importers.GUIDES["anki"]["steps"]
     assert upload(app, b"PK", "decks.colpkg")[0] == 200
@@ -2298,7 +2298,7 @@ def test_anki_card_uploads_an_export_previews_and_imports(app, vault, tmp_path):
 
 def test_cloud_on_needs_provider_model_and_variable(app, home):
     """R3-4: "on" is refused until each is filled, naming what is missing; off saves."""
-    from cortex import taint
+    from keepfold import taint
     full = {"cloud_processing": True, "provider": "openai", "model": "gpt-x",
             "api_key_env": "OPENAI_API_KEY"}
     for gone, word in (("provider", "provider"), ("model", "model"),
@@ -2353,7 +2353,7 @@ def test_uploads_are_private_and_old_ones_swept_at_start(app, home):
 
 def test_a_vault_error_in_a_job_shows_its_message(app):
     """r4 F4: VaultError text is written for users; other errors stay type-only."""
-    from cortex.vault import VaultError
+    from keepfold.vault import VaultError
 
     def boom(job):
         raise VaultError("invalid_argument", "Found no .ics calendar in x.zip.")
@@ -2369,29 +2369,29 @@ def test_status_has_an_ai_apps_row(app):
 
 
 def _install(home) -> Path:
-    """A fake CortexSetup.exe install in the installer's default folder; its bin\\cortex.exe."""
-    d = home / "LOCALAPPDATA" / "Programs" / "Cortex"
+    """A fake KeepfoldSetup.exe install in the installer's default folder; its bin\\keepfold.exe."""
+    d = home / "LOCALAPPDATA" / "Programs" / "Keepfold"
     (d / "bin").mkdir(parents=True)
-    (d / "cortex-install.txt").write_text("x", encoding="utf-8")
-    (d / "bin" / "cortex.exe").write_bytes(b"")
-    return d / "bin" / "cortex.exe"
+    (d / "keepfold-install.txt").write_text("x", encoding="utf-8")
+    (d / "bin" / "keepfold.exe").write_bytes(b"")
+    return d / "bin" / "keepfold.exe"
 
 
-def test_connect_points_claude_desktop_at_the_installed_cortex_and_repairs_a_stale_copy(
+def test_connect_points_claude_desktop_at_the_installed_keepfold_and_repairs_a_stale_copy(
         app, home, vault):
-    """D7: one Cortex version. A `uv tool` copy in the Claude Desktop config is reported on
+    """D7: one Keepfold version. A `uv tool` copy in the Claude Desktop config is reported on
     Status and Apply under Connect rewrites only its entry (backup first, other keys kept)."""
     exe = _install(home)
     cfg = home / "LOCALAPPDATA" / "Claude-Data" / "claude_p1" / "claude_desktop_config.json"
     cfg.parent.mkdir(parents=True)
-    tool = str(home / ".local" / "bin" / "cortex.exe")
+    tool = str(home / ".local" / "bin" / "keepfold.exe")
     old = {"theme": "dark", "mcpServers": {
         "other": {"command": "x", "args": ["y"]},
-        "cortex": {"command": tool, "args": ["mcp", "--vault", str(vault)]}}}
+        "keepfold": {"command": tool, "args": ["mcp", "--vault", str(vault)]}}}
     cfg.write_text(json.dumps(old), encoding="utf-8")
 
     row = next(r for r in status.rows(vault) if r["id"] == "apps")
-    assert row["state"] == "warn" and "different Cortex copy" in row["value"]
+    assert row["state"] == "warn" and "different copy of Keepfold" in row["value"]
     assert str(cfg) in row["detail"] and row["action"] == {"go": "connect", "label": "Fix"}
 
     want = {"claude-desktop": True}
@@ -2401,32 +2401,32 @@ def test_connect_points_claude_desktop_at_the_installed_cortex_and_repairs_a_sta
     assert wait_job(app)["error"] is None
     got = json.loads(cfg.read_text(encoding="utf-8"))
     assert got["theme"] == "dark" and got["mcpServers"]["other"] == old["mcpServers"]["other"]
-    assert got["mcpServers"]["cortex"] == {"command": str(exe),
+    assert got["mcpServers"]["keepfold"] == {"command": str(exe),
                                            "args": ["mcp", "--vault", str(vault.resolve())]}
     assert [json.loads(b.read_text(encoding="utf-8"))
-            for b in cfg.parent.glob(cfg.name + ".cortex-*.bak")] == [old]
+            for b in cfg.parent.glob(cfg.name + ".keepfold-*.bak")] == [old]
     assert not list(cfg.parent.glob("*.tmp"))
     assert next(r for r in status.rows(vault) if r["id"] == "apps")["state"] != "warn"
 
 
-def test_without_an_install_connect_keeps_the_cortex_on_path(app, home, vault, monkeypatch):
-    monkeypatch.setattr("cortex.clients.cortex_command", lambda: "/abs/cortex")
-    assert clients.installed_cortex() is None
-    assert app.entry()["command"] == "/abs/cortex"
-    assert not clients.other_copy({"command": "/elsewhere/cortex"})  # nothing to repair
-    d = home / "LOCALAPPDATA" / "Programs" / "Cortex"  # a folder without the marker: no install
+def test_without_an_install_connect_keeps_the_keepfold_on_path(app, home, vault, monkeypatch):
+    monkeypatch.setattr("keepfold.clients.keepfold_command", lambda: "/abs/keepfold")
+    assert clients.installed_keepfold() is None
+    assert app.entry()["command"] == "/abs/keepfold"
+    assert not clients.other_copy({"command": "/elsewhere/keepfold"})  # nothing to repair
+    d = home / "LOCALAPPDATA" / "Programs" / "Keepfold"  # a folder without the marker: no install
     (d / "bin").mkdir(parents=True)
-    (d / "bin" / "cortex.exe").write_bytes(b"")
-    assert clients.installed_cortex() is None
-    (d / "cortex-install.txt").write_text("x", encoding="utf-8")
-    assert app.entry()["command"] == str(d / "bin" / "cortex.exe")
-    assert not clients.other_copy({"command": str(d / "bin" / "cortex.exe")})
-    assert clients.other_copy({"command": "/elsewhere/cortex"})
+    (d / "bin" / "keepfold.exe").write_bytes(b"")
+    assert clients.installed_keepfold() is None
+    (d / "keepfold-install.txt").write_text("x", encoding="utf-8")
+    assert app.entry()["command"] == str(d / "bin" / "keepfold.exe")
+    assert not clients.other_copy({"command": str(d / "bin" / "keepfold.exe")})
+    assert clients.other_copy({"command": "/elsewhere/keepfold"})
 
 
 def _history(vault, last=None, hours=6, login=False, keys=("chrome/Default",)):
     """status.history_row with a browse state imported at `last` (None: never imported)."""
-    f = vault / ".cortex" / "browse" / "state.json"
+    f = vault / ".keepfold" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"sources": dict.fromkeys(keys, {}),
                              **({"last_run": last} if last else {})}), encoding="utf-8")
@@ -2436,7 +2436,7 @@ def _history(vault, last=None, hours=6, login=False, keys=("chrome/Default",)):
 
 
 def _found(monkeypatch, home, *keys):
-    from cortex.browse import sources
+    from keepfold.browse import sources
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source(*key.split("/"), home / key) for key in keys])
 
@@ -2454,7 +2454,7 @@ def test_status_browsing_history_row(vault, home, monkeypatch):
     assert fresh["login_hint"] is True and fresh["action"]["go"] == "browse"
     stale = _history(vault, "2026-11-17T09:00:00Z")
     assert stale["state"] == "warn" and stale["import"] == ["chrome/Default"]
-    assert stale["detail"] == "Last import {ago}: newer visits are not in Cortex yet."
+    assert stale["detail"] == "Last import {ago}: newer visits are not in Keepfold yet."
     assert _history(vault, "2026-11-17T09:00:00Z", login=True)["login_hint"] is False
     off = _history(vault, "2026-11-01T00:00:00Z", hours=0)
     assert off["state"] == "off" and "Automatic import is off" in off["detail"]
@@ -2469,7 +2469,7 @@ def test_status_import_button_leaves_unticked_profiles_out(vault, home, monkeypa
     """Status's Import new history now posts the automatic import's sources: imported before,
     still on this computer, never one unticked (browse.skip_profiles)."""
     _found(monkeypatch, home, "chrome/Default", "comet/Default", "edge/Default")
-    cfg = home / ".cortex" / "config.yaml"
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text("browse:\n  skip_profiles: [comet/Default]\n", encoding="utf-8")
     keys = ("chrome/Default", "comet/Default", "gone/Default")
@@ -2480,7 +2480,7 @@ def test_status_import_button_leaves_unticked_profiles_out(vault, home, monkeypa
 def test_status_history_row_through_the_app(app, vault, home, monkeypatch):
     """The /api/status row reads the vault's browse state, and the Run key for the hint."""
     _found(monkeypatch, home, "edge/Default")
-    f = vault / ".cortex" / "browse" / "state.json"
+    f = vault / ".keepfold" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"last_run": "2026-01-01T00:00:00Z", "sources": {"edge/Default": {}}}),
                  encoding="utf-8")
@@ -2492,7 +2492,7 @@ def test_status_history_row_through_the_app(app, vault, home, monkeypatch):
 
 
 def test_google_activity_html_says_how_many_rows_were_skipped(app, monkeypatch):
-    from cortex.browse import sources, takeout
+    from keepfold.browse import sources, takeout
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
     path = EXPORTS / "takeout_html" / "Takeout" / "My Activity" / "Search" / "MyActivity.html"
     call(app, "POST", "/api/import/preview", {"source": "google-activity", "path": str(path)})
@@ -2515,7 +2515,7 @@ def _release(version=(9, 0, 0)):
 
 @pytest.fixture
 def github(monkeypatch):
-    from cortex import update
+    from keepfold import update
     launched = []
     monkeypatch.setattr(update, "current", lambda: "0.1.0")
     monkeypatch.setattr(update, "latest", _release)
@@ -2524,16 +2524,16 @@ def github(monkeypatch):
 
 
 def test_update_state_and_status_ask_no_one(app, monkeypatch):
-    from cortex import update
+    from keepfold import update
     monkeypatch.setattr(update, "latest", lambda: pytest.fail("a GET went to GitHub"))
     monkeypatch.setattr(update, "current", lambda: "0.1.0")
-    want = {"current": "0.1.0", "mode": "dev", "ready": None}
+    want = {"current": "0.1.0", "mode": "dev", "ready": None, "auto": True}
     assert call(app, "GET", "/api/update")[1] == want
     assert call(app, "GET", "/api/status")[1]["update"] == want
 
 
 def test_update_check_newer_same_and_errors(app, github, monkeypatch):
-    from cortex import update
+    from keepfold import update
     assert call(app, "POST", "/api/update/check", {})[0] == 200
     j = wait_job(app)
     r = j["result"]
@@ -2557,37 +2557,37 @@ def test_update_check_newer_same_and_errors(app, github, monkeypatch):
 
 def test_update_apply_refuses_a_dev_install_with_the_command(app, github):
     code, js, _, _ = call(app, "POST", "/api/update/apply", {})
-    assert code == 400 and "CortexSetup.exe" in js["error"] and "uv tool install" in js["error"]
+    assert code == 400 and "KeepfoldSetup.exe" in js["error"] and "uv tool install" in js["error"]
     assert github == [] and app.jobs.cur is None
 
 
 def test_update_apply_downloads_launches_and_quits(app, github, monkeypatch, tmp_path):
-    from cortex import update
+    from keepfold import update
     got = {}
 
     def download(info, dest, on_progress, cancel):
         got.update(dest=dest, cancel=cancel)
         on_progress(12 * 2**20, 32 * 2**20)
         time.sleep(0.3)  # long enough for a poll to see the progress line
-        exe = tmp_path / "CortexSetup.exe"
+        exe = tmp_path / "KeepfoldSetup.exe"
         exe.write_bytes(b"MZ")
         return exe
     monkeypatch.setattr(update, "mode", lambda: "installer")
-    monkeypatch.setattr(update, "install_dir", lambda: tmp_path / "Cortex")
+    monkeypatch.setattr(update, "install_dir", lambda: tmp_path / "Keepfold")
     monkeypatch.setattr(update, "download", download)
     seen: list = []
     assert call(app, "POST", "/api/update/apply", {})[0] == 200
     j = wait_job(app, seen)
     assert j["result"]["launched"] is True and j["cancellable"] and j["error"] is None
     assert any(b"downloaded 12 of 32 MB" in raw for raw in seen)
-    assert got["dest"] == Path.home() / ".cortex" / "tmp" / "update-9.0.0"
+    assert got["dest"] == Path.home() / ".keepfold" / "tmp" / "update-9.0.0"
     assert got["cancel"] is app.jobs.cur.cancelled
-    assert github == [(tmp_path / "CortexSetup.exe", os.getpid(), tmp_path / "Cortex")]
+    assert github == [(tmp_path / "KeepfoldSetup.exe", os.getpid(), tmp_path / "Keepfold")]
     assert app.stop.wait(5)  # the app quits so the installer can replace its files
 
 
 def test_update_apply_when_already_latest_or_cancelled(app, github, monkeypatch):
-    from cortex import update
+    from keepfold import update
     monkeypatch.setattr(update, "mode", lambda: "installer")
     monkeypatch.setattr(update, "download", lambda *a: None)  # Cancel
     call(app, "POST", "/api/update/apply", {})
@@ -2608,8 +2608,8 @@ def test_quiet_update_prepares_once_notifies_once_and_waits_for_the_click(
     and Status) and notifies once per version, never applying it; the click reuses the file."""
     from types import SimpleNamespace
 
-    from cortex import update
-    from cortex.app import desktop
+    from keepfold import update
+    from keepfold.app import desktop
     got = []
 
     def download(info, dest, on_progress, cancel):
@@ -2625,7 +2625,7 @@ def test_quiet_update_prepares_once_notifies_once_and_waits_for_the_click(
     app.update_quietly()
     app.update_quietly()  # every 6 hours: the same version is not fetched or told again
     assert got == [update.dest_dir(_release())] and github == [] and not app.stop.is_set()
-    assert notes == ["Cortex 9.0.0 is ready: restart to update"]
+    assert notes == ["Keepfold 9.0.0 is ready: restart to update"]
     assert call(app, "GET", "/api/home/version")[1]["update"] == {"version": "9.0.0",
                                                                    "mode": "installer"}
     assert call(app, "GET", "/api/update")[1]["ready"]["version"] == "9.0.0"
@@ -2645,7 +2645,7 @@ def test_quiet_update_prepares_once_notifies_once_and_waits_for_the_click(
 
 
 def test_quiet_update_in_a_dev_install_notes_the_command(app, github, monkeypatch):
-    from cortex import update
+    from keepfold import update
     monkeypatch.setattr(update, "download", lambda *a: pytest.fail("a dev install downloaded"))
     app.update_quietly()
     assert app.update_ready["command"] == update.command("v9.0.0") and github == []
@@ -2655,11 +2655,33 @@ def test_quiet_update_in_a_dev_install_notes_the_command(app, github, monkeypatc
     assert app.update_ready is None
 
 
+def test_quiet_update_skipped_while_the_setting_is_off(app, github, monkeypatch):
+    """app.update_check false: no GitHub request and no download, read again each pass; the
+    Check for updates button still asks. Missing or true: the pass runs."""
+    from keepfold import update
+    asked = []
+    real = update.latest
+    monkeypatch.setattr(update, "latest", lambda: asked.append(1) or real())
+    monkeypatch.setattr(update, "download", lambda *a: pytest.fail("downloaded while off"))
+    for bad in ({"enabled": "no"}, {}, {"enabled": False, "extra": 1}):
+        assert call(app, "POST", "/api/app/update-check", bad)[0] == 400
+    assert call(app, "GET", "/api/update")[1]["auto"] is True  # missing: on
+    assert call(app, "POST", "/api/app/update-check", {"enabled": False})[1] == {"enabled": False}
+    assert call(app, "GET", "/api/status")[1]["update"]["auto"] is False
+    app.update_quietly()
+    assert asked == [] and app.update_ready is None
+    call(app, "POST", "/api/update/check", {})  # the button works either way
+    assert wait_job(app)["result"]["newer"] is True and asked == [1]
+    call(app, "POST", "/api/app/update-check", {"enabled": True})
+    app.update_quietly()
+    assert len(asked) == 2 and app.update_ready["version"] == "9.0.0"
+
+
 def test_update_check_sweeps_old_installers(app, github):
-    tmp = Path.home() / ".cortex" / "tmp"
+    tmp = Path.home() / ".keepfold" / "tmp"
     for name in ("update-0.0.9", "update-9.0.0"):
         (tmp / name).mkdir(parents=True)
-        (tmp / name / "CortexSetup.exe").write_bytes(b"MZ")
+        (tmp / name / "KeepfoldSetup.exe").write_bytes(b"MZ")
     call(app, "POST", "/api/update/check", {})
     assert wait_job(app)["result"]["newer"] is True
     assert sorted(p.name for p in tmp.iterdir()) == ["update-9.0.0"]  # the one it may launch
@@ -2670,11 +2692,11 @@ def test_update_check_sweeps_old_installers(app, github):
 def test_a_launch_keeps_a_prepared_newer_installer(app, monkeypatch):
     """A restart before Restart to update does not fetch the same installer again."""
     monkeypatch.setattr(update, "current", lambda: "0.2.0")
-    tmp = Path.home() / ".cortex" / "tmp"
+    tmp = Path.home() / ".keepfold" / "tmp"
     for name in ("update-0.1.0", "update-0.3.0"):
         (tmp / name).mkdir(parents=True)
-        (tmp / name / "CortexSetup.exe").write_bytes(b"MZ")
-        (tmp / name / "CortexSetup.exe.sha256").write_text(hashlib.sha256(b"MZ").hexdigest())
+        (tmp / name / "KeepfoldSetup.exe").write_bytes(b"MZ")
+        (tmp / name / "KeepfoldSetup.exe.sha256").write_text(hashlib.sha256(b"MZ").hexdigest())
     server.make_server(None)[0].server_close()
     assert [p.name for p in tmp.iterdir()] == ["update-0.3.0"]
 
@@ -2713,7 +2735,7 @@ def test_open_without_obsidian_uses_the_default_app(app, vault, fakes, monkeypat
 
 def test_search_model_counts_only_a_finished_download(home):
     """A5: a cancelled download (Hugging Face's .incomplete) is not "downloaded"."""
-    from cortex import doctor, semantic
+    from keepfold import doctor, semantic
     d = semantic.models_dir() / "models--BAAI--bge" / "blobs"
     d.mkdir(parents=True)
     (d / "abc.incomplete").write_bytes(b"half")
@@ -2729,13 +2751,13 @@ def test_start_at_login_on_windows_is_a_run_value(monkeypatch, fakes, tmp_path,
     """A10: Start at login is an HKCU Run value running the no-console receiver (faked
     registry); the old scheduled task goes on Add, on Remove and at app start."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(status, "test_copy", lambda: False)  # as the installed Cortex
-    exe = tmp_path / "bin" / "cortex.exe"
+    monkeypatch.setattr(status, "test_copy", lambda: False)  # as the installed Keepfold
+    exe = tmp_path / "bin" / "keepfold.exe"
     exe.parent.mkdir()
-    (exe.parent / "cortex-receiver.exe").write_bytes(b"MZ")
-    monkeypatch.setattr("cortex.clients.cortex_command", lambda: str(exe))
+    (exe.parent / "keepfold-receiver.exe").write_bytes(b"MZ")
+    monkeypatch.setattr("keepfold.clients.keepfold_command", lambda: str(exe))
     root = Path("C:/Users/me/Vault")
-    want = f'"{exe.with_name("cortex-receiver.exe")}" --vault "{root}"'
+    want = f'"{exe.with_name("keepfold-receiver.exe")}" --vault "{root}"'
     assert status.login_command(root) == want
     assert status.login_task() == {"supported": True, "exists": False}
     assert want in status.login_shown(root) and "HKCU" in status.login_shown(root)
@@ -2759,11 +2781,11 @@ REAL_RUN = (status.run_set, status.run_delete)  # before conftest fakes them for
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the HKCU Run key and Task Scheduler")
 def test_a_test_copy_never_changes_windows_start_up_settings(monkeypatch):
-    """R1 (25 Nov): a Cortex whose home folder was moved (tests, screenshots, demos) leaves the
+    """R1 (25 Nov): a Keepfold whose home folder was moved (tests, screenshots, demos) leaves the
     real install's Run values and Task Scheduler entry alone; the real install still may."""
     import winreg
 
-    from cortex.app import desktop
+    from keepfold.app import desktop
     writes = []
     for name in ("CreateKey", "SetValueEx", "DeleteValue"):
         monkeypatch.setattr(winreg, name, lambda *a, n=name: writes.append(n))
@@ -2782,28 +2804,28 @@ def test_a_test_copy_never_changes_windows_start_up_settings(monkeypatch):
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as k:
         real = Path(winreg.QueryValueEx(k, "USERPROFILE")[0])
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: real))
-    assert status.test_copy() is False  # the installed Cortex, run with the real profile
+    assert status.test_copy() is False  # the installed Keepfold, run with the real profile
 
 
-def test_receiver_falls_back_to_the_console_cortex(monkeypatch, tmp_path):
-    exe = tmp_path / "cortex.exe"
-    monkeypatch.setattr("cortex.clients.cortex_command", lambda: str(exe))
+def test_receiver_falls_back_to_the_console_keepfold(monkeypatch, tmp_path):
+    exe = tmp_path / "keepfold.exe"
+    monkeypatch.setattr("keepfold.clients.keepfold_command", lambda: str(exe))
     assert status.login_command(Path("C:/V")) == f'"{exe}" browse serve --vault "{Path("C:/V")}"'
 
 
 def test_vault_refused_inside_the_install_folder(app, tmp_path):
-    """A3: a vault inside the folder Cortex is installed in (uninstall empties it) is refused,
-    by the app's Setup and by `cortex init`."""
+    """A3: a vault inside the folder Keepfold is installed in (uninstall empties it) is refused,
+    by the app's Setup and by `keepfold init`."""
     from test_cli import run
-    inst = tmp_path / "Cortex"
+    inst = tmp_path / "Keepfold"
     inst.mkdir()
-    (inst / "cortex-install.txt").write_text("x")
+    (inst / "keepfold-install.txt").write_text("x")
     for target in (inst, inst / "notes"):
         call(app, "POST", "/api/setup/vault", {"path": str(target)})
         assert "installed in" in wait_job(app)["error"]
         r = run("init", str(target), ok=False)
         assert r.exit_code == 1 and "installed in" in r.output
-    assert sorted(p.name for p in inst.iterdir()) == ["cortex-install.txt"]
+    assert sorted(p.name for p in inst.iterdir()) == ["keepfold-install.txt"]
 
 
 def test_setup_vault_step_warns_onedrive_and_asks_about_a_moved_vault(app, tmp_path,
@@ -2811,7 +2833,7 @@ def test_setup_vault_step_warns_onedrive_and_asks_about_a_moved_vault(app, tmp_p
     """A15: the OneDrive warning is in the job lines; a vault folder that is gone is a
     question ("moved"), not a silently new vault."""
     monkeypatch.setenv("OneDrive", str(tmp_path / "OneDrive"))
-    call(app, "POST", "/api/setup/vault", {"path": str(tmp_path / "OneDrive" / "Cortex")})
+    call(app, "POST", "/api/setup/vault", {"path": str(tmp_path / "OneDrive" / "Keepfold")})
     job = wait_job(app)
     assert job["error"] is None and any("inside OneDrive" in x for x in job["result"]["lines"])
     gone = server.App(tmp_path / "moved-away").setup()["vault"]
@@ -2837,7 +2859,7 @@ def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
     import shutil
     import sys
 
-    from cortex import cli, doctor, session
+    from keepfold import cli, doctor, session
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
     monkeypatch.setattr(session, "git_exe", lambda: None)
@@ -2862,7 +2884,7 @@ def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
     assert job["result"]["lines"][-2:] == ["git init",
                                           "Git is installed and your vault's history has started."]
     assert [(r.resolve(), d) for r, d in inits] == [(vault.resolve(), False)]
-    assert "Quit Cortex" not in json.dumps(job)
+    assert "Quit Keepfold" not in json.dumps(job)
     assert started[0][0] == g["install"]["run"] and "creationflags" in started[0][1]
     nogit = vault.parent / "nogit"
     nogit.mkdir()
@@ -2870,7 +2892,7 @@ def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     st, _, detail, fix = doctor.check_git(nogit)
     assert st == "WARN" and "not installed" in detail and "Git.Git" in fix
-    assert "Status → Git → Install Git" in fix and "restart Cortex" not in fix
+    assert "Status → Git → Install Git" in fix and "restart Keepfold" not in fix
 
 
 def test_git_user_scope_failure_offers_the_admin_install(app, vault, monkeypatch):
@@ -2879,7 +2901,7 @@ def test_git_user_scope_failure_offers_the_admin_install(app, vault, monkeypatch
     install shows its result on Status."""
     import sys
 
-    from cortex import cli, session
+    from keepfold import cli, session
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
     monkeypatch.setattr(session, "git_exe", lambda: None)
@@ -2907,7 +2929,7 @@ def test_downloads_check_free_space_first(app, vault, monkeypatch):
     too little starts nothing and says how much, until the owner continues anyway."""
     import sys
 
-    from cortex import session
+    from keepfold import session
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(targets, "_which", lambda c: f"C:/bin/{c}.exe")
     monkeypatch.setattr(session, "git_exe", lambda: None)
@@ -2982,7 +3004,7 @@ def test_status_git_row_installs_and_llm_row_judges_the_chosen_runner(vault, mon
     holds the chosen model."""
     import sys
 
-    from cortex import session
+    from keepfold import session
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
     monkeypatch.setattr(session, "git_exe", lambda: None)
@@ -3047,18 +3069,18 @@ def test_status_llm_row_says_what_is_true(monkeypatch, enabled, runner, ollama, 
 
 
 def test_installer_wording(app, monkeypatch):
-    """A12: an installer install is told to use the Start menu, never `cortex app` or uv."""
+    """A12: an installer install is told to use the Start menu, never `keepfold app` or uv."""
     import shutil
 
-    from cortex import doctor, update
+    from keepfold import doctor, update
     _, _, raw, _ = call(app, "GET", f"/manage?t={app.token}", token=False)
-    assert b"Run cortex app again to reopen it." in raw and b"{{REOPEN}}" not in raw
+    assert b"Run keepfold app again to reopen it." in raw and b"{{REOPEN}}" not in raw
     monkeypatch.setattr(update, "mode", lambda: "installer")
     _, _, raw, _ = call(app, "GET", f"/manage?t={app.token}", token=False)
-    assert raw.count(b"Open Cortex from the Start menu to reopen it.") == 2
+    assert raw.count(b"Open Keepfold from the Start menu to reopen it.") == 2
     assert b"Start menu" in call(app, "GET", "/manage?t=wrong", token=False)[2]
     for check in (doctor.check_search_model, doctor.check_ai_apps):
-        assert "Start menu" in check()[3] and "cortex app" not in check()[3]
+        assert "Start menu" in check()[3] and "keepfold app" not in check()[3]
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     assert "uv tool" not in doctor.check_on_path()[3]
 
@@ -3067,13 +3089,13 @@ def test_skill_path(app):
     """A2: the Chat skill links to the latest release when no local zip exists."""
     js = call(app, "GET", "/api/connect")[1]
     assert js["skill_url"].startswith("https://github.com/")
-    assert js["skill_url"].endswith("/releases/latest/download/cortex-skill.zip")
+    assert js["skill_url"].endswith("/releases/latest/download/keepfold-skill.zip")
 
 
 def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
-    """A11: ~/.cortex/app.json names the running app; a stale file is ignored. The browser app
+    """A11: ~/.keepfold/app.json names the running app; a stale file is ignored. The browser app
     has no window to show, so a second launch opens its page in the browser."""
-    from cortex.app import desktop, launch
+    from keepfold.app import desktop, launch
     daytime(monkeypatch)
     lines: list[str] = []
     t = threading.Thread(target=server.run, args=(vault,),
@@ -3094,7 +3116,7 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
     port, token = int(url.split(":")[2].split("/")[0]), url.split("?t=")[1]
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     c.request("POST", "/api/quit", body=b"{}", headers={
-        "Host": f"127.0.0.1:{port}", "X-Cortex-Token": token,
+        "Host": f"127.0.0.1:{port}", "X-Keepfold-Token": token,
         "Content-Type": "application/json"})
     assert c.getresponse().status == 200
     t.join(15)
@@ -3106,20 +3128,35 @@ def test_a_second_launch_opens_the_running_app(vault, monkeypatch):
 
 
 def test_the_launcher_log_never_holds_the_key(monkeypatch, capsys):
-    from cortex.app import desktop, launch
+    from keepfold.app import desktop, launch
     seen = {}
     monkeypatch.setattr(server, "running_url", lambda: None)
     monkeypatch.setattr(desktop, "run", lambda root, hidden, echo: (
-        echo("Cortex app: http://127.0.0.1:8790/?t=Abc-_123"), seen.setdefault("ok", 1)))
+        echo("Keepfold app: http://127.0.0.1:8790/?t=Abc-_123"), seen.setdefault("ok", 1)))
     launch.main()
     out = capsys.readouterr().out
     assert seen and "http://127.0.0.1:8790/" in out and "Abc" not in out and "?t=" not in out
 
 
+def test_the_browser_app_prints_no_key_when_it_opens_the_page(monkeypatch):
+    """D1 §4.3: the browser opens the link with its key; the printed line drops it."""
+    import types
+    url = "http://127.0.0.1:8790/?t=Abc-_123"
+    def interrupted(**_):
+        raise KeyboardInterrupt
+    srv = types.SimpleNamespace(serve_forever=interrupted)
+    monkeypatch.setattr(server, "start", lambda *a, **k: (srv, None, url))
+    monkeypatch.setattr(server, "finish", lambda *a: None)
+    opened, lines = [], []
+    monkeypatch.setattr(server, "_open", opened.append)
+    server.run(None, echo=lines.append)
+    assert opened == [url] and "Abc" not in "".join(lines) and "http://127.0.0.1:8790/" in lines[0]
+
+
 def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
     import sys
 
-    from cortex.app import desktop, launch
+    from keepfold.app import desktop, launch
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     said = []
@@ -3130,7 +3167,7 @@ def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
     monkeypatch.setattr(desktop, "run", broken)
     with pytest.raises(SystemExit):
         launch.main()
-    log = Path.home() / ".cortex" / "logs" / "app.log"
+    log = Path.home() / ".keepfold" / "logs" / "app.log"
     sys.stdout.close()
     assert said and str(log) in said[0] and "half-done upgrade" in log.read_text()
 
@@ -3138,36 +3175,36 @@ def test_launcher_failure_shows_a_message_with_the_log(monkeypatch):
 def test_receiver_entry_runs_browse_serve(monkeypatch, vault):
     import sys
 
-    from cortex import browse_serve
-    from cortex.app import launch
+    from keepfold import browse_serve
+    from keepfold.app import launch
     got = {}
-    monkeypatch.setattr(sys, "argv", ["cortex-receiver.exe", "--vault", str(vault)])
+    monkeypatch.setattr(sys, "argv", ["keepfold-receiver.exe", "--vault", str(vault)])
     monkeypatch.setattr(browse_serve, "serve", lambda v: got.update(root=v.root))
     with pytest.raises(SystemExit) as e:
         launch.receiver()
     assert e.value.code == 0 and got == {"root": vault.resolve()}
     got.clear()  # a command line with the --port older versions took still runs
-    monkeypatch.setattr(sys, "argv", ["cortex-receiver.exe", "--vault", str(vault),
+    monkeypatch.setattr(sys, "argv", ["keepfold-receiver.exe", "--vault", str(vault),
                                       "--port", "8799"])
     with pytest.raises(SystemExit) as e:
         launch.receiver()
     assert e.value.code == 0 and got == {"root": vault.resolve()}
 
 
-def test_disconnect_removes_cortex_from_every_app(home):
+def test_disconnect_removes_keepfold_from_every_app(home):
     from test_cli import run
     p = home / ".cursor" / "mcp.json"
     p.parent.mkdir()
-    p.write_text(json.dumps({"mcpServers": {"cortex": ENTRY, "other": {"command": "x"}}}))
+    p.write_text(json.dumps({"mcpServers": {"keepfold": ENTRY, "other": {"command": "x"}}}))
     out = run("disconnect").output
     assert "remove" in out and "Cursor" in out
     assert json.loads(p.read_text()) == {"mcpServers": {"other": {"command": "x"}}}
-    assert "No AI app had Cortex." in run("disconnect").output
+    assert "No AI app had Keepfold." in run("disconnect").output
 
 
 def test_a_busy_port_is_refused_not_shared(vault):
     """Windows lets a second server bind a used port; the app would then print its token for a
-    server that is not Cortex. An explicit --port that is taken fails with a plain message."""
+    server that is not Keepfold. An explicit --port that is taken fails with a plain message."""
     other = socket.socket()  # as http.server and most dev servers do
     other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     other.bind(("127.0.0.1", 0))
@@ -3223,7 +3260,7 @@ def test_connections_over_the_cap_are_closed_at_once(home, monkeypatch):
 
 @pytest.fixture
 def newsfile(tmp_path, monkeypatch):
-    from cortex.app import news
+    from keepfold.app import news
 
     p = tmp_path / "whats_new.json"
     p.write_text(json.dumps({v: {"items": [f"item {v}"], "do": []}
@@ -3233,7 +3270,7 @@ def newsfile(tmp_path, monkeypatch):
 
 
 def test_whats_new_fresh_install_records_silently(newsfile, monkeypatch):
-    from cortex import taint, update
+    from keepfold import taint, update
 
     monkeypatch.setattr(update, "current", lambda: "0.2.3")
     assert newsfile.card()["show"] == []  # nothing remembered: nothing shown
@@ -3245,19 +3282,19 @@ def test_whats_new_fresh_install_records_silently(newsfile, monkeypatch):
 
 def test_whats_new_init_before_the_first_app_open_is_a_fresh_install(
         newsfile, tmp_path, monkeypatch):
-    from cortex import taint, update
-    from cortex.cli import _init
+    from keepfold import taint, update
+    from keepfold.cli import _init
 
     monkeypatch.setattr(update, "current", lambda: "0.2.3")
     _init(tmp_path / "v")
-    newsfile.start()  # the first app open, after `cortex init` set the vault
+    newsfile.start()  # the first app open, after `keepfold init` set the vault
     assert taint.config()["app"]["whats_new_seen"] == "0.2.3"
     assert newsfile.card()["show"] == []
 
 
 def test_whats_new_an_existing_user_without_a_record_sees_everything_since_0_2_1(
         newsfile, tmp_path, monkeypatch):
-    from cortex import taint, update
+    from keepfold import taint, update
 
     taint.write_config({"vault": str(tmp_path / "v")})  # set up before this card existed
     monkeypatch.setattr(update, "current", lambda: "0.2.3")
@@ -3268,7 +3305,7 @@ def test_whats_new_an_existing_user_without_a_record_sees_everything_since_0_2_1
 
 def test_whats_new_after_an_update_shows_the_versions_between_then_got_it(
         newsfile, app, monkeypatch):
-    from cortex import taint, update
+    from keepfold import taint, update
 
     taint.write_config({"app": {"other": 1, "whats_new_seen": "0.2.1"}})
     monkeypatch.setattr(update, "current", lambda: "0.2.3")
@@ -3284,7 +3321,7 @@ def test_whats_new_after_an_update_shows_the_versions_between_then_got_it(
 
 @pytest.mark.parametrize("bad", ["not a version", 3, ["0.2.1"], None])
 def test_whats_new_a_bad_record_is_ignored(newsfile, monkeypatch, bad):
-    from cortex import taint, update
+    from keepfold import taint, update
 
     taint.write_config({"app": {"whats_new_seen": bad}})
     monkeypatch.setattr(update, "current", lambda: "0.2.3")
@@ -3294,8 +3331,8 @@ def test_whats_new_a_bad_record_is_ignored(newsfile, monkeypatch, bad):
 
 
 def test_whats_new_ships_plain_entries():
-    from cortex import update
-    from cortex.app import news
+    from keepfold import update
+    from keepfold.app import news
 
     running = news._v(update.current())
     for v, e in news._entries().items():

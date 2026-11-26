@@ -1,4 +1,4 @@
-"""R29a: `cortex mcp` (stdio) exits when its client goes away (stdin EOF), within seconds, even
+"""R29a: `keepfold mcp` (stdio) exits when its client goes away (stdin EOF), within seconds, even
 while the warm-up loads a model or a tool call waits for the start-up index build. Each test
 starts its own server process on a temp copy of vault_mini, with the isolated home conftest
 sets in the environment."""
@@ -14,17 +14,18 @@ import pytest
 from conftest import FIXTURES
 
 EXIT_WITHIN = 10  # seconds
-SLOW_WARM_UP = ("import threading, time\nfrom cortex import semantic\n"
+SLOW_WARM_UP = ("import threading, time\nfrom keepfold import semantic\n"
                 "semantic.load_embedder = lambda download=False: time.sleep(120) "
-                "if threading.current_thread().name == 'cortex-embedder' else None\n")
-SLOW_INDEX = ("import time\nfrom cortex import mcp_server\nbuild = mcp_server.Cortex._build_index\n"
-              "mcp_server.Cortex._build_index = lambda self: (time.sleep(120), build(self))\n")
+                "if threading.current_thread().name == 'keepfold-embedder' else None\n")
+SLOW_INDEX = ("import time\nfrom keepfold import mcp_server\n"
+              "build = mcp_server.Keepfold._build_index\n"
+              "mcp_server.Keepfold._build_index = lambda self: (time.sleep(120), build(self))\n")
 
 
 def _start(tmp_path, patch=""):
     vault = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", vault)
-    boot = patch + "from cortex.taint import main\nmain()\n"
+    boot = patch + "from keepfold.taint import main\nmain()\n"
     return subprocess.Popen([sys.executable, "-c", boot, "mcp", "--vault", str(vault)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, cwd=tmp_path, env=dict(os.environ))
@@ -45,7 +46,7 @@ def _handshake(p):
 
 def _call(p, id=2):
     _send(p, {"id": id, "method": "tools/call",
-              "params": {"name": "cortex_find", "arguments": {"query": "pointers"}}})
+              "params": {"name": "keepfold_find", "arguments": {"query": "pointers"}}})
 
 
 def _closes_cleanly(p):
@@ -56,7 +57,7 @@ def _closes_cleanly(p):
     except subprocess.TimeoutExpired:
         p.kill()
         p.wait()
-        pytest.fail(f"cortex mcp still ran {EXIT_WITHIN} s after stdin closed")
+        pytest.fail(f"keepfold mcp still ran {EXIT_WITHIN} s after stdin closed")
     err = p.stderr.read().decode("utf-8", "replace")
     assert rc == 0, err
     return time.monotonic() - t

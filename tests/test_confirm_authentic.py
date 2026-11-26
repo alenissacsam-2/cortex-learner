@@ -13,8 +13,8 @@ import pytest
 from mcp import Client
 from mcp.types import Implementation
 
-from cortex import chats, mcp_server
-from cortex.vault import Vault
+from keepfold import chats, mcp_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -60,9 +60,9 @@ def inbox(root):
 
 def test_an_exposed_chat_saves_the_line_unconfirmed(vault):
     async def body(call):
-        await call("cortex_prime", {"prompt": PROMPT})
-        await call("cortex_read", {"id": "raw/src.md"})
-        return await call("cortex_patch", {**PATCH, "text": "Prefers short answers"})
+        await call("keepfold_prime", {"prompt": PROMPT})
+        await call("keepfold_read", {"id": "raw/src.md"})
+        return await call("keepfold_patch", {**PATCH, "text": "Prefers short answers"})
 
     out = serve(vault, body)
     assert out["changed"] is True and "queued" not in out, out
@@ -74,10 +74,10 @@ def test_an_exposed_chat_saves_the_line_unconfirmed(vault):
 
 def test_a_line_the_users_turn_says_stays_confirmed(vault):
     async def body(call):
-        p = await call("cortex_prime", {"prompt": "hello"})
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        p = await call("keepfold_prime", {"prompt": "hello"})
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "chat": p["chat"], "user": PROMPT, "gist": "Hi."}})
-        return await call("cortex_patch", {**PATCH, "text": "Prefers short answers, no fluff"})
+        return await call("keepfold_patch", {**PATCH, "text": "Prefers short answers, no fluff"})
 
     out = serve(vault, body)
     assert out["changed"] is True and out.get("claim"), out
@@ -88,8 +88,8 @@ def test_a_downgraded_revise_keeps_the_line_it_replaces(vault):
     """Audit 21 Nov M4: a relayed revise lost its pair to the old line. 22 Nov: the pair is
     settled at once, and a guess never replaces the user's own line: it is not saved."""
     async def body(call):
-        await call("cortex_prime", {"prompt": PROMPT})
-        return await call("cortex_patch", {"id": "me/preferences", "op": "revise",
+        await call("keepfold_prime", {"prompt": PROMPT})
+        return await call("keepfold_patch", {"id": "me/preferences", "op": "revise",
                                            "target": "c-plain", "text": "Wants jargon everywhere",
                                            "user_confirmed": True})
 
@@ -106,8 +106,8 @@ def test_a_downgraded_goals_revise_says_it_is_saved_not_waiting(vault):
                                            encoding="utf-8")
 
     async def body(call):
-        await call("cortex_prime", {"prompt": PROMPT})
-        return await call("cortex_patch", {"id": "me/goals", "op": "revise", "target": "c-goals",
+        await call("keepfold_prime", {"prompt": PROMPT})
+        return await call("keepfold_patch", {"id": "me/goals", "op": "revise", "target": "c-goals",
                                            "text": "Pass the Hyland OA", "user_confirmed": True})
 
     out = serve(vault, body)
@@ -118,9 +118,9 @@ def test_a_downgraded_goals_revise_says_it_is_saved_not_waiting(vault):
 
 def test_a_line_no_turn_says_is_downgraded(vault):
     async def body(call):
-        await call("cortex_prime", {"prompt": PROMPT})
-        a = await call("cortex_patch", {**PATCH, "text": "Loves long essays about tarot"})
-        b = await call("cortex_patch", {"id": "me/preferences", "op": "revise",
+        await call("keepfold_prime", {"prompt": PROMPT})
+        a = await call("keepfold_patch", {**PATCH, "text": "Loves long essays about tarot"})
+        b = await call("keepfold_patch", {"id": "me/preferences", "op": "revise",
                                         "target": "c-plain", "text": "Wants jargon everywhere",
                                         "user_confirmed": True})
         return a, b
@@ -135,9 +135,9 @@ def test_a_line_no_turn_says_is_downgraded(vault):
 
 
 def test_no_logged_turns_leaves_the_yes_as_is(vault):
-    async def body(call):  # Claude Code: Cortex logs no turns (its transcripts exist)
-        await call("cortex_prime", {"prompt": PROMPT})
-        return await call("cortex_patch", {**PATCH, "text": "Loves long essays about tarot"})
+    async def body(call):  # Claude Code: Keepfold logs no turns (its transcripts exist)
+        await call("keepfold_prime", {"prompt": PROMPT})
+        return await call("keepfold_patch", {**PATCH, "text": "Loves long essays about tarot"})
 
     out = serve(vault, body, client="claude-code")
     assert out["changed"] is True, out
@@ -145,7 +145,7 @@ def test_no_logged_turns_leaves_the_yes_as_is(vault):
 
 
 def test_the_app_click_is_never_downgraded(vault):
-    core = mcp_server.Cortex(Vault(vault))
+    core = mcp_server.Keepfold(Vault(vault))
     core.app_clicks = True
     cid = "01JAAAAAAAAAAAAAAAAAAAAAAA"
     live = chats.export_root() / chats.LIVE
@@ -153,8 +153,8 @@ def test_the_app_click_is_never_downgraded(vault):
     (live / f"{cid}.jsonl").write_text(json.dumps(
         {"type": "user", "message": {"content": "hello there"}}) + "\n", encoding="utf-8")
     core._chat = (cid, time.monotonic())  # a logged turn that does not say the line
-    core._call("cortex_read", core.cortex_read, {"id": "raw/src.md"})
-    out = core._call("cortex_patch", core.cortex_patch,
+    core._call("keepfold_read", core.keepfold_read, {"id": "raw/src.md"})
+    out = core._call("keepfold_patch", core.keepfold_patch,
                      {**PATCH, "text": "Loves long essays about tarot"})
     assert core.sessions.current.exposed  # outside text read, and still written confirmed
     assert out["changed"] is True, out

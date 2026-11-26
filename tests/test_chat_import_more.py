@@ -1,4 +1,4 @@
-"""R8: the automatic chat import (cortex.chat_import) also reads OpenAI Codex CLI, Google Gemini
+"""R8: the automatic chat import (keepfold.chat_import) also reads OpenAI Codex CLI, Google Gemini
 CLI and GitHub Copilot CLI sessions from a temp home. Fixtures are written by hand from each
 tool's published format (openai/codex rollout lines, gemini-cli chatRecordingService records,
 the Copilot session events of microsoft/copilot-sdk), never copied from a real session."""
@@ -14,9 +14,9 @@ from test_app import vault as vault  # noqa: F401 (fixture)
 from test_chat_import import KEY, T0, page, saved
 from test_chat_import import dirs as dirs  # noqa: F401 (fixture)
 
-from cortex import chat_import, taint
-from cortex.events import local_day
-from cortex.vault import Vault
+from keepfold import chat_import, taint
+from keepfold.events import local_day
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home", "dirs")
 
@@ -129,7 +129,7 @@ def test_a_codex_session_in_an_excluded_folder_and_a_skip_category(root_committe
     taint.write_config({"exclude": [str(secret)], "browse": {"skip_categories": ["adult"]}})
     v = Vault(root_committed)
     assert chat_import.run(v) == {"excluded_folder": 1, "skipped_category": 1, "saved": 1}
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     rows = chat_import.made_private(v, EventLog(v).iter_events())
     assert [(r["app"], r["category"]) for r in rows] == [("Codex", "health")]
 

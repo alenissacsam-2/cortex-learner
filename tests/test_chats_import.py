@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex import chats
-from cortex.vault import VaultError
+from keepfold import chats
+from keepfold.vault import VaultError
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 GPT = "chatgpt/6700aaaa-1111-2222-3333-444455556666"
@@ -16,8 +16,8 @@ GPT = "chatgpt/6700aaaa-1111-2222-3333-444455556666"
 
 @pytest.fixture
 def out(tmp_path, monkeypatch):
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
     return tmp_path / "exported"
 
 
@@ -193,7 +193,7 @@ def test_dry_run_counts_new_and_already_imported_and_writes_nothing(out, tmp_pat
 
 
 def test_gemini_html_gives_the_same_rows_as_json(out, tmp_path):
-    from cortex.browse import takeout
+    from keepfold.browse import takeout
     page = EXPORTS / "takeout_html" / "Takeout" / "My Activity" / "Gemini Apps" / "MyActivity.html"
     rows, skipped = takeout.html_rows(page.read_bytes())
     js = json.loads((EXPORTS / "gemini_MyActivity.json").read_text("utf-8"))
@@ -274,7 +274,7 @@ def test_perplexity_threads_that_only_open_the_same_way_never_merge(out, tmp_pat
 def test_gemini_html_rows_with_an_unreadable_date_are_counted(out, tmp_path):
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
     page = (EXPORTS / "takeout_html" / "Takeout" / "My Activity" / "Gemini Apps" /
             "MyActivity.html").read_text("utf-8")
     bad = page.replace("Oct 2, 2026, 2:29:00&#8239;PM IST", "sometime")
@@ -300,7 +300,7 @@ def test_gemini_takeout_in_another_language(out, tmp_path, folder, stem, product
     text = (EXPORTS / "gemini_MyActivity.json").read_text("utf-8")
     text = text.replace("Gemini Apps", product).replace('"Prompted ', f'"{label}')
     z = _zip(tmp_path, {f"Takeout/{folder}/{product}/{stem}.json": text})
-    from cortex import importers
+    from keepfold import importers
     assert importers.detect(z) == ["chats"]
     assert chats.import_export(z) == ("gemini", 3)
     assert chats.read_parts("gemini/2026-10-02-0900")[0].startswith("User: How does BFS work?")

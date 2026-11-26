@@ -1,5 +1,5 @@
-"""B2-b: a chat export in Downloads, offered on Home (cortex.app.exports). Tmp folders only:
-CORTEX_DOWNLOADS_DIR points at a tmp Downloads, `home` at a tmp ~/.cortex."""
+"""B2-b: a chat export in Downloads, offered on Home (keepfold.app.exports). Tmp folders only:
+KEEPFOLD_DOWNLOADS_DIR points at a tmp Downloads, `home` at a tmp ~/.keepfold."""
 
 import os
 import time
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cortex.app import exports, server, targets
+from keepfold.app import exports, server, targets
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 CLAUDE = ["conversations.json", "users.json", "projects.json"]
@@ -21,7 +21,7 @@ CHROME = ["Takeout/My Activity/Chrome/MyActivity.html"]
 def dl(tmp_path, home, monkeypatch):
     d = tmp_path / "Downloads"
     d.mkdir()
-    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(d))
+    monkeypatch.setenv("KEEPFOLD_DOWNLOADS_DIR", str(d))
     monkeypatch.setattr(targets.ClaudeDesktop, "connected", lambda self: False)
     exports.forget()
     exports._kinds.clear()
@@ -82,7 +82,7 @@ def test_only_new_recent_known_zips_are_offered_without_reading_them(dl, monkeyp
 
 
 def test_off_when_the_chat_import_setting_is_off(dl, monkeypatch):
-    from cortex import chat_import
+    from keepfold import chat_import
     make(dl, "c.zip", CLAUDE)
     monkeypatch.setattr(chat_import, "enabled", lambda: False)
     assert exports.offer() == {"found": None, "remind": False}
@@ -91,7 +91,7 @@ def test_off_when_the_chat_import_setting_is_off(dl, monkeypatch):
 
 
 def test_the_reminder_needs_claude_desktop_and_no_recent_claude_import(dl, monkeypatch):
-    from cortex import chats
+    from keepfold import chats
     assert exports.offer()["remind"] is False
     monkeypatch.setattr(targets.ClaudeDesktop, "connected", lambda self: True)
     exports.forget()
@@ -119,7 +119,7 @@ def test_the_reminder_needs_claude_desktop_and_no_recent_claude_import(dl, monke
 def app(root_committed, dl, monkeypatch):
     from test_app import _serve
     monkeypatch.setattr(server, "PORT", 0)
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     srv, a = _serve(root_committed)
     yield a
     srv.shutdown()
@@ -141,7 +141,7 @@ def test_routes_need_the_token_and_origin(app):
 def test_add_starts_the_import_with_the_found_source(app, dl):
     from test_app import call, wait_job
 
-    from cortex import chats
+    from keepfold import chats
     data = {"conversations.json": (EXPORTS / "chatgpt_conversations.json").read_text("utf-8")}
     p = make(dl, "gpt.zip", CHATGPT, data=data)
     code, got, _, _ = call(app, "GET", "/api/import/pickup")

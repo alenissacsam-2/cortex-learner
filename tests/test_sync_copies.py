@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 import pytest
 from conftest import FIXTURES
 
-from cortex import doctor, lint, sync_copies
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import doctor, lint, sync_copies
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 NOON = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 SID = "s_01JCDE0000000000000000ABCD"
@@ -55,7 +55,7 @@ def _copy(root, rel, new):
 def test_find_lists_copies_but_never_dot_folders_or_private_browsing(root):
     _copy(root, "concepts/two-pointers.md", "two-pointers (conflicted copy 2026-11-24).md")
     _copy(root, "me/profile.md", "profile-DESKTOP-AB12CD3.md")
-    for d in (".cortex", "browse/private"):
+    for d in (".keepfold", "browse/private"):
         (root / d).mkdir(parents=True, exist_ok=True)
         (root / d / "x.sync-conflict-20261124-101010-ABCDEF7.md").write_text("x")
     assert sync_copies.find(root) == [
@@ -108,7 +108,7 @@ def test_a_differing_copy_keeps_the_session_files_event_and_warns_once(root, cap
     main = _session_file(root)
     copy = main.with_name(f"{SID}-DESKTOP-AB12CD3.jsonl")
     copy.write_bytes(_line({**a, "verdict": "wrong"}))
-    with caplog.at_level(logging.WARNING, logger="cortex.events"):
+    with caplog.at_level(logging.WARNING, logger="keepfold.events"):
         got = list(_log(root).iter_events())
         list(_log(root).iter_events())
     assert [(e["id"], e["verdict"]) for e in got] == [(a["id"], "correct")]
@@ -151,10 +151,10 @@ def test_doctor_warns_with_the_count_and_up_to_five_paths(root):
 
 
 def test_the_apps_doctor_shows_the_warn_line(root_committed):
-    from cortex.app import actions
+    from keepfold.app import actions
 
     root = root_committed
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     _copy(root, "concepts/two-pointers.md", "two-pointers-DESKTOP-AB12CD3.md")
 
     class Job:

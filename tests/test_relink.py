@@ -1,14 +1,14 @@
-"""`cortex relink` and the Obsidian graph links new writes carry (synthetic vaults only)."""
+"""`keepfold relink` and the Obsidian graph links new writes carry (synthetic vaults only)."""
 
 import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
-from cortex import people, relink
-from cortex.cli import app
-from cortex.index import _edge_targets
-from cortex.vault import Vault
+from keepfold import people, relink
+from keepfold.cli import app
+from keepfold.index import _edge_targets
+from keepfold.vault import Vault
 
 
 def _w(root: Path, rel: str, text: str) -> Path:
@@ -198,9 +198,9 @@ def test_short_trailing_id_segments_do_not_match():
 
 
 def test_domains_join_hubs_idempotently_and_survive_a_hub_rebuild(root_plain):
-    from cortex import topics
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold import topics
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
 
     v = _study(root_plain)
     before = {p: p.read_bytes() for p in root_plain.rglob("*.md")}

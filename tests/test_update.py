@@ -1,4 +1,4 @@
-"""cortex.update: the latest-release check, the checked download and the installer launch, with a
+"""keepfold.update: the latest-release check, the checked download and the installer launch, with a
 fake GitHub (an injected opener; no network)."""
 
 import hashlib
@@ -13,8 +13,8 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from cortex import update
-from cortex.cli import REPO
+from keepfold import update
+from keepfold.cli import REPO
 
 API = f"{update.API}/repos/{REPO}/releases/latest"
 DL = f"https://github.com/{REPO}/releases/download/v0.2.0/"
@@ -28,7 +28,7 @@ class Resp(io.BytesIO):
         self.headers = headers or {}
 
 
-def release(tag="v0.2.0", assets=("CortexSetup.exe", "CortexSetup.exe.sha256"), **extra):
+def release(tag="v0.2.0", assets=("KeepfoldSetup.exe", "KeepfoldSetup.exe.sha256"), **extra):
     return {"tag_name": tag, "html_url": "https://evil.example/notes", "prerelease": False,
             "draft": False, **extra,
             "assets": [{"name": n, "browser_download_url": DL + n, "size": len(EXE)}
@@ -37,7 +37,7 @@ def release(tag="v0.2.0", assets=("CortexSetup.exe", "CortexSetup.exe.sha256"), 
 
 def moved(base: str) -> dict:
     """A release whose asset links point under `base` instead of its own tag."""
-    names = ("CortexSetup.exe", "CortexSetup.exe.sha256")
+    names = ("KeepfoldSetup.exe", "KeepfoldSetup.exe.sha256")
     return {**release(), "assets": [{"name": n, "browser_download_url": base + n} for n in names]}
 
 
@@ -63,13 +63,14 @@ def fake(routes: dict):
 
 def info(**over):
     return {"tag": "v0.2.0", "version": (0, 2, 0), "notes_url": "n",
-            "exe_url": DL + "CortexSetup.exe", "sha_url": DL + "CortexSetup.exe.sha256",
+            "exe_url": DL + "KeepfoldSetup.exe", "sha_url": DL + "KeepfoldSetup.exe.sha256",
             "exe_size": len(EXE), **over}
 
 
 def files(routes=None, sha=SHA):
-    return {DL + "CortexSetup.exe": EXE,
-            DL + "CortexSetup.exe.sha256": f"{sha}  CortexSetup.exe\n".encode(), **(routes or {})}
+    return {DL + "KeepfoldSetup.exe": EXE,
+            DL + "KeepfoldSetup.exe.sha256": f"{sha}  KeepfoldSetup.exe\n".encode(),
+            **(routes or {})}
 
 
 # ---- latest ---------------------------------------------------------------------------------
@@ -80,12 +81,12 @@ def test_latest_reads_the_release_with_a_generic_request():
     got = update.latest(opener=op)
     assert got == {"tag": "v0.2.0", "version": (0, 2, 0),
                    "notes_url": f"https://github.com/{REPO}/releases/tag/v0.2.0",  # never html_url
-                   "exe_url": DL + "CortexSetup.exe", "sha_url": DL + "CortexSetup.exe.sha256",
+                   "exe_url": DL + "KeepfoldSetup.exe", "sha_url": DL + "KeepfoldSetup.exe.sha256",
                    "exe_size": len(EXE)}
     (req,) = op.seen
     assert req["timeout"] == 10
     assert req["headers"] == {"Accept": "application/vnd.github+json",
-                              "User-agent": "cortex-updater"}
+                              "User-agent": "keepfold-updater"}
 
 
 @pytest.mark.parametrize("tag,want", [("v0.2.0", (0, 2, 0)), ("1.2", (1, 2)),
@@ -113,8 +114,8 @@ def test_newer_older_same():
     (release(prerelease=True), "pre-release"),
     (release(tag="v0.3.0-beta"), "not a release version"),
     (release(tag="nightly"), "not a release version"),
-    (release(assets=("CortexSetup.exe",)), r"\.sha256"),
-    (release(assets=("CortexSetup.exe.sha256", "other.zip")), "CortexSetup.exe"),
+    (release(assets=("KeepfoldSetup.exe",)), r"\.sha256"),
+    (release(assets=("KeepfoldSetup.exe.sha256", "other.zip")), "KeepfoldSetup.exe"),
     ([1, 2], "could not read"),
     # links that are not exactly this release's files (another tag, a `..` path)
     (moved(DL.replace("v0.2.0", "v0.1.0")), "not this release"),
@@ -126,7 +127,7 @@ def test_latest_refuses_what_cannot_be_installed(data, match):
 
 
 @pytest.mark.parametrize("route,match", [(403, "refusing"), (429, "refusing"),
-                                         (404, "no Cortex release"), (500, "answered 500"),
+                                         (404, "no Keepfold release"), (500, "answered 500"),
                                          (None, "internet connection"), (b"{not json", "read")])
 def test_latest_errors_say_what_happened(route, match):
     with pytest.raises(update.UpdateError, match=match):
@@ -185,9 +186,9 @@ def test_download_checks_the_hash_and_reports_progress(tmp_path):
     seen = []
     out = update.download(info(), tmp_path / "d", lambda g, t: seen.append((g, t)),
                           threading.Event(), opener=fake(files()))
-    assert out == tmp_path / "d" / "CortexSetup.exe" and out.read_bytes() == EXE
-    assert sorted(os.listdir(tmp_path / "d")) == ["CortexSetup.exe", "CortexSetup.exe.sha256"]
-    assert (tmp_path / "d" / "CortexSetup.exe.sha256").read_text() == SHA  # no .part left
+    assert out == tmp_path / "d" / "KeepfoldSetup.exe" and out.read_bytes() == EXE
+    assert sorted(os.listdir(tmp_path / "d")) == ["KeepfoldSetup.exe", "KeepfoldSetup.exe.sha256"]
+    assert (tmp_path / "d" / "KeepfoldSetup.exe.sha256").read_text() == SHA  # no .part left
     assert seen and seen[-1][1] == len(EXE)
 
 
@@ -195,8 +196,8 @@ def test_an_installer_already_there_is_not_fetched_again(tmp_path):
     update.download(info(), tmp_path, opener=fake(files()))
     op = fake(files())
     assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE
-    assert [s["url"] for s in op.seen] == [DL + "CortexSetup.exe.sha256"]  # only the checksum
-    (tmp_path / "CortexSetup.exe").write_bytes(b"MZ changed")  # not the release's: fetched again
+    assert [s["url"] for s in op.seen] == [DL + "KeepfoldSetup.exe.sha256"]  # only the checksum
+    (tmp_path / "KeepfoldSetup.exe").write_bytes(b"MZ changed")  # not the release's: fetched again
     op = fake(files())
     assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE and len(op.seen) == 2
 
@@ -204,14 +205,14 @@ def test_an_installer_already_there_is_not_fetched_again(tmp_path):
 def test_prepared_is_a_newer_installer_that_still_matches_its_checksum(monkeypatch):
     from pathlib import Path
     monkeypatch.setattr(update, "current", lambda: "0.2.0")
-    tmp = Path.home() / ".cortex" / "tmp"
+    tmp = Path.home() / ".keepfold" / "tmp"
     assert update.prepared() is None
     for ver, body, sha in (("0.1.9", EXE, SHA), ("0.2.0", EXE, SHA), ("0.3.0", EXE, SHA),
                            ("0.4.0", b"MZ half", SHA), ("0.5.0", EXE, None)):
         (tmp / f"update-{ver}").mkdir(parents=True)
-        (tmp / f"update-{ver}" / "CortexSetup.exe").write_bytes(body)
+        (tmp / f"update-{ver}" / "KeepfoldSetup.exe").write_bytes(body)
         if sha:
-            (tmp / f"update-{ver}" / "CortexSetup.exe.sha256").write_text(sha)
+            (tmp / f"update-{ver}" / "KeepfoldSetup.exe.sha256").write_text(sha)
     (tmp / "update-junk").mkdir()
     assert update.prepared() == tmp / "update-0.3.0"  # older, same, torn, unchecked: not kept
 
@@ -223,23 +224,23 @@ def test_a_hash_mismatch_deletes_the_file(tmp_path):
 
 
 def test_an_unreadable_checksum_file_stops_before_the_download(tmp_path):
-    op = fake(files({DL + "CortexSetup.exe.sha256": b"<html>not a hash</html>"}))
+    op = fake(files({DL + "KeepfoldSetup.exe.sha256": b"<html>not a hash</html>"}))
     with pytest.raises(update.UpdateError, match="checksum file"):
         update.download(info(), tmp_path / "d", opener=op)
     assert not (tmp_path / "d").exists() and len(op.seen) == 1
 
 
 def test_redirects_only_to_githubusercontent_over_https(tmp_path):
-    cdn = "https://objects.githubusercontent.com/x/CortexSetup.exe"
-    op = fake(files({DL + "CortexSetup.exe": (302, cdn), cdn: EXE}))
+    cdn = "https://objects.githubusercontent.com/x/KeepfoldSetup.exe"
+    op = fake(files({DL + "KeepfoldSetup.exe": (302, cdn), cdn: EXE}))
     assert update.download(info(), tmp_path, opener=op).read_bytes() == EXE
-    cdn2 = "https://release-assets.githubusercontent.com/y/CortexSetup.exe"
-    op = fake(files({DL + "CortexSetup.exe": (302, cdn2), cdn2: EXE}))
+    cdn2 = "https://release-assets.githubusercontent.com/y/KeepfoldSetup.exe"
+    op = fake(files({DL + "KeepfoldSetup.exe": (302, cdn2), cdn2: EXE}))
     assert update.download(info(), tmp_path / "ok2", opener=op).read_bytes() == EXE
-    for bad in ("https://evil.example/CortexSetup.exe", "http://objects.githubusercontent.com/x",
+    for bad in ("https://evil.example/KeepfoldSetup.exe", "http://objects.githubusercontent.com/x",
                 "https://githubusercontent.com.evil.example/x",
-                "https://raw.githubusercontent.com/someone/repo/main/CortexSetup.exe"):
-        op = fake(files({DL + "CortexSetup.exe": (302, bad), bad: EXE}))
+                "https://raw.githubusercontent.com/someone/repo/main/KeepfoldSetup.exe"):
+        op = fake(files({DL + "KeepfoldSetup.exe": (302, bad), bad: EXE}))
         with pytest.raises(update.UpdateError, match="not GitHub"):
             update.download(info(), tmp_path / "bad", opener=op)
         assert bad not in [r["url"] for r in op.seen]
@@ -247,9 +248,9 @@ def test_redirects_only_to_githubusercontent_over_https(tmp_path):
 
 
 def test_only_this_repos_release_files(tmp_path):
-    for url in ("https://github.com/someone/else/releases/download/v1/CortexSetup.exe",
-                f"http://github.com/{REPO}/releases/download/v1/CortexSetup.exe", None):
-        with pytest.raises(update.UpdateError, match="not a Cortex release"):
+    for url in ("https://github.com/someone/else/releases/download/v1/KeepfoldSetup.exe",
+                f"http://github.com/{REPO}/releases/download/v1/KeepfoldSetup.exe", None):
+        with pytest.raises(update.UpdateError, match="not a Keepfold release"):
             update.download(info(exe_url=url), tmp_path, opener=fake(files()))
 
 
@@ -269,20 +270,20 @@ def test_cancel_leaves_nothing(tmp_path):
     assert os.listdir(tmp_path) == []
 
 
-def test_dest_dir_is_under_cortex_tmp(tmp_path):
-    assert update.dest_dir(info()) == update.Path.home() / ".cortex" / "tmp" / "update-0.2.0"
+def test_dest_dir_is_under_keepfold_tmp(tmp_path):
+    assert update.dest_dir(info()) == update.Path.home() / ".keepfold" / "tmp" / "update-0.2.0"
 
 
 # ---- mode, command, launch ------------------------------------------------------------------
 
 
 def test_mode_installer_when_a_parent_holds_the_marker(tmp_path, monkeypatch):
-    py = tmp_path / "Cortex" / "tools" / "cortex-learner" / "Scripts" / "python.exe"
+    py = tmp_path / "Keepfold" / "tools" / "keepfold" / "Scripts" / "python.exe"
     py.parent.mkdir(parents=True)
     monkeypatch.setattr(sys, "executable", str(py))
     assert update.mode() == "dev" and update.install_dir() is None
-    (tmp_path / "Cortex" / update.MARKER).write_text("x")
-    assert update.mode() == "installer" and update.install_dir() == tmp_path / "Cortex"
+    (tmp_path / "Keepfold" / update.MARKER).write_text("x")
+    assert update.mode() == "installer" and update.install_dir() == tmp_path / "Keepfold"
 
 
 def test_dev_command_matches_the_install_guide(tmp_path, monkeypatch):
@@ -295,8 +296,8 @@ def test_dev_command_matches_the_install_guide(tmp_path, monkeypatch):
 
 
 def test_fixed_tool_copy_updates_from_its_source_folder(tmp_path, monkeypatch):
-    tool = tmp_path / "uv" / "tools" / "cortex-learner"
-    here = tool / "Lib" / "site-packages" / "cortex" / "update.py"
+    tool = tmp_path / "uv" / "tools" / "keepfold"
+    here = tool / "Lib" / "site-packages" / "keepfold" / "update.py"
     monkeypatch.setattr(update, "HERE", here)
     monkeypatch.setattr(update, "CHECKOUT", here.parents[2])  # site-packages has no .git
     src = tmp_path / "K-Graph"
@@ -305,10 +306,10 @@ def test_fixed_tool_copy_updates_from_its_source_folder(tmp_path, monkeypatch):
     assert update.command("v0.2.0") == git_cmd  # no receipt yet
     tool.mkdir(parents=True)
     receipt = tool / "uv-receipt.toml"
-    receipt.write_text("[tool]\nrequirements = [{ name = \"cortex-learner\", editable = "
+    receipt.write_text("[tool]\nrequirements = [{ name = \"keepfold\", editable = "
                        f"'{src}' }}]\n", encoding="utf-8")
     assert update.command("v0.2.0") == git_cmd  # editable receipts are not a fixed copy
-    receipt.write_text("[tool]\nrequirements = [{ name = \"cortex-learner\", directory = "
+    receipt.write_text("[tool]\nrequirements = [{ name = \"keepfold\", directory = "
                        f"'{src}' }}]\n", encoding="utf-8")
     assert update.tool_source() == src
     assert update.command("v0.2.0") == \
@@ -320,9 +321,9 @@ def test_fixed_tool_copy_updates_from_its_source_folder(tmp_path, monkeypatch):
 def test_launch_starts_the_installer_detached(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(subprocess, "Popen", lambda args, **k: seen.update(args=args, **k))
-    update.launch(tmp_path / "CortexSetup.exe", 4242, tmp_path / "Cortex")
-    assert seen["args"] == [str(tmp_path / "CortexSetup.exe"), "--update", "--wait-pid", "4242",
-                            "--dir", str(tmp_path / "Cortex")]
+    update.launch(tmp_path / "KeepfoldSetup.exe", 4242, tmp_path / "Keepfold")
+    assert seen["args"] == [str(tmp_path / "KeepfoldSetup.exe"), "--update", "--wait-pid", "4242",
+                            "--dir", str(tmp_path / "Keepfold")]
     assert seen["close_fds"] and seen["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     if sys.platform == "win32":
         assert seen["creationflags"] == subprocess.DETACHED_PROCESS | \

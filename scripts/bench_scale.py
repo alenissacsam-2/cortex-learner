@@ -1,4 +1,4 @@
-"""Cortex's big data paths at scale, on synthetic data only (a temp folder and a temp HOME).
+"""Keepfold's big data paths at scale, on synthetic data only (a temp folder and a temp HOME).
 
   vectors  a vault of --notes pages of ~10 chunks each, embedded once by a fast fake embedder
            (384 dimensions); then the time to add one page, a query's vector part (the cache
@@ -34,7 +34,7 @@ DIM = 384
 
 
 def _home(tmp: Path) -> None:
-    """A temp HOME, so the real ~/.cortex is never read or written."""
+    """A temp HOME, so the real ~/.keepfold is never read or written."""
     h = tmp / "home"
     h.mkdir(parents=True)
     for var in ("HOME", "USERPROFILE"):
@@ -84,10 +84,10 @@ def _page(rng, n_chars: int) -> str:
 
 
 def bench_vectors(tmp: Path, notes: int) -> None:
-    from cortex import semantic
-    from cortex.catalog import Catalog
-    from cortex.index import Index
-    from cortex.vault import Vault
+    from keepfold import semantic
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
+    from keepfold.vault import Vault
 
     root = _vault(tmp)
     rng = np.random.default_rng(1)
@@ -103,7 +103,7 @@ def bench_vectors(tmp: Path, notes: int) -> None:
                                 lambda: semantic.vectors(index, embed, DIM))
     print(f"  {len(ids)} pages, {len(m)} chunks; on disk "
           + ", ".join(f"{p.name} {p.stat().st_size / 1e6:.0f} MB"
-                      for p in sorted((root / ".cortex").glob("vectors*")) if p.is_file()))
+                      for p in sorted((root / ".keepfold").glob("vectors*")) if p.is_file()))
     q = np.asarray(embed(["query"])[0], np.float32)
 
     def query():
@@ -128,8 +128,8 @@ def bench_browse(tmp: Path, visits: int) -> None:
     sys.path.insert(0, str(TESTS))
     from test_browse_perf import NOW, STEPS, Embed, heavy_history
 
-    from cortex.browse import Settings, build, sources, store
-    from cortex.vault import Vault
+    from keepfold.browse import Settings, build, sources, store
+    from keepfold.vault import Vault
 
     root = _vault(tmp)
     for d in ("notes", "resources"):
@@ -185,11 +185,11 @@ def main() -> None:
     ap.add_argument("--visits", type=int, default=200_000)
     ap.add_argument("--keep", action="store_true", help="keep the temp folder")
     args = ap.parse_args()
-    tmp = Path(tempfile.mkdtemp(prefix="cortex-bench-scale-"))
+    tmp = Path(tempfile.mkdtemp(prefix="keepfold-bench-scale-"))
     _home(tmp)
     try:
-        import cortex
-        print(f"{args.what} with {Path(cortex.__file__).parent}")
+        import keepfold
+        print(f"{args.what} with {Path(keepfold.__file__).parent}")
         if args.what == "vectors":
             bench_vectors(tmp, args.notes)
         else:

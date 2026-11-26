@@ -10,10 +10,10 @@ from test_losslessness import rows_of, update, warm  # noqa: F401  (warm is a fi
 from test_review import app, live, today  # noqa: F401  (app is a fixture)
 from test_review_conflicts import cid, prefs
 
-from cortex import fact_harvest as fh
-from cortex import prime, review
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import fact_harvest as fh
+from keepfold import prime, review
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -75,7 +75,7 @@ def test_each_keep_on_an_update_card_ends_the_hold(root, app, keep):  # noqa: F8
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
-        await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                     "target": "Coding", "user_confirmed": True,
                                     "text": "- Uses Vim for editing code at work"})
 

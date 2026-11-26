@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex.catalog import Catalog
-from cortex.vault import Vault
+from keepfold.catalog import Catalog
+from keepfold.vault import Vault
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
 
@@ -20,7 +20,7 @@ def v(tmp_path):
 
 
 def _rewrite(path: Path, old: str, new: str) -> None:
-    """Edit the file outside Cortex and move its mtime on, as an editor save would."""
+    """Edit the file outside Keepfold and move its mtime on, as an editor save would."""
     st = path.stat()
     path.write_bytes(path.read_bytes().replace(old.encode(), new.encode()))
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))

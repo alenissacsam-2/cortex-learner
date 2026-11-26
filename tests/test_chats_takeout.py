@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex.browse import privacy, sources, takeout
-from cortex.vault import VaultError
+from keepfold.browse import privacy, sources, takeout
+from keepfold.vault import VaultError
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 

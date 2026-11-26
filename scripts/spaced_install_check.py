@@ -2,8 +2,8 @@
 `uv run python scripts/spaced_install_check.py` (Windows; downloads Python and packages).
 
 Builds the payload the way installer/build.py does, runs setup_app.install() into
-<temp>\\Jöhn Smith ü\\Cortex under a temp home (no shortcuts, PATH or registry), then runs
-bin\\cortex.exe --version and doctor there. Prints PASS or FAIL; deletes its temp folder.
+<temp>\\Jöhn Smith ü\\Keepfold under a temp home (no shortcuts, PATH or registry), then runs
+bin\\keepfold.exe --version and doctor there. Prints PASS or FAIL; deletes its temp folder.
 The bug it guards: uv 0.9.15 split the `-c constraints.txt` path on spaces (uv#22290)."""
 
 import os
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # doctor prints arrows; a pipe
     uv = shutil.which("uv") or sys.exit("uv is not on PATH.")
-    tmp = Path(tempfile.mkdtemp(prefix="cortex-spaced-"))
+    tmp = Path(tempfile.mkdtemp(prefix="keepfold-spaced-"))
     try:
         payload = tmp / "payload"
         subprocess.run([uv, "build", "--wheel", "--quiet", "--out-dir", str(payload)], cwd=ROOT,
@@ -40,13 +40,13 @@ def main() -> int:
                           LOCALAPPDATA=str(home / "AppData" / "Local"),
                           TEMP=str(home / "AppData" / "Local" / "Temp"),
                           TMP=str(home / "AppData" / "Local" / "Temp"),
-                          CORTEX_CHATS_DIR=str(home / "chats"),
-                          CORTEX_CHAT_EXPORT_DIR=str(home / "exports"))
+                          KEEPFOLD_CHATS_DIR=str(home / "chats"),
+                          KEEPFOLD_CHAT_EXPORT_DIR=str(home / "exports"))
         tempfile.tempdir = None
         sys.path.insert(0, str(ROOT / "installer"))
         import setup_app
 
-        d = tmp / "Jöhn Smith ü" / "Cortex"
+        d = tmp / "Jöhn Smith ü" / "Keepfold"
         opts = setup_app.parse_args(["--dir", str(d), "--no-shortcuts", "--no-path",
                                      "--no-registry"])
         try:
@@ -54,15 +54,15 @@ def main() -> int:
         except setup_app.SetupError as e:
             print(f"FAIL: install: {e}")
             return 1
-        exe = d / "bin" / "cortex.exe"
+        exe = d / "bin" / "keepfold.exe"
         ver = subprocess.run([str(exe), "--version"], capture_output=True, text=True,
                              encoding="utf-8", errors="replace")
-        print(f"cortex --version: exit {ver.returncode}: {(ver.stdout + ver.stderr).strip()}")
+        print(f"keepfold --version: exit {ver.returncode}: {(ver.stdout + ver.stderr).strip()}")
         doc = subprocess.run([str(exe), "doctor"], capture_output=True, text=True,
                              encoding="utf-8", errors="replace")
-        print(f"cortex doctor: exit {doc.returncode}\n{(doc.stdout + doc.stderr).strip()}")
+        print(f"keepfold doctor: exit {doc.returncode}\n{(doc.stdout + doc.stderr).strip()}")
         ok = ver.returncode == 0
-        print("PASS" if ok else "FAIL: cortex --version did not exit 0")
+        print("PASS" if ok else "FAIL: keepfold --version did not exit 0")
         return 0 if ok else 1
     finally:
         shutil.rmtree(tmp, onexc=lambda f, p, e: (os.chmod(p, 0o700), f(p)))

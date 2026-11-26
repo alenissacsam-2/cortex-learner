@@ -1,13 +1,13 @@
-"""v5 PHASE4.md V3: cortex_as_me, the one "act as me" read."""
+"""v5 PHASE4.md V3: keepfold_as_me, the one "act as me" read."""
 
 import pytest
 from conftest import events, run
 
-from cortex import share
-from cortex.cli import ME_PAGES
-from cortex.events import EventLog
-from cortex.mcp_server import AS_ME_NEXT
-from cortex.vault import Vault
+from keepfold import share
+from keepfold.cli import ME_PAGES
+from keepfold.events import EventLog
+from keepfold.mcp_server import AS_ME_NEXT
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -33,19 +33,19 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         return real(self, *a, **k)
 
     async def body(call):
-        await call("cortex_add", {"kind": "person", "title": "Dr Lee",
+        await call("keepfold_add", {"kind": "person", "title": "Dr Lee",
                                   "fields": {"relation": "professor"}})
-        await call("cortex_patch", _patch("me/preferences", "Communication", "- Short emails"))
-        await call("cortex_patch", _patch("me/goals", "Now", "- Finish the thesis", ok=False))
-        await call("cortex_patch", _patch("me/voice", "professor", "- Signs Regards"))
-        await call("cortex_patch", _patch("me/voice", "Everyone", "- No emoji"))
-        await call("cortex_patch", _patch("me/voice", "friend", "- Says hey"))
+        await call("keepfold_patch", _patch("me/preferences", "Communication", "- Short emails"))
+        await call("keepfold_patch", _patch("me/goals", "Now", "- Finish the thesis", ok=False))
+        await call("keepfold_patch", _patch("me/voice", "professor", "- Signs Regards"))
+        await call("keepfold_patch", _patch("me/voice", "Everyone", "- No emoji"))
+        await call("keepfold_patch", _patch("me/voice", "friend", "- Says hey"))
         for ch, text in (("email", "Dear Prof, may I ask..."), ("ai", "fix my code")):
-            await call("cortex_log", {"kind": "voice_sample", "payload": {
+            await call("keepfold_log", {"kind": "voice_sample", "payload": {
                 "text": text, "audience": "professor", "act": "request", "channel": ch}})
 
         monkeypatch.setattr(EventLog, "iter_events", counted)
-        out = await call("cortex_as_me", {"task": "Ask Dr Lee for an extension",
+        out = await call("keepfold_as_me", {"task": "Ask Dr Lee for an extension",
                                           "audience": "people/dr-lee", "act": "request",
                                           "channel": "email"})
         assert len(calls) == 1  # one event read per call
@@ -55,7 +55,7 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
             ("preferences", "Communication")]
         assert "share" not in me["lines"][0]
         assert me["lines"][0]["text"].startswith('<untrusted_note id="claim">')
-        assert me["unconfirmed"] >= 1 and "/cortex reflect" in me["hint"]  # goals (share: work)
+        assert me["unconfirmed"] >= 1 and "/keepfold reflect" in me["hint"]  # goals (share: work)
         assert me["withheld"] >= 1  # lines on self-tier pages (no share:) never leave
         assert [c["section"] for c in out["voice"]["card"]] == ["professor", "Everyone"]
         ex = out["voice"]["exemplars"]
@@ -69,28 +69,28 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
         assert not any(x.startswith("no voice") for x in u)
         assert out["next"] == AS_ME_NEXT
 
-        other = await call("cortex_as_me", {"task": "Cover letter", "audience": "recruiter"})
+        other = await call("keepfold_as_me", {"task": "Cover letter", "audience": "recruiter"})
         assert "no voice samples for recruiter" in other["unknowns"]
         assert "no voice card for recruiter" in other["unknowns"]
         assert [c["section"] for c in other["voice"]["card"]] == ["Everyone"]
         assert len(other["self"]["lines"]) == 1 and "person" not in other
-        assert len((await call("cortex_as_me", {"task": "x", "audience": "friend"}))[
+        assert len((await call("keepfold_as_me", {"task": "x", "audience": "friend"}))[
             "self"]["lines"]) == 1  # work pages reach the close tier too
-        public = (await call("cortex_as_me", {"task": "x", "audience": "public"}))["self"]
+        public = (await call("keepfold_as_me", {"task": "x", "audience": "public"}))["self"]
         assert public["lines"] == [] and public["withheld"] >= 2  # work pages, held back
         assert public["unconfirmed"] == 0 and "hint" not in public
-        out = await call("cortex_as_me", {"task": "x", "audience": "public"})
+        out = await call("keepfold_as_me", {"task": "x", "audience": "public"})
         assert "Short emails" not in str(out) and "Finish the thesis" not in str(out)
 
         for bad in ({"task": "t" * 301, "audience": "friend"},
                     {"task": "x", "audience": "Dr Lee"},
                     {"task": "x", "audience": "friend", "act": "rant"},
                     {"task": "x", "audience": "friend", "channel": "fax"}):
-            assert (await call("cortex_as_me", bad))["error"] == "invalid_argument"
-        assert (await call("cortex_as_me", {"task": "x", "audience": "people/nobody"}))[
+            assert (await call("keepfold_as_me", bad))["error"] == "invalid_argument"
+        assert (await call("keepfold_as_me", {"task": "x", "audience": "people/nobody"}))[
             "error"] == "unknown_id"
         share.set_kill(Vault(root), True)
-        assert (await call("cortex_as_me", {"task": "x", "audience": "friend"}))[
+        assert (await call("keepfold_as_me", {"task": "x", "audience": "friend"}))[
             "error"] == "killed"
         share.set_kill(Vault(root), False)
 
@@ -104,7 +104,7 @@ def test_as_me_serves_act_grade_voice_person_and_logs_access(root, monkeypatch):
 
 def test_as_me_without_confirmed_lines(root):
     async def body(call):
-        out = await call("cortex_as_me", {"task": "Thank a friend", "audience": "friend"})
+        out = await call("keepfold_as_me", {"task": "Thank a friend", "audience": "friend"})
         assert out["self"]["lines"] == [] and out["self"]["withheld"] >= 1
         assert out["voice"] == {"card": [], "exemplars": []}
         assert {"no voice samples for friend", "no voice card for friend"} <= set(

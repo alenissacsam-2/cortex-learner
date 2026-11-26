@@ -10,9 +10,9 @@ Planted (ids carry `zq7f3a`, text carries `CANARY-7F3A`):
 - a voice sample (to a friend).
 
 Surfaces: every MCP tool the server registers (the test fails if one is never called), the
-prime hook, read-only CLI output, `cortex ask` without --private (and the prompt its runner
-got), Today.md, index.md, the export snapshot, `cortex export context`, the recall log,
-`.cortex/vectors.db`, the cloud runner's input and `cloud-log.jsonl`, the app log, and the app's
+prime hook, read-only CLI output, `keepfold ask` without --private (and the prompt its runner
+got), Today.md, index.md, the export snapshot, `keepfold export context`, the recall log,
+`.keepfold/vectors.db`, the cloud runner's input and `cloud-log.jsonl`, the app log, and the app's
 home endpoints while the Private switch is locked. A positive control shows the local model's
 Chat still reads the private canaries when its Private switch is on.
 
@@ -20,9 +20,9 @@ The owner also studies the private subjects outside MCP (a terminal session, as 
 Chat can): the session page that close writes, and so the app home and the export snapshot,
 must leave them out with one neutral line. Every surface must be clean.
 
-Not swept, by documented design (docs/PRIVACY.md, SPEC-privacy-gate §1): `cortex_read` of a
-people page by its exact id, and `cortex_as_me` for the voice sample's own recipient. The sweep
-calls `cortex_as_me` for another recipient, and must not see the sample there."""
+Not swept, by documented design (docs/PRIVACY.md, SPEC-privacy-gate §1): `keepfold_read` of a
+people page by its exact id, and `keepfold_as_me` for the voice sample's own recipient. The sweep
+calls `keepfold_as_me` for another recipient, and must not see the sample there."""
 
 import io
 import json
@@ -39,7 +39,7 @@ from ruamel.yaml import YAML
 from test_chat import Stream
 from typer.testing import CliRunner
 
-from cortex import (
+from keepfold import (
     ask,
     chat,
     chat_study,
@@ -51,11 +51,11 @@ from cortex import (
     semantic,
     voice,
 )
-from cortex.app import server as app_server
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.session import SessionManager
-from cortex.vault import Vault
+from keepfold.app import server as app_server
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.session import SessionManager
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -132,7 +132,7 @@ def history_rows() -> list[tuple]:
 
 
 def set_config(home, root) -> None:
-    p = home / ".cortex" / "config.yaml"
+    p = home / ".keepfold" / "config.yaml"
     p.parent.mkdir(exist_ok=True)
     data = {"vault": str(root),
             "browse": {"visible_to_claude": True, "hidden_from_claude": ["health"],
@@ -280,73 +280,73 @@ async def _mcp(root) -> tuple[dict[str, str], set[str], set[str]]:
                     return alt["enum"]
             raise AssertionError((tool, field, p))
 
-        await call("cortex_prime", {"prompt": "What do I know about pasta recipe cooking and "
+        await call("keepfold_prime", {"prompt": "What do I know about pasta recipe cooking and "
                                               "pointers, and where am I weak?"})
-        for scope in enum("cortex_context", "scope"):
-            await call("cortex_context", {"scope": scope})
+        for scope in enum("keepfold_context", "scope"):
+            await call("keepfold_context", {"scope": scope})
         for topic in ("pasta recipe cooking", "car motor", "pointers", "flu symptoms", "arrays"):
-            await call("cortex_context", {"topic": topic})
+            await call("keepfold_context", {"topic": topic})
         found = set()
         for q in ("pasta recipe cooking", "car motor", "pointers", "off by one", "flu symptoms",
                   "private", "browse", "friend", "pasta"):
-            got = await call("cortex_find", {"query": q})
+            got = await call("keepfold_find", {"query": q})
             found |= {h["id"] for h in got.get("hits", [])}
-        for kind in enum("cortex_find", "kind"):
-            got = await call("cortex_find", {"kind": kind})
+        for kind in enum("keepfold_find", "kind"):
+            got = await call("keepfold_find", {"kind": kind})
             found |= {h["id"] for h in got.get("hits", [])}
-            got = await call("cortex_find", {"kind": kind, "query": "pointers"})
+            got = await call("keepfold_find", {"kind": kind, "query": "pointers"})
             found |= {h["id"] for h in got.get("hits", [])}
         assert "pasta" in found, "search finds the public control page"
         for q in ("pasta recipe cooking kitchen", "car motor automobile", "pointers off by one",
                   "flu symptoms health", "what did I browse this week"):
-            got = await call("cortex_recall", {"query": q})
+            got = await call("keepfold_recall", {"query": q})
             found |= {h["id"] for h in got.get("hits", [])}
-            await call("cortex_recall", {"query": q, "chats": True})
-        await call("cortex_recall", {"query": "I cook pasta every week.", "check": True})
+            await call("keepfold_recall", {"query": q, "chats": True})
+        await call("keepfold_recall", {"query": "I cook pasta every week.", "check": True})
         for i in sorted(found - set(PLANTED_IDS)):
-            await call("cortex_read", {"id": i})
+            await call("keepfold_read", {"id": i})
         browse_ids = sorted(p.stem for p in (root / "browse").rglob("*.md"))
         for i in [*PLANTED_IDS, *browse_ids, "notes/zq7f3a-note.md",
                   "browse/private/zq7f3a-ppag.md", "raw/../voice/samples.jsonl",
                   "voice/samples.jsonl", "raw/../notes/zq7f3a-note.md"]:
-            await call("cortex_read", {"id": i}, probe=True)
-        for action in enum("cortex_chats", "action"):
-            await call("cortex_chats", {"action": action})
-        await call("cortex_reflect", {"action": "pack"})
-        await call("cortex_reflect", {"action": "lint"})
-        await call("cortex_as_me", {"task": "Ask my professor for an extension.",
+            await call("keepfold_read", {"id": i}, probe=True)
+        for action in enum("keepfold_chats", "action"):
+            await call("keepfold_chats", {"action": action})
+        await call("keepfold_reflect", {"action": "pack"})
+        await call("keepfold_reflect", {"action": "lint"})
+        await call("keepfold_as_me", {"task": "Ask my professor for an extension.",
                                     "audience": "professor", "act": "request",
                                     "channel": "email"})
 
         # a study session with the happy paths that return text
-        await call("cortex_start", {"mode": "learn", "model": "test-model"})
-        ask_ = await call("cortex_ask", {"concept": "two-pointers", "item_type": "recall",
+        await call("keepfold_start", {"mode": "learn", "model": "test-model"})
+        ask_ = await call("keepfold_ask", {"concept": "two-pointers", "item_type": "recall",
                                          "question": "Which pointer moves?", "answer_key": "B"})
-        await call("cortex_grade", {"item_id": ask_.get("item_id"), "learner_answer": "b",
+        await call("keepfold_grade", {"item_id": ask_.get("item_id"), "learner_answer": "b",
                                     "verdict": "correct"})
-        await call("cortex_grade", {"concept": "two-pointers", "question": "Explain",
+        await call("keepfold_grade", {"concept": "two-pointers", "question": "Explain",
                                     "learner_answer": "x", "verdict": "wrong",
                                     "mistakes": ["dsa.off-by-one"]})
         for kind, payload in (("journal", {"text": "Cooked pasta and studied pointers."}),
                               ("touch", {"ids": ["pasta"]}),
                               ("self_report", {"concept": "two-pointers",
                                                "verdict": "correct"})):
-            await call("cortex_log", {"kind": kind, "payload": payload})
-        await call("cortex_patch", {"id": "pasta", "op": "append_to_section",
+            await call("keepfold_log", {"kind": kind, "payload": payload})
+        await call("keepfold_patch", {"id": "pasta", "op": "append_to_section",
                                     "target": "Notes", "text": "- Salt the water."})
-        await call("cortex_add", {"kind": "note", "title": "Pasta shapes",
+        await call("keepfold_add", {"kind": "note", "title": "Pasta shapes",
                                   "fields": {"summary": "pasta recipe cooking shapes"}})
-        await call("cortex_end", {"summary": "Pointers and pasta."})
-        for mode in enum("cortex_start", "mode"):
-            await call("cortex_start", {"mode": mode})
-            await call("cortex_end", {})
+        await call("keepfold_end", {"summary": "Pointers and pasta."})
+        for mode in enum("keepfold_start", "mode"):
+            await call("keepfold_start", {"mode": mode})
+            await call("keepfold_end", {})
 
         # asking about the private subjects by id: nothing about them may come back
-        await call("cortex_ask", {"concept": "zq7f3a-conc", "item_type": "recall",
+        await call("keepfold_ask", {"concept": "zq7f3a-conc", "item_type": "recall",
                                   "question": "What is it?"}, probe=True)
-        await call("cortex_grade", {"concept": "zq7f3a-inhr", "question": "Explain",
+        await call("keepfold_grade", {"concept": "zq7f3a-inhr", "question": "Explain",
                                     "learner_answer": "x", "verdict": "wrong"}, probe=True)
-        await call("cortex_end", {}, probe=True)
+        await call("keepfold_end", {}, probe=True)
     return out, set(tools), called
 
 
@@ -382,8 +382,8 @@ def cli_outputs(root, monkeypatch) -> dict[str, str]:
     monkeypatch.setattr(localllm, "find", lambda *a, **k: runner)
     out["cli ask"] = cli("ask", "pasta recipe cooking pointers flu", "--vault", root)
     out["cli ask: the local model's prompt"] = "\n".join(runner.asked)
-    assert runner.asked, "cortex ask reached its runner"
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    assert runner.asked, "keepfold ask reached its runner"
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     out["prime-hook"] = prime_hook.run(json.dumps({
         "session_id": "canary-chat", "hook_event_name": "UserPromptSubmit",
         "prompt": "What do I know about pasta recipe cooking and pointers?"}))
@@ -393,16 +393,16 @@ def cli_outputs(root, monkeypatch) -> dict[str, str]:
 
 def file_outputs(root, opener) -> dict[str, str]:
     cli("browse", "deepen", "--vault", root)  # the cloud runner: cloud-audience sites only
-    cortex = root / ".cortex"
+    keepfold = root / ".keepfold"
     out = {"Today.md": (root / "Today.md").read_text(encoding="utf-8"),
            "index.md": (root / "index.md").read_text(encoding="utf-8"),
            "export snapshot": dashboard.snapshot(Vault(root), now=NOW),
-           "recall log": (cortex / "recall-log.jsonl").read_text(encoding="utf-8"),
-           ".cortex/vectors.db": " ".join(f"{i} {e[0]}" for i, e in semantic._read(root).items()),
+           "recall log": (keepfold / "recall-log.jsonl").read_text(encoding="utf-8"),
+           ".keepfold/vectors.db": " ".join(f"{i} {e[0]}" for i, e in semantic._read(root).items()),
            "cloud runner input": opener.sent(),
-           "cloud log": (cortex / "cloud-log.jsonl").read_text(encoding="utf-8")}
+           "cloud log": (keepfold / "cloud-log.jsonl").read_text(encoding="utf-8")}
     assert opener.reqs and "pasta" in out["cloud runner input"].lower(), "the cloud ran"
-    assert "pasta" in out[".cortex/vectors.db"], "the vectors hold the public pages"
+    assert "pasta" in out[".keepfold/vectors.db"], "the vectors hold the public pages"
     return out
 
 
@@ -482,15 +482,15 @@ def test_the_session_page_says_private_topics_were_left_out(outputs):
 
 
 def test_a_hidden_id_is_refused_like_an_unknown_one(outputs):
-    """No existence oracle: cortex_ask and cortex_grade on a private or hidden concept give
+    """No existence oracle: keepfold_ask and keepfold_grade on a private or hidden concept give
     the error an unknown id gives (the sweep cut the call's own arguments out)."""
-    for name in ("mcp cortex_ask probe", "mcp cortex_grade probe"):
+    for name in ("mcp keepfold_ask probe", "mcp keepfold_grade probe"):
         assert "unknown_concept" in outputs[name], outputs[name]
 
 
 def test_a_skipped_site_is_stored_nowhere(world, home):
     root, _ = world
-    files = {p: p.read_bytes().lower() for base in (root, home / ".cortex")
+    files = {p: p.read_bytes().lower() for base in (root, home / ".keepfold")
              for p in base.rglob("*") if p.is_file()}
     found = sorted({(str(p), m) for p, b in files.items() for m in RECORDS["skipped site"]
                     if m.encode() in b})
@@ -499,7 +499,7 @@ def test_a_skipped_site_is_stored_nowhere(world, home):
 
 def test_weak_spots_never_name_a_private_subject(world):
     """OQ-22: "Where am I weak?" with Chat's Private switch off, and the start card's open
-    mistakes (cortex_start covers it above)."""
+    mistakes (keepfold_start covers it above)."""
     root, _ = world
     v, today = Vault(root), datetime.now().astimezone().date()
     text = chat_study.answer(v, "weak", None, today, private=False)

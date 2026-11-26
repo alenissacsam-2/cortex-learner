@@ -11,8 +11,8 @@ from test_app_js import HARNESS, _run
 from test_review import RULE, ago, app, today  # noqa: F401  (app is a fixture)
 from test_review_conflicts import chat, corrections_vault, prefs
 
-from cortex import review
-from cortex.app import server
+from keepfold import review
+from keepfold.app import server
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -25,7 +25,7 @@ def propose(root, text, times=1):
         core.write_bytes(b"# Core\n\n## Core\n")
 
     async def body(call):
-        await call("cortex_patch", {"id": "me/core", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "me/core", "op": "append_to_section",
                                     "target": "Core", "text": f"- {text}"})
 
     for _ in range(times):
@@ -39,7 +39,7 @@ def test_todays_five_order_sightings_and_the_daily_cap(root, app):  # noqa: F811
     propose(root, "Reads on trains")  # one chat only: a single inference
 
     async def rule(call):
-        await call("cortex_patch", RULE)
+        await call("keepfold_patch", RULE)
 
     run(root, rule)
     view = app.review()
@@ -69,7 +69,7 @@ def test_a_single_inference_leaves_the_view_after_14_days(root, app):  # noqa: F
     propose(root, "Likes short answers", times=2)
 
     async def rule(call):
-        await call("cortex_patch", RULE)
+        await call("keepfold_patch", RULE)
 
     run(root, rule)
     inbox = root / "inbox.md"

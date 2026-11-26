@@ -13,9 +13,9 @@ import pytest
 from conftest import FakeEmbed, note
 from test_chat import ALL_ON, Stream, _study_events
 
-from cortex import chat, chat_facts, semantic
-from cortex.browse import store
-from cortex.vault import Vault
+from keepfold import chat, chat_facts, semantic
+from keepfold.browse import store
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 TODAY = date(2026, 11, 18)  # a Wednesday
@@ -102,8 +102,8 @@ def _visit(con, day, url, title, host, site, category=None, n=1):
 @pytest.fixture
 def vault(root, home, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    (home / ".cortex").mkdir()
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold" / "config.yaml").write_text(
         "browse:\n  private_domains: [secret.example]\n", encoding="utf-8")
     note(root, "notes/kubernetes.md", "title: Kubernetes\ndate: 2026-09-01\n",
          "# Kubernetes\n\nContainers, pods and Kubernetes services. Kubernetes again.")
@@ -290,7 +290,7 @@ def test_gaps_lists_a_hubs_pages_oldest_first_and_unopened_recalls(vault):
     assert next(r for r in f["rows"] if r["title"] == "CI pipelines")["hub"] is True
     assert "Vault secrets" not in json.dumps(f)  # a private page is never listed
     assert f["unopened"] == []  # no recall log: that half is skipped
-    log = vault.root / ".cortex" / "recall-log.jsonl"
+    log = vault.root / ".keepfold" / "recall-log.jsonl"
     log.parent.mkdir(exist_ok=True)
     log.write_text("\n".join(json.dumps(r) for r in [
         {"rid": "a", "query": "devops on call rota", "ids": []},
@@ -332,7 +332,7 @@ def test_terms_match_whole_words_with_a_plural(term, hay, hit):
 
 def test_study_counts_skip_voided_and_bookkeeping_events(vault):
     """Audit 21 Nov C2: a voided grade and a remap are not study."""
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
 
     log = EventLog(vault)
     noon = datetime(2026, 11, 18, 12).astimezone()
@@ -404,7 +404,7 @@ def test_empty_facts_answer_without_the_model(vault, fake):
     _, ev = _turn(vault, "how many times did I visit zebrafish.org?", fake.runner())
     assert [e["t"] for e in ev] == ["start", "step", "facts", "tok", "src", "done"]
     assert ev[3]["s"] == 'I found nothing about "zebrafish org" in your archive.'
-    assert fake.bodies == [] and ev[-1]["model"] == "Cortex"
+    assert fake.bodies == [] and ev[-1]["model"] == "Keepfold"
 
 
 def test_no_runner_or_search_model_words_the_facts_in_code(vault, monkeypatch):

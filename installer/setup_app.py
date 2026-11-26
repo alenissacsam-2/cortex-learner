@@ -1,17 +1,20 @@
-"""CortexSetup.exe: installs Cortex for the current user, no admin rights (docs/INSTALL.md).
+"""KeepfoldSetup.exe: installs Keepfold for the current user, no admin rights (docs/INSTALL.md).
 
-Stdlib only. The exe bundles `payload/uv.exe` and `payload/cortex_learner-*.whl`
+Stdlib only. The exe bundles `payload/uv.exe` and `payload/keepfold-*.whl`
 (installer/build.py); `uv tool install` then fetches Python 3.12 and the dependencies into the
 install folder (pinned to uv.lock by `payload/constraints.txt`). `--uninstall` first takes
-Cortex out of the AI apps (`cortex disconnect`, unless --keep-ai-apps), then deletes only what
+Keepfold out of the AI apps (`keepfold disconnect`, unless --keep-ai-apps), then deletes only what
 install made, then the shortcuts, PATH entry, Start at login and registry key; never the vault
-or ~/.cortex. `--update` (the app's Update now) updates the existing
-install without questions, after `--wait-pid` (the app) exits, then reopens the app.
+or ~/.keepfold. `--update` (the app's Update now) updates the existing
+install without questions, after `--wait-pid` (the app) exits, then reopens the app. Over a
+Cortex install (0.6.1 and older) it also runs `keepfold migrate` and retires the old install
+(`retire_old`).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import shutil
@@ -28,39 +31,82 @@ from pathlib import Path
 import app_exe  # beside this file; PyInstaller bundles it
 import setup_progress as sp  # the window's pure parts, beside this file too
 
-EXE = "CortexSetup.exe"
-MARKER = "cortex-install.txt"  # uninstall deletes only a folder that holds this file
-UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Cortex"
-LOG = Path(tempfile.gettempdir()) / "cortex-setup.log"
+EXE = "KeepfoldSetup.exe"
+OLD_EXE = "CortexSetup.exe"  # 0.6.1 and older; install() replaces it with EXE
+MARKER = "keepfold-install.txt"  # uninstall deletes only a folder that holds this file
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Keepfold"
+LOG = Path(tempfile.gettempdir()) / "keepfold-setup.log"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0)
-KEPT = ("Your vault (your notes) and your settings in ~/.cortex were kept. Delete them "
+KEPT = ("Your vault (your notes) and your settings in ~/.keepfold were kept. Delete them "
         "yourself only if you want them gone.")
-ABOUT = ("Cortex is your local second brain: notes, learning and a memory your AI apps can "
-         "use, all on this computer. This installs it for you only, without admin rights. "
-         "It needs an internet connection once, to download Python and Cortex's parts.")
+ABOUT = ("Keepfold is your local second brain: notes, learning and a "
+         "memory your AI apps can use, all on this computer. This installs it for you only, "
+         "without admin rights. It needs an internet connection once, to download Python and "
+         "Keepfold's parts.")
 
 
 class SetupError(Exception):
     """A failure the window shows in plain words."""
 
 
+# What Cortex (0.6.1 and older) made; an upgrade over it carries it over or removes it
+# (docs/INSTALL.md "Coming from Cortex")
+OLD_MARKER = "cortex-install.txt"
+OLD_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Cortex"
+OLD_AUTOSTART, OLD_LOGIN = "Cortex", "Cortex browse receiver"  # Run values (and the old task)
+OLD_WHEELS = "cortex_learner-*.whl"
+# an old install in another folder: everything its setup made (as its uninstall deletes);
+# in the same folder: only what has an old name (bin, python... are Keepfold's now)
+OLD_INSTALLED = ("bin", "tools", "python", "cache", "uv.exe", "constraints.txt", OLD_EXE)
+OLD_IN_PLACE = ("tools/cortex-learner", "bin/cortex.exe", "bin/cortex-app.exe",
+                "bin/cortex-receiver.exe", OLD_EXE)
+
+
+def _local() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local"))
+
+
 def default_dir() -> Path:
-    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(local) / "Programs" / "Cortex"
+    return _local() / "Programs" / "Keepfold"
+
+
+def old_default_dir() -> Path:
+    return _local() / "Programs" / "Cortex"
+
+
+def _location(key: str) -> Path | None:
+    """The InstallLocation of an Apps & Features entry (tests replace this)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            return Path(winreg.QueryValueEx(k, "InstallLocation")[0])
+    except (ImportError, OSError):
+        return None
 
 
 def installed_dir() -> Path:
-    """Where Cortex is installed: the Apps & Features entry, else the default folder."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
-            p = Path(winreg.QueryValueEx(k, "InstallLocation")[0])
-        if (p / MARKER).is_file():
-            return p
-    except (ImportError, OSError):
-        pass
-    return default_dir()
+    """Where Keepfold is installed: the Apps & Features entry, else the default folder."""
+    p = _location(UNINSTALL_KEY)
+    return p if p is not None and (p / MARKER).is_file() else default_dir()
+
+
+def old_install() -> Path | None:
+    """A Cortex install (0.6.1 and older): its Apps & Features entry, else its default folder;
+    only a folder that holds its marker."""
+    for p in (_location(OLD_UNINSTALL_KEY), old_default_dir()):
+        if p is not None and (p / OLD_MARKER).is_file():
+            return p.resolve()
+    return None
+
+
+def suggested_dir() -> Path:
+    """A new install's folder: an old Cortex install's own folder when the user chose it (never
+    renamed), else where Keepfold is (a rerun after a crash), else the default."""
+    old = old_install()
+    if old is not None and old != old_default_dir().resolve():
+        return old
+    return installed_dir()
 
 
 def payload_dir() -> Path:
@@ -68,7 +114,7 @@ def payload_dir() -> Path:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog=EXE, description="Install or uninstall Cortex.")
+    p = argparse.ArgumentParser(prog=EXE, description="Install or uninstall Keepfold.")
     p.add_argument("--quiet", action="store_true", help="No window; the log says what happened.")
     p.add_argument("--dir", type=Path, default=None, help="Install folder.")
     p.add_argument("--no-shortcuts", action="store_true")
@@ -76,22 +122,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-registry", action="store_true")
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--keep-ai-apps", action="store_true",
-                   help="Uninstall without removing Cortex from Claude and other AI apps.")
+                   help="Uninstall without removing Keepfold from Claude and other AI apps.")
     p.add_argument("--update", action="store_true",
                    help="Update the existing install without questions, then open the app.")
     p.add_argument("--wait-pid", type=int, default=None,
                    help="First wait (up to 60 s) for this process to exit.")
     a = p.parse_args(argv)
-    a.dir = (a.dir or (installed_dir() if a.update else default_dir())).expanduser().resolve()
+    a.dir = (a.dir or (installed_dir() if a.update else suggested_dir())).expanduser().resolve()
     if a.update:  # the PATH entry already points at the same files; shortcuts: make_shortcuts
         a.no_path = True
     return a
 
 
 def wheel_in(folder: Path) -> Path:
-    wheels = sorted(folder.glob("cortex_learner-*.whl"))
+    wheels = sorted(folder.glob("keepfold-*.whl"))
     if not wheels:
-        raise SetupError(f"This setup file is incomplete (no Cortex package in {folder}).")
+        raise SetupError(f"This setup file is incomplete (no Keepfold package in {folder}).")
     return wheels[-1]
 
 
@@ -107,7 +153,7 @@ def uv_env(d: Path, base: dict | None = None) -> dict:
                UV_PYTHON_PREFERENCE="only-managed",
                # the Windows certificate store: school networks that inspect TLS still work
                UV_NATIVE_TLS="1",
-               # compiled at install, so the first start (and Claude's first `cortex mcp`) is fast
+               # compiled at install, so the first start (and Claude's first `keepfold mcp`) is fast
                UV_COMPILE_BYTECODE="1")
     # a school or work proxy set in Windows settings: uv reads only the environment
     if not any(k.upper() in ("HTTPS_PROXY", "HTTP_PROXY") for k in env):
@@ -137,7 +183,7 @@ def drop_path(current: str, entry: str) -> str:
 
 def uninstall_values(d: Path, version: str) -> dict:
     exe = d / EXE
-    return {"DisplayName": "Cortex", "DisplayVersion": version, "Publisher": "Cortex",
+    return {"DisplayName": "Keepfold", "DisplayVersion": version, "Publisher": "Keepfold",
             "InstallLocation": str(d), "DisplayIcon": str(app_exe.path(d)),
             "UninstallString": f'"{exe}" --uninstall --dir "{d}"',
             "QuietUninstallString": f'"{exe}" --uninstall --quiet --dir "{d}"'}
@@ -145,7 +191,7 @@ def uninstall_values(d: Path, version: str) -> dict:
 
 # ---- Windows: registry, PATH broadcast, shortcuts -------------------------------------------
 
-# twin: src/cortex/app/winpath.py (the app's Fix puts Cortex first); a fix belongs in both
+# twin: src/keepfold/app/winpath.py (the app's Fix puts Keepfold first); a fix belongs in both
 def get_user_path() -> str:
     import winreg
     try:
@@ -176,35 +222,56 @@ def register(d: Path, version: str) -> None:
             winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, 1)
 
 
-def unregister() -> None:
+def unregister(key: str = UNINSTALL_KEY) -> None:
     import winreg
     try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
     except FileNotFoundError:
         pass
 
 
+LNK, OLD_LNK = "Keepfold.lnk", "Cortex.lnk"  # OLD_LNK: what 0.6.1 and older made
+
+
 def shortcut_paths() -> list[Path]:
-    """Start menu Programs\\Cortex.lnk and Desktop\\Cortex.lnk (wherever those folders are)."""
+    """Start menu Programs\\Keepfold.lnk and Desktop\\Keepfold.lnk (wherever those folders
+    are)."""
     import ctypes
     out = []
     for csidl in (0x02, 0x10):  # CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY
         buf = ctypes.create_unicode_buffer(260)
         if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf) == 0:
-            out.append(Path(buf.value) / "Cortex.lnk")
+            out.append(Path(buf.value) / LNK)
     return out
 
 
+def _old_shortcut_here(lnk: Path, d: Path) -> bool:
+    """An OLD_LNK beside `lnk` that runs a program from inside `d` (never another copy's)."""
+    old = lnk.with_name(OLD_LNK)
+    if not old.is_file():
+        return False
+    try:
+        target = app_exe.shortcut_target(old)
+    except OSError:  # unreadable: left alone
+        return False
+    root = os.path.join(os.path.normcase(str(d.resolve())), "")
+    return os.path.normcase(target).startswith(root)
+
+
 def make_shortcuts(d: Path, say, existing_only: bool = False) -> None:
-    """The shortcuts run Cortex.exe; `existing_only` (an update) rewrites only those still
-    there, so older ones that ran cortex-app.exe pin as Cortex too."""
+    """The shortcuts run Keepfold.exe; `existing_only` (an update) rewrites only those still
+    there, so older ones that ran keepfold-app.exe pin as Keepfold too. An OLD_LNK of this
+    install counts as one still there and gives way to the new name."""
     exe = app_exe.path(d)
     for lnk in shortcut_paths():
-        if existing_only and not lnk.is_file():
+        old = _old_shortcut_here(lnk, d)
+        if existing_only and not (lnk.is_file() or old):
             continue
         lnk.parent.mkdir(parents=True, exist_ok=True)
         app_exe.shortcut(lnk, exe, subprocess.list2cmdline(app_exe.ENTRY), exe)
         say(f"shortcut: {lnk}")
+        if old:  # only once the new one is made
+            lnk.with_name(OLD_LNK).unlink(missing_ok=True)
 
 
 # ---- Windows: the programs that hold files in the install folder ----------------------------
@@ -260,7 +327,7 @@ def _snapshot() -> list[tuple[int, int]]:
 
 
 def parents() -> dict[int, int]:
-    """pid -> parent pid (the window counts cortex.exe's python.exe with it)."""
+    """pid -> parent pid (the window counts keepfold.exe's python.exe with it)."""
     return dict(_snapshot()) if sys.platform == "win32" else {}
 
 
@@ -292,21 +359,34 @@ def in_use(d: Path, procs: list[tuple[int, str]] | None = None) -> list[tuple[in
             if pid not in me and os.path.normcase(path).startswith(root)]
 
 
-def terminate(pids: list[int], d: Path | None = None) -> None:
-    """End `pids`; with `d`, only a process still running from inside `d`: the list is from
-    before the Close dialog, and a pid freed meanwhile may now belong to another program."""
+def in_use_all(d: Path) -> list[tuple[int, str]]:
+    """`in_use` of `d` and of an old Cortex install in another folder (it is replaced too)."""
+    old = old_install()
+    return in_use(d) + (in_use(old) if old is not None and old != d else [])
+
+
+def folders(d: Path) -> list[Path]:
+    """`d` and an old Cortex install's folder: where `terminate` may end a program."""
+    old = old_install()
+    return [d] + ([old] if old is not None and old != d else [])
+
+
+def terminate(pids: list[int], *dirs: Path) -> None:
+    """End `pids`; with `dirs`, only a process still running from inside one of them: the list
+    is from before the Close dialog, and a pid freed meanwhile may now belong to another
+    program."""
     import ctypes
     from ctypes import wintypes as w
     k = _kernel32()
-    root = os.path.join(os.path.normcase(str(d.resolve())), "") if d else None
+    roots = tuple(os.path.join(os.path.normcase(str(d.resolve())), "") for d in dirs)
     for pid in pids:
         # SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
         h = k.OpenProcess(0x00101001, False, pid)
         if not h:
             continue
         buf, n = ctypes.create_unicode_buffer(32768), w.DWORD(32768)
-        same = root is None or (k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n))
-                                and os.path.normcase(buf.value).startswith(root))
+        same = not roots or (k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n))
+                             and os.path.normcase(buf.value).startswith(roots))
         if same:
             k.TerminateProcess(h, 1)
             k.WaitForSingleObject(h, 5000)
@@ -315,8 +395,8 @@ def terminate(pids: list[int], d: Path | None = None) -> None:
 
 def in_use_text(procs: list[tuple[int, str]]) -> str:
     n = len(procs)
-    return (f"Cortex is in use by {n} program{'s' * (n != 1)} (the Cortex connection of AI apps "
-            "such as Claude, or the browsing receiver).")
+    return (f"Keepfold is in use by {n} program{'s' * (n != 1)} (the Keepfold connection of AI "
+            "apps such as Claude, or the browsing receiver).")
 
 
 # ---- install and uninstall ------------------------------------------------------------------
@@ -337,40 +417,46 @@ def run(args: list, env: dict, say, cwd: Path | None = None) -> None:
 
 
 def check_dir(d: Path) -> None:
-    if (d / ".cortex").is_dir():
-        raise SetupError(f"{d} is a Cortex vault (your notes). Pick another folder for the "
+    if (d / ".keepfold").is_dir():
+        raise SetupError(f"{d} is a Keepfold vault (your notes). Pick another folder for the "
                          "program.")
-    # a folder holding only CortexSetup.exe is what an uninstall left while its window was open
-    others = [p for p in d.iterdir() if p.name != EXE] if d.is_dir() else []
-    if others and not (d / MARKER).is_file():
+    # a folder holding only the setup (either name) is what an uninstall left while its window
+    # was open
+    others = [p for p in d.iterdir() if p.name not in (EXE, OLD_EXE)] if d.is_dir() else []
+    if others and not ((d / MARKER).is_file() or (d / OLD_MARKER).is_file()):
         raise SetupError(f"{d} already holds other files. Pick an empty folder, or the "
-                         "folder Cortex was installed in before.")
+                         "folder Keepfold was installed in before.")
 
 
-INSTALLED = ("bin", "tools", "python", "cache", "uv.exe", "constraints.txt", EXE)
+INSTALLED = ("bin", "tools", "python", "cache", "uv.exe", "constraints.txt", EXE, OLD_EXE)
 
 
 def installed_items(d: Path) -> list[Path]:
     """What install() put in `d` (uninstall deletes these and nothing else), marker aside."""
     return [p for p in d.iterdir() if p.name in INSTALLED
-            or (p.name.startswith("cortex_learner-") and p.suffix == ".whl")]
+            or (p.name.startswith("keepfold-") and p.suffix == ".whl")]
 
 
-def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> None:
+def install(d: Path, opts: argparse.Namespace, say,
+            src: Path | None = None) -> tuple[int, str] | None:
+    """Install into `d`; over a Cortex install (0.6.1 and older) also move its data and retire
+    it, returning `migrate`'s (exit code, message), else None."""
     src = src or payload_dir()
     wheel = wheel_in(src)
     check_dir(d)
     if opts.update and not (d / MARKER).is_file():
-        raise SetupError(f"Cortex is not installed in {d}; run {EXE} without --update.")
-    if busy := in_use(d):  # uv cannot replace a running bin\cortex.exe (os error 32)
+        raise SetupError(f"Keepfold is not installed in {d}; run {EXE} without --update.")
+    old = old_install()
+    # uv cannot replace a running bin\keepfold.exe (os error 32); an old Cortex is closed too
+    if busy := in_use_all(d):
         raise SetupError(in_use_text(busy) + " Close them, then run setup again: "
                          + "; ".join(f"{path} (process {pid})" for pid, path in busy))
     d.mkdir(parents=True, exist_ok=True)
-    (d / MARKER).write_text("Cortex is installed in this folder (CortexSetup.exe).\n",
+    (d / MARKER).write_text(f"Keepfold is installed in this folder ({EXE}).\n",
                             encoding="utf-8")
-    for old in d.glob("cortex_learner-*.whl"):
-        if old.name != wheel.name:
-            old.unlink()
+    for old_wheel in d.glob("keepfold-*.whl"):
+        if old_wheel.name != wheel.name:
+            old_wheel.unlink()
     shutil.copy2(src / "uv.exe", d / "uv.exe")
     shutil.copy2(wheel, d / wheel.name)
     # uv.lock's versions (installer/build.py): the same exe installs the same packages every day
@@ -379,16 +465,16 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
         shutil.copy2(src / "constraints.txt", d / "constraints.txt")
         # relative, run in `d`: uv 0.9.15 splits a -c path on spaces (uv#22290, fixed in 0.13)
         pins = ["-c", "constraints.txt"]
-    say(f"Installing Cortex {version_of(wheel)} into {d} (downloads Python and packages)...")
+    say(f"Installing Keepfold {version_of(wheel)} into {d} (downloads Python and packages)...")
     try:
         # x64 Python on every PC: Windows on ARM runs it emulated, and some pinned packages
         # (cryptography, py-rust-stemmers) have no win_arm64 wheels
-        run([d / "uv.exe", "tool", "install", "--force", "--reinstall-package", "cortex-learner",
+        run([d / "uv.exe", "tool", "install", "--force", "--reinstall-package", "keepfold",
              "--python", "cpython-3.12-windows-x86_64-none", *pins, d / wheel.name], uv_env(d),
             say, cwd=d)
     except SetupError as e:
         raise SetupError(f"{e} Check your internet connection; a school or work network may "
-                         "block the download, so another Wi-Fi can help. If Cortex is open, "
+                         "block the download, so another Wi-Fi can help. If Keepfold is open, "
                          "close it (Quit on its page) and run setup again.") from None
     shutil.rmtree(d / "cache", ignore_errors=True)
     try:
@@ -400,18 +486,42 @@ def install(d: Path, opts: argparse.Namespace, say, src: Path | None = None) -> 
         shutil.copy2(me, d / EXE)  # Apps & Features runs this copy to uninstall
     if not opts.no_path:
         set_user_path(merge_path(get_user_path(), str(d / "bin")))
-        say(f"added to your PATH: {d / 'bin'} (new terminals know `cortex`)")
+        say(f"added to your PATH: {d / 'bin'} (new terminals know `keepfold`)")
     if not opts.no_shortcuts:
-        try:  # a managed PC can block the shortcut object: Cortex is installed anyway
+        try:  # a managed PC can block the shortcut object: Keepfold is installed anyway
             make_shortcuts(d, say, existing_only=opts.update)
         except OSError as e:
-            say(f"warning: no Start menu shortcut ({e}). Open Cortex with "
-                f"{d / 'bin' / 'cortex-app.exe'}.")
+            say(f"warning: no Start menu shortcut ({e}). Open Keepfold with "
+                f"{d / 'bin' / 'keepfold-app.exe'}.")
     if not opts.no_registry:
         register(d, version_of(wheel))
         say("added to Apps & Features (uninstall from there)")
-    say("Cortex is updated. AI apps connected to Cortex reconnect when you restart them."
-        if opts.update else "Cortex is installed.")
+    drop_old_files(d, me, say, setup=not opts.no_registry)
+    moved = None
+    if old is not None:
+        moved, answered = migrate(d, say)
+        if answered:  # the new install runs: only now does the old one go
+            retire_old(old, d, opts, say)
+        else:
+            say(f"warning: the old Cortex program in {old} was kept; run {EXE} again to "
+                "finish.")
+    say("Keepfold is updated. AI apps connected to Keepfold reconnect when you restart them."
+        if opts.update else "Keepfold is installed.")
+    return moved
+
+
+def drop_old_files(d: Path, me: Path, say, setup: bool) -> None:
+    """What 0.6.1 and older named otherwise: app\\Cortex.exe (the shortcuts now run
+    Keepfold.exe) and, with `setup` (the uninstall entry now names EXE), CortexSetup.exe. A
+    locked one stays (uninstall deletes it later), and never the running setup."""
+    old = [app_exe.path(d).with_name(app_exe.OLD_NAME)] + [d / OLD_EXE] * setup
+    for p in old:
+        if p.resolve() == me:
+            continue
+        try:
+            p.unlink(missing_ok=True)
+        except OSError as e:
+            say(f"warning: {p} is in use, so it stays ({e}); it is no longer used.")
 
 
 def _force(func, path, _exc):  # uv's Python ships read-only files
@@ -419,8 +529,8 @@ def _force(func, path, _exc):  # uv's Python ships read-only files
     func(path)
 
 
-LOGIN_NAME = "Cortex browse receiver"  # the Run value (and the older scheduled task) the app adds
-AUTOSTART_NAME = "Cortex"  # the desktop app's Start with Windows (cortex.app.desktop.AUTOSTART)
+LOGIN_NAME = "Keepfold browse receiver"  # the Run value (and the older scheduled task) the app adds
+AUTOSTART_NAME = "Keepfold"  # the desktop app's Start with Windows (keepfold.app.desktop.AUTOSTART)
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -439,18 +549,185 @@ def drop_login() -> None:
                    stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
 
+# ---- an upgrade over Cortex (0.6.1 and older) -----------------------------------------------
+
+def _capture(args: list, timeout: float) -> tuple[int, str]:
+    """(exit code, stdout as UTF-8) of a program with no window (tests replace this)."""
+    p = subprocess.run([str(a) for a in args], capture_output=True, stdin=subprocess.DEVNULL,
+                       env=child_env(), creationflags=NO_WINDOW, timeout=timeout)
+    return p.returncode, p.stdout.decode("utf-8", errors="replace")
+
+
+def migrate(d: Path, say) -> tuple[tuple[int, str], bool]:
+    """`keepfold migrate --json` of the new install: ((exit code, its plain message), whether
+    it answered). 0 moved, 2 an old Cortex still holds files (a retry can finish), 1 failed;
+    no answer counts as 1."""
+    say("moving your Cortex settings and vault to Keepfold")
+    try:
+        code, out = _capture([d / "bin" / "keepfold.exe", "migrate", "--json"], timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        return (1, f"keepfold.exe could not run ({e})."), False
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    for line in reversed(lines):
+        try:
+            answer = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(answer, dict):
+            text = str(answer.get("message")
+                       or f"keepfold migrate stopped with exit code {code}.")
+            say(f"migrate: exit {code}: {text}")
+            return (code if code in (0, 2) else 1, text), True
+    say(f"migrate: exit {code}, no answer")
+    return (1, f"keepfold.exe stopped without an answer ({lines[-1] if lines else 'no output'})."
+            ), False
+
+
+def moved_text(code: int, text: str) -> str:
+    """What the window and the log say about `migrate`'s result (the install is done)."""
+    if code == 1:
+        return (f"Keepfold is installed, but moving your Cortex data stopped: {text} Run "
+                "keepfold doctor in a terminal to see what is left.")
+    return text
+
+
+# twin: src/keepfold/app/status.py test_copy (FX5); a fix belongs in both
+def test_copy() -> bool:
+    """Whether this runs with a home folder that is not the signed-in user's profile (a test
+    copy): such a copy never changes the Run values or Task Scheduler."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as k:
+            real = winreg.QueryValueEx(k, "USERPROFILE")[0]
+    except (ImportError, OSError):
+        return False
+    return os.path.normcase(os.path.realpath(real)) != os.path.normcase(
+        os.path.realpath(Path.home()))
+
+
+def run_get(name: str) -> str | None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return None
+
+
+def run_set(name: str, value: str) -> None:
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+        winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
+
+
+def run_delete(name: str) -> None:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.DeleteValue(k, name)
+    except FileNotFoundError:
+        pass
+
+
+def old_task() -> str | None:
+    """The arguments of the old Task Scheduler entry OLD_LOGIN (versions before the Run
+    value), None when there is none."""
+    ps = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+          f"(Get-ScheduledTask -TaskName '{OLD_LOGIN}' -ErrorAction Stop).Actions[0].Arguments")
+    try:
+        code, out = _capture(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.strip() if code == 0 else None
+
+
+def drop_task(name: str) -> None:
+    _capture(["schtasks", "/Delete", "/F", "/TN", name], timeout=60)
+
+
+def receiver_command(d: Path, old: str) -> str:
+    """The receiver's Run value (keepfold.app.status.login_command) with the old entry's
+    `--vault "<root>"`, whichever program the old one ran."""
+    i = old.find("--vault")
+    exe = f'"{d / "bin" / "keepfold-receiver.exe"}"'
+    return f"{exe} {old[i:].strip()}" if i >= 0 else exe
+
+
+def carry_over(d: Path, say) -> None:
+    """Start with Windows and Start at login, if the user had them on in Cortex, now start
+    Keepfold; the old Run values and task go. A test copy changes neither (FX5)."""
+    if test_copy():
+        say("a test copy: Start with Windows and Start at login were left alone")
+        return
+    if run_get(OLD_AUTOSTART) is not None:  # keepfold.app.desktop.autostart_command
+        exe = app_exe.path(d)
+        run_set(AUTOSTART_NAME, f'"{exe}" {subprocess.list2cmdline(app_exe.ENTRY)} --hidden')
+        run_delete(OLD_AUTOSTART)
+        say("Start with Windows now starts Keepfold")
+    if (value := run_get(OLD_LOGIN)) is not None:
+        run_set(LOGIN_NAME, receiver_command(d, value))
+        run_delete(OLD_LOGIN)
+        say("Start at login now starts Keepfold's browse receiver")
+    if (args := old_task()) is not None:
+        if run_get(LOGIN_NAME) is None:
+            run_set(LOGIN_NAME, receiver_command(d, args))
+            say("Start at login now starts Keepfold's browse receiver")
+        drop_task(OLD_LOGIN)
+        say("removed the old Task Scheduler entry")
+
+
+def retire_old(old: Path, d: Path, opts: argparse.Namespace, say) -> None:
+    """Once the new install answered: Cortex's Windows entries become Keepfold's, then its
+    program files go (only the names its setup made), its marker, its folder when it is the
+    default one and empty, and last its Apps & Features entry. Anything left (a locked file)
+    keeps the marker and the entry, so running setup again finishes."""
+    if not opts.no_registry:
+        carry_over(d, say)
+    if not opts.no_shortcuts:
+        for lnk in shortcut_paths():
+            if _old_shortcut_here(lnk, old):
+                lnk.with_name(OLD_LNK).unlink(missing_ok=True)
+                say(f"removed the old shortcut {lnk.with_name(OLD_LNK)}")
+    me = Path(sys.executable).resolve()
+    items = [old / n for n in (OLD_IN_PLACE if old == d else OLD_INSTALLED)]
+    try:
+        for p in [*items, *old.glob(OLD_WHEELS)]:
+            if p == me or not p.exists() or d.is_relative_to(p):  # never the new install
+                continue
+            shutil.rmtree(p, onexc=_force) if p.is_dir() else p.unlink()
+    except OSError as e:
+        say(f"warning: the old Cortex file {e.filename} is in use, so the old program stays; "
+            f"run {EXE} again once it is closed.")
+        return
+    if old != d and not opts.no_path:
+        set_user_path(drop_path(get_user_path(), str(old / "bin")))
+    (old / OLD_MARKER).unlink(missing_ok=True)
+    if old != d and old == old_default_dir().resolve():
+        try:
+            old.rmdir()
+            say(f"removed the old Cortex folder {old}")
+        except OSError:  # files Cortex did not make stay where they are
+            say(f"{old} still holds files Cortex did not make; they were kept.")
+    if not opts.no_registry:
+        unregister(OLD_UNINSTALL_KEY)
+        say("removed Cortex from Apps & Features")
+
+
 def disconnect_apps(d: Path, say) -> None:
-    """`cortex disconnect`: the installed program takes Cortex out of every AI app it was added
-    to (as Connect AI apps does), so they do not fail on Cortex at each start. A failure is a
+    """`keepfold disconnect`: the installed program takes Keepfold out of every AI app it was added
+    to (as Connect AI apps does), so they do not fail on Keepfold at each start. A failure is a
     warning: the files still go."""
-    exe = d / "bin" / "cortex.exe"
+    exe = d / "bin" / "keepfold.exe"
     if not exe.is_file():
         return
-    say("removing Cortex from your AI apps (Claude and others)")
+    say("removing Keepfold from your AI apps (Claude and others)")
     try:
         run([exe, "disconnect"], child_env(), say)
     except (SetupError, OSError) as e:
-        say(f"warning: some AI apps still list Cortex ({e}); remove it there by hand.")
+        say(f"warning: some AI apps still list Keepfold ({e}); remove it there by hand.")
 
 
 def uninstall(d: Path, opts: argparse.Namespace, say) -> bool:
@@ -458,7 +735,8 @@ def uninstall(d: Path, opts: argparse.Namespace, say) -> bool:
     caller must `remove_later(d)` once it has said goodbye."""
     marker = d / MARKER
     if not marker.is_file():
-        raise SetupError(f"{d} is not a Cortex install folder (no {MARKER}); nothing was removed.")
+        raise SetupError(f"{d} is not a Keepfold install folder (no {MARKER}); nothing was "
+                         "removed.")
     if not opts.keep_ai_apps:
         disconnect_apps(d, say)
     retry = (f"then uninstall again from Installed apps (or run {EXE} --uninstall in {d}). "
@@ -478,6 +756,7 @@ def uninstall(d: Path, opts: argparse.Namespace, say) -> bool:
     if not opts.no_shortcuts:
         for lnk in shortcut_paths():
             lnk.unlink(missing_ok=True)
+            lnk.with_name(OLD_LNK).unlink(missing_ok=True)
     if not opts.no_path:
         set_user_path(drop_path(get_user_path(), str(d / "bin")))
     if not opts.no_registry:
@@ -488,19 +767,20 @@ def uninstall(d: Path, opts: argparse.Namespace, say) -> bool:
     if not later:
         try:
             d.rmdir()
-        except OSError:  # files Cortex did not make stay where they are
-            say(f"{d} still holds files Cortex did not make; they were kept.")
-    say(f"Cortex was removed from {d}. {KEPT}")
+        except OSError:  # files Keepfold did not make stay where they are
+            say(f"{d} still holds files Keepfold did not make; they were kept.")
+    say(f"Keepfold was removed from {d}. {KEPT}")
     return later
 
 
 def remove_later(d: Path) -> None:
     """A running exe cannot delete itself: cmd retries for 30 s after we exit, deleting only
-    CortexSetup.exe and then the folder if it is empty (never anything else in it)."""
-    exe = d / EXE
+    the setup (either name) and then the folder if it is empty (never anything else in it)."""
+    new, old = d / EXE, d / OLD_EXE
     subprocess.Popen(f'cmd /c for /l %i in (1,1,30) do @(ping -n 2 127.0.0.1 >nul & '
-                     f'del /f /q "{exe}" 2>nul & if not exist "{exe}" (rmdir "{d}" 2>nul & '
-                     f'exit))', creationflags=DETACHED | NO_WINDOW)
+                     f'del /f /q "{new}" 2>nul & del /f /q "{old}" 2>nul & '
+                     f'if not exist "{new}" if not exist "{old}" (rmdir "{d}" 2>nul & exit))',
+                     creationflags=DETACHED | NO_WINDOW)
 
 
 # ---- the window -----------------------------------------------------------------------------
@@ -548,7 +828,7 @@ def press_enter(focused, lit) -> None:
         lit()
 
 
-# night colours from src/cortex/assets/app/app.css; rule is its amber .16 over the ground
+# night colours from src/keepfold/assets/app/app.css; rule is its amber .16 over the ground
 NIGHT = {"ground": "#0b0b0a", "panel": "#141412", "band": "#1b1a17", "ink": "#efe7d6",
          "ink2": "#b9ab90", "ink3": "#958870", "lit": "#ffb000", "rule": "#322509",
          "refresh": "#d0607f", "ok": "#1D9E75"}
@@ -557,10 +837,10 @@ SIZE, DETAILS = {"update": (560, 380), "install": (560, 420)}, 190
 
 
 def icon_path() -> Path | None:
-    """Cortex's .ico: beside the bundled payload (build.py), else the package's own."""
+    """Keepfold's .ico: beside the bundled payload (build.py), else the package's own."""
     here = Path(__file__).resolve().parent
-    for p in (Path(getattr(sys, "_MEIPASS", here)) / "cortex.ico",
-              here.parent / "src" / "cortex" / "assets" / "cortex.ico"):
+    for p in (Path(getattr(sys, "_MEIPASS", here)) / "keepfold.ico",
+              here.parent / "src" / "keepfold" / "assets" / "keepfold.ico"):
         if p.is_file():
             return p
     return None
@@ -665,7 +945,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
         version = version_of(wheel_in(payload_dir()))
     except SetupError:
         version = ""  # install() says what is missing
-    _chrome(root, "Updating Cortex" if opts.update else "Cortex setup")
+    _chrome(root, "Updating Keepfold" if opts.update else "Keepfold setup")
     scale = root.winfo_fpixels("1i") / 96
 
     def px(n: float) -> int:
@@ -689,9 +969,9 @@ def window(opts: argparse.Namespace, say_file) -> int:
     main_.pack_propagate(False)
     head = tk.Frame(main_, bg=c["ground"])
     head.pack(fill="x", padx=px(24), pady=(px(18), 0))
-    label(head, "Cortex", "lit", ("Segoe UI Semibold", 13)).pack(anchor="w")
-    label(head, ("Updating to " + version if version else "Updating Cortex") if opts.update
-          else f"Installing {sp.cortex(version)}", "ink2").pack(anchor="w")
+    label(head, "Keepfold", "lit", ("Segoe UI Semibold", 13)).pack(anchor="w")
+    label(head, ("Updating to " + version if version else "Updating Keepfold") if opts.update
+          else f"Installing {sp.keepfold(version)}", "ink2").pack(anchor="w")
 
     foot = tk.Frame(main_, bg=c["ground"])
     foot.pack(side="bottom", fill="x", padx=px(24), pady=(0, px(18)))
@@ -854,27 +1134,27 @@ def window(opts: argparse.Namespace, say_file) -> int:
         buttons([])
         if opts.update and opts.wait_pid and not st.get("waited"):
             st["waited"] = True
-            say(f"waiting for process {opts.wait_pid} (the Cortex app) to exit")
+            say(f"waiting for process {opts.wait_pid} (the Keepfold app) to exit")
             run_in_thread(wait_app, lambda _: check_busy())
         else:
             check_busy()
 
     def wait_app() -> None:
         wait_pid(opts.wait_pid)
-        for _ in range(10):  # its launcher, bin\cortex-app.exe, exits a moment later
+        for _ in range(10):  # its launcher, bin\keepfold-app.exe, exits a moment later
             if not in_use(opts.dir):
                 break
             time.sleep(0.3)
 
     def check_busy() -> None:
-        if busy := in_use(opts.dir):
+        if busy := in_use_all(opts.dir):
             ask_busy(busy)
         else:
             go()
 
     def ask_busy(busy: list) -> None:
         panel = tk.Frame(body, bg=c["ground"])
-        label(panel, "Cortex is in use. These programs must close first:").pack(fill="x")
+        label(panel, "Keepfold is in use. These programs must close first:").pack(fill="x")
         for group in sp.group_in_use(busy, parents()):
             label(panel, group, "ink2").pack(fill="x", padx=(px(16), 0), pady=(px(4), 0))
         swap(panel)
@@ -888,15 +1168,15 @@ def window(opts: argparse.Namespace, say_file) -> int:
                 rows["close"][0].pack(fill="x", pady=px(2), before=rows["install"][0])
             buttons([])
             n = len(busy)
-            say(f"closing {n} program{'s' * (n != 1)} that use Cortex: "
+            say(f"closing {n} program{'s' * (n != 1)} that use Keepfold: "
                 + "; ".join(f"{path} (process {pid})" for pid, path in busy))
             # only those still running from the folder; install() checks again
-            run_in_thread(lambda: terminate([pid for pid, _ in busy], opts.dir),
+            run_in_thread(lambda: terminate([pid for pid, _ in busy], *folders(opts.dir)),
                           lambda _: go())
 
         def cancel() -> None:
             swap(steps_panel)
-            st["s"] = st["s"]._replace(status=f"Cortex was not {verb}.")
+            st["s"] = st["s"]._replace(status=f"Keepfold was not {verb}.")
             paint()
             if not opts.update:
                 entry.configure(state="normal")
@@ -909,7 +1189,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
     def go() -> None:
         def work():
             try:
-                install(opts.dir, opts, say)
+                st["moved"] = install(opts.dir, opts, say)
             except SetupError as e:
                 return str(e)
             except Exception as e:  # noqa: BLE001
@@ -924,14 +1204,40 @@ def window(opts: argparse.Namespace, say_file) -> int:
         if err:
             return failed(err)
         result["code"] = 0
+        if (moved := st.get("moved")) and moved[0]:
+            return moved_note(moved)
         if opts.update:
             start_app(opts.dir)
-            say("opened the Cortex app")
+            say("opened the Keepfold app")
             buttons([("Close", root.destroy, True)], esc=root.destroy)
             root.after(3000, root.destroy)
         else:
-            buttons([("Open Cortex", open_app, True), ("Close", root.destroy, False)],
+            buttons([("Open Keepfold", open_app, True), ("Close", root.destroy, False)],
                     esc=root.destroy)
+
+    def moved_note(moved: tuple) -> None:
+        """Installed, but the Cortex data did not move: 2 (an old Cortex holds files) can be
+        retried here, 1 points at keepfold doctor."""
+        st["s"] = st["s"]._replace(status=moved_text(*moved))
+        paint()
+        if moved[0] == 2:
+            buttons([("Retry", retry, True), ("Close", root.destroy, False)], esc=root.destroy)
+        else:
+            buttons([("Open Keepfold", open_app, True), ("Close", root.destroy, False)],
+                    esc=root.destroy)
+
+    def retry() -> None:
+        buttons([])
+
+        def after(moved: tuple) -> None:
+            drain()
+            if moved[0]:
+                return moved_note(moved)
+            st["s"] = st["s"]._replace(status=f"Keepfold is {verb}.")
+            paint()
+            buttons([("Open Keepfold", open_app, True), ("Close", root.destroy, False)],
+                    esc=root.destroy)
+        run_in_thread(lambda: migrate(opts.dir, say)[0], after)
 
     def failed(err: str) -> None:
         st["failed"] = True
@@ -941,7 +1247,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
         tk.Frame(panel, bg=c["refresh"], width=px(3)).pack(side="left", fill="y")
         inner = tk.Frame(panel, bg=c["panel"])
         inner.pack(side="left", fill="both", expand=True, padx=px(14), pady=px(12))
-        label(inner, f"Cortex was not {verb}.", "refresh", ("Segoe UI Semibold", 10),
+        label(inner, f"Keepfold was not {verb}.", "refresh", ("Segoe UI Semibold", 10),
               bg=c["panel"]).pack(fill="x")
         label(inner, err, "ink", bg=c["panel"], wraplength=wrap - px(34)).pack(
             fill="x", pady=(px(4), 0))
@@ -960,7 +1266,7 @@ def window(opts: argparse.Namespace, say_file) -> int:
             root.clipboard_append(text)
             made["Copy log"].configure(text="Copied")
 
-        def again() -> None:  # a folder that cannot hold Cortex: pick another one
+        def again() -> None:  # a folder that cannot hold Keepfold: pick another one
             entry.configure(state="normal")
             st["s"] = sp.start(mode, version)
             st.update(failed=False, t0=None, t1=None)
@@ -996,20 +1302,20 @@ def window(opts: argparse.Namespace, say_file) -> int:
 
 
 def uninstall_window(root, opts: argparse.Namespace, say_file) -> int:
-    """Uninstall keeps Windows' own questions (message boxes), with Cortex's icon."""
+    """Uninstall keeps Windows' own questions (message boxes), with Keepfold's icon."""
     from tkinter import messagebox
 
     root.withdraw()
-    _chrome(root, "Uninstall Cortex")
-    t = "Uninstall Cortex"
-    if not messagebox.askyesno(t, f"Remove Cortex from {opts.dir}?\n\n"
-                               "Your vault (your notes) and your settings in ~/.cortex "
+    _chrome(root, "Uninstall Keepfold")
+    t = "Uninstall Keepfold"
+    if not messagebox.askyesno(t, f"Remove Keepfold from {opts.dir}?\n\n"
+                               "Your vault (your notes) and your settings in ~/.keepfold "
                                "are kept."):
         return 1
     if not opts.keep_ai_apps:
         opts.keep_ai_apps = not messagebox.askyesno(
-            t, "Also remove Cortex from Claude and other AI apps?\n\nYes is best: without "
-            "Cortex installed, they would show a Cortex error each time they start.")
+            t, "Also remove Keepfold from Claude and other AI apps?\n\nYes is best: without "
+            "Keepfold installed, they would show a Keepfold error each time they start.")
     try:
         if (busy := in_use(opts.dir)) and not ask_close(root, t, busy, "uninstall", opts.dir):
             return 1
@@ -1018,7 +1324,7 @@ def uninstall_window(root, opts: argparse.Namespace, say_file) -> int:
         say_file(traceback.format_exc())
         messagebox.showerror(t, f"{e}\n\nThe full log is at {LOG}")
         return 1
-    messagebox.showinfo(t, f"Cortex was removed.\n\n{KEPT}")
+    messagebox.showinfo(t, f"Keepfold was removed.\n\n{KEPT}")
     if later:  # after the message: this exe exits right away, so cmd can delete it
         remove_later(opts.dir)
     return 0
@@ -1034,9 +1340,9 @@ def main(argv: list[str] | None = None) -> int:
             print(line)
 
     if opts.wait_pid and (opts.quiet or not opts.update):  # the update window waits itself
-        say_file(f"waiting for process {opts.wait_pid} (the Cortex app) to exit")
+        say_file(f"waiting for process {opts.wait_pid} (the Keepfold app) to exit")
         wait_pid(opts.wait_pid)
-        for _ in range(10):  # its launcher, bin\cortex-app.exe, exits a moment later
+        for _ in range(10):  # its launcher, bin\keepfold-app.exe, exits a moment later
             if not in_use(opts.dir):
                 break
             time.sleep(0.3)
@@ -1047,7 +1353,8 @@ def main(argv: list[str] | None = None) -> int:
             if uninstall(opts.dir, opts, say_file):
                 remove_later(opts.dir)
             return 0
-        install(opts.dir, opts, say_file)
+        if (moved := install(opts.dir, opts, say_file)) and moved[0]:
+            say_file(moved_text(*moved))  # the install is done all the same
         if opts.update:
             start_app(opts.dir)
         return 0

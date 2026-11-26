@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import semantic
-from cortex.app import actions, server, status, targets
-from cortex.browse import build, privacy, sites
-from cortex.browse.privacy import Kept
-from cortex.vault import Vault, VaultError
+from keepfold import semantic
+from keepfold.app import actions, server, status, targets
+from keepfold.browse import build, privacy, sites
+from keepfold.browse.privacy import Kept
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 MARKERS = ("TITLEMARKER", "URLMARKER", "SEARCHMARKER", "markerdomain")
@@ -33,7 +33,7 @@ def no_process(monkeypatch):
 
 @pytest.fixture
 def app(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     return server.App(root)
 
 
@@ -54,8 +54,8 @@ def _wait(app) -> server.Job:
     raise AssertionError("job did not finish")
 
 
-def test_tmp_dir_is_under_the_cortex_home(home):
-    assert actions.tmp_dir() == home / ".cortex" / "tmp"
+def test_tmp_dir_is_under_the_keepfold_home(home):
+    assert actions.tmp_dir() == home / ".keepfold" / "tmp"
 
 
 @pytest.mark.parametrize("outcome", ["ok", "fail"])
@@ -85,7 +85,7 @@ def test_import_preview_keeps_the_upload_unless_it_fails(app, monkeypatch):
 def test_cancelled_google_import_deletes_the_upload_and_reports_counts_only(app, monkeypatch):
     """Cancel mid-import: build.run's next embed call raises Cancelled, the job says so with no
     title, URL or search in it, and the upload is gone."""
-    from cortex.browse import sources, takeout
+    from keepfold.browse import sources, takeout
 
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
@@ -131,7 +131,7 @@ def test_cancelled_is_not_an_exception_a_broad_except_could_swallow():
 
 
 def test_history_import_summary_holds_counts_and_dates_only(root, monkeypatch):
-    from cortex.browse import sources
+    from keepfold.browse import sources
 
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
@@ -149,7 +149,7 @@ def test_history_import_summary_holds_counts_and_dates_only(root, monkeypatch):
 
 
 def test_history_import_without_the_search_model_stops_first(root, monkeypatch):
-    from cortex.browse import sources
+    from keepfold.browse import sources
 
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source("chrome", "Default", root / "History")])
@@ -159,7 +159,7 @@ def test_history_import_without_the_search_model_stops_first(root, monkeypatch):
 
 
 def test_browse_process_answer_holds_counts_only(root, monkeypatch):
-    from cortex import browse_serve
+    from keepfold import browse_serve
 
     monkeypatch.setattr(browse_serve, "run_import", lambda v, srcs=None: {
         "kept": 3, "model": False, "days_from": "2026-10-01", "title": "TITLEMARKER",
@@ -177,11 +177,11 @@ def test_status_safe_drops_every_free_text_value():
 
 # ---- 2. app/targets: connector files ---------------------------------------------------------
 
-ENTRY = {"command": "cortex", "args": ["mcp", "--vault", "C:\\v"]}
+ENTRY = {"command": "keepfold", "args": ["mcp", "--vault", "C:\\v"]}
 
 
 def _baks(p: Path) -> list[Path]:
-    return sorted(p.parent.glob(p.name + ".cortex-*.bak"))
+    return sorted(p.parent.glob(p.name + ".keepfold-*.bak"))
 
 
 def test_edit_json_keeps_other_keys_backs_up_and_removes(tmp_path):
@@ -193,12 +193,12 @@ def test_edit_json_keeps_other_keys_backs_up_and_removes(tmp_path):
     assert targets.edit_json(p, "mcpServers", ENTRY) == "add"
     d = json.loads(p.read_text(encoding="utf-8"))
     assert d["theme"] == "dark" and d["mcpServers"]["other"] == {"command": "x"}
-    assert d["mcpServers"]["cortex"] == ENTRY and len(_baks(p)) == 1
+    assert d["mcpServers"]["keepfold"] == ENTRY and len(_baks(p)) == 1
     assert targets.edit_json(p, "mcpServers", ENTRY) == "none"
     assert targets.edit_json(p, "mcpServers", {**ENTRY, "args": []}) == "update"
     assert targets.edit_json(p, "mcpServers", None) == "remove"
     d = json.loads(p.read_text(encoding="utf-8"))
-    assert "cortex" not in d["mcpServers"] and d["mcpServers"]["other"] and d["theme"]
+    assert "keepfold" not in d["mcpServers"] and d["mcpServers"]["other"] and d["theme"]
     assert targets.edit_json(p, "mcpServers", None) == "none"
 
 
@@ -217,20 +217,20 @@ def test_codex_text_round_trip_keeps_other_tables():
     old = 'model = "o3"\n\n[mcp_servers.other]\ncommand = "x"\n\n[profiles.a]\nk = 1\n'
     added = targets.codex_text(old, ENTRY)
     d = tomllib.loads(added)
-    assert d["mcp_servers"]["cortex"] == ENTRY and d["mcp_servers"]["other"] == {"command": "x"}
+    assert d["mcp_servers"]["keepfold"] == ENTRY and d["mcp_servers"]["other"] == {"command": "x"}
     assert d["model"] == "o3" and d["profiles"] == {"a": {"k": 1}}
     gone = tomllib.loads(targets.codex_text(added, None))
     assert gone == tomllib.loads(old)
     with pytest.raises(ValueError, match="untouched"):
         targets.codex_text("[a\n", ENTRY)
-    with pytest.raises(ValueError, match="by hand"):  # an inline cortex table is not edited
-        targets.codex_text('mcp_servers = { cortex = { command = "y" } }\n', ENTRY)
+    with pytest.raises(ValueError, match="by hand"):  # an inline keepfold table is not edited
+        targets.codex_text('mcp_servers = { keepfold = { command = "y" } }\n', ENTRY)
 
 
 def test_only_lm_studio_gets_private_and_only_with_the_toggle(home):
     def on(v):
-        (home / ".cortex").mkdir(exist_ok=True)
-        (home / ".cortex" / "config.yaml").write_text(
+        (home / ".keepfold").mkdir(exist_ok=True)
+        (home / ".keepfold" / "config.yaml").write_text(
             f"browse:\n  private_mcp: {str(v).lower()}\n", encoding="utf-8")
 
     lms = targets.LMStudio()
@@ -304,7 +304,7 @@ def test_private_body_escapes_untrusted_titles_and_searches():
 
 
 def test_read_inbox_skips_bad_rows_and_caps_fields(root):
-    d = root / ".cortex" / "browse"
+    d = root / ".keepfold" / "browse"
     d.mkdir(parents=True)
     rows = [{"url": "https://a.example/", "title": "A", "start": 1_762_000_000_000,
              "active_ms": 5000, "excerpt": "e" * 5000, "channel": "c" * 500},
@@ -361,7 +361,7 @@ def test_load_cache_survives_a_bad_file_and_on_disk_lists_only_its_files(root):
 
 
 def test_private_hub_only_for_a_private_topic_hub_on_disk(root):
-    from cortex import harvest
+    from keepfold import harvest
 
     v = Vault(root)
     note(root, "notes/hub-secret.md", 'id: "hub-secret"\ntitle: "S"\nkind: "note"\n'
@@ -380,7 +380,7 @@ def test_private_hub_only_for_a_private_topic_hub_on_disk(root):
 
 
 def test_is_hub_and_page_hubs():
-    from cortex import topics
+    from keepfold import topics
 
     hub = {"kind": "note", "fields": {"tags": ["topic", "x"]}}
     assert topics.is_hub(hub)
@@ -392,7 +392,7 @@ def test_is_hub_and_page_hubs():
 
 
 def test_people_hub_lists_only_public_people(root):
-    from cortex import relink
+    from keepfold import relink
 
     v = Vault(root)
     assert relink.people_fixes(v) == {}  # nothing until the first people page
@@ -408,7 +408,7 @@ def test_people_hub_lists_only_public_people(root):
 
 
 def test_is_not_me():
-    from cortex import claims
+    from keepfold import claims
 
     page = "# Profile\n\n## Not me\n- I love  Java\n\n## Facts\n- I like Python\n"
     assert claims.is_not_me("profile", page, "i love java")
@@ -417,7 +417,7 @@ def test_is_not_me():
 
 @pytest.mark.parametrize("ok", ["professor", "people/asha", "a-b-1", "people/a.b-c"])
 def test_check_audience_accepts_tags_and_people(ok):
-    from cortex import voice
+    from keepfold import voice
 
     assert voice.check_audience(ok) == ok
 
@@ -425,22 +425,22 @@ def test_check_audience_accepts_tags_and_people(ok):
 @pytest.mark.parametrize("bad", ["", "Professor", "people/../me", "people/", "a b", "x" * 41,
                                  "people/asha/x", None, 3, "tag\n"])
 def test_check_audience_refuses_anything_else(bad):
-    from cortex import voice
+    from keepfold import voice
 
     with pytest.raises(VaultError):
         voice.check_audience(bad)
 
 
 def test_export_target_refused_in_the_vault_the_repo_and_excluded_folders(root, home, tmp_path):
-    from cortex import export_context
+    from keepfold import export_context
 
     v = Vault(root)
     for inside in (root / "me" / "x.md", root, export_context.REPO / "out.md"):
         with pytest.raises(VaultError, match="Refusing"):
             export_context.check_target(inside, v)
     ex = tmp_path / "shared"
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(f"exclude: [{json.dumps(str(ex))}]\n",
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(f"exclude: [{json.dumps(str(ex))}]\n",
                                                   encoding="utf-8")
     with pytest.raises(VaultError, match="excluded"):
         export_context.check_target(ex / "sub" / "ctx.md", v)

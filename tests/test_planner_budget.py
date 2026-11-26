@@ -8,11 +8,11 @@ import pytest
 from conftest import run
 from typer.testing import CliRunner
 
-from cortex import planner
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.levels import ConceptState
-from cortex.vault import Vault, VaultError
+from keepfold import planner
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.levels import ConceptState
+from keepfold.vault import Vault, VaultError
 
 NOW = datetime(2026, 11, 16, 12, tzinfo=UTC)  # the fixture's Acme OA is on 2026-11-20
 LATER = datetime(2026, 11, 25, 12, tzinfo=UTC)  # no pending test left
@@ -124,20 +124,20 @@ def test_paper_interleaves_domains(v):
 
 def test_start_minutes_over_mcp(root):
     async def body(call):
-        full = await call("cortex_start", {"mode": "learn"})
-        cut = await call("cortex_start", {"mode": "learn", "minutes": 1})
+        full = await call("keepfold_start", {"mode": "learn"})
+        cut = await call("keepfold_start", {"mode": "learn", "minutes": 1})
         assert "**Time:**" not in full["display"]
         assert cut["today"] == full["today"][:len(cut["today"])] and len(cut["today"]) <= 1
         assert "(estimate)" in cut["display"]
         for args in ({"mode": "learn", "minutes": 0}, {"mode": "home", "minutes": 30},
                      {"mode": "mock", "minutes": 30},  # an interview, not a paper
                      {"mode": "mock", "topic": "paper", "minutes": 20}):
-            bad = await call("cortex_start", args)
+            bad = await call("keepfold_start", args)
             assert bad["error"] == "invalid_argument", args
-        await call("cortex_grade", {"concept": "two pointers", "question": "q",
+        await call("keepfold_grade", {"concept": "two pointers", "question": "q",
                                     "learner_answer": "a", "verdict": "partial",
                                     "item_type": "recall"})
-        out = await call("cortex_start", {"mode": "mock", "topic": "paper", "minutes": 15})
+        out = await call("keepfold_start", {"mode": "mock", "topic": "paper", "minutes": 15})
         ids = [i["id"] for i in out["paper"]]
         # real clock: the Acme test (to 20 Nov) or, after it, the graded concept
         assert ids and set(ids) <= {"two-pointers", "arrays-basics"}
@@ -145,9 +145,9 @@ def test_start_minutes_over_mcp(root):
         assert planner.estimate(out["paper"]) <= 15 and out["today"] == []
         assert "Practice paper" in out["display"] and "of 15 min (estimate)" in out["display"]
         assert "Paper section" in out["next"] and "Paper (topic 'paper')" in out["brief"]
-        dflt = await call("cortex_start", {"mode": "mock", "topic": "Paper"})
+        dflt = await call("keepfold_start", {"mode": "mock", "topic": "Paper"})
         assert f"of {planner.PAPER_MINUTES} min" in dflt["display"]
-        plain = await call("cortex_start", {"mode": "mock"})
+        plain = await call("keepfold_start", {"mode": "mock"})
         assert "paper" not in plain and "Practice paper" not in plain["display"]
 
     run(root, body)

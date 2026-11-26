@@ -14,9 +14,9 @@ from test_review_conflicts import cid
 from test_review_reinforce import back
 from typer.testing import CliRunner
 
-from cortex import claims, delta, packs, prime, review, xray
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import claims, delta, packs, prime, review, xray
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -25,9 +25,9 @@ NOW = dt.datetime.now(dt.UTC)
 
 def _ring(root, *calls):
     """X-ray rows as prime records them, one per (day, [claim ids served])."""
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / xray.RING).write_text("".join(json.dumps({
-        "ts": f"{d}T12:00:00Z", "tool": "cortex_prime", "client": "cursor",
+        "ts": f"{d}T12:00:00Z", "tool": "keepfold_prime", "client": "cursor",
         "served": {"preferences": [xray.claim(i) for i in ids]}, "trimmed": {}, "chars": 1})
         + "\n" for d, ids in calls), encoding="utf-8")
 
@@ -61,19 +61,19 @@ def test_since_for_same_facts_keep_their_day_a_newer_line_gets_today():
 
 
 def test_a_line_that_replaces_another_says_since_and_no_served_text_does(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", ["Uses Vim for editing code", "Drinks green tea"])
     old = cid(root, "preferences", "Uses Vim")
     p = {"id": "me/preferences", "op": "append_to_section", "target": "Coding",
          "user_confirmed": True}
 
     async def body(call):
-        await call("cortex_patch", {**p, "text": "- Writes code in Helix",
+        await call("keepfold_patch", {**p, "text": "- Writes code in Helix",
                                     "supersedes": [f"^{old}"]})
-        await call("cortex_patch", {**p, "text": "- Reads papers at night"})
-        ctx = (await call("cortex_context"))["context"]
+        await call("keepfold_patch", {**p, "text": "- Reads papers at night"})
+        ctx = (await call("keepfold_context"))["context"]
         assert "Writes code in Helix" in ctx and "(since" not in ctx
-        got = json.dumps(await call("cortex_prime", {"prompt": "which editor writes code"}))
+        got = json.dumps(await call("keepfold_prime", {"prompt": "which editor writes code"}))
         assert "Helix" in got and "(since" not in got
 
     run(root, body)
@@ -84,7 +84,7 @@ def test_a_line_that_replaces_another_says_since_and_no_served_text_does(root):
 
 
 def test_core_rules_files_and_the_hook_drop_the_stamp(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "core.md").write_text(
         "# Core\n\n## Core\n- Keep answers short. (since 2026-11-01)\n", encoding="utf-8")
     page(root, "preferences", ["Uses Helix for code (since 2026-11-02)"])
@@ -100,7 +100,7 @@ def test_core_rules_files_and_the_hook_drop_the_stamp(root):
 
 @pytest.mark.parametrize("tier", [None, "agent"])
 def test_the_tidy_stamps_a_newer_line_it_keeps_and_r5a_owns_it(root, tier):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "setup", ["Edits code in Vim", "Writes code in Helix"], "Editor")
     commit(root)
     assert review.record_baseline(Vault(root))
@@ -117,11 +117,11 @@ def test_the_tidy_stamps_a_newer_line_it_keeps_and_r5a_owns_it(root, tier):
     else:
         assert list(live(root, "setup")) == [f"Writes code in Helix (since {today()})"]
         assert c["since"] == today() and c["kept"]["line"]
-    assert review.outside_lines(Vault(root), events(root)) == []  # Cortex's own write
+    assert review.outside_lines(Vault(root), events(root)) == []  # Keepfold's own write
 
 
 def test_a_near_copy_kept_gets_no_since(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", ["Uses Vim for editing code", "Uses Vim for code editing"])
     commit(root)
     assert tidy(root)["retired"] == 1
@@ -134,7 +134,7 @@ def test_keep_on_an_update_card_stamps_only_the_newer_line(root, app, keep):  # 
         "# Preferences\n\n## Coding\n- Uses Vim for editing code\n", encoding="utf-8")
 
     async def body(call):
-        await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                     "target": "Coding", "user_confirmed": True,
                                     "text": "- Uses Vim for editing code at work"})
 
@@ -149,7 +149,7 @@ def test_keep_on_an_update_card_stamps_only_the_newer_line(root, app, keep):  # 
 # ---- G5b-4: use ----
 
 def test_prime_orders_a_section_by_use_before_today(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", ["Uses Vim", "Uses tabs", "Uses dark mode"])
     v = Vault(root)
     k = {t: r["id"] for t, r in live(root, "preferences").items()}
@@ -186,8 +186,8 @@ def _guess(root, name, text, days, tier="agent"):
 
 
 def test_an_old_guess_no_app_used_retires_once_a_day_undoably(root):
-    from cortex.cli import app as cli
-    (root / ".cortex").mkdir(exist_ok=True)
+    from keepfold.cli import app as cli
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", ["Uses Vim", "Likes jazz", "Drinks green tea", "Reads papers",
                                "Runs at dawn"])
     (root / "me" / "core.md").write_text("# Core\n\n## Core\n- Keep answers short.\n",
@@ -211,13 +211,13 @@ def test_an_old_guess_no_app_used_retires_once_a_day_undoably(root):
     (c,) = [c for c in changes(root, "preferences") if c.get("auto")]
     assert (c["op"], c["claim"], c["why"], "kept" in c) == ("retire", vim, "unused", False)
     (receipt,) = (root / "sessions").glob("*-tidy-*.md")
-    assert "Cortex retired 1 old guess no app used" in receipt.read_text("utf-8")
+    assert "Keepfold retired 1 old guess no app used" in receipt.read_text("utf-8")
     assert tidy(root) == {"moved": 0, "retired": 0}  # once a day
     (sid,) = {e["session"] for e in events(root) if e["kind"] == "open"}
     r = CliRunner().invoke(cli, ["undo", sid, "--vault", str(root)])
     assert r.exit_code == 0, r.output
     assert "Uses Vim" in live(root, "preferences")
-    state = root / ".cortex" / "tidy.json"
+    state = root / ".keepfold" / "tidy.json"
     state.write_text(json.dumps({**json.loads(state.read_text("utf-8")), "guesses": ago(1)}),
                      encoding="utf-8")  # as on the next day
     assert tidy(root) == {"moved": 0, "retired": 0}  # an undone retire is never redone

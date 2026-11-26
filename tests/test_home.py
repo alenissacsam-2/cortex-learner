@@ -1,4 +1,4 @@
-"""The app's live home (cortex.home): the version stamp, deltas, the feed, next up, privacy,
+"""The app's live home (keepfold.home): the version stamp, deltas, the feed, next up, privacy,
 the routes, and its speed on a synthetic 5k-note vault. Made-up vaults only."""
 
 import base64
@@ -20,12 +20,12 @@ from test_brainmap import (
     made,  # noqa: F401  (a fixture: topic hubs, pages and vectors)
 )
 
-from cortex import brainmap, dashboard, home
-from cortex.browse import store
-from cortex.events import EventLog, local_day
-from cortex.home import HomeCache
-from cortex.index import SNAPSHOT, SNAPSHOT_SCHEMA
-from cortex.vault import Vault
+from keepfold import brainmap, dashboard, home
+from keepfold.browse import store
+from keepfold.events import EventLog, local_day
+from keepfold.home import HomeCache
+from keepfold.index import SNAPSHOT, SNAPSHOT_SCHEMA
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
@@ -62,7 +62,7 @@ def root(tmp_path):
     """vault_mini plus a second domain (sys: paging), each subject graded before today."""
     r = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", r)
-    (r / ".cortex").mkdir()
+    (r / ".keepfold").mkdir()
     cat = (r / "catalog.yaml").read_bytes().decode()
     (r / "catalog.yaml").write_bytes((cat.rstrip("\n") + "\n" + SYS).encode())
     _note(r, "domains", "sys", {"id": "sys", "title": "Systems", "kind": "domain"})
@@ -94,8 +94,8 @@ def test_version_moves_with_events_and_notes_only(root):
     first = hc.get()
     assert first["v"] == hc.version() == home.version(v, NOW)
     assert hc.get()["v"] == first["v"]  # its own layout write is not a change
-    assert (root / ".cortex" / "brain-layout.json").is_file()
-    (root / ".cortex" / "scratch.txt").write_bytes(b"x")  # nothing the home reads
+    assert (root / ".keepfold" / "brain-layout.json").is_file()
+    (root / ".keepfold" / "scratch.txt").write_bytes(b"x")  # nothing the home reads
     (root / "notes").mkdir()
     (root / "notes" / "readme.txt").write_bytes(b"not a note")
     assert hc.version() == first["v"]
@@ -291,7 +291,7 @@ def _add_hashing(root: Path, verdict: str, at: datetime, **fields) -> None:
 def test_each_subject_gets_its_median_stability_private_left_out(root):
     """The median FSRS stability over a subject's concepts; under 3 shows no number. The
     private concept in dsa never counts, so dsa needs a third public concept."""
-    from cortex import planner
+    from keepfold import planner
     _grade(root, "secret-diary", "correct", NOW - timedelta(days=3))
     keep = {g["subject"]["id"]: g["keep"] for g in _cache(root).get()["next_up"] if g["subject"]}
     assert keep["domain:dsa"] == {"n": 2, "days": None, "text": "Not enough checks yet"}
@@ -319,8 +319,8 @@ def _cold_vault(root: Path) -> None:
 
 
 def test_the_check_offers_three_due_concepts_most_overdue_first_never_private(root):
-    from cortex import planner
-    from cortex.catalog import Catalog
+    from keepfold import planner
+    from keepfold.catalog import Catalog
     _cold_vault(root)
     now = datetime.now(UTC)
     items = home.cold_check(Vault(root), now)
@@ -344,14 +344,14 @@ def test_the_check_offers_three_due_concepts_most_overdue_first_never_private(ro
 def test_no_due_concept_hides_the_check(tmp_path):
     r = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", r)
-    (r / ".cortex").mkdir()
+    (r / ".keepfold").mkdir()
     _grade(r, "secret-diary", "wrong", NOW - timedelta(days=5))  # due, but private
     assert _cache(r).get()["cold_check"] is False
     assert home.cold_check(Vault(r), NOW) == []
 
 
-def test_an_answer_records_one_grade_through_cortex_grade(root):
-    from cortex import planner
+def test_an_answer_records_one_grade_through_keepfold_grade(root):
+    from keepfold import planner
     _cold_vault(root)
     v = Vault(root)
     log = EventLog(v)
@@ -384,7 +384,7 @@ def test_an_answer_records_one_grade_through_cortex_grade(root):
     assert (g["object"], g["verdict"], g["confidence"], g["item_type"]) == (
         "concept:hashing", "correct", 2, "recall")
     assert g["learner_answer"] == "Shaky" and g["source"] == "tutor"
-    assert g["grader"] == {"client": "cortex-app", "model": "self"}
+    assert g["grader"] == {"client": "keepfold-app", "model": "self"}
     assert {"id", "ts", "day", "predicted_p"} <= set(g)
     now = planner.current_states(v, day)[0]["hashing"]
     assert now.attempts == was.attempts + 1 and now.last_seen == day
@@ -414,7 +414,7 @@ def test_the_routes_need_the_key_and_private_needs_the_switch(root, monkeypatch)
     """Private items only after Windows Hello (mocked), and never after a relock, the
     10-minute expiry (the server's own clock) or a restart: a page still asking for them gets
     the public home whole and `relock`."""
-    from cortex.app import hello, server
+    from keepfold.app import hello, server
     _grade(root, "secret-diary", "correct", datetime.now(UTC))
     srv, app = _serve(root)
 
@@ -492,7 +492,7 @@ def _big(root: Path, n: int = 5000) -> None:
         return " ".join(rng.choice(WORDS) for _ in range(k))
 
     root.mkdir()
-    (root / ".cortex").mkdir()
+    (root / ".keepfold").mkdir()
     cat = ["schema: 1", "domains:"]
     concepts = []
     for d in range(10):
@@ -778,7 +778,7 @@ def test_the_home_stays_quick_with_5k_sites_in_the_stem(tmp_path, capsys):
 
 def test_the_site_route_needs_the_key_and_hides_private_sites_while_locked(brain_vault,
                                                                              monkeypatch):
-    from cortex.app import hello
+    from keepfold.app import hello
     r = brain_vault
     _sites(r, *_stem_sites(3), {"site": "secret.example", "hidden": 1, "category": "adult",
                                 "visits": 9, "days": _ago(1)})

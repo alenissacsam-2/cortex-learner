@@ -8,10 +8,10 @@ import pytest
 from conftest import run
 from typer.testing import CliRunner
 
-from cortex import voice
-from cortex.app import server
-from cortex.cli import ME_PAGES, app
-from cortex.vault import Vault
+from keepfold import voice
+from keepfold.app import server
+from keepfold.cli import ME_PAGES, app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 NOW = dt.datetime(2026, 11, 20, tzinfo=dt.UTC)
@@ -102,7 +102,7 @@ def test_propose_waits_rerun_replaces_and_approved_line_stays(root):
     assert line in (root / "me/voice.md").read_text("utf-8")  # approved: never removed
 
     async def body(call):
-        out = await call("cortex_as_me", {"task": "Ask a friend over", "audience": "friend"})
+        out = await call("keepfold_as_me", {"task": "Ask a friend over", "audience": "friend"})
         assert any(line in c["text"] for c in out["voice"]["card"])
 
     run(root, body)

@@ -14,10 +14,10 @@ from test_app_js import _run
 from test_review_today import KEYS_JS
 from ulid import ULID
 
-from cortex import tonight
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import tonight
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -39,7 +39,7 @@ def change(log, s, when, note, **c):
 
 
 def synthetic(root):
-    """An AI app's session (Claude Code), an app click and the CLI on DAY's Cortex day."""
+    """An AI app's session (Claude Code), an app click and the CLI on DAY's Keepfold day."""
     log = EventLog(Vault(root))
     agent, click = sid(at(20)), sid(at(21))
     log.append(session=agent, kind="open", source="tutor", now=at(20),
@@ -76,7 +76,7 @@ def test_the_view_on_a_synthetic_vault(root, monkeypatch):
     assert n[0] == 1 and n[5] == 1 and n[16] == 3 and n[17] == 1 and sum(n) == 7
     assert v["counts"] == {"added": 1, "changed": 4, "chat_turns": 0, "recorded": 3}
     assert {s["source"]: s["n"] for s in v["sources"]} == {
-        "Claude Code": 3, "Cortex CLI": 3, "Cortex app": 1}
+        "Claude Code": 3, "Keepfold CLI": 3, "Keepfold app": 1}
     (g,) = v["learned"]  # the app click is not an AI app's
     assert (g["session"], g["client"]) == (agent, "Claude Code")
     assert [(r["id"], r["time"]) for r in g["rows"]] == [("me/profile", "20:18"),
@@ -95,7 +95,7 @@ def test_the_view_says_whether_the_person_studies(tmp_path):
 
 
 def test_chat_turns_from_the_live_logs(root):
-    from cortex import chats
+    from keepfold import chats
     chats.log_live("01JD0000000000000000000000", [("user", "hi"), ("assistant", "hello")],
                    at(22))
     chats.log_live("01JD0000000000000000000000", [("user", "yesterday")], at(3))
@@ -111,9 +111,9 @@ def test_levels_by_quartiles():
 
 def test_undo_an_ai_apps_session_then_404(root, monkeypatch):
     async def body(call):
-        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+        await call("keepfold_add", {"kind": "concept", "title": "Sliding Window",
                                   "parent": "dsa.arrays"})
-        await call("cortex_end", {"summary": "added a concept"})  # committed: undo-able
+        await call("keepfold_end", {"summary": "added a concept"})  # committed: undo-able
 
     run(root, body)
     app = server.App(root)
@@ -127,15 +127,15 @@ def test_undo_an_ai_apps_session_then_404(root, monkeypatch):
     job = app.jobs.view()["job"]
     assert job["error"] is None and job["result"]["ok"], job
     assert "sliding-window" not in (root / "catalog.yaml").read_text("utf-8")
-    assert git(root, "log", "-1", "--format=%s").strip() == f"cortex: undo {g['session']}"
+    assert git(root, "log", "-1", "--format=%s").strip() == f"keepfold: undo {g['session']}"
     assert app.tonight()["learned"] == []
     with pytest.raises(server.NotFound):  # already undone
         app.tonight_undo({"session": g["session"]})
 
 
 def test_undo_of_a_session_still_open_says_so(root):
-    async def body(call):  # no cortex_end: the session is open, nothing committed yet
-        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+    async def body(call):  # no keepfold_end: the session is open, nothing committed yet
+        await call("keepfold_add", {"kind": "concept", "title": "Sliding Window",
                                   "parent": "dsa.arrays"})
 
     run(root, body)
@@ -148,11 +148,11 @@ def test_undo_of_a_session_still_open_says_so(root):
         "utf-8")
 
 
-def test_undo_resets_the_review_cortex_only_between_clicks(root, monkeypatch):
+def test_undo_resets_the_review_keepfold_only_between_clicks(root, monkeypatch):
     async def body(call):
-        await call("cortex_add", {"kind": "concept", "title": "Sliding Window",
+        await call("keepfold_add", {"kind": "concept", "title": "Sliding Window",
                                   "parent": "dsa.arrays"})
-        await call("cortex_end", {"summary": "added a concept"})
+        await call("keepfold_end", {"summary": "added a concept"})
 
     run(root, body)
     app = server.App(root)
@@ -171,7 +171,7 @@ def test_undo_resets_the_review_cortex_only_between_clicks(root, monkeypatch):
 @pytest.mark.parametrize(("hh", "mm", "night"), [(19, 59, False), (20, 0, True),
                                                  (3, 59, True), (4, 0, False)])
 def test_the_app_opens_on_tonight_in_the_evening(root, hh, mm, night):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     app = server.App(root)
     url = server.start_url(app, datetime(2026, 11, 20, hh, mm))
     assert url == (f"http://127.0.0.1:{app.port}/manage?t={app.token}#tonight" if night
@@ -249,7 +249,7 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path, studies):
     assert ("1 page added · 2 pages changed · 3 chat turns · 1 thing recorded by AI apps"
             in out["text"])
     assert "Claude Code: 6" in out["text"] and "<b>Likes tea</b>" in out["text"]  # as text
-    assert studies == ("A 2-minute cold check tomorrow: ask any AI app /cortex review."
+    assert studies == ("A 2-minute cold check tomorrow: ask any AI app /keepfold review."
                        in out["text"])
     assert out["undo"] == ["Undo everything Claude Code saved in session s_1"]
     title, ok, ask, posted = out["undoAsk"]  # asked first: nothing posted before the OK
@@ -263,8 +263,8 @@ def test_the_tonight_section_and_y_on_a_card(tmp_path, studies):
 
 
 def test_the_apps_own_check_is_not_an_ai_app():
-    from cortex import tonight
-    events = [{"session": "s_a", "kind": "open", "payload": {"client": "cortex-app"}},
-              {"session": "s_b", "kind": "assessment", "grader": {"client": "cortex-app"}},
+    from keepfold import tonight
+    events = [{"session": "s_a", "kind": "open", "payload": {"client": "keepfold-app"}},
+              {"session": "s_b", "kind": "assessment", "grader": {"client": "keepfold-app"}},
               {"session": "s_c", "kind": "open", "payload": {"client": "claude-ai"}}]
     assert tonight.clients(events) == {"s_c": "claude-ai"}

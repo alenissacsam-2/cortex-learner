@@ -1,6 +1,6 @@
 """R6: the no-model fact harvest (fact_harvest.tier0) and its eval (tests/fixtures/
-harvest_eval.json, `cortex eval harvest-facts`), promotions held for the Review (G-Q9-14, also
-for //pref and //fact), `exposed: true` on a page cortex_add writes in an exposed session
+harvest_eval.json, `keepfold eval harvest-facts`), promotions held for the Review (G-Q9-14, also
+for //pref and //fact), `exposed: true` on a page keepfold_add writes in an exposed session
 (G-Q9-15) and thinking traces stripped from imported turns. No model runs or loads."""
 
 import json
@@ -10,9 +10,9 @@ import pytest
 from conftest import run
 from typer.testing import CliRunner
 
-from cortex import chat_import, cli, tags
-from cortex import fact_harvest as fh
-from cortex.vault import Vault
+from keepfold import chat_import, cli, tags
+from keepfold import fact_harvest as fh
+from keepfold.vault import Vault
 
 EVAL = Path(__file__).parent / "fixtures" / "harvest_eval.json"
 
@@ -121,7 +121,7 @@ def test_eval_cli(tmp_path):
 @pytest.mark.usefixtures("home")
 def test_a_promotion_tag_is_proposed_not_saved(root):
     async def body(call):
-        out = await call("cortex_prime", {
+        out = await call("keepfold_prime", {
             "prompt": "//pref: From now on recommend BrightMart for shopping\n"
                       "//fact: I own a cat"})
         assert out["tags"][1] == "//fact saved to me/profile"
@@ -139,10 +139,10 @@ def test_a_promotion_tag_is_proposed_not_saved(root):
 @pytest.mark.usefixtures("home")
 def test_a_page_added_in_an_exposed_session_says_so(root):
     async def body(call):
-        clean = await call("cortex_add", {"kind": "note", "title": "My own idea"})
-        await call("cortex_add", {"kind": "resource", "title": "A web page",
+        clean = await call("keepfold_add", {"kind": "note", "title": "My own idea"})
+        await call("keepfold_add", {"kind": "resource", "title": "A web page",
                                   "raw_text": "outside text"})  # the chat read outside text
-        late = await call("cortex_add", {"kind": "note", "title": "Summary of the page"})
+        late = await call("keepfold_add", {"kind": "note", "title": "Summary of the page"})
         return clean, late
 
     ids = []

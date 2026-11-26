@@ -6,11 +6,11 @@ x STALE_WEIGHT in recall (a read-time fold over the header lines)."""
 
 import pytest
 
-from cortex import importers, semantic, sources
-from cortex.app import server
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.vault import Vault
+from keepfold import importers, semantic, sources
+from keepfold.app import server
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -42,7 +42,7 @@ def test_a_changed_note_rewrites_its_untouched_page(root_plain, tmp_path):
 
 
 def test_a_hand_edited_page_keeps_its_text_and_gets_a_review_card(root_plain, tmp_path):
-    (root_plain / ".cortex").mkdir(exist_ok=True)
+    (root_plain / ".keepfold").mkdir(exist_ok=True)
     v, d = Vault(root_plain), _notes(tmp_path / "n", Plan="First plan.\n")
     importers.import_notes(v, d)
     v.update_text(root_plain / "resources/notes-plan.md", lambda t: t + "My own line.\n")

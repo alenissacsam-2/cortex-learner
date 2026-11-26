@@ -1,6 +1,6 @@
 """v7 review C (data, privacy, local models), on synthetic History and temp vaults only:
 C1 search terms and uncategorised titles stay local until a local-model verdict clears them,
-C2 a settings change re-filters everything stored and `cortex browse forget`, C3 private pages
+C2 a settings change re-filters everything stored and `keepfold browse forget`, C3 private pages
 out of the vault's git, C5/C16 the extension inbox archive, C12 the private search signature,
 C14 macOS and Linux browser paths."""
 
@@ -15,11 +15,11 @@ from test_browse import LINK, Embed, chromium, hubbed, m
 from test_browse_sites import OWNER, days_text, hidden, visible
 from typer.testing import CliRunner
 
-from cortex import cli, cloudllm, doctor, localllm, semantic, session
-from cortex.browse import build, forget, privacy, sites, sources, store, vectors
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.vault import Vault
+from keepfold import cli, cloudllm, doctor, localllm, semantic, session
+from keepfold.browse import build, forget, privacy, sites, sources, store, vectors
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 ROWS = [
     (m(0), "https://lichess.org/study/abc", "Chess openings for beginners", 300),
@@ -310,7 +310,7 @@ def test_c3_commits_never_take_ignored_private_pages(vault, hist):
     page.write_text("x\n", encoding="utf-8")
     private = list((vault / PRIV).rglob("*.md"))
     assert private
-    assert session._commit(v, "cortex: test", [page, *private])
+    assert session._commit(v, "keepfold: test", [page, *private])
     assert git(vault, "ls-files", PRIV.as_posix()) == ""
     assert "notes/a-new-note.md" in git(vault, "ls-files", "notes")
 
@@ -320,15 +320,15 @@ def test_c3_init_writes_and_upgrades_the_gitignore(tmp_path, home):
     assert forget.PRIVATE_IGNORE in cli.GITIGNORE.splitlines()
     r = tmp_path / "old"
     r.mkdir()
-    (r / ".gitignore").write_text(".cortex/*\n", encoding="utf-8")
+    (r / ".gitignore").write_text(".keepfold/*\n", encoding="utf-8")
     cli._init(r)
     assert forget.PRIVATE_IGNORE in (r / ".gitignore").read_text(encoding="utf-8").splitlines()
 
 
 def test_c3_doctor_passes_a_clean_vault(root):
-    (root / ".gitignore").write_text(f".cortex/*\n{forget.PRIVATE_IGNORE}\n", encoding="utf-8")
+    (root / ".gitignore").write_text(f".keepfold/*\n{forget.PRIVATE_IGNORE}\n", encoding="utf-8")
     assert doctor.check_private_browse_git(root)[0] == "PASS"
-    (root / ".gitignore").write_text(".cortex/*\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".keepfold/*\n", encoding="utf-8")
     assert doctor.check_private_browse_git(root)[0] == "PASS"  # an upgraded vault, no pages
     (root / "browse" / "private").mkdir(parents=True)
     assert doctor.check_private_browse_git(root)[0] == "WARN"
@@ -341,7 +341,7 @@ EXT = {"url": "https://lichess.org/extonly", "title": "Chess from the extension"
 
 
 def test_c5_extension_only_visits_survive_a_rebuild(vault, hist):
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     hiv = {"url": "https://www.webmd.com/x", "title": "HIV symptoms",
            "start": m(201).isoformat(), "active_ms": 1000, "excerpt": "leaked?"}
@@ -359,7 +359,7 @@ def test_c5_extension_only_visits_survive_a_rebuild(vault, hist):
 
 
 def test_c16_every_read_file_is_archived_and_old_ones_pruned(vault, hist):
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     early = {**EXT, "start": (m(0) - timedelta(days=3)).isoformat()}
     (d / "inbox-2026-11-06.jsonl").write_text(json.dumps(early) + "\n", encoding="utf-8")
@@ -385,7 +385,7 @@ def old_day(tmp_path, vault, profile_1=True):
         chromium(ud / "Profile 1" / "History",
                  [(m(100, -20), "https://lichess.org/old", "Chess old game", 60),
                   (m(100), "https://lichess.org/now", "Chess now", 60)])
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     (d / f"inbox-{OLD}.jsonl").write_text(
         json.dumps({**EXT, "start": m(200, -20).isoformat()}) + "\n", encoding="utf-8")

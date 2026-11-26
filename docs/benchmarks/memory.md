@@ -1,10 +1,10 @@
-# Memory of a long-lived Cortex process
+# Memory of a long-lived Keepfold process
 
 `uv run python scripts/memory_probe.py --notes 1000 --visits 10000`: one process takes the steps
-a long-lived MCP server (`cortex mcp`) and the app take, on a synthetic vault in a temp folder
+a long-lived MCP server (`keepfold mcp`) and the app take, on a synthetic vault in a temp folder
 with a temp HOME (1,000 made-up pages, one in five long, 2,704 chunks; a browse import of 10,000
 made-up visits, 369 browse pages, 1,104 chunks). The models are the real ones from
-`~/.cortex/models` (bge-small-en-v1.5 and ms-marco-MiniLM-L-6-v2); nothing else of `~/.cortex`
+`~/.keepfold/models` (bge-small-en-v1.5 and ms-marco-MiniLM-L-6-v2); nothing else of `~/.keepfold`
 is read and nothing is downloaded.
 
 Machine: 8 cores (16 logical), 23.7 GB RAM, Windows 11. Other work kept the CPU near 100%
@@ -15,7 +15,7 @@ during every run, so the seconds are noisy; the memory numbers are not.
 | step | before ws | before private | after ws | after private |
 |---|---:|---:|---:|---:|
 | python started | 21 | 13 | 21 | 12 |
-| import cortex (mcp_server, semantic, home) | 55 | 522 | 54 | 522 |
+| import keepfold (mcp_server, semantic, home) | 55 | 522 | 54 | 522 |
 | MCP core open (catalog + index) | 63 | 530 | 63 | 529 |
 | embedder loaded | 234 | 686 | 233 | 686 |
 | semantic index built (2,704 chunks) | 1,867 | 2,839 | 256 | 708 |
@@ -51,7 +51,7 @@ the arena, 217 MB without it.
 The models themselves are small: bge-small adds 171 MB, the reranker 95 MB, the background
 copy about 120 MB.
 
-## The fixes (src/cortex/semantic.py)
+## The fixes (src/keepfold/semantic.py)
 
 1. **No CPU arena** (`ARENA = False`, passed as fastembed's `enable_cpu_mem_arena` to the
    embedder, the background copy and the reranker). A run frees its buffers at its end. Idle
@@ -85,7 +85,7 @@ Interleaved in one process, both sessions alive, so the machine's load hits both
 A search is no slower (the query embedding and the rerank are within noise). Bulk embedding is
 7-40% slower without the arena, as every run allocates its buffers afresh: the probe's full
 index build took 262 s against 209 s before. Builds are background work at low priority, or
-`cortex model build` once; a short-lived build process could turn the arena back on (set
+`keepfold model build` once; a short-lived build process could turn the arena back on (set
 `semantic.ARENA = True` before the model loads), since its arena dies with it.
 
 ## M2: the idle app, hidden or minimised
@@ -139,7 +139,7 @@ with the cap below.
 **OpenBLAS.** `taint.cap_blas()` sets `OPENBLAS_NUM_THREADS=4` unless the user set it or
 `OMP_NUM_THREADS`, which OpenBLAS also reads. It runs before numpy loads, first thing in each
 entry point:
-- `cortex` (`taint.main`): the MCP server and every CLI command;
+- `keepfold` (`taint.main`): the MCP server and every CLI command;
 - the app (`launch.main`);
 - the receiver (`launch.receiver`).
 
@@ -156,7 +156,7 @@ noise:
 
 | | 16 threads | 4 threads (the cap) |
 |---|---:|---:|
-| private bytes after `import cortex` | 523 MB | 137 MB |
+| private bytes after `import keepfold` | 523 MB | 137 MB |
 | private bytes, idle with every model loaded | 965 MB | 579 MB |
 | private bytes, idle with the models dropped | 639 MB | 255 MB |
 | working set, idle with the models dropped | 164 MB | 158 MB |
@@ -188,10 +188,10 @@ Possible fixes, all outside M2's files (`semantic.py`, `browse_serve.py`, `safet
   restart the idle clock;
 - or a shorter `IDLE_UNLOAD` in the app.
 
-## M3: an idle Cortex gives its memory back
+## M3: an idle Keepfold gives its memory back
 
 The owner's installed 0.4.2, 15 minutes after start on a PC in use: the app's Python process
-had a 726 MB working set and 1,184 MB of private bytes, and each idle `cortex mcp` had 295-323
+had a 726 MB working set and 1,184 MB of private bytes, and each idle `keepfold mcp` had 295-323
 MB. M3 closes the two gaps M2 found in the app and makes an idle MCP connection small.
 
 Two probe runs, both on made-up data with a temp HOME and the real models:
@@ -200,8 +200,8 @@ Two probe runs, both on made-up data with a temp HOME and the real models:
   history, and every fifth minute a chat page. The browse import, the chats import, the
   safety net and the idle check run on their schedules. `--scale 0.2` shortens every schedule
   and `IDLE_UNLOAD` five times, so 25 minutes take 5. Times are shown at full scale.
-- `--mcp 15 --scale 0.2 --notes 300` starts `cortex mcp` over stdio as an AI app does:
-  `initialize`, then one `cortex_prime` and one `cortex_recall` (first calls, timed), then 15
+- `--mcp 15 --scale 0.2 --notes 300` starts `keepfold mcp` over stdio as an AI app does:
+  `initialize`, then one `keepfold_prime` and one `keepfold_recall` (first calls, timed), then 15
   idle minutes, then the same two calls again.
 
 Both print the working set and private bytes each minute, and which models are loaded and for
@@ -244,7 +244,7 @@ later.
 A first after run, which trimmed only on an idle drop, stayed at 132-136 MB with no model
 after its minute-14 import. The end of a background run now trims too.
 
-**One idle `cortex mcp`** (`--mcp 15`), in MB:
+**One idle `keepfold mcp`** (`--mcp 15`), in MB:
 
 | min | before ws | priv | after ws | priv | models |
 |---:|---:|---:|---:|---:|---|
@@ -261,10 +261,10 @@ Private bytes are the same, since they still hold the imports.
 | call | before | after |
 |---|---|---|
 | initialize | 6.40, 5.75 | 5.88, 5.70 |
-| `cortex_prime`, first (waits for the warm-up's load) | 4.31, 4.23 | 4.38, 4.22 |
-| `cortex_recall`, first | 0.11, 0.13 | 0.10, 0.09 |
-| `cortex_prime`, after the idle drop (loads again) | 0.52 | 0.52 |
-| `cortex_recall`, after the idle drop | 0.11 | 0.10 |
+| `keepfold_prime`, first (waits for the warm-up's load) | 4.31, 4.23 | 4.38, 4.22 |
+| `keepfold_recall`, first | 0.11, 0.13 | 0.10, 0.09 |
+| `keepfold_prime`, after the idle drop (loads again) | 0.52 | 0.52 |
+| `keepfold_recall`, after the idle drop | 0.11 | 0.10 |
 
 The first prime is 0.7% slower on the mean, which is within noise. The trim costs no visible
 time after idle, because that call loads the model again anyway.
@@ -296,17 +296,17 @@ never keeps one loaded:
   vectors. The private vectors' pass already reports any failure and goes on.
   `test_a_broken_model_leaves_the_background_import_as_without_one` covers both cases.
 
-**What an idle `cortex mcp` holds.**
+**What an idle `keepfold mcp` holds.**
 - **The imports.** They take about 127 MB of working set before any model loads, and they stay
   for the life of the process:
   - the MCP SDK brings starlette, uvicorn, sse_starlette and cryptography;
   - fastembed brings onnxruntime, tokenizers, PIL, huggingface_hub, requests, tqdm, mmh3 and
     loguru;
-  - numpy comes in through `cortex.cli`, by way of dashboard and brainmap.
+  - numpy comes in through `keepfold.cli`, by way of dashboard and brainmap.
 - **The embedder.** The warm-up after `notifications/initialized` loads it, so the first prime
   is quick and orders by cosine. It stays: dropping it would slow the first call.
 - **The core's catalog and index, and the vector matrices kept for queries**
-  (`semantic._MEM`). Dropping `_MEM` would change what `cortex_read` lists as similar pages.
+  (`semantic._MEM`). Dropping `_MEM` would change what `keepfold_read` lists as similar pages.
 
 The M1 idle check drops the embedder after `IDLE_UNLOAD`. On Windows a process keeps the pages
 it touched in its working set after the memory is freed. So when the last model goes, the
@@ -342,7 +342,7 @@ as it already did when no model was set up.
 
 ## F1: the per-call refresh of find, read and recall
 
-On test_home's made-up 5k-note vault (quiet PC, median of 15), a warm `cortex_find` took 576 ms
+On test_home's made-up 5k-note vault (quiet PC, median of 15), a warm `keepfold_find` took 576 ms
 before (the refresh 558 ms: `current_states` 248 ms, the index's stat pass 256 ms) and 90 ms after
 (the refresh 72 ms: `current_states` 9 ms from the cached fold, the scan 53 ms from `os.scandir`'s
 listing); `tests/test_replay_cache.py` holds it under 0.3 s.
@@ -364,7 +364,7 @@ starts from its snapshot), then the results dropped:
 | both | | **98 MB** |
 
 The process's working set rose 79 → 171 MB and its private bytes 545 → 636 MB with both full
-(tracemalloc off). A warm `cortex_find` on that vault took 245 ms (median of 7) with another
+(tracemalloc off). A warm `keepfold_find` on that vault took 245 ms (median of 7) with another
 test suite keeping the CPU busy; F1's budget is 0.3 s.
 
 **Decision: no bound.** Both together stay under the 150 MB line at this size, and a bound
@@ -374,6 +374,6 @@ per call at 2,000 sessions. The cache grows with the vault, about 33 KB per sess
 6.5 KB per page; a vault several times this size is the point to bound it by bytes, never below
 the event files the folds read.
 
-**quick_check (R29b).** `cortex.quarantine.check` runs `PRAGMA quick_check` once per store per
+**quick_check (R29b).** `keepfold.quarantine.check` runs `PRAGMA quick_check` once per store per
 process, at its first open. On the 5k-page vectors (one 384-dim chunk a page, 5.3 MB) it took
 20 ms; on the same pages with 6 chunks each (25.8 MB) 130 ms.

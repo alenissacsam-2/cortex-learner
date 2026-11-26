@@ -1,6 +1,6 @@
 """The browse brain, phase 1 (docs/design/browse-brain.md): the §2 privacy filter (a positive
 and a negative case per rule), discovery and read-only reading of synthetic Chromium and
-Firefox History files built here (never real history), `cortex browse scan` (counts only), and
+Firefox History files built here (never real history), `keepfold browse scan` (counts only), and
 the import: day pages, private pages, the index, interest signals, "New interest?" lines,
 idempotency, the inbox merge (visits the capture extension saved before 0.3.2), the local LLM
 hooks and the dashboard lobe."""
@@ -22,13 +22,13 @@ import pytest
 from conftest import git, note
 from typer.testing import CliRunner
 
-from cortex import backup, dashboard, events, semantic
-from cortex.browse import Settings, build, filter_record, load_settings, privacy, sources
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.index import Index
-from cortex.vault import Vault, secret_pattern
+from keepfold import backup, dashboard, events, semantic
+from keepfold.browse import Settings, build, filter_record, load_settings, privacy, sources
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.index import Index
+from keepfold.vault import Vault, secret_pattern
 
 S = Settings()
 REAL_LOAD = semantic.load_embedder  # before conftest's _no_real_embedder wraps it
@@ -513,7 +513,7 @@ def files(r):
 def test_every_long_phase_says_how_far_it_got_in_counts_only(vault, browsers, monkeypatch):
     """The owner saw minutes of silence: each phase reports (every PROGRESS_S, here every
     step), and no line carries a title, URL or search term."""
-    from cortex.browse import sites, vectors
+    from keepfold.browse import sites, vectors
 
     monkeypatch.setattr(build, "PROGRESS_S", 0)
     monkeypatch.setattr(sites, "PROGRESS_S", 0)
@@ -578,9 +578,9 @@ def test_import_twice_gives_the_same_pages(vault, browsers):
     assert run_import(vault, browsers).get("days_from") is None  # nothing new
     rep = run_import(vault, browsers, since="2026-11-09")
     assert rep["public_same"] == 2 and rep.get("public_written", 0) == 0
-    after = files(vault)  # .cortex holds the state and caches (the new pages get vectors)
-    assert {k: v for k, v in after.items() if not k.startswith(".cortex/")} == \
-        {k: v for k, v in first.items() if not k.startswith(".cortex/")}
+    after = files(vault)  # .keepfold holds the state and caches (the new pages get vectors)
+    assert {k: v for k, v in after.items() if not k.startswith(".keepfold/")} == \
+        {k: v for k, v in first.items() if not k.startswith(".keepfold/")}
 
 
 def test_new_visits_rebuild_their_week_only(vault, browsers):
@@ -623,10 +623,10 @@ def test_default_hides_browsing_from_claude(vault, browsers):
     rep = run_import(vault, browsers, visible=False)
     after = files(vault)
     changed = {p for p in after.keys() | before.keys() if before.get(p) != after.get(p)}
-    changed -= {".cortex/vectors.db", ".cortex/vectors.db-wal",  # the notes' embedding cache,
-                ".cortex/vectors.db-shm"}                         # from the hubs only
+    changed -= {".keepfold/vectors.db", ".keepfold/vectors.db-wal",  # the notes' embedding cache,
+                ".keepfold/vectors.db-shm"}                         # from the hubs only
     changed.discard(".gitignore")  # C3: the run adds the private-pages ignore line once
-    assert changed and all(p.startswith(("browse/private/", ".cortex/browse/"))
+    assert changed and all(p.startswith(("browse/private/", ".keepfold/browse/"))
                            for p in changed), changed
     assert rep["visible_to_claude"] is False and rep["signals"] == 0
     assert rep["sites_visible"] == 0 and rep["sites_hidden"] > 0
@@ -712,8 +712,8 @@ def test_a_broken_model_leaves_the_background_import_as_without_one(vault, brows
     """M3: the background import loads no model until it embeds. A half download is not set
     up (doctor.search_model_ready); a whole one that does not load (corrupt) fails at the
     first embed, and the import still finishes as with no model: no topics, no vectors."""
-    from cortex import browse_serve, doctor
-    from cortex.browse import titles
+    from keepfold import browse_serve, doctor
+    from keepfold.browse import titles
 
     def corrupt(download=False, threads=None):
         raise RuntimeError("a corrupt model file")
@@ -911,7 +911,7 @@ def test_m1_write_day_drops_a_secret_line_and_never_aborts(tmp_path, monkeypatch
 
 
 def test_m5_consumed_inbox_files_are_deleted_and_backups_skip_them(vault, browsers):
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     row = {"url": "https://lichess.org/extonly", "title": "Chess from the extension",
            "start": m(200).isoformat(), "active_ms": 60_000, "excerpt": "", "kind": "page"}
@@ -930,13 +930,13 @@ def test_m5_consumed_inbox_files_are_deleted_and_backups_skip_them(vault, browse
     with zipfile.ZipFile(backup.backup(vault, vault.parent / "bk")) as z:
         names = z.namelist()
     assert "browse/browse-2026-11-09.md" in names
-    assert ".cortex/browse/inbox-archive/inbox-2026-11-09.jsonl" in names  # only copy left
-    assert ".cortex/browse/token" not in names
+    assert ".keepfold/browse/inbox-archive/inbox-2026-11-09.jsonl" in names  # only copy left
+    assert ".keepfold/browse/token" not in names
 
 
 def test_l2_an_extension_record_merges_only_with_the_same_verdict(vault, browsers):
     """L2: same URL and minute, but the extension saw a private title: no merge."""
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     row = {"url": "https://lichess.org/study/abc", "title": "HIV symptoms",
            "start": int(m(0).timestamp() * 1000) + 20_000, "active_ms": 3_000_000,
@@ -961,7 +961,7 @@ def test_l3_a_video_channel_is_judged(tmp_path):
 
 def test_l4_stale_temp_copies_are_swept_and_fresh_ones_kept(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
-    old, new = tmp_path / "cortex-browse-old", tmp_path / "cortex-browse-new"
+    old, new = tmp_path / "keepfold-browse-old", tmp_path / "keepfold-browse-new"
     for d in (old, new):
         d.mkdir()
         (d / "History").write_bytes(b"x")
@@ -1002,7 +1002,7 @@ def test_private_pages_stay_out_of_find_recall_and_dashboard(vault, browsers):
 
 
 def test_extension_inbox_merges_by_url_and_minute(vault, browsers):
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     rows = [{"url": "https://lichess.org/study/abc", "title": "Chess openings for beginners",
              "start": int(m(0).timestamp() * 1000) + 20_000, "active_ms": 180_000,
@@ -1080,7 +1080,7 @@ def test_private_page_gets_title_summaries_per_day_and_session(vault, browsers):
 
 
 def test_private_summaries_respect_the_budget(vault, browsers):
-    from cortex.localllm import Budget
+    from keepfold.localllm import Budget
 
     r = FakeRunner()
     run_import(vault, browsers, runner=r, visible=False, budget=Budget(0))
@@ -1319,7 +1319,7 @@ def test_cli_scan_prints_counts_and_no_text(machine):
 
 
 def test_cli_import_status_and_llm_status(vault, machine, monkeypatch):
-    from cortex import localllm
+    from keepfold import localllm
 
     def no_probe(config=None):
         raise AssertionError("import probed a runner without localllm.enabled")
@@ -1330,7 +1330,7 @@ def test_cli_import_status_and_llm_status(vault, machine, monkeypatch):
     assert "visible to Claude: no — only private pages written" in out.output
     # no embedder, so no hub: everything is private (H1)
     assert (vault / "browse" / "private" / "browse-private-2026-11-09.md").is_file()
-    assert "cortex: cli browse import" in git(vault, "log", "-1", "--format=%s")
+    assert "keepfold: cli browse import" in git(vault, "log", "-1", "--format=%s")
     st = cli("browse", "status", "--vault", str(vault)).output
     assert "chrome/Default: up to 2026-11-1" in st and "local LLM: none" in st
     assert cli("browse", "import", "--since", "11/10", "--vault", str(vault)).exit_code == 1
@@ -1346,10 +1346,10 @@ def test_cli_import_status_and_llm_status(vault, machine, monkeypatch):
 
 
 def test_h3_cli_import_uses_the_runner_only_when_enabled(vault, machine, monkeypatch, home):
-    from cortex import localllm
+    from keepfold import localllm
 
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text("localllm:\n  enabled: true\n",
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text("localllm:\n  enabled: true\n",
                                                    encoding="utf-8")
     used = []
     monkeypatch.setattr(localllm, "find", lambda config=None, **_: used.append(1) or FakeRunner())
@@ -1386,7 +1386,7 @@ def test_selftest_fails_loudly(monkeypatch):
 def test_cli_scan_says_comet_range_and_next_step(machine):
     out = cli("browse", "scan").output
     assert "Comet found: no" in out and "date range: 2026-11-09 to 2026-11-10" in out
-    assert "next: `cortex browse selftest`" in out
+    assert "next: `keepfold browse selftest`" in out
     ud = machine[0] / "Perplexity" / "Comet" / "User Data" / "Default" / "History"
     chromium(ud, [(m(0), "https://chess.com/learn", "Chess lessons")])
     assert "Comet found: yes" in cli("browse", "scan").output
@@ -1411,7 +1411,7 @@ def test_cli_import_progress_summary_and_model_hint(vault, machine):
     assert "chrome/Default: 16 visits read, 13 new" in out.output  # 3 dropped, never saved
     assert "firefox/ab12.default-release: 1 visits read, 1 new" in out.output
     assert "embedding model not downloaded" in out.output
-    assert "To fix: cortex model download" in out.output
+    assert "To fix: keepfold model download" in out.output
     assert "dropped by the privacy filter 3" in out.output  # adult: skip by default
     assert "local model used: no; time taken" in out.output
     for bad in ("MARKER", "lichess", "http", "Chess"):
@@ -1522,7 +1522,7 @@ def test_q12_switching_visibility_off_voids_the_journal_lines_and_touches(vault,
     assert run_import(vault, browsers, visible=False).get("browse_voided", 0) == 0
 
 
-# ---- Google Takeout activity (cortex browse import --takeout) -------------------------------
+# ---- Google Takeout activity (keepfold browse import --takeout) -------------------------------
 
 def takeout_dir(tmp_path, rows):
     """A Takeout folder: My Activity/<product>/MyActivity.json, one per product."""
@@ -1551,7 +1551,7 @@ TAKEOUT_ROWS = [
 
 
 def test_takeout_rows_go_through_the_privacy_filter(vault, tmp_path):
-    from cortex.browse import takeout
+    from keepfold.browse import takeout
 
     rows = takeout.records(takeout_dir(tmp_path, TAKEOUT_ROWS))
     s = Settings(adult="private", hidden_from_claude=("adult",), visible_to_claude=True)
@@ -1590,7 +1590,7 @@ def test_cli_import_takeout_keeps_only_what_the_browsers_do_not_hold(vault, mach
 # ---- board 2 review fixes (docs/design/v6/board2) -------------------------------------------
 
 def test_r2_8_takeout_is_cut_only_on_days_a_browser_holds(vault, tmp_path):
-    from cortex.browse import takeout
+    from keepfold.browse import takeout
 
     local = tmp_path / "local"
     chromium(local / "Google" / "Chrome" / "User Data" / "Default" / "History",
@@ -1615,7 +1615,7 @@ def test_r2_8_takeout_is_cut_only_on_days_a_browser_holds(vault, tmp_path):
     build.run(Vault(vault), srcs, replace(s, deny=("example.com",)), embed=Embed(), tz=UTC,
               now=m(0, 3))
     assert "gapday" in gap.read_text(encoding="utf-8")
-    from cortex.browse import sites
+    from keepfold.browse import sites
     assert str(m(0, -10).date()) in sites.load_days(Vault(vault))[0]
 
 
@@ -1625,16 +1625,16 @@ def test_s2_a_takeout_import_reads_only_the_chosen_browsers(vault, browsers, tmp
     G7: an explicit --browser wins, with --takeout too: build.run reads what it is given."""
     from types import SimpleNamespace
 
-    from cortex import cli
-    from cortex.app import actions
-    from cortex.browse import takeout
+    from keepfold import cli
+    from keepfold.app import actions
+    from keepfold.browse import takeout
 
     tk = takeout_dir(tmp_path, TAKEOUT_ROWS[:1])
     rows = takeout.records(tk)
     srcs = sources.discover(*browsers)
     assert {s.browser for s in srcs} >= {"chrome", "edge", "firefox"}
     monkeypatch.setattr(sources, "discover", lambda *a, **k: srcs)
-    monkeypatch.setattr("cortex.taint.config", lambda: {"browse": {"browsers": ["firefox"]}})
+    monkeypatch.setattr("keepfold.taint.config", lambda: {"browse": {"browsers": ["firefox"]}})
     assert {s.browser for s in cli._browse_sources(None, None)} == {"firefox"}
     assert {s.browser for s in cli._browse_sources("edge", None)} == {"edge"}
     got = []
@@ -1650,15 +1650,15 @@ def test_s2_a_takeout_import_reads_only_the_chosen_browsers(vault, browsers, tmp
 
 
 def test_an_explicit_profile_is_read_even_when_unticked(tmp_path, monkeypatch):
-    """`cortex browse import --profile X` is the user's choice: X is read even when unticked
+    """`keepfold browse import --profile X` is the user's choice: X is read even when unticked
     (browse.skip_profiles), but only from the browsers `browse.browsers` allows, unless
     --browser names one."""
-    from cortex import cli
+    from keepfold import cli
 
     found = [sources.Source("chrome", p, tmp_path / p) for p in ("Default", "Work")]
     monkeypatch.setattr(sources, "discover", lambda *a, **k: found)
     cfg = {"browse": {"browsers": ["chrome"], "skip_profiles": ["chrome/Work"]}}
-    monkeypatch.setattr("cortex.taint.config", lambda: cfg)
+    monkeypatch.setattr("keepfold.taint.config", lambda: cfg)
     assert [s.key for s in cli._browse_sources(None, None)] == ["chrome/Default"]
     assert [s.key for s in cli._browse_sources(None, "work")] == ["chrome/Work"]
     found.append(sources.Source("comet", "Default", tmp_path / "c"))

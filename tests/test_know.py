@@ -1,12 +1,12 @@
-"""`cortex know` (v6 agenda 9): read-only per-page fidelity of the user model."""
+"""`keepfold know` (v6 agenda 9): read-only per-page fidelity of the user model."""
 
 import pytest
 from conftest import git, note
 from typer.testing import CliRunner
 
-from cortex import know
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import know
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 

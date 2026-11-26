@@ -11,8 +11,8 @@ import subprocess
 
 import pytest
 
-from cortex import access, localllm, profiles
-from cortex.app import actions, server, status, targets, wizard
+from keepfold import access, localllm, profiles
+from keepfold.app import actions, server, status, targets, wizard
 
 pytestmark = pytest.mark.usefixtures("home")
 APP_JS = server.ASSETS / "app.js"
@@ -132,7 +132,7 @@ Object.assign(globalThis, {
   },
   fetch: async (path, opts) => {
     const o = opts || {};
-    fetched.push({ path, method: o.method || 'GET', token: (o.headers || {})['X-Cortex-Token'], body: o.body ? JSON.parse(o.body) : null });
+    fetched.push({ path, method: o.method || 'GET', token: (o.headers || {})['X-Keepfold-Token'], body: o.body ? JSON.parse(o.body) : null });
     if (o.method === 'POST' && DATA.hold) await new Promise((r) => held.push(r));  // until release()
     if (o.method === 'POST' && DATA.fail) return { status: 500, ok: false, json: async () => ({ error: 'boom ' + path }) };
     if (o.method === 'POST' && DATA.busy) return { status: 409, ok: false, json: async () => ({ error: DATA.busy }) };
@@ -223,12 +223,12 @@ const out = {};
     bandBtn('Search model', 'Open').fire('click');
     await tick();
     out.reopened = [stepOf('Search model').querySelector('.band-note').textContent, btnsOf('Search model')];
-    // Try it: what to do while Cortex cannot see the AI app, and the app's own Chat
+    // Try it: what to do while Keepfold cannot see the AI app, and the app's own Chat
     out.tryIt = stepOf('Try it').querySelectorAll('button').map((b) => b.textContent);
     // Connect: an empty file list is not shown; Claude Code's plugin route lists commands
-    DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', instructions: 'USE CORTEX', targets: [
+    DATA.routes['/api/connect'] = { vault: true, skill_zip: 'x', skill_zip_found: true, skill_url: 'u', instructions: 'USE KEEPFOLD', targets: [
       { id: 'claude-desktop', label: 'Claude Desktop', detected: false, connected: false, files: [], snippet: '', note: '', paste: 'Paste into Claude.' },
-      { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install cortex', commands: true, note: '', paste: 'Paste into CLAUDE.md.' }] };
+      { id: 'claude-code', label: 'Claude Code', detected: true, connected: false, files: ['settings.json'], snippet: 'claude plugin install keepfold', commands: true, note: '', paste: 'Paste into CLAUDE.md.' }] };
     // R32a: a pack's size switch moves the text, the count and the changed line; Copy records it
     DATA.routes['/api/connect'].packs = [{ id: 'interview', sizes: [
       { chars: 1500, text: 'short pack', hash: 'aaaaaaaaaaaaaaaa', changed: false },
@@ -371,7 +371,7 @@ const out = {};
     out.noModels = ['Save choice', 'Load', 'Test'].map((t) => llmBtn(t).disabled);
     out.ollamaWord = $('llm').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Ollama').querySelector('.val').textContent;
     // Status → Updates: Check asks GitHub only on the click; Update now asks first, then the
-    // page says Cortex is closing to install it
+    // page says Keepfold is closing to install it
     DATA.routes['/api/status'] = { first_run: false, rows: [], vault: 'V', land: 'status', update: { current: '0.1.0', mode: 'installer' } };
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
     await tick();
@@ -385,9 +385,9 @@ const out = {};
     out.inertBefore = ['top', 'jobline', 'shell'].map((id) => !!$(id).inert);
     const checked = { current: '0.1.0', latest: '0.2.0', newer: true, notes_url: 'https://github.com/o/r/releases/tag/v0.2.0', mode: 'installer', size: 31 * 2 ** 20 };
     DATA.routes['/api/job'] = { seq: 3, job: { name: 'Checking for updates', section: 'update', running: false, cancellable: false, line: '', seconds: 1, error: null, result: checked } };
-    rowBtn('Cortex 0.1.0', 'Check for updates').fire('click');
+    rowBtn('Keepfold 0.1.0', 'Check for updates').fire('click');
     await tick();
-    const avail = $('status').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Cortex 0.2.0 is available');
+    const avail = $('status').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === 'Keepfold 0.2.0 is available');
     const a = avail.querySelector('a');
     out.avail = { rows: updRows(), link: [a.getAttribute('href'), a.getAttribute('rel'), a.getAttribute('target'), a.textContent],
       buttons: avail.querySelectorAll('button').map((b) => b.textContent) };
@@ -395,7 +395,7 @@ const out = {};
     await tick();
     out.updConfirm = { title: $('confirm-title').textContent, ok: $('confirm-ok').textContent,
       body: $('confirm-body').textContent, applied: fetched.some((f) => f.path === '/api/update/apply') };
-    DATA.routes['/api/job'] = { seq: 4, job: { name: 'Updating Cortex', section: 'update', running: false, cancellable: true, line: '', seconds: 9, error: null, result: { ...checked, launched: true } } };
+    DATA.routes['/api/job'] = { seq: 4, job: { name: 'Updating Keepfold', section: 'update', running: false, cancellable: true, line: '', seconds: 9, error: null, result: { ...checked, launched: true } } };
     $('confirm-ok').onclick();
     await tick();
     out.updAfter = { posts: fetched.filter((f) => f.path.startsWith('/api/update')).map((f) => f.path), gone: $('gone').hidden ? '' : $('gone').textContent };
@@ -423,8 +423,8 @@ DATA_EXAMPLES = ["Which sites did I visit yesterday?", "What should I study toda
 
 def test_data_examples_need_no_model():
     """D14: each example shown while the search or local model is missing is one that
-    chat.reply answers from Cortex's own data (a site list or a study question)."""
-    from cortex import chat, chat_study
+    chat.reply answers from Keepfold's own data (a site list or a study question)."""
+    from keepfold import chat, chat_study
     js = APP_JS.read_text(encoding="utf-8")
     assert "const DATA_EXAMPLES = " + json.dumps(DATA_EXAMPLES).replace('"', "'").replace(
         "','", "', '") + ";" in js
@@ -439,7 +439,7 @@ def test_app_js_has_no_html_sinks():
 
 def test_the_watch_form_offers_every_watched_source():
     """R31: a source watch.py accepts (calendar) is one the Setup form can pick, in its order."""
-    from cortex import watch
+    from keepfold import watch
     m = re.search(r"const WATCH_KINDS = \{([^}]*)\}", APP_JS.read_text(encoding="utf-8"))
     assert tuple(re.findall(r"(\w+):", m.group(1))) == watch.SOURCES
 
@@ -456,7 +456,7 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("started a process"))
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     app = server.App(root_committed)
     setup = app.setup()  # the server's own shape, not a hand-made one
     monkeypatch.setattr(status, "ollama_models", lambda: ["nomic-embed-text:latest", "qwen3.5:4b"])
@@ -495,8 +495,9 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     # the upload: raw octet-stream XHR with the key, the name URL-encoded; the bar moves in place
     x = out["xhr"]
     assert (x["method"], x["url"]) == ("POST", "/api/import/upload")
-    assert x["headers"] == {"X-Cortex-Token": "KEY123", "Content-Type": "application/octet-stream",
-                            "X-Cortex-Name": "my%20export.zip"}
+    assert x["headers"] == {"X-Keepfold-Token": "KEY123",
+                            "Content-Type": "application/octet-stream",
+                            "X-Keepfold-Name": "my%20export.zip"}
     assert out["before"] == {"max": str(4 * 2**20), "value": 0, "text": "0% · 0.0 of 4.0 MB"}
     assert out["after"] == {"same": True, "value": 2**20, "text": "25% · 1.0 of 4.0 MB"}
     assert out["uncomputable"] == 2**20
@@ -514,13 +515,13 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
     assert out["needAbove"] == ["chat-bar", "board", "chat-log", "composer"]
     assert out["until"] == ["Ask about anything you've saved or browsed.",
                             "Until then, Chat can still answer questions like these from what "
-                            "Cortex already has:"]
+                            "Keepfold already has:"]
     # Chat: the example fills the composer; Enter sends; the stream renders safely with sources
     assert out["empty"] == "Ask about anything you've saved or browsed."
     assert out["filled"] == "Which sites did I visit yesterday?"
     assert out["help"] == "Runs on this computer with qwen3.5-2b. Nothing leaves it."
     assert out["sent"] == [{"id": None, "text": "Which sites did I visit yesterday?"}]
-    assert out["who"] == ["You", "Cortex · qwen3.5-2b · 1 s"]  # the answer took 1.2 s
+    assert out["who"] == ["You", "Keepfold · qwen3.5-2b · 1 s"]  # the answer took 1.2 s
     assert out["answer"] == "You read two pages 1.heap notes"
     assert (out["bold"], out["code"], out["cites"]) == ("two", "heap", ["Source 1"])
     assert out["items"] == ["heap notes"]  # a list right under a line, no blank line
@@ -561,33 +562,33 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
                                   "about 3.0 GB, from ollama.com.", False]
     assert out["pulls"] == [{"name": "qwen3.5:4b"}]
     assert out["llmSaved"] == [{"model": "qwen3.5:4b", "runner": "ollama"}]
-    assert out["updBefore"] == {"rows": ["Cortex 0.1.0"], "asked": False}
-    assert out["avail"] == {"rows": ["Cortex 0.1.0", "Cortex 0.2.0 is available"],
+    assert out["updBefore"] == {"rows": ["Keepfold 0.1.0"], "asked": False}
+    assert out["avail"] == {"rows": ["Keepfold 0.1.0", "Keepfold 0.2.0 is available"],
                             "link": ["https://github.com/o/r/releases/tag/v0.2.0",
                                      "noopener noreferrer", "_blank", "Release notes"],
                             "buttons": ["Update now"]}
     assert out["updConfirm"] == {
-        "title": "Update Cortex?", "ok": "Update now", "applied": False,
-        "body": "Cortex will download the update (about 31 MB), close, and reopen when it's "
-                "done. AI apps connected to Cortex may need a restart."}
+        "title": "Update Keepfold?", "ok": "Update now", "applied": False,
+        "body": "Keepfold will download the update (about 31 MB), close, and reopen when it's "
+                "done. AI apps connected to Keepfold may need a restart."}
     assert out["updAfter"]["posts"] == ["/api/update/check", "/api/update/apply"]
-    assert out["updAfter"]["gone"].startswith("Cortex is closing to install the update.")
-    assert out["quit"] == {"title": "Stop Cortex?", "ok": "Quit", "before": False, "after": True,
+    assert out["updAfter"]["gone"].startswith("Keepfold is closing to install the update.")
+    assert out["quit"] == {"title": "Stop Keepfold?", "ok": "Quit", "before": False, "after": True,
                            "body": "Running jobs are cancelled; your vault is not affected."}
     # QA fixes: after the app stops only the banner stays live; a refetch marks the old board
     assert out["inertBefore"] == [False] * 3 and out["inertAfter"] == [True] * 3
     assert out["refresh"] == ["refreshing", "true", "", "false"]
-    # while something is missing the examples are the questions Cortex answers from its own data
+    # while something is missing the examples are the questions Keepfold answers from its own data
     assert out["examplesOff"] == DATA_EXAMPLES
     assert out["noModels"] == [True, True, True] and out["ollamaWord"] == "installed, not running"
     assert out["current"] == ["Skip"] and out["reopened"] == ["Skipped", ["Hide"]]
     assert "Open Chat" in out["tryIt"]
-    assert out["whatLines"] == [["Files:", "Commands Cortex runs:"],  # found apps first
+    assert out["whatLines"] == [["Files:", "Commands Keepfold runs:"],  # found apps first
                                 ["Set up a vault first; the entry points at it."]]
     assert out["paste"] == [[  # a found app needing a paste: its line and Copy instructions
         ["Claude Code", ["Found on this computer; not connected.", "Paste into CLAUDE.md."],
          ["Copy instructions"]],
-        ["Claude Desktop", ["Not found on this computer."], []]], ["USE CORTEX"]]
+        ["Claude Desktop", ["Not found on this computer."], []]], ["USE KEEPFOLD"]]
     sizes = lambda a, b: [["1,500 characters", a], ["5,000 characters", b]]  # noqa: E731
     assert out["pack"] == [
         ["short pack", "10 characters", True, sizes("true", "false")],
@@ -752,8 +753,8 @@ def test_setup_shows_numbered_steps_with_progress(root_committed, tmp_path, monk
     assert two["optional"] == ["", "", "", "Optional", "Optional", ""]
     assert two["descs"][0] == "The folder where your notes live."
     assert two["descs"][2].startswith("Find notes by meaning. A download of ")
-    assert two["descs"][5] == "Ask a first question and see what Cortex knows."
-    # Try it never gets a check (Cortex cannot see the AI app's chats), so all five real steps
+    assert two["descs"][5] == "Ask a first question and see what Keepfold knows."
+    # Try it never gets a check (Keepfold cannot see the AI app's chats), so all five real steps
     # done reads "5 of 6"
     assert five["text"] == "5 of 6 done" and five["marks"][:5] == ["✓ done"] * 5
     assert five["marks"][5] == "6" and five["current"] == ["Try it"]
@@ -879,8 +880,9 @@ def test_the_welcome_guide_opens_once_walks_six_steps_and_uses_setups_routes(
         json.dumps({"t": "start", "id": CHAT_ID, "model": "m"}) + "\n"
         + json.dumps({"t": "done", "id": CHAT_ID, "model": "m", "seconds": 1}) + "\n"]})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
-    step1 = {"open": True, "count": "Step 1 of 6", "current": "step", "title": "Welcome to Cortex",
-             "next": "Let’s start", "back": True, "done": False, "now": "1"}
+    step1 = {"open": True, "count": "Step 1 of 6", "current": "step",
+             "title": "Welcome to Keepfold", "next": "Let’s start", "back": True,
+             "done": False, "now": "1"}
     assert out["boot"] == step1
     assert out["skipped"] == [False, [{"welcome_done": True}]]
     assert out["reopened"] == step1
@@ -1378,7 +1380,7 @@ def _sweep_routes(root, monkeypatch):
         {"key": "qwen/qwen3.5-2b", "name": "Qwen 3.5 2B", "size": 2 * 10**9, "params": "2B"}])
     monkeypatch.setattr(wizard, "hardware", lambda: {
         "kind": "gpu", "gb": 8.0, "label": "8 GB of graphics memory (NVIDIA)"})
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     app = server.App(root)
     chat_id = "01KA0000000000000000000000"
     chats = [{"id": chat_id, "title": "Heaps", "updated": "2026-11-19T10:00:00Z", "count": 2}]
@@ -1407,11 +1409,11 @@ def _sweep_routes(root, monkeypatch):
 def _stale_import(root, monkeypatch, last="2026-01-01T00:00:00Z"):
     """chrome/Default imported at `last`, the Status button's source (the Browsing list stays
     empty: no browser is discovered)."""
-    from cortex import browse_serve
-    from cortex.browse import sources
+    from keepfold import browse_serve
+    from keepfold.browse import sources
     monkeypatch.setattr(browse_serve, "auto_sources", lambda v: [
         sources.Source("chrome", "Default", root / "History")])
-    f = root / ".cortex" / "browse" / "state.json"
+    f = root / ".keepfold" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"last_run": last, "sources": {"chrome/Default": {}}}),
                  encoding="utf-8")
@@ -1425,7 +1427,8 @@ SENDS = {
                "Import new history now": [["/api/browse/import", {"sources": ["chrome/Default"],
                                                                  "from": "browse"}]],
                "Start at login": [["/api/browse/login", {"on": True}]],
-               "chat-import": [["/api/app/chat-import", {"enabled": False}]]},
+               "chat-import": [["/api/app/chat-import", {"enabled": False}]],
+               "update-check": [["/api/app/update-check", {"enabled": False}]]},
     "connect": {"Apply…": [["/api/connect/plan", {"want": {}}],
                            ["/api/connect/apply", {"want": {}}]],
                 "Open folder: Claude Desktop skill": [["/api/open", {"what": "skill_zip"}]]},
@@ -1574,7 +1577,7 @@ const out = { errors };
     await tick();
     out.reading = box().textContent;
     const x = xhrs[xhrs.length - 1];
-    out.xhr = [x.method, x.url, x.headers['X-Cortex-Name'], x.headers['X-Cortex-Token']];
+    out.xhr = [x.method, x.url, x.headers['X-Keepfold-Name'], x.headers['X-Keepfold-Token']];
     x.status = 200; x.responseText = JSON.stringify({ upload: 'u1' });
     x.onload();
     await tick();
@@ -1633,7 +1636,7 @@ def test_chat_attaches_a_file_shows_its_line_saves_removes_and_names_it_in_sourc
                            "INPUT:chat-file", "UL:chat-pk"]
     assert out["pick"] == ["file", ".pdf,.docx,.txt,.md", True]
     assert out["wrong"] == "Attach a .pdf, .docx, .txt or .md file."
-    assert out["big"] == "This file is over 5 MB, the most Cortex reads from one .txt file."
+    assert out["big"] == "This file is over 5 MB, the most Keepfold reads from one .txt file."
     assert out["reading"] == "Reading notes.pdf…"
     assert out["xhr"] == ["POST", "/api/import/upload", "notes.pdf", "KEY123"]
     assert out["attached"] == [{"upload": "u1", "name": "notes.pdf"}]
@@ -1748,7 +1751,7 @@ HIST = HARNESS[:HARNESS.index("const out = {};")] + r"""
 const out = { errors };
 const go = async (s) => { nav.querySelectorAll('button').find((b) => b.dataset.s === s).fire('click'); await tick(); };
 const hist = () => [...$('status').querySelectorAll('.brow')].find((r) => r.querySelector('.ttl').textContent === 'Browsing history');
-const LOGIN_HINT = 'New history comes in only while Cortex runs. Start the receiver at login to keep it going in the background.';
+const LOGIN_HINT = 'New history comes in only while Keepfold runs. Start the receiver at login to keep it going in the background.';
 (async () => {
   try {
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
@@ -1787,7 +1790,7 @@ const LOGIN_HINT = 'New history comes in only while Cortex runs. Start the recei
 def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, monkeypatch):
     """A stale import: Status says when in words ("days ago", the exact time in a title) with
     Import new history now; while the receiver does not start at login, Status and Browsing
-    say new history comes in only while Cortex runs, and Start at login confirms in a toast.
+    say new history comes in only while Keepfold runs, and Start at login confirms in a toast.
     With login on, that line and its button are gone."""
     node = shutil.which("node")
     if node is None:
@@ -1802,9 +1805,9 @@ def test_status_warns_when_history_imports_stopped(root_committed, tmp_path, mon
     st = out["status"]
     assert re.fullmatch(r"last import \d+ days ago", st["value"]), st
     assert st["title"] and "{ago}" not in st["title"]
-    assert re.fullmatch(r"Last import \d+ days ago: newer visits are not in Cortex yet\.",
+    assert re.fullmatch(r"Last import \d+ days ago: newer visits are not in Keepfold yet\.",
                         st["subs"][0]), st
-    assert st["subs"][1].startswith("New history comes in only while Cortex runs.")
+    assert st["subs"][1].startswith("New history comes in only while Keepfold runs.")
     assert st["buttons"] == ["Import new history now", "Start at login", "Open"]
     assert out["toast"] == ["toast on ok", "The receiver now starts at login."]
     assert any(re.fullmatch(r"\d+ days ago", v) for v in out["browse"]["last"]), out["browse"]
@@ -1862,7 +1865,7 @@ def test_whats_new_card_shows_got_it_records_and_the_link_reopens_it(
     out = _run(node, tmp_path, "news", NEWS, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["first"]
-    assert out["shown"] == ["What’s new in Cortex 0.2.3",
+    assert out["shown"] == ["What’s new in Keepfold 0.2.3",
                             ["Faster <b>lists</b>.", "Dates.", "Reload it.", "Chat steps."]]
     assert out["posted"] == [["/api/whats_new/seen", {}]] and out["hidden"]
     assert out["toast"] == "Read it again any time: Updates, What’s new."
@@ -1956,12 +1959,12 @@ globalThis.fetch = async (path, o) => { if (!(o && o.method)) await new Promise(
 const answer = async () => { for (const r of waits.splice(0)) r(); await tick(); };
 (async () => {
   try {
-    if (DATA.last) sessionStorage.setItem('cortex.section', DATA.last);
+    if (DATA.last) sessionStorage.setItem('keepfold.section', DATA.last);
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
     await tick();
     out.before = { shown: shown(), text: DATA.last ? $(DATA.last).textContent : $('status').textContent };
     await answer();
-    out.after = { shown: shown(), kept: sessionStorage.getItem('cortex.section') };
+    out.after = { shown: shown(), kept: sessionStorage.getItem('keepfold.section') };
     await answer();
     if (!DATA.last) {
       nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
@@ -2039,9 +2042,9 @@ def test_home_and_manage_keep_the_theme_under_one_key():
     Manage's old key as a fallback, so a choice on either page holds on both."""
     for js in (APP_JS, server.ASSETS.parent / "dashboard.js"):
         text = js.read_text(encoding="utf-8")
-        assert re.findall(r"localStorage\.setItem\('([\w-]+)'", text) == ["cortex-theme"], js
-        assert ("localStorage.getItem('cortex-theme') || localStorage.getItem('cortex-app-theme')"
-                in text), js
+        assert re.findall(r"localStorage\.setItem\('([\w-]+)'", text) == ["keepfold-theme"], js
+        assert ("localStorage.getItem('keepfold-theme') || "
+                "localStorage.getItem('keepfold-app-theme')" in text), js
 
 
 HOTKEY = HARNESS[:HARNESS.index("const out = {};")] + r"""
@@ -2076,7 +2079,7 @@ UNSAFE_JS = HARNESS[:HARNESS.index("const out = {};")] + r"""
 const out = { errors };
 (async () => {
   try {
-    localStorage.setItem('cortex-theme', DATA.theme);
+    localStorage.setItem('keepfold-theme', DATA.theme);
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
     await tick();
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'review').fire('click');
@@ -2133,7 +2136,7 @@ const el = (id) => ({ id, value: '', textContent: '', className: '', listeners: 
   focus() { this.focused += 1; } });
 const els = { cap: el('cap'), 'cap-hint': el('cap-hint') };
 const root = { dataset: {} };
-const store = new Map([['cortex-theme', DATA.theme]]);
+const store = new Map([['keepfold-theme', DATA.theme]]);
 Object.assign(globalThis, {
   window: globalThis, location: { search: '?t=KEY123' }, history: { replaceState() {} },
   localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null) },
@@ -2142,7 +2145,7 @@ Object.assign(globalThis, {
     addEventListener: (t, fn) => (docL[t] = docL[t] || []).push(fn) },
   fetch: async (path, o) => {
     const body = JSON.parse(o.body);
-    posts.push([path, body, o.headers['X-Cortex-Token']]);
+    posts.push([path, body, o.headers['X-Keepfold-Token']]);
     if (path === '/api/capture' && body.text.includes('BAD')) return { status: 400, ok: false, json: async () => ({ error: '//fact line: refused' }) };
     return { status: 200, ok: true, json: async () => (path === '/api/capture' ? { kind: 'journal', said: 'Added to today’s journal 14:05' } : { hidden: true }) };
   },
@@ -2257,7 +2260,7 @@ const out = { errors };
 const wait = () => new Promise((r) => setTimeout(r, 200)).then(tick);
 (async () => {
   try {
-    localStorage.setItem('cortex-theme', DATA.theme);
+    localStorage.setItem('keepfold-theme', DATA.theme);
     vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
     await tick();
     nav.querySelectorAll('button').find((b) => b.dataset.s === 'chat').fire('click');
@@ -2530,10 +2533,10 @@ def test_change_folder_asks_to_move_connected_apps(root_committed, tmp_path, mon
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     msg = ("Your AI apps still use your old folder. Open Connect AI apps and click Apply to "
            "move them.")
-    assert out["toast"] == [f"Cortex now uses D:\\New. {msg}", "Open Connect AI apps"]
+    assert out["toast"] == [f"Keepfold now uses D:\\New. {msg}", "Open Connect AI apps"]
     assert out["row"] == ["Open Connect AI apps and click Apply to move them.",
                           ["Open Connect AI apps"]]
-    stale = "Its Cortex entry is out of date (another folder or program). Apply updates it."
+    stale = "Its Keepfold entry is out of date (another folder or program). Apply updates it."
     # FX3 4: its tag says Out of date (warn colour), never Connected beside that line
     assert out["connect"] == [True, stale, True, "Out of date", "code-tag warn"]
     assert out["after"] is True
@@ -2579,7 +2582,7 @@ def test_note_counts_are_labelled_and_labels_are_plain(root_committed, tmp_path,
     words = f"{n:,} note{'' if n == 1 else 's'}"
     assert out["status"] == [words] and out["statusDm"] is False
     assert out["vault"] == words
-    assert out["health"] == ["Checks that Cortex and your notes folder are working, and finds "
+    assert out["health"] == ["Checks that Keepfold and your notes folder are working, and finds "
                              "common problems.", ["Check for problems"]]
     assert out["profiles"][0] == "Apps whose name contains “claude”"
     assert all(t.startswith("Apps whose name contains “") for t in out["profiles"])
@@ -2599,12 +2602,12 @@ def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["closed"] and out["noWarning"]
     assert out["open"] == [True, "Use another folder for your notes", "C:\\Notes\\MyVault",
-                           "Cortex adds its own folders and a git history there, and never "
+                           "Keepfold adds its own folders and a git history there, and never "
                            "changes notes you already have. Obsidian can open it as a vault. "
                            "Your current vault stays where it is.", True]
     assert out["focused"] and out["enabled"]
     assert out["posted"] == [{"path": "D:\\Notes\\MyVault"}]
-    assert out["toast"] == ["toast on ok", "Cortex now uses D:\\Notes\\MyVault."]
+    assert out["toast"] == ["toast on ok", "Keepfold now uses D:\\Notes\\MyVault."]
     assert out["closedAfter"] and out["escaped"] and out["cancelled"]
     assert out["postsAfter"] == 1  # Cancel and Escape send nothing
     assert out["warn"] == ["Windows can empty it at any time. Use Change folder to pick your "

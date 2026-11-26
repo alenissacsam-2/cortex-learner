@@ -1,5 +1,5 @@
-"""R7: Codex CLI and Gemini CLI get Cortex's prime on each prompt from their own hooks
-(`cortex prime-hook --client codex|gemini`), and `cortex taint` after another server's tool.
+"""R7: Codex CLI and Gemini CLI get Keepfold's prime on each prompt from their own hooks
+(`keepfold prime-hook --client codex|gemini`), and `keepfold taint` after another server's tool.
 The stdin samples follow each app's documented hook input (made-up content):
 Codex: learn.chatgpt.com/docs/hooks and codex-rs/hooks/schema/generated/*.schema.json;
 Gemini: github.com/google-gemini/gemini-cli docs/hooks/reference.md."""
@@ -10,13 +10,13 @@ import sys
 
 import pytest
 
-from cortex import delta, prime_hook, taint, xray
-from cortex.app import targets
-from cortex.vault import Vault
+from keepfold import delta, prime_hook, taint, xray
+from keepfold.app import targets
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
-ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\notes"]}
+ENTRY = {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", "C:\\notes"]}
 DBMS = "".join(f"- DBMS rule {i}: tables first, then the SQL query, one worked example.\n"
                for i in range(14))  # past the 800-char preferences cap: Email waits
 CODEX_SID = "019a7c3e-55b1-7d42-9e0a-2f6c1b8d4e21"
@@ -29,11 +29,11 @@ def vault(root, monkeypatch):
         "# Preferences\n\n## Learning\n" + DBMS
         + "\n## Communication\n- Email: formal greeting, at most five sentences.\n",
         encoding="utf-8")
-    (root / ".cortex").mkdir(exist_ok=True)
-    (root / ".cortex/profiles.json").write_text(json.dumps({"profiles": [
+    (root / ".keepfold").mkdir(exist_ok=True)
+    (root / ".keepfold/profiles.json").write_text(json.dumps({"profiles": [
         {"match": "codex", "scopes": ["all"]}, {"match": "gemini", "scopes": ["all"]}],
         "unknown": ["core"]}), encoding="utf-8")
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     return root
 
 
@@ -77,7 +77,7 @@ def test_first_prompt_primes_then_only_deltas(vault, tmp_path, client, make, eve
 def test_tags_and_session_start(vault, tmp_path):
     out = context(prime_hook.run(gemini("hi //pref: answers in tables", tmp_path), "gemini"),
                   "BeforeAgent")
-    assert "Cortex saved the user's //pref" in out and "answers in tables" in out
+    assert "Keepfold saved the user's //pref" in out and "answers in tables" in out
     assert "answers in tables" in (vault / "me/preferences.md").read_text("utf-8")
     assert prime_hook.run(gemini("", tmp_path, "SessionStart", source="startup"), "gemini") == ""
     again = context(prime_hook.run(codex("", tmp_path, "SessionStart", source="compact"),
@@ -87,7 +87,7 @@ def test_tags_and_session_start(vault, tmp_path):
 
 
 def test_console_entry_takes_the_client(vault, tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["cortex", "prime-hook", "--client", "gemini"])
+    monkeypatch.setattr(sys, "argv", ["keepfold", "prime-hook", "--client", "gemini"])
     monkeypatch.setattr(taint, "read_stdin", lambda: gemini("Revise DBMS please", tmp_path))
     taint.main()
     assert context(capsys.readouterr().out, "BeforeAgent").startswith(prime_hook.HEAD)
@@ -102,29 +102,29 @@ def test_taint_maps_each_apps_tool_names(vault, tmp_path):
                                      "tool_name": tool})), (app, tool)
         assert marker.is_file()
     marker.unlink()
-    for tool in ("mcp_cortex_cortex_prime", "mcp__cortex__cortex_patch"):
+    for tool in ("mcp_keepfold_keepfold_prime", "mcp__keepfold__keepfold_patch"):
         assert not taint.run(json.dumps({"session_id": "s", "tool_name": tool}))
     assert not marker.exists()
     m = re.compile(targets.Gemini.TAINT)  # Gemini tests it as a JS RegExp: same syntax here
     assert all(m.search(t) for t in ("web_fetch", "google_web_search", "mcp_fetch_get"))
-    assert not any(m.search(t) for t in ("mcp_cortex_cortex_prime", "read_file",
+    assert not any(m.search(t) for t in ("mcp_keepfold_keepfold_prime", "read_file",
                                          "run_shell_command"))
 
 
 def test_hook_command_quotes_for_each_shell(monkeypatch):
     monkeypatch.setattr(targets.sys, "platform", "win32")
-    exe = {"command": "C:\\Program Files\\O'Neil\\cortex.exe"}
+    exe = {"command": "C:\\Program Files\\O'Neil\\keepfold.exe"}
     assert targets.hook_command(exe, "taint --client gemini", powershell=True) == \
-        "& 'C:\\Program Files\\O''Neil\\cortex.exe' taint --client gemini"
+        "& 'C:\\Program Files\\O''Neil\\keepfold.exe' taint --client gemini"
     assert targets.hook_command(exe, "prime-hook --client codex") == \
-        '"C:\\Program Files\\O\'Neil\\cortex.exe" prime-hook --client codex'
+        '"C:\\Program Files\\O\'Neil\\keepfold.exe" prime-hook --client codex'
     monkeypatch.setattr(targets.sys, "platform", "linux")
-    assert targets.hook_command({"command": "/opt/my tools/cortex"}, "taint --client codex") \
-        == "'/opt/my tools/cortex' taint --client codex"
+    assert targets.hook_command({"command": "/opt/my tools/keepfold"}, "taint --client codex") \
+        == "'/opt/my tools/keepfold' taint --client codex"
 
 
 def _baks(p):
-    return sorted(p.parent.glob(p.name + ".cortex-*.bak"))
+    return sorted(p.parent.glob(p.name + ".keepfold-*.bak"))
 
 
 def test_gemini_add_then_remove_keeps_the_owners_hooks(home):
@@ -134,7 +134,7 @@ def test_gemini_add_then_remove_keeps_the_owners_hooks(home):
     old = {"theme": "dark", "hooks": {"BeforeAgent": [{"hooks": [mine]}]}}
     p.write_text(json.dumps(old, indent=4), encoding="utf-8")
     t = targets.by_id()["gemini-cli"]
-    assert {"file": str(p), "change": "add", "detail": "the Cortex hooks"} in t.plan(True, ENTRY)
+    assert {"file": str(p), "change": "add", "detail": "the Keepfold hooks"} in t.plan(True, ENTRY)
     t.apply(ENTRY)
     hooks = json.loads(p.read_text("utf-8"))["hooks"]
     assert hooks["BeforeAgent"][0] == {"hooks": [mine]} and len(hooks["BeforeAgent"]) == 2
@@ -143,14 +143,14 @@ def test_gemini_add_then_remove_keeps_the_owners_hooks(home):
     assert hooks["AfterTool"][0]["matcher"] == targets.Gemini.TAINT
     assert hooks["SessionStart"][0]["hooks"][0]["command"] == ours["command"]
     assert t.plan(True, ENTRY) == []  # nothing left to do
-    moved = {**ENTRY, "command": "D:\\new\\cortex.exe"}
-    assert {"file": str(p), "change": "update", "detail": "the Cortex hooks"} in t.plan(True,
+    moved = {**ENTRY, "command": "D:\\new\\keepfold.exe"}
+    assert {"file": str(p), "change": "update", "detail": "the Keepfold hooks"} in t.plan(True,
                                                                                          moved)
     t.apply(moved)
     hooks = json.loads(p.read_text("utf-8"))["hooks"]
     assert len(hooks["BeforeAgent"]) == 2 and "new" in hooks["BeforeAgent"][1]["hooks"][0][
         "command"]
-    assert {"file": str(p), "change": "remove", "detail": "the Cortex hooks"} in t.plan(False)
+    assert {"file": str(p), "change": "remove", "detail": "the Keepfold hooks"} in t.plan(False)
     t.remove()
     data = json.loads(p.read_text("utf-8"))
     assert data == {**old, "mcpServers": {}} and _baks(p)
@@ -162,7 +162,7 @@ def test_codex_add_then_remove_leaves_hooks_json_as_it_was(home):
     p = d / "hooks.json"
     t = targets.by_id()["codex"]
     rows = t.plan(True, ENTRY)
-    assert {"file": str(p), "change": "add", "detail": "the Cortex hooks"} in rows
+    assert {"file": str(p), "change": "add", "detail": "the Keepfold hooks"} in rows
     t.apply(ENTRY)
     hooks = json.loads(p.read_text("utf-8"))["hooks"]
     assert set(hooks) == {"UserPromptSubmit", "SessionStart", "PostToolUse"}
@@ -170,7 +170,7 @@ def test_codex_add_then_remove_leaves_hooks_json_as_it_was(home):
     assert hooks["PostToolUse"][0]["matcher"] == "^mcp__"
     assert hooks["UserPromptSubmit"][0]["hooks"][0]["timeout"] == 30
     t.remove()
-    assert not p.exists() and _baks(p)  # only Cortex's hooks were in it: gone, backed up
+    assert not p.exists() and _baks(p)  # only Keepfold's hooks were in it: gone, backed up
 
     old = {"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
         {"type": "command", "command": "python3 log.py", "timeout": 5}]}]}}
@@ -201,12 +201,12 @@ def test_an_unparseable_hooks_file_is_left_alone(home, bad):
 def test_each_apps_hook_serves_its_own_guesses_not_another_apps(vault, tmp_path):
     """R5d through the hooks: a guess made in a Codex session reaches Codex's hook, and
     neither Gemini's nor Claude Code's, until the owner approves it."""
-    from cortex.mcp_server import Cortex
+    from keepfold.mcp_server import Keepfold
     (vault / "me/preferences.md").write_text(  # short: within the preferences cap
         "# Preferences\n\n## Communication\n- Email: formal greeting.\n", encoding="utf-8")
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     c.over_mcp, c.sessions.client = True, "codex-mcp-client"
-    out = c._call("cortex_patch", c.cortex_patch, {
+    out = c._call("keepfold_patch", c.keepfold_patch, {
         "id": "me/preferences", "op": "append_to_section", "target": "Communication",
         "text": "Likes tables over prose."})
     assert "error" not in out and out.get("changed"), out

@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from cortex import catalog as catalog_mod
-from cortex.catalog import Catalog, inbox_add, slugify
-from cortex.events import local_day
-from cortex.vault import Vault, VaultError
+from keepfold import catalog as catalog_mod
+from keepfold.catalog import Catalog, inbox_add, slugify
+from keepfold.events import local_day
+from keepfold.vault import Vault, VaultError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
-REAL = Path(os.environ.get("CORTEX_REAL_VAULT", "/nonexistent-real-vault"))
+REAL = Path(os.environ.get("KEEPFOLD_REAL_VAULT", "/nonexistent-real-vault"))
 
 
 @pytest.fixture

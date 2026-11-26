@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from cortex import events
-from cortex.events import EventLog
-from cortex.levels import fold, predicted_p, replay
-from cortex.vault import Vault
+from keepfold import events
+from keepfold.events import EventLog
+from keepfold.levels import fold, predicted_p, replay
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCENARIOS = sorted(p.stem for p in (FIXTURES / "events").glob("*.jsonl"))
@@ -81,7 +81,7 @@ def test_golden_scenario(log, name):
 def test_a_regrade_folds_on_the_original_grades_day(log):
     """B4: a spot-check flip (void + self_report with regrade_of) a week later rates the
     grade's own day, as if the verdict had been right all along; it adds no review today."""
-    from cortex.levels import calibration
+    from keepfold.levels import calibration
 
     grades(log, "two-pointers", 1, ["correct"])
     g = add(log, 2, object="concept:two-pointers", verdict="wrong", hints=0,
@@ -205,7 +205,7 @@ def test_needs_refresh_only_when_solid_was_met(log):
 def test_item_rating():
     from fsrs import Rating
 
-    from cortex.levels import _Item, _rating
+    from keepfold.levels import _Item, _rating
 
     def r(verdict, hints=0, confidence=None, item_type=None):
         return _rating(_Item({}, "c", verdict, hints, confidence, item_type=item_type))
@@ -266,7 +266,7 @@ def test_problem_secondary_concepts_get_also_credit(log):
 
 
 def test_jitter_is_deterministic_and_within_five_percent():
-    from cortex.levels import JITTER, _jitter
+    from keepfold.levels import JITTER, _jitter
     assert all(_jitter("c", n, i) == 0 for n in range(20) for i in range(3))
     shifts = [(i, _jitter(f"c{n}", n, i)) for n in range(50) for i in range(3, 200, 7)]
     assert shifts == [(i, _jitter(f"c{n}", n, i)) for n in range(50) for i in range(3, 200, 7)]
@@ -377,7 +377,7 @@ def test_confident_miss_clears_only_on_a_later_day(log):
 
 
 def test_solid_waits_for_a_gap_pass(log):
-    from cortex.levels import gap_note
+    from keepfold.levels import gap_note
     for day in (1, 2):
         grades(log, "c", day, ["correct"], item_type="application", confidence=4)
     st = states(log, "2026-11-02")[0]["c"]
@@ -439,7 +439,7 @@ def test_same_timestamp_batch_is_rated_by_pass_share():
 
 
 def test_resolving_a_solved_problem_is_recall(log):
-    from cortex.levels import _items
+    from keepfold.levels import _items
     add(log, 1, object="concept:two-pointers", problem="problem:p1", verdict="wrong")
     add(log, 1, minute=1, object="concept:two-pointers", problem="problem:p1",
         verdict="correct")  # same day: still the first solve
@@ -531,7 +531,7 @@ def test_predicted_p_uses_worst_rating_of_the_day(log):
 
 
 def test_items_item_type_inherited_and_derived(log):
-    from cortex.levels import _items
+    from keepfold.levels import _items
     ask = add(log, 1, kind="ask", object="concept:two-pointers", question="q",
               item_type="transfer")
     add(log, 1, minute=1, object="concept:two-pointers", ref=ask["id"], verdict="correct")
@@ -579,7 +579,7 @@ def test_solved_after_a_graded_code_phase_is_plain_evidence(log):
 # ---- leeches (lapses) and answer time (L1) -------------------------------------------------
 
 def test_lapses_count_misses_after_learning_only(log):
-    from cortex.levels import LEECH_LAPSES, is_leech
+    from keepfold.levels import LEECH_LAPSES, is_leech
     for day in (1, 2):  # misses while still learning are not lapses
         grades(log, "arrays-basics", day, ["wrong"])
     grades(log, "arrays-basics", 3, ["correct"])

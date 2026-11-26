@@ -11,11 +11,11 @@ import pytest
 from conftest import events, run
 from test_browse import Embed, hubbed
 
-from cortex import semantic
-from cortex.browse import Settings, build, sites, sources, vectors
-from cortex.events import live
-from cortex.vault import Vault
 from integration.builders import fake_profile_root
+from keepfold import semantic
+from keepfold.browse import Settings, build, sites, sources, vectors
+from keepfold.events import live
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -57,7 +57,7 @@ PLAN = Settings(visible_to_claude=True, hidden_from_claude=("health", "money"),
 
 def hidden_markers(s: Settings) -> tuple[str, ...]:
     """Markers that must not reach a visible file under `s`: every non-cloud category's."""
-    from cortex.browse import privacy
+    from keepfold.browse import privacy
 
     return DROPPED + tuple(w for c, ws in MARKERS.items()
                            if privacy.audience(c, s) != "cloud" for w in ws)
@@ -86,7 +86,7 @@ def grep(blobs: dict[str, bytes], markers) -> list[tuple[str, str]]:
 
 
 def every_file(root) -> dict[str, bytes]:
-    """The whole vault, .cortex and .git included."""
+    """The whole vault, .keepfold and .git included."""
     return {p.relative_to(root).as_posix(): p.read_bytes()
             for p in root.rglob("*") if p.is_file()}
 
@@ -144,7 +144,7 @@ def test_private_vectors_hold_hidden_pages_the_main_ones_do_not(vault, local, mo
     assert any("webmd" in p for p in priv) and not any("pornhub" in p for p in priv)
 
     async def body(call):
-        await call("cortex_recall", {"query": "pasta recipe cooking"})
+        await call("keepfold_recall", {"query": "pasta recipe cooking"})
 
     run(vault, body)
     stored = " ".join(f"{i} {e[0]}" for i, e in semantic._read(vault).items()).lower()

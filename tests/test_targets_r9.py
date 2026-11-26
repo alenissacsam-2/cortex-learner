@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from cortex.app import targets
+from keepfold.app import targets
 
-ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\vault"]}
+ENTRY = {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", "C:\\vault"]}
 
 
 def _paths(home):
@@ -32,7 +32,7 @@ def test_detect_add_keep_remove(home, tid):
     path, key, want = _paths(home)[tid]
     t = targets.by_id()[tid]
     assert not t.detect() and not t.connected()
-    assert t.snippet(ENTRY) == json.dumps({key: {"cortex": want}}, indent=2)
+    assert t.snippet(ENTRY) == json.dumps({key: {"keepfold": want}}, indent=2)
     # the app's folder (not the file) decides detection; a missing file is then created
     folder = {"cline": path.parents[1], "copilot-cli": path.parent, "junie": path.parents[1],
               "zed": path.parent}[tid]
@@ -47,12 +47,12 @@ def test_detect_add_keep_remove(home, tid):
     t.apply(ENTRY)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["theme"] == "dark" and data[key]["other"] == {"command": "x"}
-    assert data[key]["cortex"] == want
+    assert data[key]["keepfold"] == want
     assert t.connected() and t.plan(True, ENTRY) == []
-    assert original in [b.read_bytes() for b in path.parent.glob(path.name + ".cortex-*.bak")]
+    assert original in [b.read_bytes() for b in path.parent.glob(path.name + ".keepfold-*.bak")]
     t.remove()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "cortex" not in data[key] and data[key]["other"] == {"command": "x"}
+    assert "keepfold" not in data[key] and data[key]["other"] == {"command": "x"}
     assert data["theme"] == "dark" and not t.connected()
 
 
@@ -63,7 +63,7 @@ def test_a_missing_file_is_created_for_a_detected_app(home, tid):
     folder.mkdir(parents=True)
     assert [r["change"] for r in targets.plan_all({tid: True}, ENTRY)] == ["add"]
     targets.apply_all({tid: True}, ENTRY)
-    assert json.loads(path.read_text(encoding="utf-8"))[key]["cortex"] == want
+    assert json.loads(path.read_text(encoding="utf-8"))[key]["keepfold"] == want
 
 
 def test_an_app_that_is_not_installed_is_skipped(home):
@@ -140,4 +140,4 @@ def test_new_targets_are_listed_and_connect_rows_exist(home):
     rows = {r["id"]: r for r in targets.describe(ENTRY)}
     for tid in ("zed", "cline", "copilot-cli", "junie"):
         assert rows[tid]["label"] and not rows[tid]["detected"] and not rows[tid]["connected"]
-        assert "cortex" in rows[tid]["snippet"] and "error" not in rows[tid]
+        assert "keepfold" in rows[tid]["snippet"] and "error" not in rows[tid]

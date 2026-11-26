@@ -1,5 +1,5 @@
-"""cortex_prime (the first call of every chat), deduped `touch` logs, and the plugin's
-UserPromptSubmit hook (`cortex prime-hook`)."""
+"""keepfold_prime (the first call of every chat), deduped `touch` logs, and the plugin's
+UserPromptSubmit hook (`keepfold prime-hook`)."""
 
 import json
 import os
@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 from conftest import FakeEmbed, events, git, note, run
 
-from cortex import prime, prime_hook, semantic, taint, topics
-from cortex.mcp_server import PRIME_MAX, Cortex
-from cortex.vault import Vault
+from keepfold import prime, prime_hook, semantic, taint, topics
+from keepfold.mcp_server import PRIME_MAX, Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -48,7 +48,7 @@ def vault(root):
 
 def test_prime_serves_matching_preferences_contract_and_recalls(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    out = Cortex(Vault(vault)).cortex_prime("How does a car motor work? Explain it.")
+    out = Keepfold(Vault(vault)).keepfold_prime("How does a car motor work? Explain it.")
     ctx = out["context"]
     assert len(ctx) <= PRIME_MAX
     assert '<untrusted_note id="me/profile">' in ctx
@@ -61,7 +61,7 @@ def test_prime_serves_matching_preferences_contract_and_recalls(vault, monkeypat
     assert out["touch"] == ["topic-cars"]  # the root map never counts
     assert "kind='touch'" in out["next"] and "user_confirmed=true" in out["next"]
     # stores nothing: no event, no recall-log row with the prompt, nothing to commit
-    assert events(vault) == [] and not (vault / ".cortex/recall-log.jsonl").exists()
+    assert events(vault) == [] and not (vault / ".keepfold/recall-log.jsonl").exists()
     assert git(vault, "status", "--porcelain") == ""
 
 
@@ -105,21 +105,21 @@ def test_study_abbreviations_match_the_long_words(tmp_path):
 
 def test_full_prime_closes_only_an_ambient_session(vault, monkeypatch):
     """One chat, one ambient session: a full prime (a new chat in the Chat app) closes the
-    open ambient one, so `cortex undo` is per chat; related_only and study sessions stay."""
+    open ambient one, so `keepfold undo` is per chat; related_only and study sessions stay."""
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     touch = {"kind": "touch", "payload": {"ids": ["pasta"]}}
 
     async def body(call):
-        await call("cortex_log", touch)  # opens an ambient session
-        await call("cortex_prime", {"prompt": "my car motor", "related_only": True})
-        assert (await call("cortex_log", {**touch, "payload": {"ids": ["engines"]}}))[
+        await call("keepfold_log", touch)  # opens an ambient session
+        await call("keepfold_prime", {"prompt": "my car motor", "related_only": True})
+        assert (await call("keepfold_log", {**touch, "payload": {"ids": ["engines"]}}))[
             "recorded"] == 1  # same session: nothing closed
-        await call("cortex_prime", {"prompt": "my car motor"})  # a new chat
-        assert (await call("cortex_log", touch))["recorded"] == 1  # a new session
-        await call("cortex_start", {"mode": "learn"})
-        await call("cortex_prime", {"prompt": "my car motor"})
-        await call("cortex_log", {**touch, "payload": {"ids": ["engines"]}})
-        await call("cortex_end")
+        await call("keepfold_prime", {"prompt": "my car motor"})  # a new chat
+        assert (await call("keepfold_log", touch))["recorded"] == 1  # a new session
+        await call("keepfold_start", {"mode": "learn"})
+        await call("keepfold_prime", {"prompt": "my car motor"})
+        await call("keepfold_log", {**touch, "payload": {"ids": ["engines"]}})
+        await call("keepfold_end")
 
     run(vault, body)
     evs = events(vault)
@@ -135,18 +135,18 @@ def test_prime_without_model_or_me_pages(vault, monkeypatch, tmp_path):
     monkeypatch.setattr(semantic, "models_dir", lambda: tmp_path / "no-models")
     (vault / "me/preferences.md").unlink()
     (vault / "me/personality.md").unlink()
-    out = Cortex(Vault(vault)).cortex_prime("a pasta recipe")
-    assert "not recorded yet" not in out["context"]  # /cortex home asks, not prime
+    out = Keepfold(Vault(vault)).keepfold_prime("a pasta recipe")
+    assert "not recorded yet" not in out["context"]  # /keepfold home asks, not prime
     assert "[[pasta]]" in out["context"] and out["touch"] == []
     with pytest.raises(Exception, match="prompt"):
-        Cortex(Vault(vault)).cortex_prime("  ")
+        Keepfold(Vault(vault)).keepfold_prime("  ")
 
 
 def test_template_profile_summary_gives_way_to_claim_lines(vault):
-    from cortex.cli import ME_PAGES
+    from keepfold.cli import ME_PAGES
 
     page = ME_PAGES["me/profile.md"]
-    assert f"summary: {prime.PROFILE_TEMPLATE}\n" in page  # the constant tracks `cortex init`
+    assert f"summary: {prime.PROFILE_TEMPLATE}\n" in page  # the constant tracks `keepfold init`
     page = page.replace("## Background\n", "## Background\n- CS student. ^c-abcde\n- Likes Go.\n")
     (vault / "me/profile.md").write_text(
         page.replace("## Past\n", "## Past\n- Was a chemist.\n"), encoding="utf-8")
@@ -159,17 +159,17 @@ def test_template_profile_summary_gives_way_to_claim_lines(vault):
 def test_a_profile_line_the_model_wrote_is_served_ask(vault):
     """B3: a profile claim line of tier agent (or exposed) used to reach every prime and
     context plain, as a fact; it is labelled (ask) like claim_items, with the legend."""
-    from cortex.cli import ME_PAGES
+    from keepfold.cli import ME_PAGES
 
     page = ME_PAGES["me/profile.md"].replace("## Background\n", "## Background\n- CS student.\n")
     (vault / "me/profile.md").write_text(page, encoding="utf-8")
 
     async def body(call):
-        out = await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/profile", "op": "append_to_section",
                                           "target": "Background", "text": "Studies at X"})
         assert out["changed"] is True
-        for ctx in ((await call("cortex_prime", {"prompt": "hello there"}))["context"],
-                    (await call("cortex_context", {}))["context"]):
+        for ctx in ((await call("keepfold_prime", {"prompt": "hello there"}))["context"],
+                    (await call("keepfold_context", {}))["context"]):
             profile = ctx.split("## Profile\n", 1)[1].split("\n## ", 1)[0]
             assert "- CS student.\n" in profile and "- Studies at X (ask)" in profile
             assert prime.LEGEND in ctx
@@ -185,7 +185,7 @@ def test_first_prime_does_not_wait_on_the_model_load(vault, monkeypatch):
     import anyio
     from mcp import Client
 
-    from cortex import mcp_server
+    from keepfold import mcp_server
 
     slow, lock, loaded_by = 1.5, threading.Lock(), []
 
@@ -201,7 +201,7 @@ def test_first_prime_does_not_wait_on_the_model_load(vault, monkeypatch):
     monkeypatch.setattr(semantic, "load_embedder", load)
     monkeypatch.setattr(mcp_server, "WARM_EMBEDDER", True)
     server = mcp_server.build_server(Vault(vault))
-    core = server.cortex
+    core = server.keepfold
     assert core.warming is None  # nothing loads before the handshake
 
     async def main():
@@ -212,24 +212,24 @@ def test_first_prime_does_not_wait_on_the_model_load(vault, monkeypatch):
                 # the user's first message comes later than the load ends
                 await anyio.to_thread.run_sync(core.warming.join)
             t = time.perf_counter()
-            r = await client.call_tool("cortex_prime", {"prompt": "How does a car motor work?"})
+            r = await client.call_tool("keepfold_prime", {"prompt": "How does a car motor work?"})
             assert time.perf_counter() - t < slow / 2
             assert "[[engines]]" in r.structured_content["context"]
 
     anyio.run(main)
-    assert loaded_by == ["cortex-embedder"]  # loaded once, off the prime's path
+    assert loaded_by == ["keepfold-embedder"]  # loaded once, off the prime's path
 
 
 def test_light_core_is_the_prime_before_related(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     p = "How does a car motor work? Explain it."
     parts, left = prime.core(c.vault, p, list(c.log.iter_events()), c._now())
     assert [b.split("\n", 1)[0] for b in parts] == [
         "## Profile", "## Teaching contract (core)", "## Preferences"]  # no (ask): no legend
-    ctx = c.cortex_prime(p)["context"]
+    ctx = c.keepfold_prime(p)["context"]
     assert ctx.startswith("\n\n".join(parts) + "\n\n## Related\n") and 0 < left[0] < PRIME_MAX
-    only = c.cortex_prime(p, related_only=True)
+    only = c.keepfold_prime(p, related_only=True)
     assert only["context"] == "## Related\n" + ctx.split("\n\n## Related\n", 1)[1]
     assert only["touch"] == ["topic-cars"] and "kind='touch'" in only["next"]
     for head in ("Profile", "Preferences", "Teaching contract"):
@@ -260,7 +260,7 @@ def test_prime_serves_contract_rules_not_preamble(vault):
     (vault / "me/teaching-contract.md").write_text(
         "---\nx: 1\n---\n# Teaching contract\n\n" + PREAMBLE + "\n\n## Core rules\n\n"
         "- Retrieve first.\n- Ask confidence.\n", encoding="utf-8")
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     parts, _ = prime.core(c.vault, "hi", list(c.log.iter_events()), c._now())
     block = next(b for b in parts if b.startswith("## Teaching contract (core)"))
     body = block.split(">\n", 1)[1]
@@ -272,27 +272,27 @@ def test_touch_is_logged_once_per_session(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
 
     async def body(call):
-        only = await call("cortex_prime", {"prompt": "my car motor", "related_only": True})
+        only = await call("keepfold_prime", {"prompt": "my car motor", "related_only": True})
         assert only["context"].startswith("## Related\n") and only["touch"] == ["topic-cars"]
-        first = await call("cortex_prime", {"prompt": "my car motor"})
+        first = await call("keepfold_prime", {"prompt": "my car motor"})
         assert first["touch"] == ["topic-cars"]
-        r = await call("cortex_log", {"kind": "touch", "payload": {"ids": ["topic-cars"]}})
+        r = await call("keepfold_log", {"kind": "touch", "payload": {"ids": ["topic-cars"]}})
         assert r["recorded"] == 1
-        again = await call("cortex_log", {"kind": "touch", "payload": {
+        again = await call("keepfold_log", {"kind": "touch", "payload": {
             "ids": ["topic-cars", "topic-cars"]}})
         assert again["recorded"] == 0 and again["display_line"] == "Already recorded in this chat"
-        both = await call("cortex_log", {"kind": "touch", "payload": {
+        both = await call("keepfold_log", {"kind": "touch", "payload": {
             "ids": ["topic-cars", "pasta"]}})
         assert both["recorded"] == 1 and both["display_line"] == "Topic touch: pasta"
-        again = await call("cortex_prime", {"prompt": "my car motor", "related_only": True})
+        again = await call("keepfold_prime", {"prompt": "my car motor", "related_only": True})
         assert again["touch"] == []
-        bad = await call("cortex_log", {"kind": "touch", "payload": {"ids": ["nope"]}})
+        bad = await call("keepfold_log", {"kind": "touch", "payload": {"ids": ["nope"]}})
         assert bad["error"] == "unknown_id"
-        assert (await call("cortex_log", {"kind": "touch", "payload": {}}))["error"] \
+        assert (await call("keepfold_log", {"kind": "touch", "payload": {}}))["error"] \
             == "invalid_argument"
-        await call("cortex_end")
+        await call("keepfold_end")
         # a new session (chat) may touch the same hub again
-        r = await call("cortex_log", {"kind": "touch", "payload": {"ids": ["topic-cars"]}})
+        r = await call("keepfold_log", {"kind": "touch", "payload": {"ids": ["topic-cars"]}})
         assert r["recorded"] == 1
 
     run(vault, body)
@@ -308,7 +308,7 @@ def test_touch_is_prompt_anchored(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
 
     def touch(prompt):
-        return Cortex(Vault(vault)).cortex_prime(prompt, related_only=True)["touch"]
+        return Keepfold(Vault(vault)).keepfold_prime(prompt, related_only=True)["touch"]
 
     # the top hit is filed under the cars hub, but the prompt is about cooking: no touch
     note(vault, "notes/carbonara.md", 'title: Carbonara\nrelated: ["[[topic-cars]]"]\n',
@@ -323,7 +323,7 @@ def test_touch_is_prompt_anchored(vault, monkeypatch):
     assert touch("a pasta recipe") == ["topic-cooking"]
     assert touch("car pasta") == []
     # the prompt alone is not enough: a hub needs a recall hit (not a graph neighbour) under it
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     c._refresh_index()
     for hits, want in [([], None), ([{"id": "ragu", "match": "linked"}], None),
                        ([{"id": "engines", "match": "similar"}], None),
@@ -377,18 +377,18 @@ def subjects(root, monkeypatch):
     ("hello there", []),
 ])
 def test_touch_is_the_hub_the_prompt_is_about(subjects, prompt, touch):
-    assert Cortex(Vault(subjects)).cortex_prime(prompt, related_only=True)["touch"] == touch
+    assert Keepfold(Vault(subjects)).keepfold_prime(prompt, related_only=True)["touch"] == touch
 
 
 def test_touch_needs_a_matching_recall_hit_under_the_hub(subjects, monkeypatch):
     """The prompt's nearest hub counts only when recall agrees: a hit at or under it, not a
     page that is only linked to a hit."""
-    c = Cortex(Vault(subjects))
+    c = Keepfold(Vault(subjects))
 
     def hits(*ids, match="similar"):
         monkeypatch.setattr(semantic, "search", lambda *a, **k: ([
             {"id": i, "title": i, "summary": "", "match": match} for i in ids], ""))
-        return c.cortex_prime("dbms", related_only=True)["touch"]
+        return c.keepfold_prime("dbms", related_only=True)["touch"]
 
     assert hits("img-0", "pasta-night") == []
     assert hits("dbms-1", match="linked") == []
@@ -399,12 +399,12 @@ def test_touch_needs_a_matching_recall_hit_under_the_hub(subjects, monkeypatch):
 def test_touch_follows_a_page_edit_between_primes(subjects):
     """The cached tree and centroids are rebuilt when a page changes: moving one DBMS page to
     the AI media hub leaves the DBMS hub under MIN_MEMBERS, so the same prompt touches nothing."""
-    c = Cortex(Vault(subjects))
+    c = Keepfold(Vault(subjects))
     prompt = "what should I revise for dbms today"
-    assert c.cortex_prime(prompt, related_only=True)["touch"] == ["topic-dbms"]
+    assert c.keepfold_prime(prompt, related_only=True)["touch"] == ["topic-dbms"]
     note(subjects, "notes/dbms-0.md", 'title: Databases 0\nrelated: ["[[topic-ai-media]]"]\n',
          "# Databases 0\n\nThe dbms and sql joins, part 0, now filed elsewhere.")
-    assert c.cortex_prime(prompt, related_only=True)["touch"] == []
+    assert c.keepfold_prime(prompt, related_only=True)["touch"] == []
 
 
 def _attempt(vault, prompt):
@@ -462,33 +462,33 @@ def test_attempt_first_is_budget_neutral(vault, monkeypatch):
     for head in ("## Profile", "## Teaching contract (core)"):
         assert got[head] == without[head]
     assert left >= left_without - 70  # at most one dropped preference line's slack
-    ctx = Cortex(Vault(vault)).cortex_prime(prompt)["context"]
+    ctx = Keepfold(Vault(vault)).keepfold_prime(prompt)["context"]
     assert len(ctx) <= PRIME_MAX and "## Attempt first" in ctx and "## Related\n" in ctx
 
 
 def test_due_concept_offer_in_prime_and_context_next(vault, monkeypatch):
     """L3: one optional closed-book question in `next` when a served concept is due; none
     when nothing is due, and prime leaves it out when a problem's Attempt first line is in."""
-    from cortex import planner
+    from keepfold import planner
 
     monkeypatch.setattr(semantic, "_embedder", None)  # keyword and graph hits only
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     topic = "how about pointers"
-    assert "closed-book" not in c.cortex_context(topic=topic)["next"]
-    assert "closed-book" not in c.cortex_prime("two pointers trick")["next"]
+    assert "closed-book" not in c.keepfold_context(topic=topic)["next"]
+    assert "closed-book" not in c.keepfold_prime("two pointers trick")["next"]
     monkeypatch.setattr(planner, "is_due", lambda st, day: True)
-    nxt = c.cortex_context(topic=topic)["next"]
+    nxt = c.keepfold_context(topic=topic)["next"]
     assert nxt.count("closed-book") == 1 and "question on two-pointers" in nxt
     assert "just show me" in nxt and "at most one per chat" in nxt
-    assert "closed-book" not in c.cortex_context()["next"]  # no topic, no offer
-    assert "question on two-pointers" in c.cortex_prime("two pointers trick")["next"]
+    assert "closed-book" not in c.keepfold_context()["next"]  # no topic, no offer
+    assert "question on two-pointers" in c.keepfold_prime("two pointers trick")["next"]
     for related_only in (False, True):
-        out = c.cortex_prime("two pointers trick: solve lc-167", related_only=related_only)
+        out = c.keepfold_prime("two pointers trick: solve lc-167", related_only=related_only)
         assert "closed-book" not in out["next"], related_only
 
 
 def test_prime_hook_carries_attempt_first(vault, monkeypatch):
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
     ctx = json.loads(prime_hook.run(payload("solve lc-167 please")))["hookSpecificOutput"][
         "additionalContext"]
     assert "## Attempt first\n[[lc-167]] is todo" in ctx and ctx.endswith(prime_hook.NEXT)
@@ -500,7 +500,7 @@ def payload(prompt="How does a car motor work?", sid="chat-1"):
 
 
 def test_prime_hook_injects_once_per_chat(vault, monkeypatch):
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
     out = json.loads(prime_hook.run(payload()))["hookSpecificOutput"]
     assert out["hookEventName"] == "UserPromptSubmit"
     ctx = out["additionalContext"]
@@ -517,7 +517,7 @@ def test_prime_hook_injects_once_per_chat(vault, monkeypatch):
 
 
 def test_prime_hook_nudges_when_prime_is_slow_or_fails(vault, monkeypatch):
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
 
     def context(sid):
         return json.loads(prime_hook.run(payload(sid=sid)))["hookSpecificOutput"][
@@ -536,7 +536,7 @@ def test_prime_hook_nudges_when_prime_is_slow_or_fails(vault, monkeypatch):
     gate.set()
     prime_hook.pending.join(30)
     assert context("after-slow").startswith(prime_hook.HEAD)  # no lockout after a slow prime
-    assert not list((vault / ".cortex").glob("prime-slow*"))
+    assert not list((vault / ".keepfold").glob("prime-slow*"))
 
 
 def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, monkeypatch):
@@ -545,11 +545,11 @@ def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, mon
     is still served) instead of blocking the hook."""
     import socket
 
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
     sids = ["chat-a", "chat-b"]  # two chats opened together: two hook processes
-    code = "import sys\nfrom cortex import prime_hook\nprime_hook.run(sys.stdin.read())\n"
+    code = "import sys\nfrom keepfold import prime_hook\nprime_hook.run(sys.stdin.read())\n"
     runs = [subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, text=True,
-                             env={**os.environ, "CORTEX_VAULT": str(vault)}) for _ in sids]
+                             env={**os.environ, "KEEPFOLD_VAULT": str(vault)}) for _ in sids]
     for p, s in zip(runs, sids, strict=True):
         p.stdin.write(payload(sid=s))
         p.stdin.close()
@@ -558,7 +558,7 @@ def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, mon
     assert set(sids) <= set((vault / prime_hook.STATE).read_text("utf-8").split())
 
     monkeypatch.setattr(prime_hook, "LOCK_WAIT", 0.2)
-    lock = vault / ".cortex" / "lock"  # another live process's write, as the hook sees it
+    lock = vault / ".keepfold" / "lock"  # another live process's write, as the hook sees it
     lock.write_text(f"{os.getppid()} {time.time():.3f} {socket.gethostname()}")
     try:
         t = time.perf_counter()
@@ -573,18 +573,18 @@ def test_prime_hook_marks_chats_opened_together_and_skips_a_busy_lock(vault, mon
 def test_prime_hook_stays_light(vault):
     """The hook process never imports the mcp SDK, the embedder or numpy, nor builds Index."""
     code = ("import json, sys\n"
-            "import cortex.index as ix\n"
+            "import keepfold.index as ix\n"
             "def no(*a, **k): raise AssertionError('Index built')\n"
             "ix.Index.__init__ = no\n"
-            "from cortex import prime_hook\n"
+            "from keepfold import prime_hook\n"
             "out = prime_hook.run(sys.stdin.read())\n"
             "heavy = sorted(m for m in sys.modules if m.split('.')[0] in "
             "('mcp', 'numpy', 'fastembed', 'onnxruntime') or m in "
-            "('cortex.semantic', 'cortex.mcp_server', 'cortex.cli'))\n"
+            "('keepfold.semantic', 'keepfold.mcp_server', 'keepfold.cli'))\n"
             "print(json.dumps({'out': out, 'heavy': heavy}))\n")
     r = subprocess.run([sys.executable, "-c", code], input=payload(), capture_output=True,
                        text=True, encoding="utf-8", timeout=120,
-                       env={**os.environ, "CORTEX_VAULT": str(vault)})
+                       env={**os.environ, "KEEPFOLD_VAULT": str(vault)})
     got = json.loads(r.stdout)
     assert got["heavy"] == [], got["heavy"]
     assert json.loads(got["out"])["hookSpecificOutput"]["additionalContext"].startswith(
@@ -592,14 +592,14 @@ def test_prime_hook_stays_light(vault):
 
 
 def test_prime_hook_console_entry_and_no_vault(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("CORTEX_VAULT", str(tmp_path / "missing"))
-    monkeypatch.setattr(sys, "argv", ["cortex", "prime-hook"])
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(tmp_path / "missing"))
+    monkeypatch.setattr(sys, "argv", ["keepfold", "prime-hook"])
     monkeypatch.setattr(taint, "read_stdin", lambda: payload())
     taint.main()
     assert capsys.readouterr().out == ""
     cfg = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     (ups,) = cfg["hooks"]["UserPromptSubmit"]
-    assert ups["hooks"][0]["command"] == "cortex prime-hook; exit 0" and "matcher" not in ups
+    assert ups["hooks"][0]["command"] == "keepfold prime-hook; exit 0" and "matcher" not in ups
 
 
 def test_profile_drops_lines_past_their_until_day(root):
@@ -608,8 +608,8 @@ def test_profile_drops_lines_past_their_until_day(root):
     assert prime.profile_summary(Vault(root), "2026-11-16") == "- Current fact"
 
     async def body(call):
-        for text in ((await call("cortex_prime", {"prompt": "hi"}))["context"],
-                     (await call("cortex_context", {}))["context"]):
+        for text in ((await call("keepfold_prime", {"prompt": "hi"}))["context"],
+                     (await call("keepfold_context", {}))["context"]):
             assert "Current fact" in text and "Old fact" not in text, text
 
     run(root, body)
@@ -619,7 +619,7 @@ def test_prime_names_at_most_two_open_mistakes_of_its_concepts(vault, monkeypatc
     """Open, non-private mistakes on the hit concepts join Related; resolved ones never."""
     from datetime import timedelta
 
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
 
     monkeypatch.setattr(semantic, "_embedder", None)  # keyword and graph hits only
     for id, extra in (("dsa.a-private", "private: true\n"), ("dsa.b-resolved", ""),
@@ -631,9 +631,9 @@ def test_prime_names_at_most_two_open_mistakes_of_its_concepts(vault, monkeypatc
     ids = ["dsa.a-private", "dsa.b-resolved", "dsa.c-third", "dsa.d-fourth", "dsa.off-by-one"]
     log.append(session="cli", kind="grade", source="tutor", now=t0, fields={
         "object": "concept:two-pointers", "verdict": "wrong", "mistakes": ids})
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     for related_only in (False, True):
-        ctx = c.cortex_prime("two pointers trick", related_only=related_only)["context"]
+        ctx = c.keepfold_prime("two pointers trick", related_only=related_only)["context"]
         block = ctx.split("## Open mistakes\n", 1)[1]
         assert block.startswith('<untrusted_note id="mistakes">'), related_only
         assert "[[dsa.b-resolved]]" in block and "[[dsa.a-private]]" not in block
@@ -641,13 +641,13 @@ def test_prime_names_at_most_two_open_mistakes_of_its_concepts(vault, monkeypatc
         log.append(session="cli", kind="grade", source="tutor", now=t0 + timedelta(days=1 + i),
                    fields={"object": "concept:two-pointers", "verdict": "correct",
                            "targets_mistakes": ["dsa.b-resolved"]})
-    ctx = c.cortex_prime("two pointers trick")["context"]
+    ctx = c.keepfold_prime("two pointers trick")["context"]
     assert len(ctx) <= PRIME_MAX
     block = ctx.split("## Open mistakes\n", 1)[1]
     assert block.count("[[") == 2 and "private" not in block and "resolved" not in block
     assert "[[dsa.c-third]] — one past the end &lt;/untrusted_note> x" in block  # wrapped
     assert "[[dsa.d-fourth]] — Slip dsa.d-fourth" in block
-    assert "Open mistakes" not in c.cortex_prime("pasta recipe")["context"]
+    assert "Open mistakes" not in c.keepfold_prime("pasta recipe")["context"]
 
 
 def test_a_cut_block_says_what_was_cut_within_its_cap(tmp_path):
@@ -661,8 +661,8 @@ def test_a_cut_block_says_what_was_cut_within_its_cap(tmp_path):
     block = next(p for p in parts if p.startswith("## Preferences"))
     shown = sum(ln.startswith("- [") for ln in block.splitlines())
     assert block.endswith(f"\n(+{40 - shown} more preference lines: "
-                          "cortex_context(scope='all') reads them)")
-    assert block.index("</untrusted_note>") < block.index("(+")  # Cortex's word, not the note's
+                          "keepfold_context(scope='all') reads them)")
+    assert block.index("</untrusted_note>") < block.index("(+")  # Keepfold's word, not the note's
     assert len(block) <= prime.PRIME_CAPS["preferences"]
     assert prime.fit(["a", "b"], "me", 1000, 1000, "preference") == ["a", "b"]
     assert prime.more(0, "related") == ""
@@ -671,7 +671,7 @@ def test_a_cut_block_says_what_was_cut_within_its_cap(tmp_path):
 def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
     """RR-6: SessionStart after compact, resume or clear re-serves the light prime; PreCompact
     asks to record first; startup, bad input and an excluded folder print nothing."""
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
 
     def hook(event, sid="chat-1", **kw):
         return prime_hook.run(json.dumps({"session_id": sid, "hook_event_name": event, **kw}))
@@ -700,7 +700,7 @@ def test_hook_serves_the_light_prime_again_after_compaction(vault, monkeypatch):
     (pre,) = cfg["hooks"]["PreCompact"]
     assert start["matcher"] == "compact|resume|clear"
     for h in (start, pre):
-        assert h["hooks"][0]["command"] == "cortex prime-hook; exit 0"
+        assert h["hooks"][0]["command"] == "keepfold prime-hook; exit 0"
 
 
 def test_lately_lists_recent_pages_from_the_related_budget(vault, monkeypatch):
@@ -708,9 +708,9 @@ def test_lately_lists_recent_pages_from_the_related_budget(vault, monkeypatch):
     already in Related, wrapped as untrusted, and the Related cap shrinks by its size."""
     from datetime import timedelta
 
-    from cortex import xray
-    from cortex.events import EventLog
-    from cortex.mcp_server import LATELY_HEAD
+    from keepfold import xray
+    from keepfold.events import EventLog
+    from keepfold.mcp_server import LATELY_HEAD
 
     monkeypatch.setattr(semantic, "_embedder", None)  # keyword and graph hits only
     note(vault, "notes/diary.md", "title: Secret diary\nprivate: true\n", "# Secret diary\n")
@@ -731,7 +731,7 @@ def test_lately_lists_recent_pages_from_the_related_budget(vault, monkeypatch):
     log.append(session="cli", kind="log", source="tutor", now=now,
                fields={"payload": {"kind": "touch", "ids": ["engines"]}})
     xray.set_flag(v, "mute", "hidden", True)
-    ctx = Cortex(v).cortex_prime("How does a car motor work?")["context"]
+    ctx = Keepfold(v).keepfold_prime("How does a car motor work?")["context"]
     assert len(ctx) <= PRIME_MAX
     block = ctx.split(f"## {LATELY_HEAD}\n", 1)[1].split("\n\n## ", 1)[0]
     assert block.startswith('<untrusted_note id="lately">')

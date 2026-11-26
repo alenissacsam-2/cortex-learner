@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from cortex import cli, taint
-from cortex.app import server, status
-from cortex.vault import in_temp_folder
+from keepfold import cli, taint
+from keepfold.app import server, status
+from keepfold.vault import in_temp_folder
 
 
 @pytest.fixture

@@ -1,0 +1,142 @@
+{
+  "0.6.2": {
+    "items": [
+      "Cortex is now Keepfold: the app, its commands (keepfold), its tools (keepfold_*), the /keepfold skill and its folders (~/.keepfold) all have the new name, and your notes, settings and AI-app connections move over by themselves the first time it runs.",
+      "Updates come from the project's new home on GitHub (alenissacsam-2/keepfold).",
+      "Status has a new switch, Check for updates automatically. Turn it off and Keepfold contacts GitHub only when you click Check for updates.",
+      "If a line in your settings file has a typo, Keepfold no longer falls back to the defaults and takes in folders you excluded. Imports stay off until you fix the line, and Status and keepfold doctor show which line it is.",
+      "Logs and error messages leave out more: no app key in the log, and no text from a note whose header is broken. Rules files in other AI apps keep your pinned lines after an error.",
+      "The README and the privacy guide list exactly what leaves your computer and what your connected AI apps receive."
+    ],
+    "do": []
+  },
+  "0.6.1": {
+    "items": [
+      "Keepfold installs and updates in a folder whose path has a space, such as C:\\Users\\John Smith. Before, setup stopped and blamed the internet connection.",
+      "When setup fails, it shows the real error first, before the advice about your internet connection.",
+      "Setup and updates use the proxy set in Windows, so they work on school and work networks that need one.",
+      "Windows on ARM laptops keep getting the x64 Python that Keepfold's packages need."
+    ],
+    "do": []
+  },
+  "0.6.0": {
+    "items": [
+      "A welcome guide for new users: six short steps that set up your notes folder, connect your AI apps and show you where things are. Reopen it any time from Setup.",
+      "Installing and updating look like Keepfold now: one window with each step, a progress bar and plain words. If another program is still using Keepfold, it asks you inside the window.",
+      "Change your vault folder from Dashboard and vault. A vault in a temporary folder gets a warning, and Keepfold never swaps the vault you use for one.",
+      "Something not working? Status has Copy details (versions and what is on or off, never your notes or file paths) and a button to report it on GitHub. In a terminal: keepfold doctor --report.",
+      "Connect AI apps works on a new laptop: Claude Code's hooks run without Git Bash, an app you install later is found without restarting Keepfold, and apps that need it get Copy instructions, the short text that makes them use Keepfold in every chat. docs/CONNECT.md walks through each app.",
+      "Agent X-ray's dry run is quick after the first run: it reuses what it already read."
+    ],
+    "do": [
+      "Restart Claude and your other AI apps once after updating."
+    ]
+  },
+  "0.5.0": {
+    "items": [
+      "A calmer day theme: soft sand panels with amber ink, the night theme in daylight. No bright yellow slabs and no pure white.",
+      "The app is easier to find your way in: the sidebar has three groups (Every day, Your setup, Check), and Setup is a short list of numbered steps with a progress bar.",
+      "Chat says how sure each answer is: exactly from your pages, from a few of your pages, thin, or nothing on record. Type # in Chat to hand it up to 3 of your pages.",
+      "Home follows what you do: study, build and research boards appear once you use them, and a new vault gets a Get started card. The brain has a month-by-month time scrub, a Focus Lens for one page and its links, and Save picture.",
+      "Press Ctrl+Alt+Space anywhere to save a thought, and more comes in by itself: Codex, Gemini CLI and GitHub Copilot CLI sessions; watched folders, notes, git projects, Zotero and calendars every 10 minutes; Anki with your review history; and TODO: lines in your notes become open loops.",
+      "Also new: Zed, Cline, Copilot CLI and JetBrains Junie can connect; text inside <private>...</private> is never saved; forget removes a line from every place Keepfold keeps it; the Mind Mirror shows how your views changed; X-ray traces a reply back to what an app was given; a damaged store repairs itself; search is about 5x faster; a hidden window sleeps; and buttons, tabs and toasts move a little."
+    ],
+    "do": [
+      "Restart Claude once after updating."
+    ]
+  },
+  "0.4.2": {
+    "items": [
+      "An idle Keepfold gives its memory back: its search models unload after 10 quiet minutes and load again when needed, so an idle Keepfold uses under 200 MB instead of about 2.8 GB.",
+      "Codex CLI and Gemini CLI get your profile, preferences and rules on every prompt from their own hooks, as Claude Code does.",
+      "Lines added to your core, setup or teaching rules outside Keepfold (in Obsidian, a synced folder or another program) wait in Review for Keep before any AI app sees them; what is there when you update is kept. A playbook an AI wrote waits for your OK, and a guess one app made about you reaches only that app until you approve it.",
+      "The local Chat finds more: pages linked to the best match, what held at a date you ask about (\"back in July\"), follow-ups on its last list (\"the second one\") and both halves of a two-part question. When it finds only noise, it says it found nothing.",
+      "Facts you state in imported chats and in the local Chat become guesses about you by themselves, the clearest ones with no model at all. Your own words still win.",
+      "Also new: scanned PDFs are read with Windows' own offline OCR; imported documents keep their full text; you can ask Chat about a file; the Google activity import brings YouTube watch and search history; a chat-export zip in Downloads gets a one-click card on Home; Status lists every way data can leave Keepfold; and study features show only if you study."
+    ],
+    "do": [
+      "Restart Claude once after updating.",
+      "Using Codex CLI or Gemini CLI? In Connect AI apps, press Apply… once to add Keepfold's hooks, then restart it. In Codex, trust Keepfold's hooks once under /hooks."
+    ]
+  },
+  "0.4.1": {
+    "items": [
+      "Review no longer merges two different facts: \"reads news every morning\" and \"reads papers every morning\" both stay. Lines 0.4.0 merged by mistake are put back by themselves.",
+      "Keepfold's own tidying shows in your sessions as \"Keepfold tidied lines about you\", not as an AI chat, and each Review answer is one Undo.",
+      "Status tells you when Claude Code runs an older Keepfold than the app; its Fix puts the app's copy first.",
+      "Review's More fold no longer repeats Today's cards, and its buttons say Keep first and Keep second.",
+      "Lines that try to steer an AI are also refused when they say \"act as DAN\" or start with a chat label such as \"assistant:\"."
+    ],
+    "do": [
+      "Restart Claude once after updating.",
+      "If Status shows a Claude Code row, press Fix, then quit Claude completely and open it again."
+    ]
+  },
+  "0.4.0": {
+    "items": [
+      "Review finishes: Keepfold keeps one of lines that say nearly the same and settles replaced lines itself. It asks only when two of your own lines clash, one answer covers every rewording, and after Today's 5 it says Done for today.",
+      "What chats learn about you is saved at once as a guess; your own words always win over it. Teaching rules, your core and your setup still wait for your click.",
+      "Every AI app knows how you work: Claude, Cursor, Codex and VS Code get your profile, preferences, setup and playbooks (a note tagged playbook: how you want a kind of task done).",
+      "The local Chat knows who is asking and answers counts and timelines from your notes. The new Tonight tab shows your day, Today's 5 and what AI apps learned about you today, with Undo.",
+      "Agent X-ray shows what each AI app was given (pin, mute, scope, dry run), and lines that try to steer an AI (\"ignore previous instructions\") are refused and never reach another app.",
+      "The Keepfold capture browser extension is gone. Your history still comes in by itself from your browsers: every 10 minutes while the app runs, and from the receiver when it starts at login."
+    ],
+    "do": [
+      "On Status, press Fix on the Claude Desktop row if it shows, then restart Claude once.",
+      "If you had \"Keepfold capture\", remove it from your browser's extensions page."
+    ]
+  },
+  "0.3.1": {
+    "items": [
+      "Keepfold shows as Keepfold: its own Keepfold.exe and logo in the title bar, taskbar, Start menu and Task Manager, and pinning it pins Keepfold.",
+      "Import my past history goes on from where you paused it, and never shrinks or redoes days an earlier import already wrote.",
+      "Settings opens at once: Setup, Local model and Browsing no longer wait about 3 seconds on each visit.",
+      "A Claude Chat-tab chat and its claude.ai export are one chat page, not two.",
+      "Next up lines wrap instead of cutting off, and the brain's legend starts folded on smaller screens."
+    ],
+    "do": [
+      "If you pinned Keepfold to the taskbar before, unpin it and pin it again, so the pin shows the new logo."
+    ]
+  },
+  "0.3.0": {
+    "items": [
+      "Keepfold is its own app: a window and a tray icon, it starts with Windows, and closing the window keeps it running.",
+      "The first page is your live brain: what you did today and this week, Next up, exams and deadlines. New pages pop in by themselves.",
+      "Your browsing is the brain stem: one dot per site, sized by visits and glowing by how recently you went there. Click one to see its days and searches.",
+      "A Private switch behind Windows Hello shows private notes and sites; it locks again when you minimise or after 10 minutes.",
+      "Every chat is logged: past and new Claude Code, Desktop and Cowork chats import themselves every 5 minutes, and the Chat tab logs itself.",
+      "Plans have no dates: each subject is an ordered list, the one you studied last comes first, and nothing is ever behind."
+    ],
+    "do": [
+      "Restart Claude once after this update, so its Keepfold tools use the new version.",
+      "Reload the browser extension (Extensions page, Reload) if you use it."
+    ]
+  },
+  "0.2.3": {
+    "items": [
+      "The dashboard feels like the app: buttons react, keyboard focus is easy to see, and copy buttons confirm with a check.",
+      "Status warns when your browsing history has not been imported for a while, with Import new history now.",
+      "Chat lists the sites you visited and sums up a day or week in about a second, even on a big history.",
+      "Browser profiles you untick in the history list stay unticked in every automatic import.",
+      "Chat understands more dates (\"on Monday\", \"last night\", \"the last 3 days\", \"what's due on Friday?\") and a day starts at 04:00, as in Today.",
+      "Sites filed under a category you set to Don't save never show in Chat's site lists or summaries."
+    ],
+    "do": [
+      "Your first browsing import after this update rebuilds every day your browsers still hold, once, so it takes longer than usual."
+    ]
+  },
+  "0.2.2": {
+    "items": [
+      "Chat shows what it is doing while an answer is on its way, and how long the answer took.",
+      "Esc stops an answer, every answer has Copy, and scrolling up no longer drags you back down.",
+      "\"Which sites did I visit?\" lists every site once, most visited first; name a browser to see only its visits.",
+      "New browser history comes in by itself every 6 hours while the app or the receiver runs (Browsing, Past history).",
+      "Chat answers \"What should I study today?\", \"what's due?\" and \"summarize my week\" from your own plan and records.",
+      "The browser extension only sends its key to your own Keepfold receiver, never to another program on that port."
+    ],
+    "do": [
+      "Reload the Keepfold browser extension: open your browser's Extensions page and click the reload arrow on Keepfold.",
+      "To keep history coming in without the app open, turn on Start at login under Browsing."
+    ]
+  }
+}

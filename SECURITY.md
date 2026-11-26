@@ -1,6 +1,6 @@
 # Security policy
 
-Cortex keeps a student's private notes, study history and browsing on their own computer, so a security bug is usually a privacy bug.
+Keepfold keeps a student's private notes, study history and browsing on their own computer, so a security bug is usually a privacy bug.
 
 ## Reporting a vulnerability
 
@@ -9,9 +9,9 @@ Report it privately through GitHub's private vulnerability reporting: open the r
 **Never open a public issue for a security or privacy bug**, and don't post an exploit, a crafted note or a real vault anywhere public. A public report shows everyone how to read other people's data before they can update.
 
 Please include:
-- the Cortex version (`cortex --version`, or the installer's version) and your operating system;
+- the Keepfold version (`keepfold --version`, or the installer's version) and your operating system;
 - what an attacker can read, write or run, and from where (a crafted note, an imported chat, a web page, another local program);
-- the smallest steps that show it, using a made-up vault (`cortex init <folder>`), never your own.
+- the smallest steps that show it, using a made-up vault (`keepfold init <folder>`), never your own.
 
 ## What counts
 

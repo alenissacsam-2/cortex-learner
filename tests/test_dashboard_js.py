@@ -19,9 +19,9 @@ from pathlib import Path
 import pytest
 from test_brainmap import made  # noqa: F401  (a fixture: topic hubs, pages and vectors)
 
-from cortex import dashboard, taint
-from cortex.cli import _init
-from cortex.vault import Vault
+from keepfold import dashboard, taint
+from keepfold.cli import _init
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,9 +32,9 @@ COPY = "M9 9h10v10H9z"
 
 def _browser() -> str | None:
     """A Chromium browser (read at import, before conftest points the app-data folders at a
-    temp home): CORTEX_TEST_BROWSER, one on PATH, or the usual install places."""
-    if os.environ.get("CORTEX_TEST_BROWSER"):
-        return os.environ["CORTEX_TEST_BROWSER"]
+    temp home): KEEPFOLD_TEST_BROWSER, one on PATH, or the usual install places."""
+    if os.environ.get("KEEPFOLD_TEST_BROWSER"):
+        return os.environ["KEEPFOLD_TEST_BROWSER"]
     for name in ("chrome", "msedge", "google-chrome", "chromium", "chromium-browser"):
         if found := shutil.which(name):
             return found
@@ -167,10 +167,10 @@ setTimeout(() => {
     await sleep(2500);
     await shot(cfg.stem.shots[1]);
     // a first visit in a 1024x768 window: the legend starts folded so it leaves the stem clear
-    await ev("localStorage.removeItem('cortex.legend')");
+    await ev("localStorage.removeItem('keepfold.legend')");
     await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false });
     await load();
-    out.stem.smallLegend = await ev("__T.go('brain').then(() => [document.getElementById('legend-toggle').getAttribute('aria-expanded'), document.getElementById('legend').hidden, localStorage.getItem('cortex.legend')])");
+    out.stem.smallLegend = await ev("__T.go('brain').then(() => [document.getElementById('legend-toggle').getAttribute('aria-expanded'), document.getElementById('legend').hidden, localStorage.getItem('keepfold.legend')])");
   }
   if (cfg.probe) { await load(); cur = 'probe'; out.probe = await ev(cfg.probe); }  // a test's own script
   for (const [expr, file] of cfg.shots || []) {  // pictures after the probe: [setup expression, png]
@@ -354,12 +354,12 @@ window.__T = (() => {
 """.replace("CHECK", CHECK).replace("COPY", COPY)  # noqa: E501  (JavaScript)
 
 
-# the live page's extras: every brain mounted (through window.CortexBrain), camera and feed probes
+# the live page's extras: every brain mounted (through window.KeepfoldBrain), camera and feed probes
 LIVE = r"""
 window.__L = (() => {
   const mounts = [], sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let real = null, opts = null;
-  Object.defineProperty(window, 'CortexBrain', { configurable: true, get: () => real, set(v) {
+  Object.defineProperty(window, 'KeepfoldBrain', { configurable: true, get: () => real, set(v) {
     real = v;
     const mount = v.mount;
     v.mount = (c, o) => { opts = o; const b = mount(c, o); mounts.push(b); return b; };
@@ -392,7 +392,7 @@ window.__L = (() => {
       focused: mounts[mounts.length - 1].focused,
       fresh: [...document.querySelectorAll('.feed .brow.fresh')].map((e) => e.textContent),
       stale: document.getElementById('stale').hidden,
-      grown: growLabels(), seen: localStorage.getItem('cortex.brain.seenAt'),
+      grown: growLabels(), seen: localStorage.getItem('keepfold.brain.seenAt'),
       llm: !!document.querySelector('.quick-chat a[href="/manage#llm"]'),
       settings: !!document.querySelector('a[aria-label="Settings"][href="/manage"]') };
   }
@@ -430,7 +430,7 @@ window.__L = (() => {
     out.legend = document.getElementById('legend').textContent;
     // the legend: open on the first visit (stored closed for the next), a click toggles and keeps it
     const lt = document.getElementById('legend-toggle'), lg = document.getElementById('legend');
-    const lstate = () => [lt.getAttribute('aria-expanded'), lg.hidden, localStorage.getItem('cortex.legend')];
+    const lstate = () => [lt.getAttribute('aria-expanded'), lg.hidden, localStorage.getItem('keepfold.legend')];
     out.legendUi = { first: lstate(), dots: lg.querySelectorAll('.sw .dot').length };
     lt.click();
     out.legendUi.closed = lstate();
@@ -467,9 +467,9 @@ window.__L = (() => {
       out.outline.panel = r.textContent.includes(li.dataset.id.slice(5));
       out.outline.selected = li.getAttribute('aria-selected');
     }
-    const key = sessionStorage.getItem('cortex.key');
+    const key = sessionStorage.getItem('keepfold.key');
     out.codes = [];
-    for (const s of c.sites) out.codes.push((await fetch('/api/home/site?site=' + encodeURIComponent(s), { headers: { 'X-Cortex-Token': key } })).status);
+    for (const s of c.sites) out.codes.push((await fetch('/api/home/site?site=' + encodeURIComponent(s), { headers: { 'X-Keepfold-Token': key } })).status);
     return out;
   }
   return { before, after, leak, ready, stem, growLabels, brain: () => mounts[mounts.length - 1], opts: () => opts };
@@ -836,7 +836,7 @@ MIRROR_SHOT = r"""
 def _mirror_vault(tmp_path) -> Path:
     """A vault with 11 changes: a revised line (its start from an event), nine retired lines
     (unknown starts) and a superseded decision."""
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
 
     root = tmp_path / "mirror"
     (root / "me").mkdir(parents=True)
@@ -872,7 +872,7 @@ def test_the_mind_mirror_shows_how_your_mind_changed(tmp_path, narrow):
     p = out["probe"]
     heads = p["heads"]  # after the first grid, its board's band, then Your pages
     i = heads.index("How your mind changed")
-    assert heads[i - 1:i + 3] == ["How well Cortex knows you", "How your mind changed",
+    assert heads[i - 1:i + 3] == ["How well Keepfold knows you", "How your mind changed",
                                   "Lines and decisions you replaced", "Your pages"]
     assert p["band"] == ["Lines and decisions you replaced", "11 changes"]
     if narrow:  # under 560 px: the list first; the timeline fits the page too
@@ -942,7 +942,7 @@ def test_no_study_features_for_someone_who_does_not_study(tmp_path):
     assert "study" not in p["options"] and p["home"] == [False, "true", 0], p
     assert "Exams and deadlines" not in p["heads"] and "Start here" in p["heads"], p
     assert [s[0] for s in p["steps"]] == ["1", "2", "3"], p
-    assert [s[1].split("In the Cortex app")[0] for s in p["steps"]] == [  # badge, then title
+    assert [s[1].split("In the Keepfold app")[0] for s in p["steps"]] == [  # badge, then title
         "1Add your chats", "2Connect an AI app", "3Ask Chat"], p
     assert "Add a test date" not in str(p["steps"])
     assert p["end"] == ["tab-help", "true"] and p["hash"] == [False, "true"], p
@@ -968,9 +968,9 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     focused; 30 more mounts leave the page's WebGL context alive."""
     from test_app import _serve
 
-    from cortex import localllm
-    from cortex.app import server
-    from cortex.events import local_day
+    from keepfold import localllm
+    from keepfold.app import server
+    from keepfold.events import local_day
 
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
@@ -979,7 +979,7 @@ def test_the_live_home_applies_a_new_note_in_place(tmp_path, made, home, monkeyp
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(server, "_open", lambda url: None)
     root = made[0]
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     srv, app = _serve(root)
     ready, title = tmp_path / "ready", "Live test note"
 
@@ -1068,9 +1068,9 @@ def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
     from test_home import NOW as HOME_NOW
     from test_home import _cold_vault, _grade
 
-    from cortex import localllm
-    from cortex.app import server
-    from cortex.events import EventLog
+    from keepfold import localllm
+    from keepfold.app import server
+    from keepfold.events import EventLog
 
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
@@ -1080,7 +1080,7 @@ def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_open", lambda url: None)
     root = tmp_path / "vault"
     shutil.copytree(HOME_FIXTURES / "vault_mini", root)
-    (root / ".cortex").mkdir()
+    (root / ".keepfold").mkdir()
     _grade(root, "two-pointers", "wrong", HOME_NOW - timedelta(days=3))
     _grade(root, "arrays-basics", "wrong", HOME_NOW - timedelta(days=3, hours=1))
     _cold_vault(root)
@@ -1112,7 +1112,7 @@ def test_the_live_home_runs_a_90_second_check(tmp_path, monkeypatch):
     assert p["closed"] and p["back"] == "cold-open"
     grades = [e for e in log.iter_events() if e["id"] not in before and e["kind"] == "grade"]
     assert [(g["object"], g["verdict"], g["confidence"], g["grader"]) for g in grades] == [
-        ("concept:hashing", "correct", 2, {"client": "cortex-app", "model": "self"})]
+        ("concept:hashing", "correct", 2, {"client": "keepfold-app", "model": "self"})]
 
 
 PICKUP_PROBE = r"""
@@ -1148,19 +1148,19 @@ def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
     from test_app import _serve
     from test_home import FIXTURES as HOME_FIXTURES
 
-    from cortex.app import desktop, exports, server
+    from keepfold.app import desktop, exports, server
 
     monkeypatch.setattr(server, "_open", lambda url: None)
     dl = tmp_path / "Downloads"
     dl.mkdir()
-    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(dl))
+    monkeypatch.setenv("KEEPFOLD_DOWNLOADS_DIR", str(dl))
     with zipfile.ZipFile(dl / "a&amp;b.zip", "w") as z:
         for m in ("conversations.json", "users.json"):
             z.writestr(m, "[]")
     exports.forget()
     root = tmp_path / "vault"
     shutil.copytree(HOME_FIXTURES / "vault_mini", root)
-    (root / ".cortex").mkdir()
+    (root / ".keepfold").mkdir()
     srv, app = _serve(root)
     app.jobs.cur = server.Job("Indexing", "setup", False)  # running: Add chats gets a 409
     try:
@@ -1172,7 +1172,7 @@ def test_the_live_home_offers_a_downloaded_export(tmp_path, monkeypatch):
     assert out["errors"] == []
     p = out["probe"]
     assert p["first"] and p["title"].startswith("You downloaded a claude.ai export on ")
-    assert p["title"].endswith(". Add its chats to Cortex?")
+    assert p["title"].endswith(". Add its chats to Keepfold?")
     assert p["sub"] == "a&amp;b.zip" and p["html"] == "a&amp;amp;b.zip"
     assert p["buttons"] == ["Add chats", "Not this one"] and p["gone"]
     assert p["toast"] == "Wait: Indexing is still running." and p["stays"]
@@ -1190,12 +1190,12 @@ def test_help_links_to_the_welcome_guide_only_when_the_app_serves_home(tmp_path,
     from test_app import _serve
     from test_home import FIXTURES as HOME_FIXTURES
 
-    from cortex.app import server
+    from keepfold.app import server
 
     monkeypatch.setattr(server, "_open", lambda url: None)
     root = tmp_path / "vault"
     shutil.copytree(HOME_FIXTURES / "vault_mini", root)
-    (root / ".cortex").mkdir()
+    (root / ".keepfold").mkdir()
     welcome = ["/manage#welcome", "Show the welcome guide"]
     (tmp_path / "live").mkdir()
     (tmp_path / "file").mkdir()
@@ -1224,8 +1224,8 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     from test_app import _serve
     from test_home import _ago, _sites, _stem_sites
 
-    from cortex import localllm
-    from cortex.app import server
+    from keepfold import localllm
+    from keepfold.app import server
 
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
@@ -1234,7 +1234,7 @@ def test_the_brain_stem_shows_websites_and_a_site_panel_as_text(tmp_path, made, 
     monkeypatch.setattr(localllm, "_lms_exe", lambda cfg: None)
     monkeypatch.setattr(server, "_open", lambda url: None)
     root = made[0]
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     evil = '<img src=x onerror="window.__pwned=1">'
     _sites(root, *_stem_sites(40),
            {"site": "odd.example", "visits": 80, "days": _ago(30, 2), "category": "learning",
@@ -1284,7 +1284,7 @@ def test_a_table_cell_keeps_its_escaped_pipe(tmp_path):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    js = (ROOT / "src/cortex/assets/dashboard.js").read_text(encoding="utf-8")
+    js = (ROOT / "src/keepfold/assets/dashboard.js").read_text(encoding="utf-8")
     start = js.index("  const cells = ")
     fn = js[start:js.index(";\n", start) + 2]
     script = tmp_path / "cells.cjs"
@@ -1415,9 +1415,9 @@ def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch, narrow):
     from test_home import FIXTURES as HOME_FIXTURES
     from test_home import _note
 
-    from cortex import localllm
-    from cortex.app import server
-    from cortex.events import local_day
+    from keepfold import localllm
+    from keepfold.app import server
+    from keepfold.events import local_day
 
     def no_runner(*a, **k):
         raise OSError("no runner in tests")
@@ -1427,7 +1427,7 @@ def test_the_live_home_adds_an_exam_date(tmp_path, monkeypatch, narrow):
     monkeypatch.setattr(server, "_open", lambda url: None)
     root = tmp_path / "vault"
     shutil.copytree(HOME_FIXTURES / "vault_mini", root)
-    (root / ".cortex").mkdir()
+    (root / ".keepfold").mkdir()
     today = date.fromisoformat(local_day(datetime.now(UTC)))
     day = today + timedelta(days=20)
     sday = (today + timedelta(days=6)).isoformat()
@@ -1521,7 +1521,7 @@ def test_save_picture_draws_shape_and_light_only(tmp_path, demo_vault, canvas2d)
 
     import numpy as np
 
-    from cortex import brainmap
+    from keepfold import brainmap
 
     (demo_vault / "notes").mkdir(exist_ok=True)
     (demo_vault / "notes" / "canary-private.md").write_text(
@@ -1564,7 +1564,7 @@ def test_save_picture_draws_shape_and_light_only(tmp_path, demo_vault, canvas2d)
     caption = f"{count(n, 'page')} in {count(areas, 'area')}, kept on this computer"
     shown_day = f"{int(day[8:10])} {mon[int(day[5:7]) - 1]} {day[:4]}"
     assert sorted(p["texts"]) == sorted([caption, shown_day])
-    assert p["name"] == f"cortex-brain-{day}.png" and p["type"] == "image/png"
+    assert p["name"] == f"keepfold-brain-{day}.png" and p["type"] == "image/png"
     assert p["head"] == [137, 80, 78, 71, 13, 10, 26, 10] and p["size"] == [1200, 675]
     assert p["lit"] > 500, p["lit"]  # the brain drew
     assert max(p["corner"]) < 40, p["corner"]  # the night ground, whatever the theme

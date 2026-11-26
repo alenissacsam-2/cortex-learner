@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from cortex import claims, prime, semantic
-from cortex.cli import ME_PAGES
-from cortex.vault import Vault
+from keepfold import claims, prime, semantic
+from keepfold.cli import ME_PAGES
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 NOW = datetime(2026, 11, 20, 12, tzinfo=UTC)

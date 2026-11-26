@@ -12,11 +12,11 @@ import anyio
 import pytest
 from mcp import Client
 
-from cortex import index as index_mod
-from cortex import mcp_server
-from cortex.catalog import Catalog
-from cortex.index import SNAPSHOT, Index
-from cortex.vault import Vault
+from keepfold import index as index_mod
+from keepfold import mcp_server
+from keepfold.catalog import Catalog
+from keepfold.index import SNAPSHOT, Index
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -173,7 +173,7 @@ def test_bad_snapshot_is_ignored_with_a_warning(tmp_path, caplog, text):
     root = make_vault(tmp_path, 60)
     good = build(root)
     (root / SNAPSHOT).write_text(text, encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="cortex.index"):
+    with caplog.at_level(logging.WARNING, logger="keepfold.index"):
         idx = build(root)
     assert [r for r in caplog.records if "snapshot ignored" in r.getMessage()]
     assert idx._notes == good._notes
@@ -196,7 +196,7 @@ def slow_index(monkeypatch, seconds: float) -> None:
 def call_find(server):
     async def main():
         async with Client(server) as client:
-            r = await client.call_tool("cortex_find", {"query": "two pointers"})
+            r = await client.call_tool("keepfold_find", {"query": "two pointers"})
             return r.structured_content
 
     return anyio.run(main)

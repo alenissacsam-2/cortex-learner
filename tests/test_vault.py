@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex import vault as vault_mod
-from cortex.vault import Vault, VaultError, is_private, scan_secrets
+from keepfold import vault as vault_mod
+from keepfold.vault import Vault, VaultError, is_private, scan_secrets
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
 
@@ -65,6 +65,21 @@ def test_iter_notes_skips_unparsable(v, caplog):
     assert ids == ["arrays-basics", "secret-diary", "two-pointers"]
     assert "broken.md" in caplog.text and "BadName.md" in caplog.text
     assert {n.kind for n in v.iter_notes()} >= {"concept", "problem", "track", "me"}
+
+
+def test_parse_errors_never_quote_the_note(v, caplog):
+    """D1 §4.2: ruamel quotes the bad line; logs and MCP errors get the class and line only."""
+    (v.root / "concepts" / "leaky.md").write_text("---\ntitle: ok\nbad: [unclosed SECRETWORD\n"
+                                                  "---\nx\n")
+    with pytest.raises(VaultError) as e:
+        v.read("concept", "leaky")
+    msg = str(e.value)
+    assert "leaky.md" in msg and "Error at line " in msg and "SECRETWORD" not in msg
+    with pytest.raises(VaultError) as e:
+        v.read_path(Path("concepts/leaky.md"))
+    assert "SECRETWORD" not in str(e.value)
+    list(v.iter_notes("concept"))
+    assert "leaky.md" in caplog.text and "SECRETWORD" not in caplog.text
 
 
 def test_set_field_keeps_other_bytes(v):
@@ -138,8 +153,8 @@ def test_set_field_new_field_and_int(v):
     ("me", "profile", "title", "x"),
     ("problem", "lc-1", "status", "done"),  # not in the enum
     ("problem", "lc-1", "status", ["solved"]),
-    ("concept", "two-pointers", "cortex_status", "solid"),  # computed by Cortex
-    ("concept", "two-pointers", "cortex_next", "2026-11-15"),
+    ("concept", "two-pointers", "keepfold_status", "solid"),  # computed by Keepfold
+    ("concept", "two-pointers", "keepfold_next", "2026-11-15"),
     ("concept", "two-pointers", "merged_into", "[[arrays-basics]]"),
 ])
 def test_set_field_rejects(v, kind, id, field, value):
@@ -149,17 +164,17 @@ def test_set_field_rejects(v, kind, id, field, value):
 
 
 def test_set_field_refuses_tool_props_with_reason(v):
-    with pytest.raises(VaultError, match="computed by Cortex"):
-        v.set_field("concept", "two-pointers", "cortex_status", "solid")
+    with pytest.raises(VaultError, match="computed by Keepfold"):
+        v.set_field("concept", "two-pointers", "keepfold_status", "solid")
 
 
 def test_set_tool_props(v):
     path = v.path_for("concept", "two-pointers")
     v.set_tool_props("concept", "two-pointers", "learning", "2026-11-15")
-    assert 'cortex_status: "learning"\ncortex_next: "2026-11-15"\n---' in path.read_text()
+    assert 'keepfold_status: "learning"\nkeepfold_next: "2026-11-15"\n---' in path.read_text()
     v.set_tool_props("concept", "two-pointers", "solid", None)
     text = path.read_text()
-    assert 'cortex_status: "solid"' in text and "cortex_next" not in text
+    assert 'keepfold_status: "solid"' in text and "keepfold_next" not in text
 
 
 def test_append_to_section(v):
@@ -240,7 +255,7 @@ def test_secret_rejected(v, secret):
     with pytest.raises(VaultError) as e:
         v.write_text(v.root / "Today.md", secret)
     assert code(e) == "secret_detected"
-    v.write_text(v.root / ".cortex" / "dashboard.html", secret)  # git-ignored view: not scanned
+    v.write_text(v.root / ".keepfold" / "dashboard.html", secret)  # git-ignored view: not scanned
 
 
 @pytest.mark.parametrize("secret, near_miss", [  # SEC-3; built by concatenation, no real keys
@@ -278,14 +293,14 @@ def test_lock_exclusive(v):
         assert time.monotonic() - t0 >= 0.3
         with v.lock():  # reentrant for the same Vault
             pass
-        assert (v.root / ".cortex" / "lock").exists()
-    assert not (v.root / ".cortex" / "lock").exists()
+        assert (v.root / ".keepfold" / "lock").exists()
+    assert not (v.root / ".keepfold" / "lock").exists()
     with other.lock(timeout=0.3):
         pass
 
 
 def test_stale_lock_stolen(v):
-    lock = v.root / ".cortex" / "lock"
+    lock = v.root / ".keepfold" / "lock"
     lock.parent.mkdir(exist_ok=True)
     lock.write_text(f"999999 {time.time() - 1000:.3f}")  # old and the pid is gone
     with v.lock(timeout=0.3):
@@ -303,7 +318,7 @@ def test_stale_lock_stolen(v):
 
 def test_live_holders_lock_is_never_stolen(v, monkeypatch):
     """R2-3: a lock older than LOCK_STALE_S whose holder is alive (a long sites.write) stays."""
-    lock = v.root / ".cortex" / "lock"
+    lock = v.root / ".keepfold" / "lock"
     lock.parent.mkdir(exist_ok=True)
     lock.write_text(f"{os.getppid()} {time.time() - vault_mod.LOCK_STALE_S - 1:.3f}")
     monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: 0.0)  # started long before
@@ -317,7 +332,7 @@ def test_live_holders_lock_is_never_stolen(v, monkeypatch):
 def test_lock_of_a_reused_pid_is_stolen(v, monkeypatch):
     """G4: after a reboot the lock's pid can belong to a live, newer process; a holder that
     started after the lock was written is not the holder, so the lock is stale."""
-    lock = v.root / ".cortex" / "lock"
+    lock = v.root / ".keepfold" / "lock"
     lock.parent.mkdir(exist_ok=True)
     ts = time.time() - 3600
     monkeypatch.setattr(vault_mod, "_pid_alive", lambda pid: True)
@@ -347,7 +362,7 @@ def test_a_lock_this_process_failed_to_delete_is_taken_back(v, monkeypatch):
     failing leaves this pid's lock behind, and the long-running server must not wait on its own
     leftover forever. A lock another Vault of this process holds still waits."""
     from pathlib import Path
-    lock = v.root / ".cortex" / "lock"
+    lock = v.root / ".keepfold" / "lock"
     real = Path.unlink
     monkeypatch.setattr(Path, "unlink", lambda self, *a, **k: (_ for _ in ()).throw(
         PermissionError("in use")) if self == lock else real(self, *a, **k))
@@ -368,7 +383,7 @@ def test_a_lock_this_process_failed_to_delete_is_taken_back(v, monkeypatch):
 
 def test_release_retries_a_briefly_busy_lock_file(v, monkeypatch):
     from pathlib import Path
-    lock = v.root / ".cortex" / "lock"
+    lock = v.root / ".keepfold" / "lock"
     real, fails = Path.unlink, []
 
     def busy_twice(self, *a, **k):
@@ -392,7 +407,7 @@ def test_pid_started_reads_this_process():
 def test_lock_records_pid_and_host(v):
     import socket
     with v.lock():
-        pid, _ts, host = (v.root / ".cortex" / "lock").read_text().split(maxsplit=2)
+        pid, _ts, host = (v.root / ".keepfold" / "lock").read_text().split(maxsplit=2)
     assert int(pid) == os.getpid() and host == socket.gethostname()
 
 
@@ -420,7 +435,7 @@ def test_concurrent_edit_rereads(v, monkeypatch):
     seen = []
 
     def edit_then_write(self, p, text, expect=None):
-        if not seen:  # Obsidian saves the note while Cortex is mid-edit
+        if not seen:  # Obsidian saves the note while Keepfold is mid-edit
             raw = path.read_bytes()
             path.write_bytes(raw.replace(b"- Hash map version first.",
                                          b"- Hash map version first.\n- Obsidian edit."))
@@ -428,15 +443,15 @@ def test_concurrent_edit_rereads(v, monkeypatch):
         return real_write(self, p, text, expect)
 
     monkeypatch.setattr(Vault, "_atomic_write", edit_then_write)
-    v.append_to_section("problem", "lc-1", "Notes", "- Cortex edit.")
+    v.append_to_section("problem", "lc-1", "Notes", "- Keepfold edit.")
     assert len(seen) == 2
-    assert path.read_text().endswith("- Obsidian edit.\n- Cortex edit.\n")
+    assert path.read_text().endswith("- Obsidian edit.\n- Keepfold edit.\n")
 
 
 def test_id_with_trailing_newline_is_rejected(tmp_path):
     import shutil
 
-    from cortex.vault import Vault, VaultError
+    from keepfold.vault import Vault, VaultError
 
     root = tmp_path / "v"
     shutil.copytree(Path(__file__).parent / "fixtures" / "vault_mini", root)

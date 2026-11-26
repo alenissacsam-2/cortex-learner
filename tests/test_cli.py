@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import doctor
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import doctor
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -44,19 +44,19 @@ def snapshot(root):
 
 def test_no_vault_is_a_clear_error():
     r = run("brief", ok=False)
-    assert r.exit_code == 1 and "--vault" in r.output and "CORTEX_VAULT" in r.output
-    assert "cortex app" in r.output
-    assert "fix: Run `cortex app`" in run("doctor", ok=False).output
+    assert r.exit_code == 1 and "--vault" in r.output and "KEEPFOLD_VAULT" in r.output
+    assert "keepfold app" in r.output
+    assert "fix: Run `keepfold app`" in run("doctor", ok=False).output
 
 
 def test_init_is_idempotent_and_touches_no_notes(vault, home):
     before = snapshot(vault)
     first = run("init", vault).output
     assert "created  git init" in first and "created  pre-push hook" in first
-    assert (vault / ".cortex/config.yaml").read_text() == "schema: 1\n"
-    assert "!.cortex/config.yaml" in (vault / ".gitignore").read_text()
+    assert (vault / ".keepfold/config.yaml").read_text() == "schema: 1\n"
+    assert "!.keepfold/config.yaml" in (vault / ".gitignore").read_text()
     assert (vault / "sessions").is_dir()
-    assert str(vault.resolve()) in (home / ".cortex/config.yaml").read_text(encoding="utf-8")
+    assert str(vault.resolve()) in (home / ".keepfold/config.yaml").read_text(encoding="utf-8")
     after_first = snapshot(vault)
     assert all(after_first[p] == b for p, b in before.items())  # existing notes untouched
     second = run("init", vault).output
@@ -66,8 +66,25 @@ def test_init_is_idempotent_and_touches_no_notes(vault, home):
     assert "Synthetic brief" in run("brief").output
 
 
+def test_init_keeps_crash_leftover_temp_files_out_of_git(vault, tmp_path):
+    """D1 §2.2: vault._atomic_write's `.<name>.<random>.tmp` never enters a session commit."""
+    fresh = tmp_path / "fresh"
+    run("init", fresh)
+    assert ".*.tmp" in (fresh / ".gitignore").read_text(encoding="utf-8").splitlines()
+    # an older vault's .gitignore
+    (vault / ".gitignore").write_text(".keepfold/*\n!.keepfold/config.yaml", encoding="utf-8")
+    run("init", vault)
+    run("init", vault)
+    lines = (vault / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert lines.count(".*.tmp") == 1 and lines[:2] == [".keepfold/*", "!.keepfold/config.yaml"]
+    if shutil.which("git") and (vault / ".git").is_dir():
+        (vault / "concepts" / ".two-pointers.md.x1y2.tmp").write_text("leftover")
+        assert subprocess.run(["git", "-C", str(vault), "check-ignore", "-q",
+                               "concepts/.two-pointers.md.x1y2.tmp"]).returncode == 0
+
+
 def test_init_moves_the_default_vault_only_when_unset_or_asked(vault, home, tmp_path):
-    from cortex import taint
+    from keepfold import taint
 
     other = tmp_path / "other"
     run("init", vault)  # no config yet: this becomes the default
@@ -81,13 +98,13 @@ def test_init_moves_the_default_vault_only_when_unset_or_asked(vault, home, tmp_
 
 
 def test_init_writes_obsidian_config_and_upgrades_old_default_groups(vault):
-    from cortex.cli import COLOR_GROUPS
+    from keepfold.cli import COLOR_GROUPS
 
     graph = vault / ".obsidian/graph.json"
     graph.parent.mkdir()
-    graph.write_text(json.dumps({"scale": 2, "colorGroups": [  # only old Cortex defaults
+    graph.write_text(json.dumps({"scale": 2, "colorGroups": [  # only old Keepfold defaults
         {"query": "path:areas", "color": {"a": 1, "rgb": 1}},
-        {"query": "[cortex_status:solid]", "color": {"a": 1, "rgb": 0x1D9E75}}]}))
+        {"query": "[keepfold_status:solid]", "color": {"a": 1, "rgb": 0x1D9E75}}]}))
     run("init", vault)
     data = json.loads(graph.read_text())
     assert data["scale"] == 2  # other graph settings are kept
@@ -95,7 +112,7 @@ def test_init_writes_obsidian_config_and_upgrades_old_default_groups(vault):
     assert data["colorGroups"][0] == {"query": "file:my-topic-map",
                                       "color": {"a": 1, "rgb": 0xFFFFFF}}
     assert data["colorGroups"][1]["query"] == "tag:#topic"
-    assert "cortex_next <= today()" in (vault / "views/Due.base").read_text()
+    assert "keepfold_next <= today()" in (vault / "views/Due.base").read_text()
     assert (vault / "views/Weak.base").is_file()
     before = {p: p.read_bytes() for p in (graph, vault / "views/Due.base")}
     second = run("init", vault).output
@@ -104,7 +121,7 @@ def test_init_writes_obsidian_config_and_upgrades_old_default_groups(vault):
 
 
 def test_init_graph_scheme_on_empty_file_and_custom_groups_left_alone(vault, tmp_path):
-    from cortex.cli import COLOR_GROUPS
+    from keepfold.cli import COLOR_GROUPS
 
     graph = vault / ".obsidian/graph.json"
     graph.parent.mkdir()
@@ -139,7 +156,7 @@ def test_doctor_pass_and_fail(vault, monkeypatch):
     monkeypatch.delenv("OneDriveConsumer", raising=False)
     monkeypatch.delenv("OneDriveCommercial", raising=False)
     real = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: "cortex" if c == "cortex"
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: "keepfold" if c == "keepfold"
                         else real(c, *a, **k))
     r = run("doctor", "--vault", vault, ok=False)  # no git yet
     assert r.exit_code == 1 and "FAIL  Vault git" in r.output
@@ -155,20 +172,20 @@ def test_doctor_pass_and_fail(vault, monkeypatch):
     assert "WARN  Vault git" in r.output and "origin" in r.output
 
 
-def test_doctor_warns_on_duplicate_cortex_servers(home):
+def test_doctor_warns_on_duplicate_keepfold_servers(home):
     settings = home / "settings.json"
     desktop = home / "claude_desktop_config.json"
-    entry = {"command": r"C:\tools\cortex.exe", "args": ["mcp", "--vault", "v"]}
-    desktop.write_text(json.dumps({"mcpServers": {"cortex": entry}}), encoding="utf-8")
-    settings.write_text(json.dumps({"enabledPlugins": {"cortex@cortex": False}}),
+    entry = {"command": r"C:\tools\keepfold.exe", "args": ["mcp", "--vault", "v"]}
+    desktop.write_text(json.dumps({"mcpServers": {"keepfold": entry}}), encoding="utf-8")
+    settings.write_text(json.dumps({"enabledPlugins": {"keepfold@keepfold": False}}),
                         encoding="utf-8")
     assert doctor.check_duplicate_servers(settings, [desktop])[0] == "PASS"
-    settings.write_text(json.dumps({"enabledPlugins": {"cortex@cortex": True}}),
+    settings.write_text(json.dumps({"enabledPlugins": {"keepfold@keepfold": True}}),
                         encoding="utf-8")
     status, _, detail, fix = doctor.check_duplicate_servers(settings, [desktop])
     assert status == "WARN" and "Code tab" in detail and "duplicated" in detail
     assert "Chat needs the desktop entry" in fix and "CLI needs the plugin" in fix
-    uv = {"command": "uv", "args": ["run", "cortex", "mcp"]}  # `uv run cortex mcp` counts too
+    uv = {"command": "uv", "args": ["run", "keepfold", "mcp"]}  # `uv run keepfold mcp` counts too
     desktop.write_text(json.dumps({"mcpServers": {"x": uv}}), encoding="utf-8")
     assert doctor.check_duplicate_servers(settings, [desktop])[0] == "WARN"
     desktop.write_text(json.dumps({"mcpServers": {"x": {"command": "node"}}}),
@@ -188,42 +205,42 @@ def test_doctor_sync_folder(vault, monkeypatch, tmp_path):  # name must not say 
 
 
 def test_doctor_warns_without_the_search_model(home):
-    from cortex import semantic
+    from keepfold import semantic
 
     status, _, _, fix = doctor.check_search_model()
-    assert status == "WARN" and "cortex model download" in fix
+    assert status == "WARN" and "keepfold model download" in fix
     semantic.models_dir().mkdir(parents=True, exist_ok=True)
     (semantic.models_dir() / "model.onnx").write_bytes(b"x")
     assert doctor.check_search_model()[0] == "PASS"
 
 
 def test_doctor_warns_when_no_ai_app_is_connected(home):
-    """N9: without a cortex entry in any app the app's Connect section lists, Cortex is idle."""
+    """N9: without a keepfold entry in any app the app's Connect section lists, Keepfold is idle."""
     status, _, _, fix = doctor.check_ai_apps()
-    assert status == "WARN" and "cortex app" in fix
+    assert status == "WARN" and "keepfold app" in fix
     (home / ".cursor").mkdir()
     (home / ".cursor" / "mcp.json").write_text(
-        '{"mcpServers": {"cortex": {"command": "cortex", "args": ["mcp"]}}}', encoding="utf-8")
+        '{"mcpServers": {"keepfold": {"command": "keepfold", "args": ["mcp"]}}}', encoding="utf-8")
     assert doctor.check_ai_apps()[:3] == ("PASS", "AI app connected", "Cursor")
 
 
-def test_doctor_warns_when_cortex_is_not_on_path(monkeypatch):
+def test_doctor_warns_when_keepfold_is_not_on_path(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     status, _, detail, fix = doctor.check_on_path()
     assert status == "WARN" and "plugin" in detail and "uv tool update-shell" in fix
-    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: "C:\\bin\\cortex.exe")
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: "C:\\bin\\keepfold.exe")
     assert doctor.check_on_path()[0] == "PASS"
 
 
 def test_doctor_warns_when_the_local_model_is_on_but_silent(home, monkeypatch):
-    from cortex import localllm
+    from keepfold import localllm
 
     assert doctor.check_local_model()[1:3] == ("Local model", "off")
-    (home / ".cortex").mkdir()
-    (home / ".cortex/config.yaml").write_text("localllm:\n  enabled: true\n", encoding="utf-8")
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold/config.yaml").write_text("localllm:\n  enabled: true\n", encoding="utf-8")
     monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     status, _, _, fix = doctor.check_local_model()
-    assert status == "WARN" and "cortex llm start" in fix
+    assert status == "WARN" and "keepfold llm start" in fix
 
     class Fake:
         kind = "ollama"
@@ -238,7 +255,7 @@ def test_doctor_warns_when_the_local_model_is_on_but_silent(home, monkeypatch):
 def test_init_sets_a_vault_git_identity_so_commits_work(vault, monkeypatch):
     """N11: with no identity anywhere (isolated HOME, no env), init sets a repo-local one, so a
     session commit lands; doctor WARNs on a repo without one."""
-    from cortex import session
+    from keepfold import session
 
     for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL",
                 "GIT_COMMITTER_EMAIL"):
@@ -247,33 +264,33 @@ def test_init_sets_a_vault_git_identity_so_commits_work(vault, monkeypatch):
     bare = vault.parent / "bare"
     subprocess.run(["git", "init", "-q", str(bare)], check=True)
     assert doctor.check_git_identity(bare)[0] == "WARN"
-    assert "git identity Cortex <cortex@localhost>" in run("init", vault).output
+    assert "git identity Keepfold <keepfold@localhost>" in run("init", vault).output
     git = ["git", "-C", str(vault)]
     assert subprocess.run([*git, "config", "--local", "user.email"], capture_output=True,
-                          text=True).stdout.strip() == "cortex@localhost"
+                          text=True).stdout.strip() == "keepfold@localhost"
     assert doctor.check_git_identity(vault)[0] == "PASS"
-    assert session._commit(Vault(vault), "cortex: test") is not None
+    assert session._commit(Vault(vault), "keepfold: test") is not None
     assert subprocess.run([*git, "log", "-1", "--format=%an <%ae>"], capture_output=True,
-                          text=True).stdout.strip() == "Cortex <cortex@localhost>"
+                          text=True).stdout.strip() == "Keepfold <keepfold@localhost>"
     assert "git identity" not in run("init", vault).output  # set once
 
 
 def test_init_commits_its_own_starter_files_once(vault, monkeypatch):
-    """R3-8: one `cortex: init` commit of what init wrote (me/ pages, views, .gitignore...)
+    """R3-8: one `keepfold: init` commit of what init wrote (me/ pages, views, .gitignore...)
     under the repo-local identity; the user's own notes stay uncommitted; a rerun adds none."""
     for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL",
                 "GIT_COMMITTER_EMAIL"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     out = run("init", vault).output
-    assert "created  git commit cortex: init" in out
-    assert out.rstrip().endswith("Next: run `cortex app`")
+    assert "created  git commit keepfold: init" in out
+    assert out.rstrip().endswith("Next: run `keepfold app`")
     git = ["git", "-C", str(vault)]
     log = subprocess.run([*git, "log", "--format=%s|%an"], capture_output=True,
                          text=True).stdout.splitlines()
-    assert log == ["cortex: init|Cortex"]
+    assert log == ["keepfold: init|Keepfold"]
     files = subprocess.run([*git, "ls-files"], capture_output=True, text=True).stdout.split()
-    assert {".gitignore", ".gitattributes", ".cortex/config.yaml"} <= set(files)
+    assert {".gitignore", ".gitattributes", ".keepfold/config.yaml"} <= set(files)
     assert any(f.startswith("views/") for f in files)
     assert "me/profile.md" not in files and not any(f.startswith("concepts/") for f in files)
     run("init", vault)
@@ -313,7 +330,7 @@ def test_today_prints_and_writes_today_md(vault):
 def test_today_says_done_only_after_work_today(vault, monkeypatch):
     from datetime import UTC, datetime
 
-    from cortex import cli, planner
+    from keepfold import cli, planner
 
     monkeypatch.setattr(planner, "today", lambda *a, **k: [])
     out = run("today", "--vault", vault).output  # never graded: first steps, not "done"
@@ -327,7 +344,7 @@ def test_today_says_done_only_after_work_today(vault, monkeypatch):
 
 
 def test_today_line_skips_an_id_the_title_already_says():
-    from cortex.cli import _today_line
+    from keepfold.cli import _today_line
 
     row = {"state": "not_started", "why": "New", "title": "Sorting", "id": "sorting"}
     assert _today_line(row) == "○ Not started: Sorting [New]"
@@ -335,7 +352,7 @@ def test_today_line_skips_an_id_the_title_already_says():
 
 
 def test_cli_prints_note_text_without_control_characters(vault, monkeypatch):
-    from cortex import planner
+    from keepfold import planner
 
     monkeypatch.setattr(planner, "today", lambda *a, **k: [{
         "state": None, "why": "Sprint plan", "id": None, "kind": "track",
@@ -439,7 +456,7 @@ def test_replay_dry_run_then_write(vault):
     out = run("replay", "--vault", vault).output
     assert "3 note(s) updated" in out
     fields = Vault(vault).read("concept", "two-pointers").fields
-    assert fields["cortex_status"] == "learning" and fields["cortex_next"]
+    assert fields["keepfold_status"] == "learning" and fields["keepfold_next"]
     assert "0 note(s) updated" in run("replay", "--vault", vault).output
 
 
@@ -465,7 +482,7 @@ def test_replay_dry_run_prints_diff_and_writes_nothing(vault):
 def test_replay_dry_run_names_the_gap_check(vault):
     from datetime import UTC, datetime, timedelta
 
-    from cortex.events import local_day
+    from keepfold.events import local_day
     log, now = EventLog(Vault(vault)), datetime.now(UTC)
     for when in (now - timedelta(days=1), now):  # the old Solid rule, but no 7-day gap
         log.append(session="cli", kind="grade", source="tutor", now=when,
@@ -483,13 +500,13 @@ def test_backup_creates_zip(vault, tmp_path):
     run("init", vault)
     out = run("backup", "--vault", vault).output
     path = Path(out.split(" (")[0])
-    assert path.parent == (vault / ".cortex/backups").resolve() and "bytes" in out
+    assert path.parent == (vault / ".keepfold/backups").resolve() and "bytes" in out
     names = zipfile.ZipFile(path).namelist()
     assert "concepts/two-pointers.md" in names and ".git/HEAD" in names
-    assert not any(n.startswith(".cortex/backups") for n in names)
+    assert not any(n.startswith(".keepfold/backups") for n in names)
     r = run("backup", "--to", tmp_path / "out", "--vault", vault)
     assert "same drive" in r.output  # tmp_path shares the vault's drive
-    assert not any(n.startswith(".cortex/backups") for n in
+    assert not any(n.startswith(".keepfold/backups") for n in
                    zipfile.ZipFile(Path(r.output.split(" (")[0])).namelist())
 
 
@@ -514,7 +531,7 @@ def _clean(vault):
 
 
 def _session(vault, when, verdict):
-    from cortex.session import SessionManager
+    from keepfold.session import SessionManager
     mgr = SessionManager(Vault(vault), clock=lambda: when)
     s = mgr.start()
     mgr.log.append(session=s.id, kind="grade", source="tutor", mode="learn", now=when,
@@ -531,10 +548,10 @@ def test_undo_reverts_a_session_commit(vault):
     note = vault / "concepts/arrays-basics.md"
     original = note.read_bytes()
     note.write_text(note.read_text() + "- session edit\n")
-    _git_out(vault, "commit", "-qam", f"cortex: session {sid} learn")
+    _git_out(vault, "commit", "-qam", f"keepfold: session {sid} learn")
     out = run("undo", sid, "--vault", vault).output
     assert "reverted" in out and note.read_bytes() == original
-    assert _git_out(vault, "log", "-1", "--format=%s").strip() == f"cortex: undo {sid}"
+    assert _git_out(vault, "log", "-1", "--format=%s").strip() == f"keepfold: undo {sid}"
     _clean(vault)
     assert "already undone" in run("undo", sid, "--vault", vault).output
     assert "nothing to undo" in run("undo", "s_01JD0000000000000000000001", "--vault",
@@ -561,7 +578,7 @@ def test_undo_older_session_keeps_later_text(vault):
 def test_undo_failure_leaves_head_untouched(vault, monkeypatch):
     from datetime import UTC, datetime
 
-    from cortex import render
+    from keepfold import render
     _repo(vault)
     first = _session(vault, datetime(2026, 11, 10, 12, tzinfo=UTC), "correct")
     _session(vault, datetime(2026, 11, 11, 12, tzinfo=UTC), "wrong")
@@ -630,7 +647,7 @@ def test_help_lists_no_stray_why_command():  # §15.2 N1
 def test_chats_lists_past_chats(vault, tmp_path, monkeypatch):
     d = tmp_path / "projects"
     shutil.copytree(FIXTURES / "chats", d)
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(d))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
     lines = run("chats", "--vault", vault).stdout.splitlines()
     assert [ln.split()[1] for ln in lines] == ["D--proj-beta/cccc-3333",
                                                 "D--proj-alpha/aaaa-1111"]
@@ -639,10 +656,10 @@ def test_chats_lists_past_chats(vault, tmp_path, monkeypatch):
 
 
 def test_help_epilogue_names_real_commands():
-    """review r4 S9: `cortex --help` groups the commands; every name it lists exists."""
+    """review r4 S9: `keepfold --help` groups the commands; every name it lists exists."""
     import typer
 
-    from cortex.cli import EPILOG
+    from keepfold.cli import EPILOG
 
     root = typer.main.get_command(app)
     names = [n for group in EPILOG.split(" · ") for n in group.split(": ", 1)[1].split(", ")]
@@ -656,20 +673,20 @@ def test_help_epilogue_names_real_commands():
         opts = {o for p in cmd.params for o in p.opts}
         assert all(f in opts for f in flags.rstrip("]").split("|") if f), name
     out = run("--help").output
-    assert "About you: claims" in out and "New here? Run `cortex app`." in out
+    assert "About you: claims" in out and "New here? Run `keepfold app`." in out
     assert EPILOG.split("Setup: ", 1)[1].startswith("app, ")
 
 
 def test_llm_start_starts_the_configured_runner(home, monkeypatch):
-    from cortex.app import wizard
+    from keepfold.app import wizard
 
     seen = []
     monkeypatch.setattr(wizard, "start", lambda r: (seen.append(r), {
         "ok": True, "state": "running", "lines": ["ran: lms server start"]})[1])
     assert "ran: lms server start" in run("llm", "start", "--runner", "lmstudio").output
     run("llm", "start")  # no config: Ollama, the recommended runner
-    (home / ".cortex").mkdir()
-    (home / ".cortex/config.yaml").write_text("localllm:\n  runner: lmstudio\n",
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold/config.yaml").write_text("localllm:\n  runner: lmstudio\n",
                                               encoding="utf-8")
     run("llm", "start")
     assert seen == ["lmstudio", "ollama", "lmstudio"]
@@ -700,7 +717,7 @@ def test_old_names_are_hidden_aliases():
 
 
 def test_ask_prints_the_answer_sources_and_model(vault, monkeypatch):
-    from cortex import ask, localllm
+    from keepfold import ask, localllm
     seen = []
     monkeypatch.setattr(ask, "ask", lambda v, q, private: seen.append(private) or {
         "answer": "Use two pointers [1].", "model": "ollama gemma3:2b at 127.0.0.1:11434",
@@ -711,7 +728,7 @@ def test_ask_prints_the_answer_sources_and_model(vault, monkeypatch):
     # E3: CliRunner's streams are no terminal, so --private is refused before ask runs
     r = run("ask", "x", "--private", "--vault", vault, ok=False)
     assert r.exit_code == 1 and "only in a real terminal" in r.output and seen == [False]
-    from cortex import cli as cli_mod
+    from keepfold import cli as cli_mod
     monkeypatch.setattr(cli_mod, "_tty", lambda: True)
     run("ask", "x", "--private", "--vault", vault)
     assert seen == [False, True]  # private notes and browsing only with --private, at a TTY
@@ -728,8 +745,8 @@ def test_ask_prints_the_answer_sources_and_model(vault, monkeypatch):
 
 
 def test_browse_import_takeout_says_how_many_rows_were_skipped(vault, monkeypatch):
-    from cortex import cli, localllm, semantic
-    from cortex.browse import build
+    from keepfold import cli, localllm, semantic
+    from keepfold.browse import build
     monkeypatch.setattr(cli, "_browse_sources", lambda *a: [])
     monkeypatch.setattr(semantic, "load_embedder", lambda *a, **k: None)
     monkeypatch.setattr(localllm, "enabled", lambda: False)
@@ -740,7 +757,7 @@ def test_browse_import_takeout_says_how_many_rows_were_skipped(vault, monkeypatc
 
 
 def test_tier_on_a_chat_export_names_every_source_that_takes_one(vault):
-    from cortex.app import actions
+    from keepfold.app import actions
     r = run("import", FIXTURES / "exports" / "perplexity_thread.md", "--tier", "private",
             "--vault", vault, ok=False)
     assert r.exit_code == 1 and "--tier applies to notes, calendars" in r.output

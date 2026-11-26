@@ -2,18 +2,18 @@
 exports (claude.ai, ChatGPT, Gemini, Perplexity) goes through `chats.import_export`; its
 redacted turns become an imported chat page in the vault; then `Index`, `semantic.search` and
 the MCP tools. A secret never gets past the import, a re-import dedupes on (source, id), the
-chat page ranks below the user's own page, and `cortex_chats` lists every source."""
+chat page ranks below the user's own page, and `keepfold_chats` lists every source."""
 
 import json
 
 import pytest
 from conftest import FakeEmbed, note, run
 
-from cortex import chats, semantic
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.vault import Vault
 from integration.builders import EXPORTS
+from keepfold import chats, semantic
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -87,11 +87,11 @@ def test_secrets_never_reach_transcripts_index_or_recall(root, imported):
 
     async def body(call):
         for q in ("car motor token key", "Dijkstra weighted graphs", "minimum spanning tree"):
-            got.append(await call("cortex_recall", {"query": q, "chats": True}))
-        listed = await call("cortex_chats", {"limit": 50})
+            got.append(await call("keepfold_recall", {"query": q, "chats": True}))
+        listed = await call("keepfold_chats", {"limit": 50})
         got.append(listed)
         for c in listed["chats"]:
-            got.append(await call("cortex_chats", {"action": "read", "id": c["id"]}))
+            got.append(await call("keepfold_chats", {"action": "read", "id": c["id"]}))
 
     run(root, body)
     assert any("chat-" in json.dumps(r) for r in got[:3]), got[:3]

@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 import pytest
 from conftest import git
 
-from cortex import backup, events, recall_log, session, taint
-from cortex.app import actions, server, status, targets, wizard
-from cortex.catalog import Catalog, resolve_or_inbox
-from cortex.vault import Vault, VaultError
+from keepfold import backup, events, recall_log, session, taint
+from keepfold.app import actions, server, status, targets, wizard
+from keepfold.catalog import Catalog, resolve_or_inbox
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -66,9 +66,9 @@ def test_same_drive(tmp_path):
 
 def test_recall_log_rows_eval_set_and_cap(root, monkeypatch):
     v = Vault(root)
-    rid = recall_log.log_recall(v, "cortex_recall", "two pointers", ["two-pointers", "lc-1"])
+    rid = recall_log.log_recall(v, "keepfold_recall", "two pointers", ["two-pointers", "lc-1"])
     recall_log.log_open(v, rid, "two-pointers")
-    other = recall_log.log_recall(v, "cortex_recall", "unopened", ["lc-1"])
+    other = recall_log.log_recall(v, "keepfold_recall", "unopened", ["lc-1"])
     rows = recall_log.rows(v)
     assert [r.get("rid") or r.get("opened") for r in rows] == [rid, rid, other]
     assert all(r["ts"].endswith("Z") for r in rows)
@@ -85,8 +85,8 @@ def test_recall_log_rows_eval_set_and_cap(root, monkeypatch):
 def test_recall_log_redacts_secrets_in_the_query(root):
     v = Vault(root)
     key = "sk-" + "a" * 24  # a SECRET_RES pattern, not a real key
-    recall_log.log_recall(v, "cortex_recall", f"why does {key} fail", [])
-    recall_log.log_recall(v, "cortex_recall", "two pointers", [])
+    recall_log.log_recall(v, "keepfold_recall", f"why does {key} fail", [])
+    recall_log.log_recall(v, "keepfold_recall", "two pointers", [])
     rows = recall_log.rows(v)
     assert rows[0]["query"] == "why does [redacted] fail" and rows[1]["query"] == "two pointers"
     assert key not in (root / recall_log.FILE).read_text(encoding="utf-8")
@@ -177,7 +177,7 @@ def test_job_lines_are_capped():
 
 @pytest.fixture
 def config(home):
-    p = home / ".cortex" / "config.yaml"
+    p = home / ".keepfold" / "config.yaml"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("vault: V\nrerank: false\nlocalllm:\n  budget_s: 60\n", encoding="utf-8")
     return p

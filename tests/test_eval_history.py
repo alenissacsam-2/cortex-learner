@@ -1,14 +1,14 @@
-"""v6 "one eval history": `cortex eval all` appends paired, numbers-only rows."""
+"""v6 "one eval history": `keepfold eval all` appends paired, numbers-only rows."""
 
 import pytest
 from conftest import FakeEmbed
 from test_semantic import root  # noqa: F401  (test_semantic's seeded vault)
 from typer.testing import CliRunner
 
-from cortex import eval_history, semantic
-from cortex.cli import app
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import eval_history, semantic
+from keepfold.cli import app
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -26,9 +26,9 @@ def recall_rows(root):  # noqa: F811
 
 def test_runs_pair_only_on_the_same_day_and_index_across_commits(root, monkeypatch):  # noqa: F811
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(root))
-    c.cortex_recall("secret vehicle query")
-    c.cortex_read("engines")
+    c = Keepfold(Vault(root))
+    c.keepfold_recall("secret vehicle query")
+    c.keepfold_read("engines")
 
     first = run(root, "aaa", monkeypatch)
     assert "no earlier run on this day and index" in first and "(too few)" in first
@@ -57,9 +57,9 @@ def test_runs_pair_only_on_the_same_day_and_index_across_commits(root, monkeypat
 
 
 def test_bare_eval_runs_all(root, monkeypatch):  # noqa: F811
-    """review r4 S2: `cortex eval` alone is `cortex eval all`, history row and all."""
+    """review r4 S2: `keepfold eval` alone is `keepfold eval all`, history row and all."""
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    Cortex(Vault(root)).cortex_recall("vehicle")
+    Keepfold(Vault(root)).keepfold_recall("vehicle")
     first = run(root, "aaa", monkeypatch)
     n = len(eval_history.read(Vault(root)))
     out = CliRunner().invoke(app, ["eval", "--vault", str(root), "--k", "3"])
@@ -73,8 +73,8 @@ def test_options_before_a_subcommand_are_refused(root):  # noqa: F811
 
 
 def test_a_page_edit_changes_the_index_key(root, monkeypatch):  # noqa: F811
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
 
     v = Vault(root)
     key = eval_history.fingerprint(Index(v, Catalog.load(v)), True)

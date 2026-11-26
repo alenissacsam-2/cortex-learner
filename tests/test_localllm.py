@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from cortex import localllm
-from cortex.localllm import Budget, Runner
+from keepfold import localllm
+from keepfold.localllm import Budget, Runner
 
 
 class Fake:
@@ -132,7 +132,7 @@ def test_background_work_asks_for_its_own_model_first(serve, monkeypatch):
 def test_find_uses_loaded_config_when_none(serve, monkeypatch):
     o = serve({("GET", "/api/tags"): tags("a:3b")})
     monkeypatch.setattr(localllm, "_PROBES", [])
-    monkeypatch.setattr("cortex.taint.config", lambda: {"localllm": {"url": o.base}})
+    monkeypatch.setattr("keepfold.taint.config", lambda: {"localllm": {"url": o.base}})
     assert localllm.find().model == "a:3b"
 
 
@@ -362,7 +362,7 @@ def test_a_redirect_to_another_host_is_refused():
 
     import pytest
 
-    from cortex import localllm
+    from keepfold import localllm
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -410,7 +410,7 @@ def test_enabled_needs_an_explicit_true(monkeypatch):
     for cfg in ({}, {"localllm": {}}, {"localllm": {"enabled": "yes"}}, {"localllm": True},
                 {"localllm": {"enabled": False}}):
         assert not localllm.enabled(cfg)
-    monkeypatch.setattr("cortex.taint.config", lambda: {"localllm": {"enabled": True}})
+    monkeypatch.setattr("keepfold.taint.config", lambda: {"localllm": {"enabled": True}})
     assert localllm.enabled()
 
 
@@ -570,7 +570,7 @@ def test_openai_rows_marked_remote_are_skipped(serve, monkeypatch):
 def test_cli_llm_test_sends_only_the_synthetic_prompt(serve, monkeypatch):
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
 
     f = serve({("POST", "/v1/chat/completions"): openai_reply(
         '{"label":"programming","confidence":0.9}')})
@@ -587,48 +587,48 @@ def test_cli_llm_test_sends_only_the_synthetic_prompt(serve, monkeypatch):
 def test_cli_llm_status_never_starts_or_loads_lmstudio(serve, lms, monkeypatch):
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
 
     a = serve({("GET", "/v1/models"): oa_models(QWEN)})
     port = int(a.base.rsplit(":", 1)[1])
     monkeypatch.setattr(localllm, "_PROBES", [])
     cfg, calls = lms(running=False, port=port, disk=DISK, model=QWEN)
-    monkeypatch.setattr("cortex.taint.config", lambda: cfg)
+    monkeypatch.setattr("keepfold.taint.config", lambda: cfg)
     out = CliRunner().invoke(app, ["llm", "status"])
     assert out.exit_code == 0, out.output
-    assert "server off" in out.output and "cortex llm start" in out.output
+    assert "server off" in out.output and "keepfold llm start" in out.output
     assert not any(c.startswith(("server start", "load")) for c in calls())
     cfg, calls = lms(running=True, port=port, disk=DISK, model=QWEN)  # on, model not loaded
-    monkeypatch.setattr("cortex.taint.config", lambda: cfg)
+    monkeypatch.setattr("keepfold.taint.config", lambda: cfg)
     out = CliRunner().invoke(app, ["llm", "status"])
     assert out.exit_code == 0, out.output
     assert f"found: openai-compatible {QWEN}" in out.output
-    assert "loaded in LM Studio: no" in out.output and "cortex llm start" in out.output
+    assert "loaded in LM Studio: no" in out.output and "keepfold llm start" in out.output
     assert not any(c.startswith(("server start", "load")) for c in calls())
     assert not any(m == "POST" for m, _, _ in a.calls)  # no ping: LM Studio would load it
 
 
 def test_doctor_never_starts_or_loads_lmstudio(serve, lms, monkeypatch):
     """G3: doctor uses the read-only path of `llm status`: a stopped LM Studio is a WARN that
-    names `cortex llm start`, and no `server start` or `load` runs."""
-    from cortex import doctor
+    names `keepfold llm start`, and no `server start` or `load` runs."""
+    from keepfold import doctor
 
     a = serve({("GET", "/v1/models"): oa_models(QWEN)})
     port = int(a.base.rsplit(":", 1)[1])
     monkeypatch.setattr(localllm, "_PROBES", [])
     cfg, calls = lms(running=False, port=port, disk=DISK, model=QWEN)
-    monkeypatch.setattr("cortex.taint.config", lambda: cfg)
+    monkeypatch.setattr("keepfold.taint.config", lambda: cfg)
     status, _, detail, fix = doctor.check_local_model()
-    assert status == "WARN" and "not running" in detail and "cortex llm start" in fix
+    assert status == "WARN" and "not running" in detail and "keepfold llm start" in fix
     assert not any(c.startswith(("server start", "load")) for c in calls())
     cfg, calls = lms(running=True, port=port, disk=DISK, model=QWEN)
-    monkeypatch.setattr("cortex.taint.config", lambda: cfg)
+    monkeypatch.setattr("keepfold.taint.config", lambda: cfg)
     assert doctor.check_local_model()[0] == "PASS"
     assert not any(c.startswith(("server start", "load")) for c in calls())
 
 
 def test_status_is_the_one_read_only_lookup(serve, lms, monkeypatch):
-    """`cortex llm status` and doctor share `localllm.status`: it finds a model already served
+    """`keepfold llm status` and doctor share `localllm.status`: it finds a model already served
     by LM Studio, reports the server, never starts it or loads, and returns a bad config as
     an error instead of raising."""
     a = serve({("GET", "/v1/models"): oa_models(QWEN)})

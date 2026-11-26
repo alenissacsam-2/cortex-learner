@@ -13,13 +13,13 @@ from test_app import _serve, call
 from test_dashboard_js import _run
 from test_home import FIXTURES, _note
 
-from cortex import dashboard, localllm, taint
-from cortex.app import server, status, targets
-from cortex.cli import ME_PAGES
-from cortex.vault import Vault
+from keepfold import dashboard, localllm, taint
+from keepfold.app import server, status, targets
+from keepfold.cli import ME_PAGES
+from keepfold.vault import Vault
 
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
-GS = ["Tell Cortex one thing about you", "Connect an AI app", "Bring in what you already have"]
+GS = ["Tell Keepfold one thing about you", "Connect an AI app", "Bring in what you already have"]
 
 
 def _row(i, kind, *, source=None, body="", links=(), day="2026-11-10"):
@@ -68,7 +68,7 @@ def test_get_started_is_for_a_vault_with_under_10_pages_of_its_own():
 def test_signals_cost_under_10_ms_on_5k_notes(tmp_path, capsys):
     from test_home import _big
 
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     root = tmp_path / "big"
     _big(root)
     v = Vault(root)
@@ -89,7 +89,7 @@ def test_signals_cost_under_10_ms_on_5k_notes(tmp_path, capsys):
 
 def _vault(tmp_path, name: str) -> Path:
     root = tmp_path / name
-    (root / ".cortex").mkdir(parents=True)
+    (root / ".keepfold").mkdir(parents=True)
     (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
     return root
 

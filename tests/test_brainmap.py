@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from cortex import brainmap, dashboard, vecstore
-from cortex.cli import app
-from cortex.semantic import CACHE
-from cortex.vault import Vault
+from keepfold import brainmap, dashboard, vecstore
+from keepfold.cli import app
+from keepfold.semantic import CACHE
+from keepfold.vault import Vault
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 # 12 topic lobes in 4 families of 3 (hub-0..hub-2, hub-3..hub-5, ...): the lobes of a family
@@ -393,7 +393,7 @@ def test_fibres_are_the_links_and_three_nearest(made):
 
 def test_cli_relayout(made, monkeypatch):
     root, _ = made
-    monkeypatch.delenv("CORTEX_VAULT", raising=False)
+    monkeypatch.delenv("KEEPFOLD_VAULT", raising=False)
     v, now = Vault(root), datetime.now(UTC)
     assert dashboard.build(v, now=now)["brain"]["stats"]["relayout"] is True  # the first lays out
     plain = dashboard.build(v, now=now)["brain"]

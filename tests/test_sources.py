@@ -8,9 +8,9 @@ import pytest
 import typer.testing
 from typer.testing import CliRunner
 
-from cortex import sources
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import sources
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 runner = CliRunner()
@@ -66,7 +66,7 @@ def test_quoted_mail_is_dropped(root_plain):
 
 def test_a_note_keeps_its_quoted_mail_and_coordinates(root_plain, tmp_path):
     """The owner's own notes are their writing: only secrets are filtered from them."""
-    from cortex import importers
+    from keepfold import importers
     notes = tmp_path / "notes"
     notes.mkdir()
     body = ("Kept this reply.\n\nOn Mon, 2 Nov 2026 at 09:30, Asha wrote:\n> Can we meet?\n"
@@ -182,7 +182,7 @@ def test_unreadable(text, why):
 
 
 def test_garbage_items_are_skipped_and_counted_in_the_report(root_plain):
-    from cortex import importers
+    from keepfold import importers
     v = Vault(root_plain)
     links = "".join(f"https://example.com/page/{i}/with/a/long/path\n" for i in range(10))
     r = sources.run(v, _src(sources.Item("Bad", "2026-11-02", "x" + "�" * 250),
@@ -248,7 +248,7 @@ def test_cli_and_app_say_what_a_stricter_tier_did(root_plain, tmp_path):
     out = _cli(root_plain, notes, "--tier", "private").output
     assert "Notes: tier private (--tier)\nMade 1 earlier page from Notes private." in out
     assert _private(Vault(root_plain), "notes-one")
-    from cortex.app import actions
+    from keepfold.app import actions
 
     class Job:
         def say(self, _):

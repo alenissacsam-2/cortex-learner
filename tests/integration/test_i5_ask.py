@@ -1,5 +1,5 @@
 """I5 ask <-> vectors <-> localllm (docs/design/v6/TEST-PLAN.md §3): a fake Ollama on loopback
-named by `localllm.url` in the config, `ask.ask` and `cortex ask` over a vault with private
+named by `localllm.url` in the config, `ask.ask` and `keepfold ask` over a vault with private
 browse pages and notes. What crosses the wire: only `<untrusted_note>`-wrapped passages and the
 question; an injected page stays inside its note; no cloud runner is ever built; and (G2) a
 browse passage reaches the prompt past its first 240 characters."""
@@ -10,10 +10,10 @@ import pytest
 from conftest import FakeEmbed, note
 from typer.testing import CliRunner
 
-from cortex import ask, cli, cloudllm, localllm, semantic
-from cortex.browse import vectors
-from cortex.vault import Vault
 from integration.builders import fake_ollama
+from keepfold import ask, cli, cloudllm, localllm, semantic
+from keepfold.browse import vectors
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 QUESTION = "car motor"

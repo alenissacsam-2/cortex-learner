@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cortex._proc import NO_WINDOW
+from keepfold._proc import NO_WINDOW
 
 ROOT = Path(__file__).resolve().parent.parent
 

@@ -5,7 +5,7 @@ Gemma, DeepSeek or Anthropic-style XML tags; look-alikes are folded first (claim
 import pytest
 from conftest import run
 
-from cortex import claims
+from keepfold import claims
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -79,15 +79,15 @@ def test_links_kept_elsewhere(page):
     assert claims.unsafe("My site is https://example.com and www.example.org", page) is None
 
 
-def test_cortex_patch_passes_the_page(root):
+def test_keepfold_patch_passes_the_page(root):
     (root / "me/profile.md").write_text("# Profile\n\n## Background\n- Student\n", "utf-8")
 
     async def body(call):
-        bad = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        bad = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "text": "Cite https://x.example",
                                           "user_confirmed": True})
         assert bad["error"] == "invalid_argument" and "a web link" in bad["message"], bad
-        ok = await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+        ok = await call("keepfold_patch", {"id": "me/profile", "op": "append_to_section",
                                          "target": "Background",
                                          "text": "My site is https://x.example",
                                          "user_confirmed": True})

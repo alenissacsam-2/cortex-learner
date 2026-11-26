@@ -1,4 +1,4 @@
-"""v5 PHASE2.md G1: the Honest Double check on cortex_recall."""
+"""v5 PHASE2.md G1: the Honest Double check on keepfold_recall."""
 
 import re
 
@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 from conftest import run
 
-from cortex import semantic
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import semantic
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -40,9 +40,9 @@ def verdicts(out):
 
 def test_check_gives_a_verdict_per_concept_sentence(root):
     async def body(call):
-        await call("cortex_log", {"kind": "self_report",
+        await call("keepfold_log", {"kind": "self_report",
                                   "payload": {"concept": "two-pointers", "verdict": "correct"}})
-        out = await call("cortex_recall", {"query": TEXT, "check": True})
+        out = await call("keepfold_recall", {"query": TEXT, "check": True})
         # cooking matches no concept; the private concept is not in the index
         assert [c["sentence"] for c in out["checks"]] == [
             "I am strong at two pointers.", "Arrays are easy for me."]
@@ -50,12 +50,12 @@ def test_check_gives_a_verdict_per_concept_sentence(root):
         assert out["checks"][0]["state"] in ("learning", "needs_refresh")
         assert out["checks"][0]["title"] == "Two pointers"
         assert "hedge Learning" in out["next"] and "hits" in out
-        plain = await call("cortex_recall", {"query": TEXT})
+        plain = await call("keepfold_recall", {"query": TEXT})
         assert "checks" not in plain
 
-        await call("cortex_add", {"kind": "project", "title": "Pair finder", "fields": {
+        await call("keepfold_add", {"kind": "project", "title": "Pair finder", "fields": {
             "status": "active", "applies": ["[[two-pointers]]"]}})
-        out = await call("cortex_recall", {"query": TEXT, "check": True})
+        out = await call("keepfold_recall", {"query": TEXT, "check": True})
         tp = out["checks"][0]
         assert tp["verdict"] == "ok" and tp["applied"] is True
 
@@ -65,9 +65,9 @@ def test_check_gives_a_verdict_per_concept_sentence(root):
 def test_a_shipped_project_counts_as_applied(root):
     """Audit F3: `shipped` is a real project status (`done` is not)."""
     async def body(call):
-        await call("cortex_add", {"kind": "project", "title": "Pair finder", "fields": {
+        await call("keepfold_add", {"kind": "project", "title": "Pair finder", "fields": {
             "status": "shipped", "applies": ["[[two-pointers]]"]}})
-        out = await call("cortex_recall", {"query": TEXT, "check": True})
+        out = await call("keepfold_recall", {"query": TEXT, "check": True})
         assert verdicts(out)["two-pointers"] == "ok" and out["checks"][0]["applied"] is True
 
     run(root, body)
@@ -80,9 +80,9 @@ def test_an_old_claim_flag_no_longer_dismisses(root):
                     "sentence": "Arrays are easy for me.", "fair": False}})
 
     async def body(call):
-        check = await call("cortex_recall", {"query": "Arrays are easy for me.", "check": True})
+        check = await call("keepfold_recall", {"query": "Arrays are easy for me.", "check": True})
         assert verdicts(check) == {"arrays-basics": "unverified"}
-        assert "claim_check" not in await call("cortex_reflect")
+        assert "claim_check" not in await call("keepfold_reflect")
 
     run(root, body)
 
@@ -90,12 +90,12 @@ def test_an_old_claim_flag_no_longer_dismisses(root):
 def test_check_limits(root):
     async def body(call):
         for text in ("word. " * 21, "x" * 4001):
-            out = await call("cortex_recall", {"query": text, "check": True})
+            out = await call("keepfold_recall", {"query": text, "check": True})
             assert out["error"] == "invalid_argument"
-        ok = await call("cortex_recall", {"query": "word. " * 20, "check": True})
+        ok = await call("keepfold_recall", {"query": "word. " * 20, "check": True})
         assert ok["checks"] == []
         # a keyword-only hit ("two" in Two pointers, no embedding match) is no claim
-        kw = await call("cortex_recall", {"query": "Two friends.", "check": True})
+        kw = await call("keepfold_recall", {"query": "Two friends.", "check": True})
         assert kw["hits"] and kw["checks"] == []
 
     run(root, body)
@@ -103,10 +103,10 @@ def test_check_limits(root):
 
 def test_the_reranker_never_touches_the_check(root, monkeypatch):
     """Rerank reorders plain recall only; the per-sentence check keeps recall's own order."""
-    from cortex.mcp_server import Cortex
-    from cortex.vault import Vault
+    from keepfold.mcp_server import Keepfold
+    from keepfold.vault import Vault
 
-    before = Cortex(Vault(root)).cortex_recall(TEXT, check=True)["checks"]
+    before = Keepfold(Vault(root)).keepfold_recall(TEXT, check=True)["checks"]
     seen = []
 
     def reverse(query, texts):
@@ -114,6 +114,6 @@ def test_the_reranker_never_touches_the_check(root, monkeypatch):
         return list(range(len(texts)))  # the last hit first
 
     monkeypatch.setattr(semantic, "_reranker", reverse)
-    after = Cortex(Vault(root)).cortex_recall(TEXT, check=True)
+    after = Keepfold(Vault(root)).keepfold_recall(TEXT, check=True)
     assert after["checks"] == before and before
     assert seen == [TEXT]  # the main search only, never a checked sentence

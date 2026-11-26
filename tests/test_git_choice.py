@@ -1,6 +1,6 @@
 """The vault's git is the owner's choice: `git: {enabled, private_browsing}` in
-~/.cortex/config.yaml. Off: no repo made, no commit, undo explains, doctor passes, an existing
-.git is left alone. private_browsing on: Cortex's own browse/private/ ignore line goes, private
+~/.keepfold/config.yaml. Off: no repo made, no commit, undo explains, doctor passes, an existing
+.git is left alone. private_browsing on: Keepfold's own browse/private/ ignore line goes, private
 pages are committed, doctor passes; back off: the line returns and the pages are untracked.
 Temp vaults and an isolated HOME only."""
 
@@ -17,9 +17,9 @@ from test_browse_sites import OWNER
 from test_forget_more import ROWS, priv
 from typer.testing import CliRunner
 
-from cortex import cli, doctor, session, taint
-from cortex.browse import build, forget, sources
-from cortex.vault import Vault
+from keepfold import cli, doctor, session, taint
+from keepfold.browse import build, forget, sources
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 PRIV = Path("browse") / "private"
@@ -82,11 +82,11 @@ def test_git_off_init_makes_no_repo_and_doctor_passes(tmp_path):
 def test_git_off_a_session_commits_nothing_and_leaves_git_alone(root):
     before = head(root)
     choose(enabled=False)
-    assert session._commit(Vault(root), "cortex: s", [note(root)]) is None
+    assert session._commit(Vault(root), "keepfold: s", [note(root)]) is None
     assert head(root) == before and (root / ".git").is_dir()
     assert all(c[0] == "PASS" for c in doctor_git(root))
     choose(enabled=True)  # turned back on: commits carry on from the same history
-    assert session._commit(Vault(root), "cortex: s", [root / "notes" / "n.md"])
+    assert session._commit(Vault(root), "keepfold: s", [root / "notes" / "n.md"])
     assert git(root, "rev-parse", "HEAD~1").strip() == before
 
 
@@ -127,8 +127,8 @@ def test_git_off_doctor_still_warns_about_the_old_repos_remote_and_history(root)
 
 # ---- private browsing kept in git ---------------------------------------------------------
 
-def test_private_on_drops_only_cortexs_line_and_commits_the_pages(root, monkeypatch):
-    (root / ".gitignore").write_text(f".cortex/*\n{forget.PRIVATE_IGNORE}\nmine/\n",
+def test_private_on_drops_only_keepfolds_line_and_commits_the_pages(root, monkeypatch):
+    (root / ".gitignore").write_text(f".keepfold/*\n{forget.PRIVATE_IGNORE}\nmine/\n",
                                      encoding="utf-8")
     git(root, "add", ".gitignore")
     git(root, "commit", "-q", "-m", "ignore")
@@ -139,8 +139,8 @@ def test_private_on_drops_only_cortexs_line_and_commits_the_pages(root, monkeypa
     monkeypatch.setattr(forget, "untrack_private", boom)
     p = page(root)
     build.run(Vault(root), [], OWNER, tz=UTC, now=m(0, 2), embed=Embed())  # an import
-    assert (root / ".gitignore").read_text(encoding="utf-8") == ".cortex/*\nmine/\n"
-    assert session._commit(Vault(root), "cortex: session", [p])
+    assert (root / ".gitignore").read_text(encoding="utf-8") == ".keepfold/*\nmine/\n"
+    assert session._commit(Vault(root), "keepfold: session", [p])
     assert p.relative_to(root).as_posix() in git(root, "ls-files", PRIV.as_posix())
     status, _, detail, _ = doctor.check_private_browse_git(root)
     assert status == "PASS" and "by your choice" in detail
@@ -157,7 +157,7 @@ def test_private_on_init_does_not_add_the_line(root):
 def test_private_back_off_readds_the_line_and_untracks(root):
     choose(enabled=True, private_browsing=True)
     p = page(root)
-    assert session._commit(Vault(root), "cortex: everything")
+    assert session._commit(Vault(root), "keepfold: everything")
     assert git(root, "ls-files", PRIV.as_posix())
     choose(enabled=True, private_browsing=False)
     r = CliRunner().invoke(cli.app, ["init", str(root)])
@@ -171,7 +171,7 @@ def test_private_back_off_readds_the_line_and_untracks(root):
 # ---- the app ------------------------------------------------------------------------------
 
 def test_app_saves_the_choice_and_applies_it(app, vault):  # noqa: F811
-    (vault / ".gitignore").write_text(f".cortex/*\n{forget.PRIVATE_IGNORE}\n", encoding="utf-8")
+    (vault / ".gitignore").write_text(f".keepfold/*\n{forget.PRIVATE_IGNORE}\n", encoding="utf-8")
     assert call(app, "GET", "/api/vault")[1]["git"] == {"enabled": True,
                                                          "private_browsing": False}
     body = {"enabled": True, "private_browsing": True}
@@ -202,7 +202,7 @@ def test_private_on_forget_commits_the_pages_without_what_it_forgot(root, tmp_pa
     chromium(local / "Google" / "Chrome" / "User Data" / "Default" / "History", ROWS)
     build.run(Vault(v), sources.discover(local, tmp_path / "roaming"), OWNER, tz=UTC,
               now=m(0, 2), embed=Embed())
-    assert session._commit(Vault(v), "cortex: import")
+    assert session._commit(Vault(v), "keepfold: import")
     assert "lichess" in priv(v)
     r = CliRunner().invoke(cli.app, ["browse", "forget", "--site", "lichess.org",
                                      "--vault", str(v)])

@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
-from cortex import events, levels, planner
-from cortex.catalog import Catalog
-from cortex.events import EventLog, log_assessment
-from cortex.levels import ConceptState, replay
-from cortex.planner import readiness, today, week_summary
-from cortex.render import today_md
-from cortex.vault import Vault
+from keepfold import events, levels, planner
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, log_assessment
+from keepfold.levels import ConceptState, replay
+from keepfold.planner import readiness, today, week_summary
+from keepfold.render import today_md
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ORDER = ["unchecked", "asked", "confident_miss", "warmup", "track", "refresh", "new"]
@@ -228,7 +228,7 @@ def test_exam_in_five_days_pulls_in_and_boosts(v):
 
 
 def test_private_exam_is_hidden_from_claude_but_still_planned(v):
-    from cortex.render import start_card
+    from keepfold.render import start_card
     path = v.root / "assessments/acme-oa-2026.md"
     path.write_text(path.read_text(encoding="utf-8").replace('outcome: "pending"\n',
                                                              'outcome: "pending"\nprivate: true\n'),
@@ -418,7 +418,7 @@ def test_ready_to_learn_needs_solid_prereqs_and_prefers_topic(v):
 
 @pytest.mark.parametrize("mode", ["learn", "review"])
 def test_a_named_topic_ranks_its_due_items_first(v, mode):
-    """Missing/better: "/cortex learn sorting" refreshes sorting before riskier other topics."""
+    """Missing/better: "/keepfold learn sorting" refreshes sorting before riskier other topics."""
     no_exam(v)
     catalog = cat(v, ("Sorting", []))
     states = {"risky": due("risky", 0.1), "sorting": due("sorting", 0.6)}
@@ -564,7 +564,7 @@ def test_last_night_failure_outranks_older_due(tmp_path):
     assert refresh == ["prefix-sums", "arrays-basics"]
 
 
-# ---- privacy and the shared "due" (CORTEX-DESIGN §15.2 N5, N8) --------------------------
+# ---- privacy and the shared "due" (KEEPFOLD-DESIGN §15.2 N5, N8) --------------------------
 
 def _lanes(c):
     return ConceptState(c, "learning", unchecked=(c == "secret-diary"),
@@ -586,7 +586,7 @@ def test_private_concepts_stay_out_of_unchecked_asked_and_confident_miss(v):
 
 
 def test_private_concept_never_on_the_start_card(v):
-    from cortex.render import start_card
+    from keepfold.render import start_card
 
     no_exam(v)
     states = {c: taught(c, 14) for c in ("two-pointers", "secret-diary")}
@@ -597,7 +597,7 @@ def test_private_concept_never_on_the_start_card(v):
 
 
 def test_find_due_and_planner_share_one_definition(v):
-    from cortex.index import Index
+    from keepfold.index import Index
 
     no_exam(v)
     states = {"arrays-basics": ConceptState("arrays-basics", "learning", next_due="2026-11-10"),
@@ -697,13 +697,13 @@ def test_past_question_cue_is_escaped(v):
 
 def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
     """D1: a `private: true` track (title, unlinked items, its pointer) and a private open
-    mistake never reach the plan, next_up, `cortex today`, Today.md, the start card or the
+    mistake never reach the plan, next_up, `keepfold today`, Today.md, the start card or the
     dashboard blob."""
     from conftest import run
     from typer.testing import CliRunner
 
-    from cortex import dashboard
-    from cortex.cli import app
+    from keepfold import dashboard
+    from keepfold.cli import app
 
     owed = "".join(f"- [ ] SECRET-OWED {i}\n" for i in range(8))
     (root / "tracks" / "secret.md").write_text(
@@ -726,7 +726,7 @@ def test_a_private_track_and_mistake_stay_out_of_every_plan_view(root, home):
     seen += [r.output, (root / "Today.md").read_text(encoding="utf-8")]
 
     async def body(call):
-        seen.append(json.dumps(await call("cortex_start", {"mode": "learn"})))
+        seen.append(json.dumps(await call("keepfold_start", {"mode": "learn"})))
 
     run(root, body)
     seen.append(json.dumps(dashboard.build_data(v, now=now), default=str))

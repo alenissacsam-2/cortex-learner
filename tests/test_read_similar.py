@@ -1,12 +1,12 @@
-"""RR-23: cortex_read's `similar`, from head vectors already in memory only."""
+"""RR-23: keepfold_read's `similar`, from head vectors already in memory only."""
 
 import numpy as np
 import pytest
 from conftest import note
 
-from cortex import semantic
-from cortex.mcp_server import READ_SIMILAR, Cortex
-from cortex.vault import Vault, VaultError
+from keepfold import semantic
+from keepfold.mcp_server import READ_SIMILAR, Keepfold
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -22,8 +22,8 @@ def test_similar_lists_close_unlinked_public_pages(root, monkeypatch):
     for id in ("c", "d", "e", "f"):
         note(root, f"notes/{id}.md", f'title: "{id.upper()} <b>x</b>"\n', f"# {id}\n")
     note(root, "notes/p.md", "title: Private twin\nprivate: true\n", "# p\n")
-    c = Cortex(Vault(root))
-    assert "similar" not in c.cortex_read("a")  # nothing in memory: never loads a model
+    c = Keepfold(Vault(root))
+    assert "similar" not in c.keepfold_read("a")  # nothing in memory: never loads a model
     assert semantic._embedder is None
 
     vecs = {"a": unit(1), "b": unit(1), "p": unit(1), "c": unit(1, 0.1), "d": unit(1, 0.2),
@@ -31,11 +31,11 @@ def test_similar_lists_close_unlinked_public_pages(root, monkeypatch):
     cache = {i: (None, True, np.array([0, 5], np.int32), np.stack([v, unit(0, 0, 1)]))
              for i, v in vecs.items()}
     monkeypatch.setattr(semantic, "_MEM", {c.vault.root: (None, cache, None)})
-    got = c.cortex_read("a")["similar"]
+    got = c.keepfold_read("a")["similar"]
     assert [s["id"] for s in got] == ["c", "d", "e"] and len(got) == READ_SIMILAR
     assert got[0]["title"] == "C x"  # plain text: no markup
-    assert "a" not in [s["id"] for s in c.cortex_read("b").get("similar", [])]  # linked
-    assert "p" not in [s["id"] for s in c.cortex_read("c")["similar"]]  # private
-    assert "similar" not in c.cortex_read("f")
+    assert "a" not in [s["id"] for s in c.keepfold_read("b").get("similar", [])]  # linked
+    assert "p" not in [s["id"] for s in c.keepfold_read("c")["similar"]]  # private
+    assert "similar" not in c.keepfold_read("f")
     with pytest.raises(VaultError):
-        c.cortex_read("p")
+        c.keepfold_read("p")

@@ -15,8 +15,8 @@ from test_dashboard_js import (
 )
 from test_dashboard_js import demo_page, demo_vault  # noqa: F401  (fixtures)
 
-from cortex import dashboard
-from cortex.app import server
+from keepfold import dashboard
+from keepfold.app import server
 
 pytestmark = pytest.mark.usefixtures("home")
 

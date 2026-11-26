@@ -1,4 +1,4 @@
-"""`cortex import`: notes folders and zips (Obsidian, Notion, plain), calendars (.ics), and the
+"""`keepfold import`: notes folders and zips (Obsidian, Notion, plain), calendars (.ics), and the
 kind detection that sends every export to its importer."""
 
 import json
@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import importers
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.index import Index
-from cortex.vault import Vault, VaultError
+from keepfold import importers
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.index import Index
+from keepfold.vault import Vault, VaultError
 
 EXPORTS = Path(__file__).parent / "fixtures" / "exports"
 runner = CliRunner()
@@ -164,7 +164,7 @@ def test_detect_reads_only_the_head_and_agrees_with_chat_import(tmp_path, monkey
     gem = (EXPORTS / "gemini_MyActivity.json").read_text("utf-8")
     z = _zip(tmp_path / "top.zip", {"MyActivity.json": gem})
     assert importers.detect(z) == ["chats"]
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
     assert importers.chats.import_export(z)[0] == "gemini"
     big = _zip(tmp_path / "big.zip", {"MyActivity.json": gem + " " * 9000})
     monkeypatch.setattr(importers, "MAX_ENTRY", 8000)  # detect still works: it reads 4 KB
@@ -172,8 +172,8 @@ def test_detect_reads_only_the_head_and_agrees_with_chat_import(tmp_path, monkey
 
 
 def test_zip_bomb_entries_are_refused_before_they_are_read(root_plain, tmp_path, monkeypatch):
-    from cortex.browse import takeout
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    from keepfold.browse import takeout
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
     monkeypatch.setattr(importers, "MAX_ENTRY", 1000)
     monkeypatch.setattr(importers, "MAX_STREAM", 1000)  # the JSON lists stream (C11)
     pad = " " * 5000
@@ -254,7 +254,7 @@ def test_detect_every_kind(tmp_path):
     html = _zip(tmp_path / "takeout-html.zip", {  # activity left as HTML; a stray .txt
         "Takeout/My Activity/Gemini Apps/MyActivity.html": "<html></html>",
         "Takeout/My Activity/Gemini Apps/notes.txt": "attachment"})
-    with pytest.raises(VaultError, match="JSON"):  # HTML Cortex cannot parse
+    with pytest.raises(VaultError, match="JSON"):  # HTML Keepfold cannot parse
         importers.detect(html)
 
 
@@ -267,7 +267,7 @@ def test_detect_youtube_history_as_takeout(tmp_path):
     z = _zip(tmp_path / "yt.zip", {yt + "watch-history.json": rows,
                                    yt + "search-history.json": rows})
     assert importers.detect(z) == ["takeout"]
-    from cortex.app import exports
+    from keepfold.app import exports
     assert exports.kind_of([yt + "watch-history.html"]) == "google-activity"
 
 
@@ -415,9 +415,9 @@ def test_a_truncated_or_malformed_json_list_fails_cleanly(tmp_path, monkeypatch,
 def test_a_big_chat_export_streams_through_import_and_matches_a_whole_read(tmp_path,
                                                                            monkeypatch):
     src = EXPORTS / "chatgpt_conversations.json"
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "whole"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "whole"))
     whole = importers.chats.import_export(src)
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "streamed"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "streamed"))
     # over the whole-file cap (which also caps one streamed item), under MAX_STREAM
     monkeypatch.setattr(importers, "MAX_ENTRY", src.stat().st_size - 1)
     monkeypatch.setattr(importers, "STREAM_CHUNK", 64)
@@ -427,14 +427,14 @@ def test_a_big_chat_export_streams_through_import_and_matches_a_whole_read(tmp_p
     assert a == b and a
     cut = tmp_path / "conversations.json"
     cut.write_bytes(src.read_bytes().rstrip()[:-40])  # cut short: refused, nothing written
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "cut"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "cut"))
     with pytest.raises(VaultError, match="Cannot read conversations.json"):
         importers.chats.import_export(cut)
     assert not list((tmp_path / "cut").rglob("*.jsonl"))
 
 
 def test_a_big_activity_file_streams_and_a_cut_one_is_refused_by_name(tmp_path, monkeypatch):
-    from cortex.browse import takeout
+    from keepfold.browse import takeout
     src = EXPORTS / "takeout_MyActivity.json"
     whole = [(v.url, v.start, v.title) for v in takeout.records(src)]
     monkeypatch.setattr(importers, "MAX_ENTRY", src.stat().st_size - 1)
@@ -446,19 +446,19 @@ def test_a_big_activity_file_streams_and_a_cut_one_is_refused_by_name(tmp_path, 
         takeout.records(cut)
 
 
-def test_an_import_dates_a_file_by_the_cortex_day():
-    """Audit 21 Nov I12: a note or document's date is its mtime's Cortex day (local, 04:00
+def test_an_import_dates_a_file_by_the_keepfold_day():
+    """Audit 21 Nov I12: a note or document's date is its mtime's Keepfold day (local, 04:00
     rollover, events.local_day), never its UTC date (04:45 IST is still that day)."""
     from datetime import UTC, datetime
 
-    from cortex import more_sources
-    from cortex.events import local_day
+    from keepfold import more_sources
+    from keepfold.events import local_day
     base = datetime(2026, 11, 20, tzinfo=UTC).timestamp()
     t = next((base + h * 3600 for h in range(24) if local_day(datetime.fromtimestamp(
         base + h * 3600, UTC)) != datetime.fromtimestamp(base + h * 3600, UTC).date()
         .isoformat()), None)
     if t is None:
-        pytest.skip("this time zone's Cortex day always matches the UTC date")
+        pytest.skip("this time zone's Keepfold day always matches the UTC date")
     want = local_day(datetime.fromtimestamp(t, UTC))
     assert importers.note_item("a.md", 2, t, lambda: b"hi").date == want
     assert more_sources._day(t) == want
@@ -470,8 +470,8 @@ def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypat
     updates the page."""
     from conftest import FakeEmbed
 
-    from cortex import semantic
-    from cortex.mcp_server import Cortex
+    from keepfold import semantic
+    from keepfold.mcp_server import Keepfold
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     src = tmp_path / "MyNotes"
     src.mkdir()
@@ -495,10 +495,10 @@ def test_imported_notes_keep_their_aliases(root_plain, tmp_path, home, monkeypat
     secret = v.read("resource", "obsidian-secret")
     assert secret.fields["private"] is True and secret.fields["aliases"] == ["Zorblat"]
     assert "aliases" not in secret.body
-    c = Cortex(v)
-    assert [h["id"] for h in c.cortex_find("NWTU")["hits"]][:1] == ["obsidian-campus"]
-    assert [h["id"] for h in c.cortex_find("Kandi")["hits"]][:1] == ["obsidian-lab"]
-    assert "obsidian-secret" not in json.dumps(c.cortex_find("Zorblat"))
+    c = Keepfold(v)
+    assert [h["id"] for h in c.keepfold_find("NWTU")["hits"]][:1] == ["obsidian-campus"]
+    assert [h["id"] for h in c.keepfold_find("Kandi")["hits"]][:1] == ["obsidian-lab"]
+    assert "obsidian-secret" not in json.dumps(c.keepfold_find("Zorblat"))
     (src / "Campus.md").write_text("---\naliases: [Northwest Tech]\n---\n"
                                    "Hostel and mess notes.\n", "utf-8")
     assert importers.import_notes(v, src, "obsidian")["updated"] == 1

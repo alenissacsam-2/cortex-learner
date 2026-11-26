@@ -9,10 +9,10 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from test_app import _serve, call
 
-from cortex import dates
-from cortex.app import desktop, server
-from cortex.events import EventLog, local_day
-from cortex.vault import Vault
+from keepfold import dates
+from keepfold.app import desktop, server
+from keepfold.events import EventLog, local_day
+from keepfold.vault import Vault
 
 TODAY = date.fromisoformat(local_day(datetime.now(UTC)))
 PREFS = ("---\nsummary: My preferences\n---\n\n# My preferences\n\n## Coding\n\n"
@@ -22,7 +22,7 @@ PREFS = ("---\nsummary: My preferences\n---\n\n# My preferences\n\n## Coding\n\n
 
 @pytest.fixture
 def app(root_committed, home):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     srv, a = _serve(root_committed)
     yield a
     srv.shutdown()
@@ -64,7 +64,7 @@ def test_a_plain_line_is_a_journal_line_with_its_dates_pinned(app):
     tomorrow = (TODAY + timedelta(days=1)).isoformat()
     assert f"call mom tomorrow ({tomorrow})" in page  # pinned once (L1)
     assert page.count(tomorrow) == 1 and "4321" not in page and "<private>" not in page
-    # cortex_log's own change, in a session closed at once: `cortex undo` takes it back
+    # keepfold_log's own change, in a session closed at once: `keepfold undo` takes it back
     assert [e["kind"] for e in new_events(app.root, before)] == ["open", "change", "close"]
 
 
@@ -163,7 +163,7 @@ def test_the_hotkey_thread_registers_presses_re_registers_and_unregisters(
     u, pressed = _no_real_hotkey, threading.Event()
     h = desktop.Hotkey(pressed.set)
     h.start()
-    assert h.thread.name == "cortex-hotkey" and h.thread.daemon
+    assert h.thread.name == "keepfold-hotkey" and h.thread.daemon
     assert u.calls == [("register", *SPACE)]
     assert h.label() == "Ctrl+Alt+Space" and not h.taken
     u.press()

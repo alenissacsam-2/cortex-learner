@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from ruamel.yaml.comments import CommentedMap
 
-from cortex.access import (
+from keepfold.access import (
     KINDS,
     VIEWERS,
     Audience,
@@ -16,8 +16,8 @@ from cortex.access import (
     audience_of_study,
     may_see,
 )
-from cortex.browse.privacy import Settings
-from cortex.vault import Note
+from keepfold.browse.privacy import Settings
+from keepfold.vault import Note
 
 S, L, C = Audience.SKIP, Audience.LOCAL, Audience.CLOUD
 # The spec's §2 table, written out. A cell is True/False, a condition, or {kind: condition}.
@@ -141,8 +141,8 @@ def test_audience_of_study():
 def test_exams_and_job_applications_have_a_scope(tmp_path):
     """R12: assessments sit under learning and applications under career, so a coding or
     unknown profile is not served them (profiles.withheld) and `all` still is."""
-    from cortex import access, profiles
-    from cortex.vault import Vault
+    from keepfold import access, profiles
+    from keepfold.vault import Vault
 
     assert access.scope_kind(frozenset({"learning"}), "assessment")
     assert not access.scope_kind(frozenset(profiles.CODING), "assessment")
@@ -160,7 +160,7 @@ def test_exams_and_job_applications_have_a_scope(tmp_path):
 
 
 def test_a_playbooks_own_scope():
-    from cortex import access
+    from keepfold import access
 
     assert access.scope_own(None, "personal") and access.scope_own(frozenset({"core"}), None)
     assert access.scope_own(frozenset({"core"}), "all")

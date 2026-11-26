@@ -1,6 +1,6 @@
 """E2 Privacy (docs/design/v6/TEST-PLAN.md §4), in-process. The owner's rule: Claude may see
 browsing except the hidden categories. A synthetic History with adult, health, money, bank,
-sign-in and secret-URL rows goes through `cortex browse import` under three settings; then
+sign-in and secret-URL rows goes through `keepfold browse import` under three settings; then
 every surface that leaves the vault (public browse files, index rows, the MCP read tools,
 prime, Today.md, the dashboard, the app's status JSON, the main vectors, the cloud runner's
 input and every command's output) is collected and grepped for every hidden host, title and
@@ -20,11 +20,11 @@ from ruamel.yaml import YAML
 from test_browse import Embed, hubbed
 from typer.testing import CliRunner
 
-from cortex import cloudllm, dashboard, localllm, mcp_server, semantic
-from cortex.app import server as app_server
-from cortex.cli import app
-from cortex.events import live
-from cortex.vault import Vault
+from keepfold import cloudllm, dashboard, localllm, mcp_server, semantic
+from keepfold.app import server as app_server
+from keepfold.cli import app
+from keepfold.events import live
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -53,7 +53,7 @@ class Opener:
 
 
 def set_config(home, browse: dict, vault) -> None:
-    p = home / ".cortex" / "config.yaml"
+    p = home / ".keepfold" / "config.yaml"
     p.parent.mkdir(exist_ok=True)
     data = {"vault": str(vault), "browse": browse,
             "cloudllm": {"provider": "openai", "model": "m", "api_key_env": KEY_ENV}}
@@ -112,22 +112,22 @@ async def _mcp(root) -> tuple[dict[str, str], str, set[str]]:
         found = set()
         for q in ("pasta recipe cooking", "browsing", "browse", "flu", "holdings", "clip",
                   "google search", "ZQPRIVNOTE", "ZQPRIVCO", "zqhealthterm", "Acme"):
-            got = await call("cortex_find", {"query": q})
+            got = await call("keepfold_find", {"query": q})
             found |= {h["id"] for h in got.get("hits", [])}
         for kind in ("assessment", "note", "due"):
-            got = await call("cortex_find", {"kind": kind})
+            got = await call("keepfold_find", {"kind": kind})
             found |= {h["id"] for h in got.get("hits", [])}
         for q in ("pasta recipe cooking kitchen", "health flu symptoms money holdings adult",
                   "what did I browse this week"):
-            got = await call("cortex_recall", {"query": q})
+            got = await call("keepfold_recall", {"query": q})
             found |= {h["id"] for h in got.get("hits", [])}
-        await call("cortex_prime", {"prompt": "What have I been browsing and cooking lately, "
+        await call("keepfold_prime", {"prompt": "What have I been browsing and cooking lately, "
                                               "and which assessment is next?"})
         for i in sorted(found | {"browse-index", "browse-private-index", "kitchen-diary",
                                  "secret-oa", "browse-private-2026-11-10", "browse-profile",
                                  "browse-sites"}):
-            await call("cortex_read", {"id": i})
-        index = srv.cortex.index
+            await call("keepfold_read", {"id": i})
+        index = srv.keepfold.index
         rows = "\n".join(index.db.iterdump())
         ids = {r[0] for r in index.db.execute("SELECT id FROM nodes")}
     return out, rows, ids
@@ -189,12 +189,12 @@ def test_e2_privacy(world, home):
     set_config(home, {"visible_to_claude": True, "hidden_from_claude": ["health", "money"],
                       "skip_categories": ["adult"], "cloud_processing": True}, root)
     outputs.append(cli("browse", "import", "--vault", root))
-    everything = tree(root)  # .cortex and .git included
+    everything = tree(root)  # .keepfold and .git included
     assert not hits(everything, DROPPED + ADULT), hits(everything, DROPPED + ADULT)
     # private pages are committed to the vault's local git like any page (browse-brain.md §2,
-    # "known and accepted"); .cortex/browse/ is the local archive's own cache
+    # "known and accepted"); .keepfold/browse/ is the local archive's own cache
     outside = {k: v for k, v in everything.items()
-               if not k.startswith(("browse/private/", ".cortex/browse/", ".git/"))}
+               if not k.startswith(("browse/private/", ".keepfold/browse/", ".git/"))}
     assert not hits(outside, SENSITIVE), hits(outside, SENSITIVE)
     private = tree(root, "browse/private")
     kept = b"".join(private.values()).lower()
@@ -213,7 +213,7 @@ def test_e2_privacy(world, home):
     leaks = hits(out, NEVER_OUT)
     assert not leaks, leaks
     assert any("browse-2026-11-10" in v for k, v in out.items()
-               if k.startswith("cortex_find") and isinstance(v, str))  # the public page shows
+               if k.startswith("keepfold_find") and isinstance(v, str))  # the public page shows
     _, _, ids = anyio.run(_mcp, root)
     assert "browse-2026-11-10" in ids and not any(i.startswith("browse-private") for i in ids)
 

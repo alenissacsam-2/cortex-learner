@@ -1,5 +1,5 @@
 """R27b: X-ray's Trace a reply (C2), Compare two apps (G5b-7) and the broad-read flag over
-cortex_find, cortex_recall and cortex_read rows (G5b-5)."""
+keepfold_find, keepfold_recall and keepfold_read rows (G5b-5)."""
 
 import json
 import logging
@@ -13,10 +13,10 @@ from test_app import _serve, call
 from test_app_js import HARNESS, _run
 from test_xray import PREFS, PROMPT, _aperture, claim_id
 
-from cortex import semantic, xray
-from cortex.events import local_day
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import semantic, xray
+from keepfold.events import local_day
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.usefixtures("home")
 @pytest.fixture
 def vault(root, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     note(root, "notes/engines.md", "title: Engines\nsummary: how a motor works\n",
          "# Engines\n\nAutomobile car motor basics.")
     note(root, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA recipe from the kitchen.")
@@ -43,7 +43,7 @@ def test_trace_ranks_by_the_rare_words_shared(vault):
     v = Vault(vault)
     pipenv, python = (claim_id(vault, t) for t in ("Uses Pipenv for every project.",
                                                    "Python first, type hints."))
-    xray.record(v, "cortex_prime", "claude-ai", {"preferences": [pipenv, python],
+    xray.record(v, "keepfold_prime", "claude-ai", {"preferences": [pipenv, python],
                                                  "related": ["py-0", "engines"]}, {}, 100)
     got = xray.trace(v, "claude-ai", "Since you prefer Pipenv, here is a Python setup.")
     assert got["calls"] == 1
@@ -51,7 +51,7 @@ def test_trace_ranks_by_the_rare_words_shared(vault):
         (pipenv, ["pipenv"]), ("py-0", ["python", "setup"]), (python, ["python"])]
     first = got["hits"][0]
     assert (first["kind"], first["tool"], first["title"]) == (
-        "claim", "cortex_prime", "Uses Pipenv for every project.")
+        "claim", "keepfold_prime", "Uses Pipenv for every project.")
     assert first["ts"] == xray.rows(v)[-1]["ts"] and "muted" in first and "pinned" in first
     # plural folding: "setups" and "guides" meet "setup" and "guide"
     (hit, *_), = [xray.trace(v, "claude-ai", "Setups and guides.")["hits"]]
@@ -62,10 +62,10 @@ def test_trace_shows_a_private_page_by_no_name(vault):
     note(vault, "notes/zanzibar.md", "title: Zanzibar diary\nprivate: true\n",
          "# Zanzibar diary\n\nZanzibar carburettor rebuild notes.")
     v = Vault(vault)
-    xray.record(v, "cortex_find", "cursor", {"found": ["zanzibar", "engines"]}, {}, 50)
+    xray.record(v, "keepfold_find", "cursor", {"found": ["zanzibar", "engines"]}, {}, 50)
     got = xray.trace(v, "cursor", "Rebuild the carburettor like your Zanzibar notes said.")
     (hit,) = got["hits"]
-    assert hit == {"title": xray.PRIVATE, "kind": "page", "tool": "cortex_find",
+    assert hit == {"title": xray.PRIVATE, "kind": "page", "tool": "keepfold_find",
                    "ts": xray.rows(v)[-1]["ts"]}
     dumped = json.dumps(got).lower()
     assert "zanzibar" not in dumped and "carburettor" not in dumped
@@ -73,10 +73,10 @@ def test_trace_shows_a_private_page_by_no_name(vault):
 
 def test_trace_reads_only_the_apps_last_ten_calls(vault):
     v = Vault(vault)
-    xray.record(v, "cortex_prime", "claude-ai", {"related": ["engines"]}, {}, 10)  # 11th back
+    xray.record(v, "keepfold_prime", "claude-ai", {"related": ["engines"]}, {}, 10)  # 11th back
     for _ in range(xray.TRACE_CALLS):
-        xray.record(v, "cortex_prime", "claude-ai", {"related": ["pasta"]}, {}, 10)
-    xray.record(v, "cortex_find", "cursor", {"found": ["engines"]}, {}, 10)
+        xray.record(v, "keepfold_prime", "claude-ai", {"related": ["pasta"]}, {}, 10)
+    xray.record(v, "keepfold_find", "cursor", {"found": ["engines"]}, {}, 10)
     reply = "An automobile motor, as in your engines page."
     assert xray.trace(v, "claude-ai", reply) == {"calls": 10, "hits": []}
     (hit,) = xray.trace(v, "cursor", reply)["hits"]
@@ -88,7 +88,7 @@ def test_trace_reads_only_the_apps_last_ten_calls(vault):
 def test_trace_endpoint_keeps_no_reply(vault, tmp_path, caplog, monkeypatch):
     caplog.set_level(logging.DEBUG)
     v = Vault(vault)
-    xray.record(v, "cortex_prime", "claude-ai", {"related": ["engines"]}, {}, 10)
+    xray.record(v, "keepfold_prime", "claude-ai", {"related": ["engines"]}, {}, 10)
     marker = "zqxjvplonkr"
     reply = f"Your automobile motor {marker} engines."
     srv, app = _serve(vault)
@@ -116,7 +116,7 @@ def test_trace_endpoint_keeps_no_reply(vault, tmp_path, caplog, monkeypatch):
         srv.shutdown()
         srv.server_close()
     assert marker not in caplog.text
-    for p in Path(tmp_path).rglob("*"):  # the vault, .cortex and the home folder
+    for p in Path(tmp_path).rglob("*"):  # the vault, .keepfold and the home folder
         if p.is_file():
             assert marker.encode() not in p.read_bytes(), p
 
@@ -169,15 +169,15 @@ def test_find_recall_and_read_record_ids_only(vault):
     note(vault, "people/dr-rao.md", "title: Dr Rao\nrelation: professor\n",
          "# Dr Rao\n\n## Who they are to me\nZebra mentor.\n")
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.sessions.client = "cursor"
-    found = c.cortex_find("automobile")
-    c.cortex_recall("automobile kitchen")
-    c.cortex_read("engines")
-    c.cortex_read("people/dr-rao")
+    found = c.keepfold_find("automobile")
+    c.keepfold_recall("automobile kitchen")
+    c.keepfold_read("engines")
+    c.keepfold_read("people/dr-rao")
     rs = xray.rows(v)
-    assert [r["tool"] for r in rs] == ["cortex_find", "cortex_recall", "cortex_read",
-                                       "cortex_read"]
+    assert [r["tool"] for r in rs] == ["keepfold_find", "keepfold_recall", "keepfold_read",
+                                       "keepfold_read"]
     assert {r["client"] for r in rs} == {"cursor"} and all(r["chars"] > 0 for r in rs[2:])
     assert rs[0]["served"] == {"found": [h["id"] for h in found["hits"]]}
     assert "engines" in rs[0]["served"]["found"]
@@ -188,7 +188,7 @@ def test_find_recall_and_read_record_ids_only(vault):
         assert text not in raw  # no query, no page text
     view = xray.view(v)
     (g,) = view["clients"]
-    assert [c_["tool"] for c_ in g["calls"]][0] == "cortex_read"
+    assert [c_["tool"] for c_ in g["calls"]][0] == "keepfold_read"
     assert g["calls"][0]["served"] == [{"block": "read", "items": [
         {"title": xray.PRIVATE, "kind": "page", "token": xray.token("dr-rao"),
          "pinned": False, "muted": False}]}]
@@ -197,25 +197,25 @@ def test_find_recall_and_read_record_ids_only(vault):
 
 def test_find_shapes_never_break_the_tool(vault, monkeypatch):
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.sessions.client = "cursor"
-    c.cortex_find(kind="resurface")
-    c.cortex_find("engines", kind="timeline")
-    monkeypatch.setattr(Cortex, "_resurface", lambda self, limit: {
+    c.keepfold_find(kind="resurface")
+    c.keepfold_find("engines", kind="timeline")
+    monkeypatch.setattr(Keepfold, "_resurface", lambda self, limit: {
         "items": [{"title": "x"}, "y", {"id": 7}, {"id": "pasta"}], "next": ""})
-    assert c.cortex_find(kind="resurface")["items"][0] == {"title": "x"}
+    assert c.keepfold_find(kind="resurface")["items"][0] == {"title": "x"}
     rs = xray.rows(v)
-    assert [r["tool"] for r in rs] == ["cortex_find"] * 3
+    assert [r["tool"] for r in rs] == ["keepfold_find"] * 3
     assert all(isinstance(i, str) for r in rs for ids in r["served"].values() for i in ids)
     assert rs[-1]["served"] == {"found": ["pasta"]}
 
 
 def test_served_most_often_counts_first_calls_only(vault):
     v = Vault(vault)
-    xray.record(v, "cortex_prime", "cursor", {"related": ["engines"]}, {}, 1)
+    xray.record(v, "keepfold_prime", "cursor", {"related": ["engines"]}, {}, 1)
     for _ in range(3):  # Mute does nothing for a search's hits: they never lead this list
-        xray.record(v, "cortex_find", "cursor", {"found": ["pasta", "engines"]}, {}, 1)
-    xray.record(v, "cortex_read", "cursor", {"read": ["pasta"]}, {}, 1)
+        xray.record(v, "keepfold_find", "cursor", {"found": ["pasta", "engines"]}, {}, 1)
+    xray.record(v, "keepfold_read", "cursor", {"read": ["pasta"]}, {}, 1)
     (g,) = xray.view(v)["clients"]
     assert [(x["id"], x["count"]) for x in g["often"]] == [("engines", 1)]
     assert len(g["calls"]) == 5  # the searches and reads still list
@@ -226,7 +226,7 @@ def test_old_guesses_judge_by_the_first_calls_not_older_reads(root):
     from test_review_auto import commit, page, past, tidy
     from test_time_salience import _guess
 
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", ["Uses Vim"])
     commit(root)
     _guess(root, "preferences", "Uses Vim", 31)
@@ -238,10 +238,10 @@ def test_old_guesses_judge_by_the_first_calls_not_older_reads(root):
 
     # finds reach 45 days back, first calls only 20: a guess older than those may have
     # been served by a first call the ring has dropped
-    ring((ago(45), "cortex_find"), (ago(20), "cortex_prime"))
+    ring((ago(45), "keepfold_find"), (ago(20), "keepfold_prime"))
     assert tidy(root) == {"moved": 0, "retired": 0}
     assert "Uses Vim" not in past(root, "preferences")
-    ring((ago(45), "cortex_prime"), (ago(20), "cortex_prime"))
+    ring((ago(45), "keepfold_prime"), (ago(20), "keepfold_prime"))
     assert tidy(root) == {"moved": 0, "retired": 0, "guesses": 1}
     assert "Uses Vim" in past(root, "preferences")
 
@@ -251,10 +251,10 @@ def test_reads_are_capped_apart(vault, monkeypatch):
     monkeypatch.setattr(xray, "READ_CAP", 2)
     v = Vault(vault)
     for n in range(4):
-        xray.record(v, "cortex_prime", "claude-ai", {"related": [f"p{n}"]}, {}, 1)
+        xray.record(v, "keepfold_prime", "claude-ai", {"related": [f"p{n}"]}, {}, 1)
     for n in range(3):
-        xray.record(v, "cortex_find", "claude-ai", {"found": [f"f{n}"]}, {}, 1)
-    xray.record(v, "resource:cortex://core", "claude-ai", {"core": ["me/core"]}, {}, 1)
+        xray.record(v, "keepfold_find", "claude-ai", {"found": [f"f{n}"]}, {}, 1)
+    xray.record(v, "resource:keepfold://core", "claude-ai", {"core": ["me/core"]}, {}, 1)
     assert [next(iter(r["served"].values()))[0] for r in xray.rows(v)] == [
         "p2", "p3", "f1", "f2", "me/core"]  # resource rows count with the CAP family
 
@@ -263,7 +263,7 @@ def test_reads_are_capped_apart(vault, monkeypatch):
 NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 
-def _reads(start, pages, per=5, step=timedelta(minutes=1), tool="cortex_find",
+def _reads(start, pages, per=5, step=timedelta(minutes=1), tool="keepfold_find",
            client="cursor"):
     """One call per `step` from `start`, `per` pages each."""
     return [{"ts": (start + step * (k // per)).strftime(xray.TS), "tool": tool,
@@ -293,11 +293,11 @@ def test_the_window_maths():
     assert xray.wide(_reads(week - timedelta(minutes=11), _pages(51)), now=NOW) is None
     assert xray.wide(_reads(week + timedelta(minutes=1), _pages(51)), now=NOW)["n"] == 51
     # first calls and resource reads are not searches or reads
-    for tool in ("cortex_prime", "resource:cortex://core", "cortex_context"):
+    for tool in ("keepfold_prime", "resource:keepfold://core", "keepfold_context"):
         assert xray.wide(_reads(t0, _pages(60), tool=tool), now=NOW) is None, tool
     # recall and read count with find
-    rs = _reads(t0, _pages(20), tool="cortex_recall") + _reads(
-        t0, _pages(20, "r"), tool="cortex_read") + _reads(t0, _pages(20, "f"))
+    rs = _reads(t0, _pages(20), tool="keepfold_recall") + _reads(
+        t0, _pages(20, "r"), tool="keepfold_read") + _reads(t0, _pages(20, "f"))
     assert xray.wide(rs, now=NOW)["n"] == 60
     # after a Got it, only later calls count
     assert xray.wide(_reads(t0, _pages(51)), after=w["end"], now=NOW) is None
@@ -345,15 +345,15 @@ def test_a_normal_chat_reads_far_below_the_flag(vault, monkeypatch):
         note(vault, f"notes/topic-{n}.md", f"title: Motor topic {n}\n",
              f"# Motor topic {n}\n\nCar motor fact number {n}.")
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.sessions.client = "claude-ai"
-    c.cortex_prime("How does a car motor work?")
+    c.keepfold_prime("How does a car motor work?")
     for q in ("car motor", "motor fact", "automobile"):
-        c.cortex_find(q)
-    c.cortex_recall("car motor")
+        c.keepfold_find(q)
+    c.keepfold_recall("car motor")
     for i in ("topic-1", "topic-2", "engines"):
-        c.cortex_read(i)
-    c.cortex_context(topic="car motor")
+        c.keepfold_read(i)
+    c.keepfold_context(topic="car motor")
     assert xray.wide(xray.rows(v)) is None
     monkeypatch.setattr(xray, "WIDE_PAGES", 0)
     assert xray.wide(xray.rows(v))["n"] <= 35  # 3 finds of 8, a recall of 8, 3 reads at most
@@ -464,7 +464,7 @@ def test_the_trace_compare_and_warning_page(tmp_path):
     line = {"id": "^c-abcde", "kind": "claim", "title": "Uses Pipenv for every project.",
             "where": "preferences · Coding", "pinned": False, "muted": False}
     racing = {**line, "id": "^c-fghij", "title": "Weekend motor racing fan."}
-    call_ = {"ts": ts, "tool": "cortex_prime", "chars": 900,
+    call_ = {"ts": ts, "tool": "keepfold_prime", "chars": 900,
              "served": [{"block": "related", "items": [engines]}], "trimmed": []}
     end = (datetime.now(UTC) - timedelta(days=2)).strftime(xray.TS)  # 2 local days back
     wide = {"n": 64, "day": end[:10], "end": end}
@@ -477,10 +477,10 @@ def test_the_trace_compare_and_warning_page(tmp_path):
             "all_scopes": ["all", "core", "coding", "personal"], "clients": clients}
     acked = {**view, "clients": [{**clients[0], "wide": None}, clients[1]]}
     traced = {"calls": 3, "hits": [
-        {**line, "tool": "cortex_prime", "ts": ts, "words": ["pipenv"]},
-        {**engines, "tool": "cortex_find", "ts": ts, "words": ["python", "setup"]},
-        {"title": "a private page", "kind": "page", "tool": "cortex_read", "ts": ts},
-        {**profile, "tool": "cortex_prime", "ts": ts, "words": ["python"]}]}
+        {**line, "tool": "keepfold_prime", "ts": ts, "words": ["pipenv"]},
+        {**engines, "tool": "keepfold_find", "ts": ts, "words": ["python", "setup"]},
+        {"title": "a private page", "kind": "page", "tool": "keepfold_read", "ts": ts},
+        {**profile, "tool": "keepfold_prime", "ts": ts, "words": ["python"]}]}
     compared = {
         "a": {"served": [{"block": "preferences", "items": [racing]},
                          {"block": "related", "items": [engines]}],
@@ -509,22 +509,22 @@ def test_the_trace_compare_and_warning_page(tmp_path):
     assert out["disabled"] == [True, True, False] and out["plainEnter"] == 0
     assert out["busy"] == ["true", None, 1, "true", None]  # the app's busy dots (pressable)
     when = "served by {} · 3 hours ago"
-    matched = ("Matched against what Cortex gave Claude Code in its last 3 calls · the reply "
+    matched = ("Matched against what Keepfold gave Claude Code in its last 3 calls · the reply "
                "was not saved")
     assert out["traced"] == [[matched], [
-        ["Uses Pipenv for every project.", [when.format("cortex_prime"), "Shared words: pipenv"],
+        ["Uses Pipenv for every project.", [when.format("keepfold_prime"), "Shared words: pipenv"],
          ["Mute", "Retire"], ["Mute: Uses Pipenv for every project.",
                               "Retire: Uses Pipenv for every project."]],
-        ["Engines", [when.format("cortex_find"), "Shared words: python, setup"], ["Mute"],
+        ["Engines", [when.format("keepfold_find"), "Shared words: python, setup"], ["Mute"],
          ["Mute: Engines"]],
-        ["a private page", [when.format("cortex_read")], [], []],
-        ["Profile", [when.format("cortex_prime"), "Shared words: python"], [], []]]]
+        ["a private page", [when.format("keepfold_read")], [], []],
+        ["Profile", [when.format("keepfold_prime"), "Shared words: python"], [], []]]]
     assert out["retired"] == ["You use Pipenv.", [matched],
                               ["Engines", "a private page", "Profile"],
                               "Retired. AI apps no longer get this line."]
     assert out["none"] == [[
-        "Matched against what Cortex gave mystery-app in its last 1 call · the reply was not "
-        "saved", "None of what Cortex gave mystery-app recently matches this reply. The reply "
+        "Matched against what Keepfold gave mystery-app in its last 1 call · the reply was not "
+        "saved", "None of what Keepfold gave mystery-app recently matches this reply. The reply "
         "may come from the app's own memory or the model itself."], 3]
     apps = [["claude-code", "Claude Code"], ["mystery-app", "mystery-app"]]
     assert out["cmpForm"] == [

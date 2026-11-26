@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex import browse_serve as bs
-from cortex.events import local_day
+from keepfold import browse_serve as bs
+from keepfold.events import local_day
 
 START = "2026-11-10T12:00:00Z"
 DAY = local_day(datetime(2026, 11, 10, 12, tzinfo=UTC))
@@ -77,7 +77,7 @@ def test_a_failed_run_logs_no_text(monkeypatch, caplog, tmp_path):
         raise ValueError("https://secret.example/page Secret Title")
 
     p, _, lines = _aged(monkeypatch, boom, tmp_path)
-    with caplog.at_level(logging.DEBUG, logger="cortex"):
+    with caplog.at_level(logging.DEBUG, logger="keepfold"):
         assert p.tick()
     assert "ValueError" in caplog.text and "secret" not in caplog.text.lower()
     assert p.processing is False and lines[-1] == "failed: ValueError"
@@ -101,8 +101,8 @@ def test_processing_prints_counts_only_progress(monkeypatch, tmp_path):
 def test_run_import_is_the_whole_import_with_no_since(vault, home, monkeypatch):
     """Every browser found, no `since` (it would skip History days before it), no runner
     unless config enables the local LLM, and the embedder never downloaded."""
-    from cortex import semantic
-    from cortex.browse import build, sources
+    from keepfold import semantic
+    from keepfold.browse import build, sources
 
     got = {}
     monkeypatch.setattr(sources, "discover", lambda: ["a source"])
@@ -118,12 +118,12 @@ def test_run_import_is_the_whole_import_with_no_since(vault, home, monkeypatch):
 def test_run_import_still_imports_the_inbox_the_extension_left(vault, home, monkeypatch):
     """The extension is gone, but the visits it saved and no import read yet still import
     (with no browser chosen), and the file moves to the archive."""
-    from cortex import semantic
-    from cortex.browse import build, sources
+    from keepfold import semantic
+    from keepfold.browse import build, sources
 
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [])
     monkeypatch.setattr(semantic, "load_embedder", lambda download=False: None)
-    d = vault / ".cortex" / "browse"
+    d = vault / ".keepfold" / "browse"
     d.mkdir(parents=True)
     (d / f"inbox-{DAY}.jsonl").write_text(json.dumps({
         "url": "https://example.com/a", "title": "Fourier series notes", "start": START,
@@ -136,7 +136,7 @@ def test_run_import_still_imports_the_inbox_the_extension_left(vault, home, monk
 
 
 def _last_run(vault, when: datetime) -> None:
-    from cortex.browse import build
+    from keepfold.browse import build
     p = vault / build.STATE  # what a finished import leaves
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"last_run": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "sources": {
@@ -147,7 +147,7 @@ def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, mon
     """browse.auto_import_hours: due by the last import's age, first checked a minute after
     start then every 10 minutes; never before a first import, never with 0, never while the
     browse-wide lock is held (a forget or deepen). Only the profiles imported before."""
-    from cortex.browse import build, sites, sources
+    from keepfold.browse import build, sites, sources
     runs, lines = [], []
     monkeypatch.setattr(sources, "discover", lambda *a, **k: [
         sources.Source("chrome", "Default", vault / "a"),
@@ -182,14 +182,39 @@ def test_receiver_imports_by_itself_when_the_last_import_is_old(vault, home, mon
     _last_run(vault, now - timedelta(hours=5))  # fresh enough
     t[0] += bs.AUTO_EVERY_S
     assert not p.tick() and runs == [C]
-    (home / ".cortex").mkdir(exist_ok=True)
-    cfg = home / ".cortex" / "config.yaml"
+    (home / ".keepfold").mkdir(exist_ok=True)
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.write_text("browse:\n  auto_import_hours: 4\n", encoding="utf-8")
     t[0] += bs.AUTO_EVERY_S
     assert p.tick() and runs == [C, C]
     cfg.write_text("browse:\n  auto_import_hours: 0\n", encoding="utf-8")
     t[0] += bs.AUTO_EVERY_S
     assert not p.tick() and runs == [C, C]
+
+
+def test_an_unreadable_config_stops_every_browsing_import(vault, home, caplog):
+    """D1-audit 1.2: a typo in config.yaml must not import on the default settings (no deny
+    list, no skipped profiles): the automatic import skips with one log line per check, a
+    manual one (build.run, the site pages' move) refuses."""
+    from keepfold import taint
+    from keepfold.browse import Settings, build, store
+    from keepfold.vault import VaultError
+    v = bs.Vault(vault)
+    _last_run(vault, datetime.now(UTC) - timedelta(hours=7))
+    assert bs.auto_import_due(v)
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text("browse:\n  deny: [bank.example\n",
+                                                  encoding="utf-8")
+    err = taint.config_error()
+    assert err and err.endswith("ParserError at line 3")
+    with caplog.at_level(logging.WARNING, logger=bs.__name__):
+        assert not bs.auto_import_due(v) and not bs.auto_import_due(v, live=True)
+    assert [r.getMessage() for r in caplog.records] == [
+        f"browse: automatic import skipped: {err}"] * 2
+    for go in (lambda: build.run(v, [], Settings()),
+               lambda: store.migrate(v, settings=Settings())):
+        with pytest.raises(VaultError, match="so the browsing import is off"):
+            go()
 
 
 def test_auto_import_hours_falls_back_on_bad_values():
@@ -203,9 +228,9 @@ def test_auto_import_hours_falls_back_on_bad_values():
 def test_a_failing_check_never_ends_the_receivers_loop(tmp_path, monkeypatch):
     import threading
 
-    from cortex import browse_serve
-    from cortex.vault import Vault
-    (tmp_path / ".cortex").mkdir()
+    from keepfold import browse_serve
+    from keepfold.vault import Vault
+    (tmp_path / ".keepfold").mkdir()
     proc = browse_serve.Processor(Vault(tmp_path))
     calls = []
 
@@ -222,10 +247,10 @@ def test_a_failing_check_never_ends_the_receivers_loop(tmp_path, monkeypatch):
 
 
 def test_auto_sources_is_empty_when_the_browsers_cannot_be_listed(tmp_path, monkeypatch):
-    from cortex import browse_serve
-    from cortex.browse import sources
-    from cortex.vault import Vault
-    (tmp_path / ".cortex").mkdir()
+    from keepfold import browse_serve
+    from keepfold.browse import sources
+    from keepfold.vault import Vault
+    (tmp_path / ".keepfold").mkdir()
 
     def denied(*a, **k):
         raise PermissionError("denied")

@@ -1,6 +1,6 @@
 """Harvest (docs/design/v6/arena/harvest-verdict.md): the user-turn parser, the queue and its
 bundles, the duplicate fold, the `harvested` ledger, the guards while chats are served,
-recall quieting, `cortex_read` exposure and `cortex eval harvest`. A synthetic vault of three
+recall quieting, `keepfold_read` exposure and `keepfold eval harvest`. A synthetic vault of three
 hubs and a dozen chat pages on vault_mini; FakeEmbed puts car words on one axis and kitchen
 words on another, and two-pointers gets car words so it is the cars hub's concept."""
 
@@ -10,12 +10,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from conftest import FakeEmbed, events, git, note, tiers
 
-from cortex import chats, harvest, semantic, topics
-from cortex.catalog import Catalog
-from cortex.events import local_day
-from cortex.index import Index
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import chats, harvest, semantic, topics
+from keepfold.catalog import Catalog
+from keepfold.events import local_day
+from keepfold.index import Index
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -144,11 +144,11 @@ def test_a_private_hub_is_never_served_and_can_be_skipped(core, vault):
     units = harvest.queue(idx, t, stack, set(), set())
     assert not any("chat-health-1" in u["chats"] for u in units)
     assert [u["unit"] for u in units] == ["cars", "food", "month:2026-06", "month:2026-05"]
-    out = call(core, "cortex_log", kind="harvested", payload={"outcome": "skipped",
+    out = call(core, "keepfold_log", kind="harvested", payload={"outcome": "skipped",
                                                                 "hub": "health"})
     assert out["recorded"] == 1 and "private" in out["display_line"], out
     assert "Health" not in (vault / "log.md").read_text(encoding="utf-8")
-    bad = call(core, "cortex_log", kind="harvested", payload={"outcome": "skipped",
+    bad = call(core, "keepfold_log", kind="harvested", payload={"outcome": "skipped",
                                                                 "hub": "nope"})
     assert bad["error"] == "invalid_argument"
 
@@ -244,7 +244,7 @@ def test_fold_respects_voids_and_quiet_hides_copies():
 @pytest.fixture
 def core(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    return Cortex(Vault(vault))
+    return Keepfold(Vault(vault))
 
 
 def call(c, name, **kw):
@@ -257,23 +257,23 @@ def harvested(root):
 
 
 def test_harvest_action_serves_without_exposing_and_arms_the_guards(core, vault):
-    call(core, "cortex_start", mode="history")
-    b = call(core, "cortex_chats", action="harvest")
+    call(core, "keepfold_start", mode="history")
+    b = call(core, "keepfold_chats", action="harvest")
     assert b["hubs"][0]["id"] == "cars" and b["budget"] == {"about_me": 4}
-    assert "cortex_log(kind='harvested'" in b["next"]
+    assert "keepfold_log(kind='harvested'" in b["next"]
     assert core.sessions.current.exposed is False
     assert core.sessions.served == set(served(b)) and "chat-car-2-copy" in core.sessions.served
-    life = call(core, "cortex_chats", action="harvest", id="area-life")
+    life = call(core, "keepfold_chats", action="harvest", id="area-life")
     assert [h["id"] for h in life["hubs"]] == ["health", "food"]
-    bad = call(core, "cortex_chats", action="harvest", id="chat-car-1")
+    bad = call(core, "keepfold_chats", action="harvest", id="chat-car-1")
     assert bad["error"] == "invalid_argument"
-    call(core, "cortex_end")
+    call(core, "keepfold_end")
     assert core.sessions.served == set()  # cleared when the session closes
 
 
 def test_harvest_action_needs_the_model(vault):
-    out = call(Cortex(Vault(vault)), "cortex_chats", action="harvest")
-    assert out["error"] == "invalid_argument" and "cortex model download" in out["message"]
+    out = call(Keepfold(Vault(vault)), "keepfold_chats", action="harvest")
+    assert out["error"] == "invalid_argument" and "keepfold model download" in out["message"]
 
 
 @pytest.mark.parametrize("payload, why", [
@@ -289,20 +289,20 @@ def test_harvest_action_needs_the_model(vault):
     ({"outcome": "skipped", "hub": "chat-car-1"}, "payload.hub"),
 ])
 def test_harvested_validation(core, payload, why):
-    out = call(core, "cortex_log", kind="harvested", payload=payload)
+    out = call(core, "keepfold_log", kind="harvested", payload=payload)
     assert out["error"] == "invalid_argument" and why in out["message"], out
 
 
 def test_harvested_ledger_key_repeats_void_and_no_journal(core, vault):
-    call(core, "cortex_start", mode="history")
-    b = call(core, "cortex_chats", action="harvest")
+    call(core, "keepfold_start", mode="history")
+    b = call(core, "keepfold_chats", action="harvest")
     ids = served(b)
     pl = {"chats": ids, "dupes": {"chat-car-2-copy": "chat-car-2"}, "pages": ["two-pointers"],
           "found": 1}
-    out = call(core, "cortex_log", kind="harvested", payload=pl, key=b["bundle"])
+    out = call(core, "keepfold_log", kind="harvested", payload=pl, key=b["bundle"])
     assert out["recorded"] == 1 and "10 chats" in out["display_line"]
     core._done.clear()  # a new process: the event log's key, not the reply cache, answers
-    again = call(core, "cortex_log", kind="harvested", payload=pl, key=b["bundle"])
+    again = call(core, "keepfold_log", kind="harvested", payload=pl, key=b["bundle"])
     assert again["recorded"] == 0
     [e] = harvested(vault)
     assert e["payload"] == {"kind": "harvested", "outcome": "harvested", "chats": ids,
@@ -311,30 +311,30 @@ def test_harvested_ledger_key_repeats_void_and_no_journal(core, vault):
     log = (vault / "log.md").read_text(encoding="utf-8")
     assert log.count("harvest | 10 chats → 1 pages") == 1
     assert not list((vault / "journal").glob("*.md"))  # no journal line per bundle
-    dup = call(core, "cortex_log", kind="harvested", payload={"chats": ids[:2]})
+    dup = call(core, "keepfold_log", kind="harvested", payload={"chats": ids[:2]})
     assert dup["error"] == "already_harvested"
-    assert call(core, "cortex_chats", action="harvest")["bundle"] is None
-    call(core, "cortex_log", kind="void", payload={"event_id": e["id"], "reason": "redo"})
-    back = call(core, "cortex_chats", action="harvest")
+    assert call(core, "keepfold_chats", action="harvest")["bundle"] is None
+    call(core, "keepfold_log", kind="void", payload={"event_id": e["id"], "reason": "redo"})
+    back = call(core, "keepfold_chats", action="harvest")
     assert set(served(back)) == set(ids)  # a void re-queues the bundle, with a new bundle id
     assert back["bundle"] != b["bundle"]
-    skip = call(core, "cortex_log", kind="harvested", payload={"outcome": "skipped",
+    skip = call(core, "keepfold_log", kind="harvested", payload={"outcome": "skipped",
                                                                  "hub": "area-life"})
     assert skip["recorded"] == 1
-    assert {h["id"] for h in call(core, "cortex_chats", action="harvest")["hubs"]} == {"cars"}
+    assert {h["id"] for h in call(core, "keepfold_chats", action="harvest")["hubs"]} == {"cars"}
 
 
 def test_harvested_takes_the_lines_as_found_and_me_prefixed_pages(core, vault):
     """dogfood r4 #1: harvest.md read literally sends the lines and me/ ids; both are kept."""
-    call(core, "cortex_start", mode="history")
-    b = call(core, "cortex_chats", action="harvest")
-    out = call(core, "cortex_log", kind="harvested", key=b["bundle"], payload={
+    call(core, "keepfold_start", mode="history")
+    b = call(core, "keepfold_chats", action="harvest")
+    out = call(core, "keepfold_log", kind="harvested", key=b["bundle"], payload={
         "chats": served(b), "dupes": {"chat-car-2-copy": "chat-car-2"},
         "pages": ["two-pointers", "me/personality"], "found": ["likes cars", "drives"]})
     assert out["recorded"] == 1, out
     [e] = harvested(vault)
     assert e["payload"]["found"] == 2 and e["payload"]["pages"] == ["two-pointers", "personality"]
-    bad = call(core, "cortex_log", kind="harvested", payload={"chats": ["chat-car-1"],
+    bad = call(core, "keepfold_log", kind="harvested", payload={"chats": ["chat-car-1"],
                                                               "pages": ["me/Not An Id"]})
     assert bad["error"] == "invalid_argument" and "bare page ids" in bad["message"]
 
@@ -345,12 +345,12 @@ CITE = " (from [[chat-car-1]])"
 
 
 def harvesting(core):
-    call(core, "cortex_start", mode="history")
-    return call(core, "cortex_chats", action="harvest")
+    call(core, "keepfold_start", mode="history")
+    return call(core, "keepfold_chats", action="harvest")
 
 
 def patch(core, id, target, text, **kw):
-    return call(core, "cortex_patch", id=id, op="append_to_section", target=target, text=text,
+    return call(core, "keepfold_patch", id=id, op="append_to_section", target=target, text=text,
                 **kw)
 
 
@@ -373,7 +373,7 @@ def test_claim_lines_become_cited_proposals_capped_by_outstanding(core, vault):
     out = patch(core, "me/preferences", "Learning", f"pref 3{CITE}")  # a 5th waiting line
     assert out["queued"] is False and "budget" in out["summary"]
     assert "pref 3" not in inbox(vault)
-    call(core, "cortex_patch", id="me/preferences", op="reject", target=f"pref 0{CITE}")
+    call(core, "keepfold_patch", id="me/preferences", op="reject", target=f"pref 0{CITE}")
     assert patch(core, "me/preferences", "Learning", f"pref 3{CITE}")["queued"] is True
     yes = patch(core, "me/preferences", "Learning", f"likes worked examples{CITE}",
                 user_confirmed=True)  # a yes on the card is written at once
@@ -386,7 +386,7 @@ def test_the_per_session_cap_resets_with_the_next_harvest(core, vault):
     harvesting(core)
     for k in range(4):
         assert patch(core, "me/preferences", "Learning", f"pref {k}{CITE}")["queued"] is True
-    call(core, "cortex_end", summary="first harvest")
+    call(core, "keepfold_end", summary="first harvest")
     b = harvesting(core)  # 4 lines still wait, but none is this session's
     assert b["budget"]["about_me"] == 4
 
@@ -411,7 +411,7 @@ def test_chat_pages_are_read_only_and_a_bare_hub_gets_its_heading(core, vault):
     harvesting(core)
     for op, target, text in (("append_to_section", "Notes", "x"), ("set_topics", "", "food"),
                              ("set_field", "summary", "x")):
-        out = call(core, "cortex_patch", id="chat-car-1", op=op, target=target, text=text)
+        out = call(core, "keepfold_patch", id="chat-car-1", op=op, target=target, text=text)
         assert out["error"] == "invalid_argument" and "read-only" in out["message"], op
     before = (vault / "notes/cars.md").read_bytes()
     out = patch(core, "cars", "What I know", line)  # the hub's own section: never harvested into
@@ -432,27 +432,27 @@ def test_know_reads_both_headings_old_first():
 
 
 @pytest.mark.parametrize("name, kw", [
-    ("cortex_ask", {"concept": "two-pointers", "item_type": "recall", "question": "q?"}),
-    ("cortex_grade", {"concept": "two-pointers", "question": "q?", "learner_answer": "a",
+    ("keepfold_ask", {"concept": "two-pointers", "item_type": "recall", "question": "q?"}),
+    ("keepfold_grade", {"concept": "two-pointers", "question": "q?", "learner_answer": "a",
                       "verdict": "correct"}),
-    ("cortex_log", {"kind": "self_report", "payload": {"concept": "two-pointers",
+    ("keepfold_log", {"kind": "self_report", "payload": {"concept": "two-pointers",
                                                        "verdict": "correct"}}),
-    ("cortex_log", {"kind": "taught", "payload": {"concept": "two-pointers"}}),
-    ("cortex_log", {"kind": "assessment_result", "payload": {"assessment": "acme-oa-2026",
+    ("keepfold_log", {"kind": "taught", "payload": {"concept": "two-pointers"}}),
+    ("keepfold_log", {"kind": "assessment_result", "payload": {"assessment": "acme-oa-2026",
                                                              "outcome": "pass"}}),
-    ("cortex_add", {"kind": "person", "title": "A friend"}),
-    ("cortex_log", {"kind": "problem_status", "payload": {"problem": "two-sum",
+    ("keepfold_add", {"kind": "person", "title": "A friend"}),
+    ("keepfold_log", {"kind": "problem_status", "payload": {"problem": "two-sum",
                                                           "status": "solved"}}),
-    ("cortex_log", {"kind": "spot_check", "payload": {"event_id": "x", "verdict": "correct"}}),
-    ("cortex_patch", {"id": "people/a-friend", "op": "append_to_section", "target": "Notes",
+    ("keepfold_log", {"kind": "spot_check", "payload": {"event_id": "x", "verdict": "correct"}}),
+    ("keepfold_patch", {"id": "people/a-friend", "op": "append_to_section", "target": "Notes",
                       "text": "- likes cars"}),
 ])
 def test_no_evidence_or_people_while_harvesting(core, vault, name, kw):
     harvesting(core)
     out = call(core, name, **kw)
     assert out["error"] == "harvesting" and out["next"], out
-    assert call(core, "cortex_log", kind="journal", payload={"text": "harvested"})["recorded"]
-    call(core, "cortex_end")
+    assert call(core, "keepfold_log", kind="journal", payload={"text": "harvested"})["recorded"]
+    call(core, "keepfold_end")
     assert call(core, name, **kw).get("error") != "harvesting"  # a fresh session may
 
 
@@ -469,12 +469,12 @@ def test_guards_follow_the_session_that_served_the_bundle(core, vault):
     while that session is current, so a mock started afterwards can grade."""
     grade = {"concept": "two-pointers", "question": "q?", "learner_answer": "a",
              "verdict": "correct"}
-    call(core, "cortex_chats", action="harvest")  # no session open
+    call(core, "keepfold_chats", action="harvest")  # no session open
     assert core.sessions.current.mode == "history" and core.sessions.harvesting
-    assert call(core, "cortex_grade", **grade)["error"] == "harvesting"
-    call(core, "cortex_start", mode="mock")
+    assert call(core, "keepfold_grade", **grade)["error"] == "harvesting"
+    call(core, "keepfold_start", mode="mock")
     assert not core.sessions.served and not core.sessions.harvesting
-    assert call(core, "cortex_grade", **grade).get("error") is None
+    assert call(core, "keepfold_grade", **grade).get("error") is None
 
 
 def test_guards_lift_when_the_serving_session_goes_idle(core, vault):
@@ -494,14 +494,14 @@ def test_a_yes_to_an_older_waiting_line_needs_no_citation_while_harvesting(core,
     assert out["error"] == "invalid_argument" and "Cite the chat" in out["message"]
 
 
-# ---- 7. cortex_read exposure ----------------------------------------------------------
+# ---- 7. keepfold_read exposure ----------------------------------------------------------
 
 def test_reading_a_chat_page_exposes_the_session(core, vault):
     harvesting(core)
-    call(core, "cortex_read", id="two-pointers")
-    call(core, "cortex_read", id="food")
+    call(core, "keepfold_read", id="two-pointers")
+    call(core, "keepfold_read", id="food")
     assert core.sessions.current.exposed is False
-    call(core, "cortex_read", id="chat-car-1")
+    call(core, "keepfold_read", id="chat-car-1")
     assert core.sessions.current.exposed is True
     out = patch(core, "me/preferences", "Learning", f"likes diagrams{CITE}", user_confirmed=True)
     assert out["queued"] is True  # R3-2: exposed, so the relayed yes waits in Review
@@ -513,10 +513,10 @@ def test_reading_a_browse_page_exposes_the_session(core, vault):
     p.parent.mkdir(exist_ok=True)
     p.write_text("---\ntitle: Browsing on 1 November\n---\n- example.com: a page title\n",
                  encoding="utf-8")
-    call(core, "cortex_start", mode="history")
-    call(core, "cortex_read", id="two-pointers")
+    call(core, "keepfold_start", mode="history")
+    call(core, "keepfold_read", id="two-pointers")
     assert core.sessions.current.exposed is False
-    assert call(core, "cortex_read", id="2026-11-01")["kind"] == "browse"
+    assert call(core, "keepfold_read", id="2026-11-01")["kind"] == "browse"
     assert core.sessions.current.exposed is True
 
 
@@ -553,30 +553,30 @@ def test_quiet_hides_copies_and_ranks_harvested_chats_below_their_twins(vault):
 def test_recall_sites_pass_quiet(core, vault, monkeypatch):
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
 
-    call(core, "cortex_log", kind="harvested", payload={
+    call(core, "keepfold_log", kind="harvested", payload={
         "chats": ["chat-car-2", "chat-car-2-copy"], "dupes": {"chat-car-2-copy": "chat-car-2"}})
-    ids = [h["id"] for h in call(core, "cortex_recall", query="car gearbox", limit=20)["hits"]]
+    ids = [h["id"] for h in call(core, "keepfold_recall", query="car gearbox", limit=20)["hits"]]
     assert "chat-car-2" in ids and "chat-car-2-copy" not in ids
     asked = []
     monkeypatch.setattr(core, "_quiet", lambda: asked.append(1) or {})
-    call(core, "cortex_context", topic="car gearbox")
-    call(core, "cortex_prime", prompt="car gearbox basics")
+    call(core, "keepfold_context", topic="car gearbox")
+    call(core, "keepfold_prime", prompt="car gearbox basics")
     assert len(asked) == 2  # context and prime fold it too
     out = CliRunner().invoke(app, ["recall", "car gearbox", "--limit", "20", "--vault",
                                    str(vault)]).output
     assert "chat-car-2 " in out and "chat-car-2-copy" not in out
 
 
-# ---- 9. cortex eval harvest -----------------------------------------------------------
+# ---- 9. keepfold eval harvest -----------------------------------------------------------
 
 def test_eval_harvest_numbers(vault, monkeypatch):
     from typer.testing import CliRunner
     from ulid import ULID
 
-    from cortex.cli import app
-    from cortex.events import EventLog
+    from keepfold.cli import app
+    from keepfold.events import EventLog
 
     log, now = EventLog(Vault(vault)), datetime.now(UTC)
     old, new = f"s_{ULID()}", f"s_{ULID()}"
@@ -612,14 +612,14 @@ def test_eval_harvest_numbers(vault, monkeypatch):
     assert r["empty"] == {"Gemini": {"chats": 2, "empty": 1, "rate": 0.5},
                           "Perplexity": {"chats": 1, "empty": 0, "rate": 0.0}}
     assert [(x["session"], x["pages"], x["undo"]) for x in r["runs"]] == [
-        (old, ["food", "gone"], f"cortex undo {old}"), (new, [], f"cortex undo {new}")]
+        (old, ["food", "gone"], f"keepfold undo {old}"), (new, [], f"keepfold undo {new}")]
     since = json.loads(run("--json", "--since", local_day(now)))
     assert since["keep"]["pages"] == 0 and [x["session"] for x in since["runs"]] == [new]
     text = run()
     assert CliRunner().invoke(  # review r4 S3: the new home prints the same
         app, ["harvest", "status", "--vault", str(vault)]).output == text
     assert "placement coverage: 0.33 (2 of 6 chats in 1 hubs" in text
-    assert "7-day keep share: 0.50" in text and f"undo: cortex undo {old}" in text
+    assert "7-day keep share: 0.50" in text and f"undo: keepfold undo {old}" in text
     assert "--since must be a day" in CliRunner().invoke(
         app, ["eval", "harvest", "--since", "soon", "--vault", str(vault)]).output
 
@@ -628,7 +628,7 @@ def test_eval_harvest_escapes_page_text(vault, monkeypatch):
     """review r4 L6: an app name or page id from a chat page reaches the terminal escaped."""
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
 
     real = harvest.status
 
@@ -636,7 +636,7 @@ def test_eval_harvest_escapes_page_text(vault, monkeypatch):
         r = real(*a, **kw)
         r["empty"] = {"Gem\x1b[31mini [x](http://e.co)": {"chats": 1, "empty": 0, "rate": 0.0}}
         r["runs"] = [{"day": "2026-11-16", "session": "s_1", "bundles": 1, "chats": 1,
-                      "pages": ["fo\x07od"], "undo": "cortex undo s_1"}]
+                      "pages": ["fo\x07od"], "undo": "keepfold undo s_1"}]
         return r
 
     monkeypatch.setattr(harvest, "status", status)

@@ -1,4 +1,4 @@
-"""R12 `cortex eval agent`: Layer A (no model) per case, so a regression names its case; Layer
+"""R12 `keepfold eval agent`: Layer A (no model) per case, so a regression names its case; Layer
 B's pass^3 on a fake runner; the command's lines and JSON."""
 
 import json
@@ -6,8 +6,8 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from cortex import agent_eval
-from cortex.cli import app
+from keepfold import agent_eval
+from keepfold.cli import app
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -76,7 +76,7 @@ def test_layer_b_is_pass_cubed_on_the_served_text(monkeypatch):
 
 
 def test_command_runs_layer_a_only_and_never_looks_for_a_model(monkeypatch):
-    from cortex import chat_eval
+    from keepfold import chat_eval
 
     monkeypatch.setattr(chat_eval, "find_model", lambda: pytest.fail("looked for a model"))
     res = CliRunner().invoke(app, ["eval", "agent"])
@@ -91,7 +91,7 @@ def test_command_runs_layer_a_only_and_never_looks_for_a_model(monkeypatch):
 
 
 def test_command_with_model_and_none_loaded_says_why(monkeypatch):
-    from cortex import chat_eval
+    from keepfold import chat_eval
 
     monkeypatch.setattr(chat_eval, "find_model", lambda: (None, "no local model loaded"))
     res = CliRunner().invoke(app, ["eval", "agent", "--model"])

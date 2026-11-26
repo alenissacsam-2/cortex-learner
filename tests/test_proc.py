@@ -1,5 +1,5 @@
 """A1: every subprocess the app or the CLI starts passes `creationflags`, so the windowless
-`cortex-app.exe` never flashes a console window on Windows (cortex/_proc.py NO_WINDOW). New
+`keepfold-app.exe` never flashes a console window on Windows (keepfold/_proc.py NO_WINDOW). New
 calls without it fail here; the allow-list names the ones that are detached or show a window on
 purpose."""
 
@@ -32,13 +32,13 @@ def _spawns(path: Path):
 
 
 def test_every_subprocess_passes_creationflags():
-    files = [*(ROOT / "src" / "cortex").rglob("*.py"), *(ROOT / "installer").glob("*.py")]
+    files = [*(ROOT / "src" / "keepfold").rglob("*.py"), *(ROOT / "installer").glob("*.py")]
     bad = []
     for p in files:
         rel = p.relative_to(ROOT).as_posix()
         bad += [f"{rel}:{line} in {fn}()" for fn, line in _spawns(p)
                 if (rel, fn) not in ALLOWED]
-    assert not bad, "pass creationflags=NO_WINDOW (cortex._proc): " + ", ".join(bad)
+    assert not bad, "pass creationflags=NO_WINDOW (keepfold._proc): " + ", ".join(bad)
 
 
 def test_the_scan_finds_a_call_without_the_flag(tmp_path):

@@ -1,5 +1,5 @@
 """R5 (Gemini round 5): what agents trust most cannot be changed behind the owner's back.
-R5a: a line on me/core, me/setup or the teaching contract that Cortex did not write and that
+R5a: a line on me/core, me/setup or the teaching contract that Keepfold did not write and that
 was not there at the baseline is served nowhere until the Review card's Keep; Remove takes it
 out. R5d: an inferred about-me line one AI app wrote is not served to another app."""
 
@@ -7,11 +7,11 @@ import datetime as dt
 
 import pytest
 
-from cortex import claims, packs, prime, review
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import claims, packs, prime, review
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -37,10 +37,10 @@ def _add(root, page, text):
 @pytest.fixture
 def guarded(root, monkeypatch):
     """me/core, me/setup and the contract as the owner had them at the upgrade, baseline taken."""
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me/core.md").write_text(CORE, encoding="utf-8")
     (root / "me/setup.md").write_text(SETUP, encoding="utf-8")
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     assert review.outside_lines(Vault(root), []) == []  # no baseline yet: nothing withheld
     assert review.record_baseline(Vault(root)) and not review.record_baseline(Vault(root))
     return root
@@ -64,9 +64,9 @@ def test_an_outside_line_is_served_nowhere_until_keep(guarded):
     got = _prime(root)
     assert "Keep answers short." in got and "Ask before you teach." in got
     assert "French" not in got and "Grade every" not in got and "Uses a Mac" not in got
-    assert "Grade every" not in prime.contract(Vault(root), set())  # cortex_context, export
+    assert "Grade every" not in prime.contract(Vault(root), set())  # keepfold_context, export
     assert "French" not in packs.rule_block(Vault(root), NOW)  # rules files, tools/list
-    ctx = Cortex(Vault(root)).cortex_context(scope="environment")["context"]
+    ctx = Keepfold(Vault(root)).keepfold_context(scope="environment")["context"]
     assert "RTX 4050" in ctx and "Uses a Mac" not in ctx and "zsh" not in ctx
     view = server.App(root).review()
     cards = {c["text"]: c for c in view["outside"]}
@@ -110,10 +110,10 @@ def test_an_edited_line_counts_as_new_and_a_removed_one_needs_nothing(guarded):
     assert review.outside_lines(Vault(root), _evs(root)) == []
 
 
-def test_lines_cortex_writes_are_its_own(guarded):
+def test_lines_keepfold_writes_are_its_own(guarded):
     root = guarded
-    c = Cortex(Vault(root))
-    c.app_clicks = True  # the owner's Approve in the app, through cortex_patch's own path
+    c = Keepfold(Vault(root))
+    c.app_clicks = True  # the owner's Approve in the app, through keepfold_patch's own path
     for args in (("me/core", "append_to_section", "Answers", "Cite the page."),
                  ("me/setup", "append_to_section", "Hardware", "16 GB RAM."),
                  ("me/setup", "revise", claims.parse("setup", SETUP)[0]["id"],
@@ -129,15 +129,15 @@ def test_lines_cortex_writes_are_its_own(guarded):
 
 def _agent_line(root, client):
     """An inferred me/preferences line written in a session of AI app `client`."""
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     c.over_mcp, c.sessions.client = True, client
     _patch(c, "me/preferences", "append_to_section", "Communication", "Likes short answers.")
     c.sessions.close(summary="test")
 
 
 def _patch(c, id, op, target, text, **kw):
-    """cortex_patch through the server's own dispatch (`_call` opens the session)."""
-    out = c._call("cortex_patch", c.cortex_patch, {"id": id, "op": op, "target": target,
+    """keepfold_patch through the server's own dispatch (`_call` opens the session)."""
+    out = c._call("keepfold_patch", c.keepfold_patch, {"id": id, "op": op, "target": target,
                                                     "text": text, **kw})
     assert "error" not in out and out.get("changed"), out
 
@@ -147,9 +147,9 @@ def test_a_guess_is_served_only_to_the_app_that_made_it(root):
     assert "Likes short answers. (ask)" in _prime(root, "claude-ai")
     assert "Likes short answers" not in _prime(root, "Codex")
     assert "Likes short answers" not in _prime(root)  # an unknown asker: not it
-    ctx = Cortex(Vault(root))
+    ctx = Keepfold(Vault(root))
     ctx.sessions.client = "codex"
-    assert "Likes short answers" not in ctx.cortex_context(scope="all")["context"]
+    assert "Likes short answers" not in ctx.keepfold_context(scope="all")["context"]
     cid = next(r["id"] for r in claims.rows(Vault(root)) if "Likes short" in r["text"])
     server.App(root).review_still({"id": cid})  # the owner's yes: every app gets it
     assert "Likes short answers." in _prime(root, "Codex")

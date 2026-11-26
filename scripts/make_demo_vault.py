@@ -5,10 +5,10 @@ normal vault and event APIs: extra concepts and notes, two mistakes, graded answ
 "how sure" level of 1-4, two upcoming assessments and a few lessons taught. Every event is
 keyed `demo:<n>`, so running it again adds nothing. Dates are relative to today; everything
 else is fixed. It refuses the configured vault and any vault with events of its own (not demo
-or sample ones) unless --force. For imported chats, run `cortex import` on the
+or sample ones) unless --force. For imported chats, run `keepfold import` on the
 synthetic exports in tests/fixtures/exports afterwards.
 
-    uv run cortex init <vault>
+    uv run keepfold init <vault>
     uv run python scripts/make_demo_vault.py <vault>
 """
 
@@ -20,10 +20,10 @@ import random
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from cortex import sample, taint
-from cortex.catalog import sync as catalog_sync
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import sample, taint
+from keepfold.catalog import sync as catalog_sync
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 CONCEPTS = {  # id: (title, area, requires, note line)
     "variables": ("Variables", "programming.basics", [], "A name points at a value."),
@@ -178,9 +178,9 @@ def events(vault: Vault, now: datetime) -> int:
 
 def refusal(root: Path) -> str | None:
     """Why `root` looks like a real vault (made-up events are permanent history), or None."""
-    named = (taint.config().get("vault"), os.environ.get("CORTEX_VAULT"))
+    named = (taint.config().get("vault"), os.environ.get("KEEPFOLD_VAULT"))
     if any(v and Path(v).expanduser().resolve() == root for v in named):
-        return f"{root} is your configured Cortex vault"
+        return f"{root} is your configured Keepfold vault"
     real = sum(1 for e in EventLog(Vault(root)).iter_events()
                if not str(e.get("key") or "").startswith(("demo:", sample.KEY)))
     return f"{root} already has {real} events of its own" if real else None
@@ -188,12 +188,12 @@ def refusal(root: Path) -> str | None:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("vault", type=Path, help="an existing throwaway vault (cortex init)")
+    ap.add_argument("vault", type=Path, help="an existing throwaway vault (keepfold init)")
     ap.add_argument("--force", action="store_true",
                     help="write even into the configured vault or one with events of its own")
     a = ap.parse_args(argv)
     if not a.force and (why := refusal(a.vault.resolve())):
-        ap.error(f"{why}; refusing to add made-up history. Use a fresh `cortex init` folder, "
+        ap.error(f"{why}; refusing to add made-up history. Use a fresh `keepfold init` folder, "
                  "or pass --force.")
     vault = Vault(a.vault.resolve())
     now = datetime.now(UTC)

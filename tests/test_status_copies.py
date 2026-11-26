@@ -1,5 +1,5 @@
-"""Status's Claude Code row: Claude Code starts the first `cortex` on PATH; when that is another
-copy than the installed Cortex, of another version, Status warns and its Fix puts the installed
+"""Status's Claude Code row: Claude Code starts the first `keepfold` on PATH; when that is another
+copy than the installed Keepfold, of another version, Status warns and its Fix puts the installed
 bin folder first on the user PATH. A fake winreg throughout: never the real registry or PATH."""
 
 import contextlib
@@ -14,12 +14,12 @@ from test_app import app as app  # noqa: F401 (fixture)
 from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or opens)
 from test_app import vault as vault  # noqa: F401 (fixture)
 
-from cortex import update
-from cortex.app import status, winpath
+from keepfold import update
+from keepfold.app import status, winpath
 
 pytestmark = pytest.mark.usefixtures("home")
 REAL_IN_SYSTEM = winpath.in_system  # module import time: before conftest's fixture fakes it
-REAL_PROBE = status.cortex_version
+REAL_PROBE = status.keepfold_version
 
 
 class FakeReg:
@@ -46,17 +46,17 @@ class FakeReg:
 
 @pytest.fixture
 def setup(home, monkeypatch):
-    """An installed Cortex, an `other` copy first on PATH and a fake registry; returns
+    """An installed Keepfold, an `other` copy first on PATH and a fake registry; returns
     (installed exe, other exe, the fake registry, the version list the probe answers)."""
     exe = _install(home)
-    other = home / ".local" / "bin" / "cortex.exe"
+    other = home / ".local" / "bin" / "keepfold.exe"
     other.parent.mkdir(parents=True)
     other.write_bytes(b"")
-    found, real = {"cortex": str(other)}, shutil.which
-    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: found.get(cmd) if cmd == "cortex"
+    found, real = {"keepfold": str(other)}, shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: found.get(cmd) if cmd == "keepfold"
                         else real(cmd, *a, **k))
     ver = ["0.3.9"]
-    monkeypatch.setattr(status, "cortex_version", lambda e: ver[0])
+    monkeypatch.setattr(status, "keepfold_version", lambda e: ver[0])
     monkeypatch.setattr(update, "current", lambda: "0.4.1")
     reg = FakeReg(user=(f"C:\\Tools;{other.parent};{exe.parent};%USERPROFILE%\\x",
                         FakeReg.REG_SZ),
@@ -78,16 +78,17 @@ def test_no_row_for_the_same_exe_or_the_same_version(setup, vault):
     ver[0] = "0.4.1"
     assert _row(vault) is None  # another exe, same version
     ver[0] = "0.3.9"
-    found["cortex"] = str(exe)
+    found["keepfold"] = str(exe)
     assert _row(vault) is None  # the installed one comes first
     found.clear()
-    assert _row(vault) is None  # no cortex on PATH
+    assert _row(vault) is None  # no keepfold on PATH
 
 
 def test_an_older_copy_first_warns_with_a_fix(setup, vault):
     _, other, *_ = setup
     r = _row(vault)
-    assert r["state"] == "warn" and r["value"] == "Claude Code runs Cortex 0.3.9, the app is 0.4.1"
+    assert r["state"] == "warn"
+    assert r["value"] == "Claude Code runs Keepfold 0.3.9, the app is 0.4.1"
     assert str(other) in r["detail"] and "an older copy" in r["detail"]
     assert r["fix"] == {"post": "/api/connect/path", "label": "Fix"}
     names = [x["id"] for x in status.rows(vault)]
@@ -97,7 +98,7 @@ def test_an_older_copy_first_warns_with_a_fix(setup, vault):
 def test_an_unknown_version_still_warns(setup, vault):
     setup[3][0] = None
     r = _row(vault)
-    assert "an unknown Cortex version" in r["value"] and r["fix"]
+    assert "an unknown Keepfold version" in r["value"] and r["fix"]
 
 
 def test_a_copy_on_the_system_path_gets_no_fix(setup, vault):
@@ -108,13 +109,13 @@ def test_a_copy_on_the_system_path_gets_no_fix(setup, vault):
     assert "system PATH" in r["detail"] and str(other.parent) in r["detail"]
 
 
-def test_fix_puts_cortex_first_keeping_the_rest_and_the_type(setup, app, vault):  # noqa: F811
+def test_fix_puts_keepfold_first_keeping_the_rest_and_the_type(setup, app, vault):  # noqa: F811
     exe, other, reg, _, _, sent = setup
     assert call(app, "POST", "/api/connect/path", {}, token=False)[0] == 401
     assert reg.values["HKCU"][0].startswith("C:\\Tools") and not sent
     code, js, *_ = call(app, "POST", "/api/connect/path", {})
     assert code == 200 and js["say"] == ("Done. Quit Claude completely and open it again, so "
-                                         "its Cortex tools use 0.4.1.")
+                                         "its Keepfold tools use 0.4.1.")
     assert reg.values["HKCU"] == (f"{exe.parent};C:\\Tools;{other.parent};%USERPROFILE%\\x",
                                   FakeReg.REG_SZ)
     assert sent == [1] and os.environ["PATH"].startswith(f"{exe.parent};")
@@ -126,14 +127,14 @@ def test_first_and_a_missing_user_path(monkeypatch):
     reg = FakeReg()
     monkeypatch.setitem(sys.modules, "winreg", reg)
     monkeypatch.setattr(winpath, "broadcast", lambda: None)
-    winpath.put_first(r"C:\Cortex\bin")
-    assert reg.values["HKCU"] == (r"C:\Cortex\bin", FakeReg.REG_EXPAND_SZ)
+    winpath.put_first(r"C:\Keepfold\bin")
+    assert reg.values["HKCU"] == (r"C:\Keepfold\bin", FakeReg.REG_EXPAND_SZ)
 
 
 def test_the_version_probe_parses_and_fails_quietly(monkeypatch):
     def answer(out):
         return lambda *a, **k: subprocess.CompletedProcess(a, 0, out, "")
-    monkeypatch.setattr(subprocess, "run", answer("cortex 0.3.9\n"))
+    monkeypatch.setattr(subprocess, "run", answer("keepfold 0.3.9\n"))
     assert REAL_PROBE("x") == "0.3.9"
     monkeypatch.setattr(subprocess, "run", answer("something else"))
     assert REAL_PROBE("x") is None

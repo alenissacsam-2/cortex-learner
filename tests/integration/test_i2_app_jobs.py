@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from cortex import chats, localllm
-from cortex.app import actions, server, targets
 from integration.builders import EXPORTS, chatgpt_zip
+from keepfold import chats, localllm
+from keepfold.app import actions, server, targets
 
 pytestmark = pytest.mark.usefixtures("home")
 # what the synthetic exports hold that the API must never echo: titles, URLs, a secret, text
@@ -40,7 +40,7 @@ def fakes(monkeypatch):
 
 @pytest.fixture
 def vault(root_committed):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     return root_committed
 
 
@@ -63,7 +63,7 @@ class Client:
     def call(self, method, path, body=None, *, raw=None, token=True, headers=None):
         h = dict(headers or {})
         if token:
-            h["X-Cortex-Token"] = self.app.token if token is True else token
+            h["X-Keepfold-Token"] = self.app.token if token is True else token
         data = raw
         if body is not None:
             data, h["Content-Type"] = json.dumps(body).encode(), "application/json"
@@ -79,7 +79,7 @@ class Client:
 
     def upload(self, data: bytes, name: str):
         return self.call("POST", "/api/import/upload", raw=data, headers={
-            "Content-Type": "application/octet-stream", "X-Cortex-Name": name})
+            "Content-Type": "application/octet-stream", "X-Keepfold-Name": name})
 
     def wait(self, timeout=30) -> dict:
         ev = threading.Event()
@@ -92,7 +92,7 @@ class Client:
 
 
 def _uploads(home: Path) -> list[Path]:
-    return list((home / ".cortex" / "tmp").glob("upload-*"))
+    return list((home / ".keepfold" / "tmp").glob("upload-*"))
 
 
 def _tree(*dirs: Path) -> dict:
@@ -116,7 +116,7 @@ def test_auth_and_get_changes_nothing(app, vault, home):
         assert c.call("GET", path)[0] == 405, path
     after = _tree(vault, home)
     # /api/home lays the brain out once and keeps it there: a view cache, as the dashboard's
-    after.pop(str(vault / ".cortex" / "brain-layout.json"), None)
+    after.pop(str(vault / ".keepfold" / "brain-layout.json"), None)
     assert after == before
 
 

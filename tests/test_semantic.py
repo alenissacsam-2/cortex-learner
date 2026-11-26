@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import semantic, vecstore
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault, VaultError
+from keepfold import semantic, vecstore
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 REAL_LOAD = semantic.load_embedder  # before the autouse fixture wraps it
@@ -111,7 +111,7 @@ def test_cache_reembeds_only_changed_pages_and_drops_deleted(root, idx):
 
 
 def test_an_idle_server_drops_its_model_and_answers_the_same_after(root, monkeypatch):
-    """M3: once the idle thread drops the last model, an idle `cortex mcp` empties its working
+    """M3: once the idle thread drops the last model, an idle `keepfold mcp` empties its working
     set (`_trim`); its next recall loads the model again and answers as before (fake model)."""
     loads, trims, real_trim = [], [], semantic._trim
 
@@ -126,13 +126,13 @@ def test_an_idle_server_drops_its_model_and_answers_the_same_after(root, monkeyp
     monkeypatch.setattr(semantic, "load_embedder", REAL_LOAD)
     monkeypatch.setattr(semantic, "_trim", lambda: trims.append(1))
     semantic.models_dir().mkdir(parents=True)
-    c = Cortex(Vault(root))
-    first = c.cortex_recall("vehicle")["hits"]
+    c = Keepfold(Vault(root))
+    first = c.keepfold_recall("vehicle")["hits"]
     assert loads == [1] and ids(first)[0] == "engines"
     assert semantic.idle_pass() == [] and trims == []  # just used: kept
     assert semantic.idle_pass(time.monotonic() + semantic.IDLE_UNLOAD + 1) == ["embedder"]
     assert trims == [1] and semantic._main.model is None
-    assert c.cortex_recall("vehicle")["hits"] == first and len(loads) == 2
+    assert c.keepfold_recall("vehicle")["hits"] == first and len(loads) == 2
     real_trim()  # the real call (Windows: EmptyWorkingSet) runs without error
 
 
@@ -140,7 +140,7 @@ def test_without_the_model_it_falls_back_to_keyword_and_says_so(idx, tmp_path, m
     monkeypatch.setattr(semantic, "_embedder", None)
     monkeypatch.setattr(semantic, "models_dir", lambda: tmp_path / "no-models")
     hits, notice = semantic.search(idx, "vehicle")
-    assert notice == semantic.NOT_SET_UP and "cortex model download" in notice
+    assert notice == semantic.NOT_SET_UP and "keepfold model download" in notice
     assert ids(hits) == ["pasta"] and hits[0]["match"] == "keyword"
     assert not (tmp_path / "no-models").exists()  # never downloads implicitly
     assert semantic.search(idx, "")[0] == []
@@ -148,7 +148,7 @@ def test_without_the_model_it_falls_back_to_keyword_and_says_so(idx, tmp_path, m
 
 def test_context_related_uses_recall_when_the_model_is_there(root, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    ctx = Cortex(Vault(root)).cortex_context(topic="automobile")["context"]
+    ctx = Keepfold(Vault(root)).keepfold_context(topic="automobile")["context"]
     related = ctx.split("## Related\n", 1)[1]
     assert related.index("[[engines]]") < related.index("[[gearbox]]")
     assert "hidden" not in related
@@ -178,38 +178,38 @@ def test_private_domain_hides_its_concepts_and_raw_over_mcp(root, monkeypatch):
     (root / "raw/diary.md").write_text("my diary", encoding="utf-8")
     (root / "raw/open.md").write_text("open text", encoding="utf-8")
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(root))
-    assert "gear-ratios" in ids(c.cortex_recall("vehicle")["hits"])  # domain still public
+    c = Keepfold(Vault(root))
+    assert "gear-ratios" in ids(c.keepfold_recall("vehicle")["hits"])  # domain still public
 
     dom.write_text(dom.read_text("utf-8").replace("kind:", "private: true\nkind:"), "utf-8")
     _bump(dom)
-    assert "gear-ratios" not in ids(c.cortex_find("gear ratios")["hits"])
+    assert "gear-ratios" not in ids(c.keepfold_find("gear ratios")["hits"])
     with pytest.raises(VaultError) as e:
-        c.cortex_read("gear-ratios")
+        c.keepfold_read("gear-ratios")
     assert e.value.code == "unknown_id"
-    assert "gear-ratios" not in ids(c.cortex_recall("vehicle")["hits"])
-    assert "gear-ratios" not in c.cortex_context(topic="gear ratios")["context"]
+    assert "gear-ratios" not in ids(c.keepfold_recall("vehicle")["hits"])
+    assert "gear-ratios" not in c.keepfold_context(topic="gear ratios")["context"]
     semantic._MEM.clear()
     stored = semantic._read(root)
     assert "gear-ratios" not in stored and "engines" in stored
     with pytest.raises(VaultError) as e:
-        c.cortex_read("raw/diary.md")
+        c.keepfold_read("raw/diary.md")
     assert e.value.code == "unknown_id"
-    assert "open text" in c.cortex_read("raw/open.md")["text"]
+    assert "open text" in c.keepfold_read("raw/open.md")["text"]
 
     dom.write_text(dom.read_text("utf-8").replace("private: true\n", ""), "utf-8")
     _bump(dom)
-    assert "gear-ratios" in ids(c.cortex_find("gear ratios")["hits"])  # privacy lifted
+    assert "gear-ratios" in ids(c.keepfold_find("gear ratios")["hits"])  # privacy lifted
 
 
 def test_context_topic_finds_a_concept_named_by_one_word(root, monkeypatch):
     """RETR-2: a phrase where one word names a concept still lists it, with or without the
     model (the fallback retries the full-text match on any non-stopword word)."""
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    topic = Cortex(Vault(root)).cortex_context(topic="how about pointers")["context"]
+    topic = Keepfold(Vault(root)).keepfold_context(topic="how about pointers")["context"]
     assert "(two-pointers)" in topic.split("## Related", 1)[0]
     monkeypatch.setattr(semantic, "_embedder", None)  # home has no models: no embedder
-    c_ctx = Cortex(Vault(root)).cortex_context(topic="how about pointers")["context"]
+    c_ctx = Keepfold(Vault(root)).keepfold_context(topic="how about pointers")["context"]
     assert "(two-pointers)" in c_ctx and "No matching concepts." not in c_ctx
 
 
@@ -228,10 +228,10 @@ def test_cosine_floor_and_stopwords_make_nothing_an_answer(root, idx, monkeypatc
             return out
 
     monkeypatch.setattr(semantic, "_embedder", Far())
-    ctx = Cortex(Vault(root)).cortex_context(topic="what is quantum")["context"]
+    ctx = Keepfold(Vault(root)).keepfold_context(topic="what is quantum")["context"]
     assert "## Related" not in ctx and "No matching concepts." in ctx
     monkeypatch.setattr(semantic, "MIN_COS", 0.3)
-    ctx = Cortex(Vault(root)).cortex_context(topic="what is quantum")["context"]
+    ctx = Keepfold(Vault(root)).keepfold_context(topic="what is quantum")["context"]
     assert "[[pasta]]" in ctx.split("## Related", 1)[1]
 
 
@@ -369,7 +369,7 @@ def test_partial_build_scores_by_chunk_0_and_a_build_completes_it(root, chat, mo
     assert next(h for h in hits if h["id"] == "trip")["match"] == "keyword"  # head only
     ids, page, start, _ = semantic.vectors(chat, FakeEmbed(), 4, 0)
     assert len(start) == len(ids)  # one row per page: nothing past the heads yet
-    semantic.vectors(chat, FakeEmbed(), 4)  # no budget: `cortex model build`
+    semantic.vectors(chat, FakeEmbed(), 4)  # no budget: `keepfold model build`
     semantic._MEM.clear()  # a new process
     fake = FakeEmbed()
     hits = semantic.recall(chat, "vehicle", fake, hops=0)
@@ -417,7 +417,7 @@ def test_cache_versioning_rebuilds_on_new_chunking(root, chat, monkeypatch):
 def test_a_lost_cache_rebuilds_heads_under_a_budget(root, chat, monkeypatch):
     full = semantic.vectors(chat, FakeEmbed(), 4)
     semantic._MEM.clear()
-    (root / semantic.CACHE).unlink()  # PRIVACY.md: .cortex/ may be deleted at any time
+    (root / semantic.CACHE).unlink()  # PRIVACY.md: .keepfold/ may be deleted at any time
     monkeypatch.setattr(semantic, "HEAD_BUDGET", 0)
     fake = FakeEmbed()
     hits = semantic.recall(chat, "vehicle", fake, hops=0)
@@ -437,7 +437,7 @@ def test_a_server_saving_during_a_build_keeps_the_builds_chunks(root, chat, monk
             if not self.texts:
                 server = dict(semantic._MEM)
                 semantic._MEM.clear()
-                semantic.vectors(chat, FakeEmbed(), 4)  # `cortex model build`
+                semantic.vectors(chat, FakeEmbed(), 4)  # `keepfold model build`
                 semantic._MEM.clear()
                 semantic._MEM.update(server)
             return super().__call__(texts)
@@ -525,8 +525,8 @@ def test_explain_shows_score_parts_and_the_misses(idx):
 def test_recall_cli_explain_writes_no_recall_log(root, monkeypatch):
     from typer.testing import CliRunner
 
-    from cortex import recall_log
-    from cortex.cli import app
+    from keepfold import recall_log
+    from keepfold.cli import app
 
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     out = CliRunner().invoke(app, ["recall", "vehicle", "--limit", "1", "--hops", "0",
@@ -618,7 +618,7 @@ def test_a_deep_chunk_is_headed_by_title_heading_path_day_and_kind():
 
 
 def test_a_deep_passage_cites_its_span_in_the_body_not_the_header():
-    from cortex import ask
+    from keepfold import ask
 
     n = _long_page()
     s, t = semantic._chunks(n)[2]
@@ -644,9 +644,9 @@ def test_explain_shows_the_weight_factors(root, monkeypatch):
     assert parts["engines"]["factors"] == {} and parts["engines"]["weight"] == 1.0
 
 
-def test_models_load_from_cortex_models_never_fastembeds_temp_cache(home, monkeypatch):
+def test_models_load_from_keepfold_models_never_fastembeds_temp_cache(home, monkeypatch):
     """R29a: fastembed's default cache is under %TEMP%, which Windows cleans; both models are
-    read from (and downloaded into) ~/.cortex/models."""
+    read from (and downloaded into) ~/.keepfold/models."""
     import fastembed
     from fastembed.rerank import cross_encoder
 
@@ -660,5 +660,5 @@ def test_models_load_from_cortex_models_never_fastembeds_temp_cache(home, monkey
     monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Model)
     semantic._text_embedding()
     semantic._cross_encoder()
-    want = str(home / ".cortex" / "models")
-    assert semantic.models_dir() == home / ".cortex" / "models" and seen == [want, want]
+    want = str(home / ".keepfold" / "models")
+    assert semantic.models_dir() == home / ".keepfold" / "models" and seen == [want, want]

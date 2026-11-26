@@ -1,6 +1,6 @@
 """The local chat: `localllm.Runner.stream` against fake streaming runners (Ollama NDJSON,
 OpenAI-compatible SSE), `chat.when`, retrieval with a date range, history trimming, storage
-under .cortex/browse/chat/, and `chat.reply` end to end. Loopback fakes only; no model."""
+under .keepfold/browse/chat/, and `chat.reply` end to end. Loopback fakes only; no model."""
 
 import http.client
 import json
@@ -12,9 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import ask, chat, chat_study, cloudllm, localllm, semantic
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import ask, chat, chat_study, cloudllm, localllm, semantic
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 TODAY = date(2026, 11, 18)
@@ -321,7 +321,7 @@ def test_a_range_keeps_only_pages_dated_inside_it(vault):
 
 
 def test_an_undated_note_counts_on_the_day_its_file_changed(vault):
-    # cortex_add writes notes without a date; "what did I note on 15 Nov" still finds them
+    # keepfold_add writes notes without a date; "what did I note on 15 Nov" still finds them
     import os
     from datetime import datetime
     note(vault.root, "notes/gearbox.md", "kind: note\ntitle: Gearbox\n",
@@ -434,7 +434,7 @@ def test_chat_private_notes_never_reach_mcp_or_the_dashboard(vault):
     the MCP tools and the dashboard still never hold it."""
     from conftest import run
 
-    from cortex import dashboard
+    from keepfold import dashboard
 
     _secret(vault)
     assert SECRET in _paths(ask._passages(vault, "car motor zanzibarquux", 8, sources=ask.SOURCES))
@@ -443,12 +443,12 @@ def test_chat_private_notes_never_reach_mcp_or_the_dashboard(vault):
 
     async def body(call):
         q = "car motor garage stash"  # context and prime echo the query: no mark in it
-        got.append(await call("cortex_find", {"query": q}))
-        got.append(await call("cortex_recall", {"query": q}))
-        got.append(await call("cortex_recall", {"query": q, "chats": True}))
-        got.append(await call("cortex_read", {"id": "secret-garage"}))
-        got.append(await call("cortex_prime", {"prompt": q}))
-        got.append(await call("cortex_context", {"topic": q}))
+        got.append(await call("keepfold_find", {"query": q}))
+        got.append(await call("keepfold_recall", {"query": q}))
+        got.append(await call("keepfold_recall", {"query": q, "chats": True}))
+        got.append(await call("keepfold_read", {"id": "secret-garage"}))
+        got.append(await call("keepfold_prime", {"prompt": q}))
+        got.append(await call("keepfold_context", {"topic": q}))
 
     run(vault.root, body)
     assert got[1]["hits"] or got[0]["hits"]  # the query does find the public car note
@@ -515,7 +515,7 @@ def test_storage_list_delete(vault):
         {"role": "user", "text": "x" * 80 + " tail", "ts": "2026-11-17T10:00:00Z"},
         {"role": "assistant", "text": "y", "ts": "2026-11-17T10:00:05Z"}], True)
     chat._save(vault, b, [{"role": "user", "text": "second", "ts": "2026-11-18T09:00:00Z"}], True)
-    assert (vault.root / ".cortex" / "browse" / "chat" / f"{a}.jsonl").is_file()
+    assert (vault.root / ".keepfold" / "browse" / "chat" / f"{a}.jsonl").is_file()
     rows = chat.list(vault)
     assert [r["id"] for r in rows] == [b, a]
     assert rows[1] == {"id": a, "title": "x" * 60, "updated": "2026-11-17T10:00:05Z", "count": 2}
@@ -524,7 +524,7 @@ def test_storage_list_delete(vault):
 
 
 def test_settings_validate_and_keep_other_keys(home):
-    from cortex import taint
+    from keepfold import taint
     taint.write_config({"vault": "x", "chat": {"other": 1}})
     assert chat.get_settings() == chat.DEFAULTS
     for bad in ({"length": "huge"}, {"temperature": 2}, {"temperature": True},
@@ -923,7 +923,7 @@ def test_errors_are_events(vault, stream, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", None)
     _, ev = _turn(vault, None, "car motor", dead)
     assert ev[0]["code"] == "not_set_up" and ev[0]["message"] == chat.NO_SEARCH_MODEL
-    assert "cortex model download" not in ev[0]["message"]
+    assert "keepfold model download" not in ev[0]["message"]
 
 
 class Silent(Stream):
@@ -967,7 +967,7 @@ def test_still_nothing_shows_the_pages_searched_and_stays_out_of_history(vault, 
     assert saved[-1]["unanswered"] is True
     ok = stream("ollama", ["Engines [1]."])
     _turn(vault, cid, "car motor torque", ok.runner())
-    msgs = ok.bodies[0]["messages"]  # Cortex's note never reaches the model as its own words
+    msgs = ok.bodies[0]["messages"]  # Keepfold's note never reaches the model as its own words
     assert [m["role"] for m in msgs] == ["system", "user", "user"]  # as after a failed turn
     assert "gave no answer" not in json.dumps(msgs)
 
@@ -991,7 +991,7 @@ def test_bad_text_is_refused(vault, stream):
 def _site_days(vault, days, llm=None):
 
 
-    from cortex.browse import legacy, sites
+    from keepfold.browse import legacy, sites
     for rel, data in ((sites.DAYS, days), (sites.CACHE, {"llm": llm or {}, "hashes": {}})):
         p = vault.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -1063,8 +1063,8 @@ def test_reply_answers_a_site_question_without_the_model(vault, stream):
 @pytest.mark.parametrize("bad", [{"n": "abc"}, {"n": [1]}, {"n": 2, "w": {"comet": "x"}},
                                  {"n": 2, "p": [1, 2]}, {"n": 2, "p": 5}, "junk"])
 def test_a_malformed_entry_is_skipped_not_the_answer(vault, home, bad):
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(  # a listed subdomain: page URLs are read
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(  # a listed subdomain: page URLs are read
         "browse:\n  private_domains: [docs.bad.example]\n", encoding="utf-8")
     _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 3, "w": {"comet": 3}},
                                       "bad.example||0": bad, "nopipe": {"n": 1}, "x||": {}}},
@@ -1175,12 +1175,12 @@ def test_study_answers_come_from_the_learner_model(vault):
     assert "**Two pointers** · asked 1 question" in day
     progress = ask_("How am I doing?")
     due = ask_("what's due?")
-    assert "**2 concepts** in Cortex" in progress
+    assert "**2 concepts** in Keepfold" in progress
     for out in (plan, weak, day, progress, due):
         assert "Private concept" not in out and "secret" not in out  # D1: hidden as planned
         assert "predicted" not in out and "interval" not in out
     assert ask_("What is Dijkstra's algorithm?") is None
-    assert ask_("What did I study on 3 Nov?") == "Cortex has no study recorded on 3 Nov."
+    assert ask_("What did I study on 3 Nov?") == "Keepfold has no study recorded on 3 Nov."
 
 
 def test_reply_answers_a_study_question_without_the_model(vault, stream):
@@ -1206,12 +1206,12 @@ def test_a_data_answer_needs_no_model(vault, monkeypatch):
     _, events = _turn(vault, None, "which sites did I visit yesterday?", None)
     assert not [e for e in events if e["t"] == "err"]
     assert "github.com" in "".join(e["s"] for e in events if e["t"] == "tok")
-    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Cortex", "Cortex"]
+    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Keepfold", "Keepfold"]
     _, events = _turn(vault, None, "what is Dijkstra's algorithm?", None)
     assert [e["code"] for e in events if e["t"] == "err"] == ["not_set_up"]
 
 
-# ---- the digest: a day or week from Cortex's own data ----------------------------------------
+# ---- the digest: a day or week from Keepfold's own data ----------------------------------------
 
 @pytest.mark.parametrize("text, want", [
     ("What did I do yesterday?", "digest"), ("summarize my day", "digest"),
@@ -1301,7 +1301,7 @@ def test_a_digest_lists_each_section_under_the_switches(vault):
     assert "sites" not in bare and "Rust" not in bare and "Journal" not in bare
     assert "Heaps" not in bare and "studied" not in bare  # concepts are notes: switched off
     empty = chat.digest(vault, date(2026, 11, 3), date(2026, 11, 3), ALL_ON, TODAY)
-    assert empty.startswith("Cortex has nothing recorded on 3 Nov. Not included:")
+    assert empty.startswith("Keepfold has nothing recorded on 3 Nov. Not included:")
 
 
 def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch):
@@ -1310,7 +1310,7 @@ def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch)
     _, events = _turn(vault, None, "What did I do yesterday?", None)
     assert not [e for e in events if e["t"] == "err"]
     assert [e["s"] for e in events if e["t"] == "step"] == ["Putting together your day on 17 Nov"]
-    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Cortex", "Cortex"]
+    assert [e["model"] for e in events if e["t"] in ("start", "done")] == ["Keepfold", "Keepfold"]
     text = "".join(e["s"] for e in events if e["t"] == "tok")
     assert text.startswith("**Your day** on 17 Nov:") and "Rust ownership" in text
     _, events = _turn(vault, None, "summarize my week", None)
@@ -1318,7 +1318,7 @@ def test_reply_answers_a_digest_without_a_runner_or_embedder(vault, monkeypatch)
         "Putting together your week from 16 Nov to 18 Nov"]
 
 
-def test_cortexs_own_answer_gets_no_quote_check(vault, monkeypatch):
+def test_keepfolds_own_answer_gets_no_quote_check(vault, monkeypatch):
     """Audit 21 Nov C7: a quoted title in the digest is not flagged "Quote not found"."""
     note(vault.root, "notes/ddia.md",
          'title: \'Notes on "Designing Data-Intensive Apps"\'\ndate: 2026-11-17\n',
@@ -1348,7 +1348,7 @@ def test_only_a_first_person_browsing_question_gets_the_site_list(vault, q, caug
 
 def test_a_visible_site_never_shows_the_private_side_description(vault):
     from pathlib import Path
-    cfg = Path.home() / ".cortex" / "config.yaml"  # the test's own home
+    cfg = Path.home() / ".keepfold" / "config.yaml"  # the test's own home
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text("browse:\n  visible_to_claude: true\n", encoding="utf-8")
     _site_days(vault, {"2026-11-17": {"x.example||0": {"n": 2}}},
@@ -1372,7 +1372,7 @@ def test_the_runner_is_only_looked_up_when_the_model_is_needed(vault):
         raise ValueError("only a loopback runner")
     _site_days(vault, {"2026-11-17": {"github.com||0": {"n": 1}}})
     _, events = _turn(vault, None, "which sites did I visit yesterday?", find)
-    assert not asked and [e["model"] for e in events if e["t"] == "start"] == ["Cortex"]
+    assert not asked and [e["model"] for e in events if e["t"] == "start"] == ["Keepfold"]
     _, events = _turn(vault, None, "what is Dijkstra's algorithm?", find)
     assert asked == [1]
     assert [(e["code"], e["message"]) for e in events if e["t"] == "err"] == [
@@ -1494,7 +1494,7 @@ def test_a_week_digest_on_a_monday_is_your_week_so_far(vault, monkeypatch):
 def test_what_next_mid_chat_goes_to_the_model(vault, stream):
     s = stream("ollama", ["Then the inner loop [1]."])
     cid, events = _turn(vault, None, "What's next?", s.runner())
-    assert [e["model"] for e in events if e["t"] == "start"] == ["Cortex"]
+    assert [e["model"] for e in events if e["t"] == "start"] == ["Keepfold"]
     _, events = _turn(vault, cid, "what next?", s.runner())
     assert [e["model"] for e in events if e["t"] == "start"] == [s.runner().model]
 
@@ -1667,7 +1667,7 @@ def test_two_routed_halves_are_both_answered_by_code(vault):
     answer = "".join(e["s"] for e in events if e["t"] == "tok")
     assert answer == ('I found nothing about "github" in your archive.\n\n'
                       'I found nothing about "gitlab" in your archive.')
-    assert events[0]["model"] == "Cortex" and events[-1]["t"] == "done"
+    assert events[0]["model"] == "Keepfold" and events[-1]["t"] == "done"
 
 
 def test_a_routed_half_goes_in_front_of_the_other_halfs_passages(vault, stream, monkeypatch):
@@ -1679,7 +1679,7 @@ def test_a_routed_half_goes_in_front_of_the_other_halfs_passages(vault, stream, 
     kinds = [e["t"] for e in events]
     assert kinds.index("facts") < kinds.index("tok")
     user = s.bodies[0]["messages"][-1]["content"]
-    assert user.startswith('<untrusted_note id="facts">\nFacts computed by Cortex:\nI found '
+    assert user.startswith('<untrusted_note id="facts">\nFacts computed by Keepfold:\nI found '
                            'nothing about "github"')
     assert user.endswith(f"Question: {text}" + chat.CITE)
     assert chat.load(vault, cid)[-1]["facts"]["query"] == "github"
@@ -1689,7 +1689,7 @@ def test_without_a_model_the_routed_half_is_shown_and_the_rest_says_why(vault, m
     events = []
     chat.reply(vault, None, "what is a car motor and how many times did I visit github?",
                None, events.append, threading.Event(), chat.get_settings(), today=TODAY)
-    assert events[0]["model"] == "Cortex" and "err" not in [e["t"] for e in events]
+    assert events[0]["model"] == "Keepfold" and "err" not in [e["t"] for e in events]
     assert "".join(e["s"] for e in events if e["t"] == "tok") == (
         f'I found nothing about "github" in your archive.\n\n{ask.NO_MODEL}')
     monkeypatch.setattr(semantic, "_embedder", None)
@@ -1778,8 +1778,8 @@ def test_a_superseded_decision_is_marked_stale(vault):
 # ---- R3: the links and time arms, fusion, near-copies, abstention ------------------------------
 
 def _index(vault):
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
     return Index(vault, Catalog.load(vault))
 
 
@@ -1797,7 +1797,7 @@ def test_linked_pages_are_named_either_way_but_not_by_a_rollup(vault):
 
 
 def _aliased(vault):
-    note(vault.root, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
+    note(vault.root, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Keepfold]\n",
          "# K-Graph\n\nThe learner model I build.")
     note(vault.root, "people/northwest-tech.md",
          "title: Northwest Tech\nkind: person\nprivate: false\naliases: NWTU\n",
@@ -1814,20 +1814,20 @@ def test_an_alias_names_a_page_for_the_links_arm(vault):
     aliases find the pages that say them; a private page's alias reveals nothing."""
     _aliased(vault)
     note(vault.root, "notes/week.md", "title: Week\n",
-         "# Week\n\nShipped Cortex; NWTU exams; read about AI and C; Zorblax.")
-    note(vault.root, "notes/said.md", "title: Said\n", "# Said\n\nShe said AIML, maybe Cortexes.")
+         "# Week\n\nShipped Keepfold; NWTU exams; read about AI and C; Zorblax.")
+    note(vault.root, "notes/said.md", "title: Said\n", "# Said\n\nShe said AIML, maybe Keepfoldes.")
     idx = _index(vault)
     got = semantic.linked(idx, ["week"])
     assert {"k-graph", "northwest-tech", "ml"} <= set(got)
     assert "c-lang" not in got and "hidden" not in got  # one character; private
-    assert semantic.linked(idx, ["said"]) == []  # "AIML", "Cortexes" are not the words
+    assert semantic.linked(idx, ["said"]) == []  # "AIML", "Keepfoldes" are not the words
     assert "week" in semantic.linked(idx, ["k-graph"])  # the page's alias found where said
 
 
 def test_chat_finds_a_page_by_its_alias(vault):
     _aliased(vault)
     assert "projects/k-graph.md" in _paths(
-        ask._passages(vault, "how is Cortex going?", 8, sources=ask.SOURCES))
+        ask._passages(vault, "how is Keepfold going?", 8, sources=ask.SOURCES))
     assert "people/northwest-tech.md" in _paths(
         ask._passages(vault, "what about nwtu", 8, sources=ask.SOURCES))
     assert "notes/hidden.md" not in _paths(  # with Chat's private switch off

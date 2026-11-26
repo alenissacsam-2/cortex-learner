@@ -4,15 +4,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import agent_text, mcp_server, profiles
-from cortex.cli import app
+from keepfold import agent_text, mcp_server, profiles
+from keepfold.cli import app
 
 pytestmark = pytest.mark.usefixtures("home")
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_every_listed_source_still_exists():
-    """A renamed or deleted constant must fail here, not vanish from `cortex agent-text`."""
+    """A renamed or deleted constant must fail here, not vanish from `keepfold agent-text`."""
     srcs = agent_text.sources()
     labels = {label for label, _, _ in srcs}
     assert all(text.strip() for _, _, text in srcs)

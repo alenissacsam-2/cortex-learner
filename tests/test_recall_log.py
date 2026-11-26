@@ -1,4 +1,4 @@
-"""NEXT.md item 1: the cross-encoder rerank, the recall usage log and `cortex eval recall`."""
+"""NEXT.md item 1: the cross-encoder rerank, the recall usage log and `keepfold eval recall`."""
 
 import json
 
@@ -7,10 +7,10 @@ from conftest import FakeEmbed
 from test_semantic import ids, idx, root  # noqa: F401  (test_semantic's seeded vault)
 from typer.testing import CliRunner
 
-from cortex import recall_log, semantic
-from cortex.cli import app
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import recall_log, semantic
+from keepfold.cli import app
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 REAL_LOAD = semantic.load_reranker  # conftest swaps it per test; this is the original
@@ -43,12 +43,12 @@ def test_no_reranker_or_a_broken_one_keeps_the_current_order(idx, home, monkeypa
         raise RuntimeError("onnx")
 
     assert semantic.recall(idx, "vehicle", FakeEmbed(), rerank_with=broken) == base
-    assert REAL_LOAD() is None and not (home / ".cortex/models").exists()  # never downloads
+    assert REAL_LOAD() is None and not (home / ".keepfold/models").exists()  # never downloads
 
     monkeypatch.setattr(semantic, "_reranker", pasta_first)
     assert ids(semantic.search(idx, "vehicle")[0])[:2] == ["engines", "pasta"]
-    (home / ".cortex").mkdir()
-    (home / ".cortex/config.yaml").write_text("vault: x\nrerank: false\n", "utf-8")
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold/config.yaml").write_text("vault: x\nrerank: false\n", "utf-8")
     assert REAL_LOAD() is None and REAL_LOAD(config=False) is pasta_first
     assert semantic.search(idx, "vehicle")[0] == base  # switched off
 
@@ -71,7 +71,7 @@ def test_two_threads_load_the_reranker_once(home, monkeypatch):
             return [0.0 for _ in texts]
 
     monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Fake)
-    (home / ".cortex/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
+    (home / ".keepfold/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
         parents=True)
     got = []
     ts = [threading.Thread(target=lambda: got.append(REAL_LOAD())) for _ in range(2)]
@@ -97,7 +97,7 @@ def test_an_idle_reranker_is_dropped_and_loads_again(home, monkeypatch):
             return [1.0 for _ in texts]
 
     monkeypatch.setattr(cross_encoder, "TextCrossEncoder", Fake)
-    (home / ".cortex/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
+    (home / ".keepfold/models" / f"models--{semantic.RERANK_MODEL.replace('/', '--')}").mkdir(
         parents=True)
     score = REAL_LOAD()
     assert score("q", ["a", "b"]) == [1.0, 1.0]
@@ -112,14 +112,14 @@ def logged(root):  # noqa: F811
 
 def test_recall_and_context_are_logged_and_reads_link_to_them(root, monkeypatch):  # noqa: F811
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(root))
-    got = ids(c.cortex_recall("vehicle")["hits"])
-    c.cortex_context(topic="automobile")
-    c.cortex_read("pasta")  # returned by the recall only
-    c.cortex_read("engines")  # returned by both: the latest recall
-    c.cortex_recall("I like cars.", check=True)  # a check is not logged
+    c = Keepfold(Vault(root))
+    got = ids(c.keepfold_recall("vehicle")["hits"])
+    c.keepfold_context(topic="automobile")
+    c.keepfold_read("pasta")  # returned by the recall only
+    c.keepfold_read("engines")  # returned by both: the latest recall
+    c.keepfold_recall("I like cars.", check=True)  # a check is not logged
     rows = logged(root)
-    assert [r.get("tool") for r in rows] == ["cortex_recall", "cortex_context", None, None]
+    assert [r.get("tool") for r in rows] == ["keepfold_recall", "keepfold_context", None, None]
     assert rows[0]["query"] == "vehicle" and rows[0]["ids"] == got and rows[0]["ts"]
     assert "pasta" in got and "pasta" not in rows[1]["ids"]
     assert rows[2] == {"ts": rows[2]["ts"], "opened": rows[0]["rid"], "id": "pasta"}
@@ -127,11 +127,11 @@ def test_recall_and_context_are_logged_and_reads_link_to_them(root, monkeypatch)
     assert not list(root.joinpath("events").rglob("*.jsonl"))  # never in the event log
 
     c._recalls = [(t - recall_log.WINDOW_S - 1, rid, i) for t, rid, i in c._recalls]
-    c.cortex_read("gearbox")  # too late: no row
+    c.keepfold_read("gearbox")  # too late: no row
     assert len(logged(root)) == 4
 
     monkeypatch.setattr(recall_log, "CAP", 3)
-    c.cortex_recall("motor")
+    c.keepfold_recall("motor")
     assert [r.get("query") for r in logged(root)] == [None, None, "motor"]
 
 
@@ -150,9 +150,9 @@ def test_eval_set_and_metrics(idx):  # noqa: F811
 
 def test_eval_cli_prints_each_variant(root, monkeypatch):  # noqa: F811
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(root))
-    c.cortex_recall("vehicle")
-    c.cortex_read("engines")
+    c = Keepfold(Vault(root))
+    c.keepfold_recall("vehicle")
+    c.keepfold_read("engines")
     run = CliRunner().invoke
     out = run(app, ["eval", "recall", "--vault", str(root), "--k", "3"])
     assert out.exit_code == 0, out.output

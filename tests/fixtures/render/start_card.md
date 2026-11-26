@@ -1,4 +1,4 @@
-### Cortex · Learning session · 2026-11-13
+### Keepfold · Learning session · 2026-11-13
 **Today's plan** (5 of 5)
 - ◐ Breadth-first search · Taught, not yet checked
 - ◌ Two pointers · Placement prep

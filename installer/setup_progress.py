@@ -1,4 +1,4 @@
-"""The setup window's pure parts (CortexSetup.exe, installer/setup_app.py): the step lists,
+"""The setup window's pure parts (KeepfoldSetup.exe, installer/setup_app.py): the step lists,
 progress from the log lines install() says and uv prints, and the in-use list in plain words.
 Stdlib only, no Tk, so tests run them without a window."""
 
@@ -27,19 +27,19 @@ class State(NamedTuple):
     downloaded: int = 0  # and its " Downloaded X" lines
 
 
-def cortex(version: str) -> str:
-    return f"Cortex {version}" if version else "Cortex"
+def keepfold(version: str) -> str:
+    return f"Keepfold {version}" if version else "Keepfold"
 
 
 def steps(mode: str, version: str = "") -> list[tuple[str, str]]:
     """(key, label) of each row; the update's "close" row shows only when programs must
     close."""
-    v = cortex(version)
+    v = keepfold(version)
     if mode == "update":
-        return [("wait", "Waiting for Cortex to close"),
-                ("close", "Closing programs that use Cortex"),
+        return [("wait", "Waiting for Keepfold to close"),
+                ("close", "Closing programs that use Keepfold"),
                 ("install", f"Installing {v}"), ("finish", "Finishing up"),
-                ("open", "Opening Cortex")]
+                ("open", "Opening Keepfold")]
     return [("folder", "Choose a folder"),
             ("install", f"Installing {v} (downloads Python and packages the first time)"),
             ("finish", "Finishing up"), ("done", "Done")]
@@ -47,8 +47,8 @@ def steps(mode: str, version: str = "") -> list[tuple[str, str]]:
 
 def start(mode: str, version: str = "") -> State:
     if mode == "update":
-        return State("wait", 0.0, "Waiting for Cortex to close…", mode, version)
-    return State("folder", 0.0, "Choose where to install Cortex, then click Install.", mode,
+        return State("wait", 0.0, "Waiting for Keepfold to close…", mode, version)
+    return State("folder", 0.0, "Choose where to install Keepfold, then click Install.", mode,
                  version)
 
 
@@ -59,14 +59,14 @@ def _n(text: str) -> int:
 
 def progress(s: State, line: str) -> State:
     """The state after one log line: the step and the bar never move backwards."""
-    t, v, to = line.strip(), cortex(s.version), s.version or "the new version"
+    t, v, to = line.strip(), keepfold(s.version), s.version or "the new version"
     new: dict = {}
     sub = None  # how far into the (new) step, 0..1
     if t.startswith("waiting for process"):
-        new, sub = {"step": "wait", "status": "Waiting for Cortex to close…"}, 0
+        new, sub = {"step": "wait", "status": "Waiting for Keepfold to close…"}, 0
     elif t.startswith("closing "):
-        new, sub = {"step": "close", "status": "Closing programs that use Cortex…"}, .5
-    elif t.startswith("Installing Cortex "):
+        new, sub = {"step": "close", "status": "Closing programs that use Keepfold…"}, .5
+    elif t.startswith("Installing Keepfold "):
         new, sub = {"step": "install", "status": (
             f"Installing {v}…" if s.mode == "update" else
             "Downloading Python 3.12 and packages (first install only)…")}, 0
@@ -92,7 +92,7 @@ def progress(s: State, line: str) -> State:
     elif t.startswith("Uninstalled "):
         sub = .72
     elif re.match(r"Installed \d+ packages? ", t):
-        new, sub = {"status": "Getting Cortex ready for a fast first start…"}, .8
+        new, sub = {"status": "Getting Keepfold ready for a fast first start…"}, .8
     elif t.startswith("Bytecode compiled"):
         sub = .95
     elif re.match(r"Installed \d+ executables?", t):
@@ -105,14 +105,14 @@ def progress(s: State, line: str) -> State:
         sub = .6
     elif t.startswith("added to Apps & Features"):
         sub = .9
-    elif t.startswith("Cortex is updated"):
-        new, sub = {"step": "open", "status": f"Cortex is updated to {to}. Opening it…"}, 0
-    elif t == "opened the Cortex app":
+    elif t.startswith("Keepfold is updated"):
+        new, sub = {"step": "open", "status": f"Keepfold is updated to {to}. Opening it…"}, 0
+    elif t == "opened the Keepfold app":
         new, sub = {"step": "open", "status": (
-            f"Cortex is updated to {to}. Restart Claude and your other AI apps so they "
+            f"Keepfold is updated to {to}. Restart Claude and your other AI apps so they "
             "reconnect.")}, 1
-    elif t == "Cortex is installed.":
-        new, sub = {"step": "done", "status": "Cortex is installed."}, 1
+    elif t == "Keepfold is installed.":
+        new, sub = {"step": "done", "status": "Keepfold is installed."}, 1
     order = list(SPANS[s.mode])
     if new.get("step", s.step) not in order:  # install has no "close" row: the words only
         new.pop("step")
@@ -131,27 +131,29 @@ def elapsed(seconds: float) -> str:
     return f"{m} min {sec} s" if m else f"{sec} s"
 
 
-# ---- the programs that keep Cortex in use ---------------------------------------------------
+# ---- the programs that keep Keepfold in use -------------------------------------------------
 
-CONNECTION, WINDOW, RECEIVER, OTHER = ("Claude's Cortex connection", "The Cortex window",
-                                       "The browsing receiver", "Other Cortex programs")
+CONNECTION, WINDOW, RECEIVER, OTHER = ("Claude's Keepfold connection", "The Keepfold window",
+                                       "The browsing receiver", "Other Keepfold programs")
 
 
 def kind(path: str) -> str:
     p = PureWindowsPath(path)
     name, parent = p.name.lower(), p.parent.name.lower()
-    if name == "cortex-receiver.exe":
+    if name.startswith("cortex"):  # a Cortex (0.6.1 and older) install's programs
+        name = "keepfold" + name[len("cortex"):]
+    if name == "keepfold-receiver.exe":
         return RECEIVER
-    if name == "cortex-app.exe" or (name == "cortex.exe" and parent == "app"):
-        return WINDOW  # app\Cortex.exe, or the older bin\cortex-app.exe launcher
-    if name == "cortex.exe":
-        return CONNECTION  # bin\cortex.exe: `cortex mcp`, which AI apps start
+    if name == "keepfold-app.exe" or (name == "keepfold.exe" and parent == "app"):
+        return WINDOW  # app\Keepfold.exe, or the older bin\keepfold-app.exe launcher
+    if name == "keepfold.exe":
+        return CONNECTION  # bin\keepfold.exe: `keepfold mcp`, which AI apps start
     return OTHER
 
 
 def group_in_use(busy: list[tuple[int, str]], parents: dict[int, int]) -> list[str]:
-    """`in_use`'s programs in plain words, e.g. "Claude's Cortex connection (2)": a busy
-    process started by another busy one (cortex.exe's python.exe) counts with its parent."""
+    """`in_use`'s programs in plain words, e.g. "Claude's Keepfold connection (2)": a busy
+    process started by another busy one (keepfold.exe's python.exe) counts with its parent."""
     pids = {pid for pid, _ in busy}
     counts: dict[str, int] = {}
     for pid, path in busy:

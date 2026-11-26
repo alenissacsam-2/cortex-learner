@@ -7,9 +7,9 @@ import pytest
 from conftest import events, run
 from typer.testing import CliRunner
 
-from cortex import claims, voice
-from cortex.cli import ME_PAGES, app
-from cortex.vault import Vault
+from keepfold import claims, voice
+from keepfold.cli import ME_PAGES, app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -21,7 +21,7 @@ def test_voice_sample_and_zone(root):
     seen = {}
 
     async def body(call):
-        s = await call("cortex_log", {"kind": "voice_sample",
+        s = await call("keepfold_log", {"kind": "voice_sample",
                                       "payload": {**SAMPLE, "id": "x", "day": "1999-01-01"}})
         assert s["display_line"] == "Voice sample saved"
         seen["sample"] = s["id"]
@@ -29,12 +29,12 @@ def test_voice_sample_and_zone(root):
                     {**SAMPLE, "audience": "Prof Lee"}, {**SAMPLE, "audience": "x" * 41},
                     {**SAMPLE, "text": " "}, {**SAMPLE, "text": "t" * 4001},
                     {**SAMPLE, "lang": "English"}):
-            assert (await call("cortex_log", {"kind": "voice_sample",
+            assert (await call("keepfold_log", {"kind": "voice_sample",
                                               "payload": bad}))["error"] == "invalid_argument"
         leak = {**SAMPLE, "text": "my key is sk-ant-api03-" + "a" * 40}
-        assert (await call("cortex_log", {"kind": "voice_sample",
+        assert (await call("keepfold_log", {"kind": "voice_sample",
                                           "payload": leak}))["error"] == "secret_detected"
-        assert (await call("cortex_find", {"query": "Friday"}))["hits"] == []
+        assert (await call("keepfold_find", {"query": "Friday"}))["hits"] == []
 
     run(root, body)
     v = Vault(root)
@@ -43,8 +43,8 @@ def test_voice_sample_and_zone(root):
     assert samples[0]["lang"] == "en"
     assert not any(e.get("payload", {}).get("text") for e in events(root))  # voice/ only
     # the zone: voice/ is no kind folder, so the index (find, recall, vectors) never sees it
-    from cortex.mcp_server import Cortex
-    assert not any("voice" in p.parts for p in Cortex(v).index._scan())
+    from keepfold.mcp_server import Keepfold
+    assert not any("voice" in p.parts for p in Keepfold(v).index._scan())
 
 
 def test_exemplars_score_and_skip_ai(tmp_path):
@@ -90,19 +90,19 @@ def test_voice_page_is_a_claim_and_confirm_page(root):
     rule = "Formal greeting, at most 5 sentences, signs Regards"
 
     async def body(call):
-        p = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
+        p = await call("keepfold_patch", {"id": "me/voice", "op": "append_to_section",
                                         "target": "professor", "text": rule})
         assert p["changed"] is True and "queued" not in p  # 22 Nov: saved now as a guess
-        bad = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
+        bad = await call("keepfold_patch", {"id": "me/voice", "op": "append_to_section",
                                           "target": "Prof Lee", "text": rule,
                                           "user_confirmed": True})
         assert bad["error"] == "invalid_argument"
-        ok = await call("cortex_patch", {"id": "me/voice", "op": "append_to_section",
+        ok = await call("keepfold_patch", {"id": "me/voice", "op": "append_to_section",
                                          "target": "professor", "text": "- " + rule,
                                          "user_confirmed": True})
         assert ok["claim"].startswith("c-") and [r["id"] for r in ok["replaced"]] == [p["claim"]]
-        ctx = await call("cortex_context", {})
-        assert "Regards" not in ctx["context"]  # served only by cortex_as_me
+        ctx = await call("keepfold_context", {})
+        assert "Regards" not in ctx["context"]  # served only by keepfold_as_me
 
     run(root, body)
     text = (root / "me/voice.md").read_text(encoding="utf-8")

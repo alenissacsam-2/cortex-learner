@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 import pytest
 from conftest import events, run
 
-from cortex import dashboard, know
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.reflect import reflect
-from cortex.vault import Vault
+from keepfold import dashboard, know
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.reflect import reflect
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -29,12 +29,12 @@ def test_old_need_events_load_and_new_ones_are_refused(root):
     before = len(events(root))
 
     async def body(call):
-        home = await call("cortex_start", {"mode": "home"})
+        home = await call("keepfold_start", {"mode": "home"})
         assert "need" not in home and "question for you" not in home["display"]
         for kind in ("need", "need_skip"):
-            out = await call("cortex_log", {"kind": kind, "payload": {"question": "x?"}})
+            out = await call("keepfold_log", {"kind": kind, "payload": {"question": "x?"}})
             assert out["error"] == "invalid_argument" and "was removed" in out["message"]
-        await call("cortex_end", {"summary": "done"})
+        await call("keepfold_end", {"summary": "done"})
 
     run(root, body)
     kinds = [e.get("payload", {}).get("kind") for e in events(root)[before:]]

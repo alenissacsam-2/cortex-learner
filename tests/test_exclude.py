@@ -1,4 +1,4 @@
-"""The `exclude:` list in ~/.cortex/config.yaml: no priming and no Cortex tools there."""
+"""The `exclude:` list in ~/.keepfold/config.yaml: no priming and no Keepfold tools there."""
 
 import json
 import sys
@@ -8,9 +8,9 @@ from conftest import events
 from test_prime import payload, vault  # noqa: F401
 from typer.testing import CliRunner
 
-from cortex import mcp_server, prime_hook, taint
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import mcp_server, prime_hook, taint
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -31,8 +31,8 @@ def cli(*args):
 
 
 def test_excluded_matches_whole_components(work, home):
-    (home / ".cortex").mkdir()
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold" / "config.yaml").write_text(
         f"vault: V\nexclude:\n  - '{work}'\n", encoding="utf-8")
     assert taint.excluded(work) == str(work.resolve())
     assert taint.excluded(work / "src") == str(work.resolve())
@@ -44,8 +44,8 @@ def test_excluded_matches_whole_components(work, home):
 
 
 def test_cli_add_list_remove_keeps_other_keys(work, home):
-    (home / ".cortex").mkdir()
-    cfg = home / ".cortex" / "config.yaml"
+    (home / ".keepfold").mkdir()
+    cfg = home / ".keepfold" / "config.yaml"
     cfg.write_text("vault: V\nrerank: false\n", encoding="utf-8")
     cli("exclude", "add", str(work))
     assert "already excluded" in cli("exclude", "add", str(work / "src"))
@@ -79,7 +79,7 @@ def test_init_keeps_the_exclude_list(work, home, tmp_path):
 
 
 def test_prime_hook_prints_nothing_in_an_excluded_folder(vault, work, monkeypatch):  # noqa: F811
-    monkeypatch.setenv("CORTEX_VAULT", str(vault))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
     cli("exclude", "add", str(work))
     inside = json.dumps({**json.loads(payload()), "cwd": str(work / "src")})
     assert prime_hook.run(inside) == ""
@@ -103,6 +103,42 @@ def test_mcp_in_an_excluded_folder_is_marked_excluded(root, work, monkeypatch):
     assert seen["excluded"] == str(work.resolve())
 
 
+BROKEN = "vault: V\nexclude:\n  - D:/x\nbrowse:\n\tdeny: hunter2-secret\n"  # a tab: line 5
+
+
+def test_an_unreadable_config_excludes_every_folder(vault, work, home, monkeypatch):  # noqa: F811
+    """D1-audit 1.2: a typo in config.yaml must not reset the exclude list to none. The hook
+    primes nothing, `keepfold mcp` refuses every tool, and doctor names the file and line but
+    never the line's text."""
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(vault))
+    (home / ".keepfold").mkdir()
+    cfg = home / ".keepfold" / "config.yaml"
+    cfg.write_text(BROKEN, encoding="utf-8")
+    err = taint.config_error()
+    assert err == f"{cfg} cannot be read: ScannerError at line 5"
+    for d in (work, work.parent / "client-repo", vault):
+        assert taint.excluded(d) == f"{d.resolve()} (every folder is, while {err})"
+    assert prime_hook.run(payload()) == ""
+    assert not (vault / prime_hook.STATE).exists()
+    seen = {}
+    monkeypatch.setattr(mcp_server, "serve", lambda v, role, excluded, **k: seen.update(
+        excluded=excluded))
+    monkeypatch.chdir(work.parent / "client-repo")
+    cli("mcp", "--vault", str(vault))
+    assert err in seen["excluded"]
+    r = CliRunner().invoke(app, ["doctor", "--vault", str(vault)])
+    assert r.exit_code == 1 and f"FAIL  Settings file: {err}\n" in r.output
+    assert "delete the file to start from the defaults" in r.output
+    for args in (["exclude", "list"], ["exclude", "add", str(work)]):
+        r2 = CliRunner().invoke(app, args)
+        assert r2.exit_code == 1 and err in r2.output, args
+    assert "hunter2" not in r.output + r2.output + seen["excluded"]
+    assert cfg.read_text(encoding="utf-8") == BROKEN  # nothing rewrote it
+    cfg.unlink()  # missing: the defaults again, nothing excluded
+    assert taint.excluded(work) is None
+    assert prime_hook.run(payload()).startswith('{"hookSpecificOutput"')
+
+
 def test_excluded_server_refuses_every_tool_and_says_why(root, monkeypatch):
     made, real = {}, mcp_server.build_server
 
@@ -114,17 +150,17 @@ def test_excluded_server_refuses_every_tool_and_says_why(root, monkeypatch):
     monkeypatch.setattr(mcp_server, "build_server", build)
     mcp_server.serve(Vault(root), "owner", "D:\\Work\\client")
     server = made["server"]
-    core = server.cortex
+    core = server.keepfold
     assert core.role == "reader"
     assert server.instructions == mcp_server.EXCLUDED_INSTRUCTIONS
-    assert "cortex_prime" not in server.instructions
+    assert "keepfold_prime" not in server.instructions
     for name, args in (
-            ("cortex_prime", {"prompt": "pointers"}), ("cortex_recall", {"query": "pointers"}),
-            ("cortex_find", {"query": "pointers"}), ("cortex_chats", {}),
-            ("cortex_read", {"id": "two-pointers"}),
-            ("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+            ("keepfold_prime", {"prompt": "pointers"}), ("keepfold_recall", {"query": "pointers"}),
+            ("keepfold_find", {"query": "pointers"}), ("keepfold_chats", {}),
+            ("keepfold_read", {"id": "two-pointers"}),
+            ("keepfold_patch", {"id": "me/profile", "op": "append_to_section",
                               "target": "Background", "text": "- x"})):
         out = core._call(name, getattr(core, name), args)
         assert out["error"] == "role_refused" and "D:\\Work\\client" in out["message"], name
-        assert "cortex exclude remove" in out["next"]
+        assert "keepfold exclude remove" in out["next"]
     assert events(root) == []

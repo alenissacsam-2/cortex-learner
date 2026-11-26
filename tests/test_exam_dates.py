@@ -1,4 +1,4 @@
-"""R31: Home's Add a date (POST /api/home/date, through cortex_add's own code path) and the
+"""R31: Home's Add a date (POST /api/home/date, through keepfold_add's own code path) and the
 board's calendar suggestions (dashboard.exam_suggestions, a fold over the calendar month pages
 and the assessment pages). Made-up vaults only."""
 
@@ -8,10 +8,10 @@ import pytest
 from test_app import _serve, call
 from test_home import _note
 
-from cortex import dashboard, planner
-from cortex.events import EventLog, local_day
-from cortex.home import HomeCache
-from cortex.vault import Vault
+from keepfold import dashboard, planner
+from keepfold.events import EventLog, local_day
+from keepfold.home import HomeCache
+from keepfold.vault import Vault
 
 TODAY = date.fromisoformat(local_day(datetime.now(UTC)))
 
@@ -22,7 +22,7 @@ def _day(n: int) -> str:
 
 @pytest.fixture
 def app(root_committed, home):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     srv, a = _serve(root_committed)
     yield a
     srv.shutdown()
@@ -49,9 +49,9 @@ def test_add_a_date_writes_an_assessment_page_the_planner_sees(app):
     row = next(a for a in home["exams"] if a["id"] == out["id"])
     assert row["title"] == "DSA exam" and row["days_left"] == 19
     new = [e for e in EventLog(v).iter_events() if e["id"] not in before]
-    # cortex_add's own change in a session of the app's, closed: `cortex undo` takes it back
+    # keepfold_add's own change in a session of the app's, closed: `keepfold undo` takes it back
     assert [e["kind"] for e in new] == ["open", "change", "close"]
-    assert new[0]["payload"]["client"] == "cortex-app"
+    assert new[0]["payload"]["client"] == "keepfold-app"
     assert new[1]["payload"]["change"] == {"tool": "add", "id": out["id"], "kind": "assessment",
                                            "op": "create", "target": None}
     # a deadline, and the same name on another day is a page of its own

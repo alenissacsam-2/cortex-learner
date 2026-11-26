@@ -14,9 +14,9 @@ from datetime import date
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import askfile, chat, cloudllm, importers, localllm, more_sources, semantic
-from cortex.app import server
-from cortex.vault import Vault
+from keepfold import askfile, chat, cloudllm, importers, localllm, more_sources, semantic
+from keepfold.app import server
+from keepfold.vault import Vault
 
 TODAY = date(2026, 11, 18)
 
@@ -151,7 +151,7 @@ def test_a_file_that_cannot_be_read_says_why_in_one_sentence(tmp_path, name, dat
 
 def test_too_big_a_file_is_refused_before_it_is_read(tmp_path, monkeypatch):
     monkeypatch.setitem(askfile.LIMIT, ".txt", 10)
-    with pytest.raises(ValueError, match=r"^This file is over 0 MB, the most Cortex reads from "
+    with pytest.raises(ValueError, match=r"^This file is over 0 MB, the most Keepfold reads from "
                                          r"one \.txt file\.$"):
         askfile.read(_write(tmp_path, "up.txt", b"x" * 11), "big.txt")
 
@@ -295,11 +295,11 @@ def test_no_local_model_shows_the_best_passages_and_saves_only_their_names(
                                                             "**lecture.pdf, page 3**"]
     hostile = next(s for s in shown if "previous instructions" in s).split("\n", 1)[1]
     assert not any(c in hostile for c in "[]*`")  # no citation or markup from the file
-    assert next(e for e in ev if e["t"] == "start")["model"] == "Cortex"
+    assert next(e for e in ev if e["t"] == "start")["model"] == "Keepfold"
     kept = chat.load(vault, cid)[-1]["text"]
     assert kept.startswith(askfile.NO_MODEL) and "Car motor" not in kept
     assert "- lecture.pdf, page" in kept and "previous instructions" not in kept
-    raw = (vault.root / ".cortex" / "browse" / "chat" / f"{cid}.jsonl").read_text("utf-8")
+    raw = (vault.root / ".keepfold" / "browse" / "chat" / f"{cid}.jsonl").read_text("utf-8")
     assert "service intervals" not in raw and "previous instructions" not in raw
 
 
@@ -326,12 +326,12 @@ def _git(root, *args):
 
 
 def _pages(root):
-    return {p.relative_to(root).as_posix() for p in root.rglob("*.md") if ".cortex" not in p.parts
+    return {p.relative_to(root).as_posix() for p in root.rglob("*.md") if ".keepfold" not in p.parts
             and ".git" not in p.parts}
 
 
 def test_save_makes_one_page_through_the_documents_import_and_is_undoable(root, tmp_path):
-    from cortex.app import actions
+    from keepfold.app import actions
     f = askfile.read(_write(tmp_path, "up.pdf", _pdf(LECTURE)), "lecture.pdf")
     v, before, head = Vault(root), _pages(root), _git(root, "rev-parse", "HEAD").strip()
     saved = askfile.save(v, f)
@@ -340,7 +340,7 @@ def test_save_makes_one_page_through_the_documents_import_and_is_undoable(root, 
     assert made == {saved["path"]} and saved["title"] == "Lecture Four" and f.saved == saved
     page = (root / saved["path"]).read_text("utf-8")
     assert "Source: Documents" in page and "car motor" in page.lower()
-    assert _git(root, "log", "-1", "--format=%s").strip() == "cortex: app import docs"
+    assert _git(root, "log", "-1", "--format=%s").strip() == "keepfold: app import docs"
     commit = _git(root, "rev-parse", "HEAD").strip()
     assert commit != head
     # again: the import's own dedupe finds the same page; nothing new is written
@@ -371,7 +371,7 @@ def test_save_from_text_imports_the_note(root, tmp_path):
 # ---- the app's routes -------------------------------------------------------------------------
 
 def test_the_app_attaches_removes_saves_and_forgets_on_clear(root, tmp_path, home):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     app = server.App(root)
     up =_write(tmp_path, "upload-1-lecture.pdf", _pdf(LECTURE))
     app.uploads["u1"] = up

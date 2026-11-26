@@ -1,12 +1,12 @@
-"""`cortex concept duplicates` (v6 agenda 8): read-only duplicate-pair suggestions."""
+"""`keepfold concept duplicates` (v6 agenda 8): read-only duplicate-pair suggestions."""
 
 from conftest import FakeEmbed, git, note
 from typer.testing import CliRunner
 
-from cortex import duplicates, semantic
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import duplicates, semantic
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 
 def _add(root, title, **kw):
@@ -25,7 +25,7 @@ def test_finds_known_pair_skips_unrelated_and_writes_nothing(root_committed):
 
     r = CliRunner().invoke(app, ["concept", "duplicates", "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    assert "run: cortex concept merge two-pointer two-pointers" in r.output  # more problems wins
+    assert "run: keepfold concept merge two-pointer two-pointers" in r.output  # more problems wins
     assert "same area dsa.arrays" in r.output and "1 shared problem" in r.output
     assert "arrays-basics" not in r.output  # same area, shared problem, but different names
     assert "secret-diary" not in r.output and "Private concept" not in r.output

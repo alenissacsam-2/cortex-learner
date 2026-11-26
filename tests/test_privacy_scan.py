@@ -51,7 +51,7 @@ def test_shipped_files_have_no_private_data():
 def test_patterns_catch_examples():
     bad = [r"D:\LearnerVault", r"C:\Users\bob\LearnerVault", "someone@gmail.com"]
     ok = ["~/LearnerVault", r"C:\Users\<you>\LearnerVault", "test@example.invalid",
-          "cortex@cortex", "git+https://github.com/<owner>/<repo>@<tag>", "galenic"]
+          "keepfold@keepfold", "git+https://github.com/<owner>/<repo>@<tag>", "galenic"]
     assert all(any(rx.search(s) for rx in PATTERNS.values()) for s in bad)
     assert not any(rx.search(s) for rx in PATTERNS.values() for s in ok)
 

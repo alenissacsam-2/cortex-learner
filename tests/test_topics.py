@@ -1,5 +1,5 @@
-"""cortex topics (REVIEW-1005 §5): the vault-backed hub tree, automatic attach with LCA
-back-off, place / set_topics, in-place rebuilds, cortex_add filing and the CLI. A synthetic
+"""keepfold topics (REVIEW-1005 §5): the vault-backed hub tree, automatic attach with LCA
+back-off, place / set_topics, in-place rebuilds, keepfold_add filing and the CLI. A synthetic
 vault of 12 hubs over 3 levels; a fake embedder gives each leaf hub's pages one direction."""
 
 import json
@@ -10,11 +10,11 @@ import pytest
 from conftest import git, note, run
 from typer.testing import CliRunner
 
-from cortex import semantic, topics
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.index import Index
-from cortex.vault import Vault, VaultError
+from keepfold import semantic, topics
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.index import Index
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -212,7 +212,7 @@ def test_build_regenerates_generated_parts_only(vault):
     mtimes = {p: p.stat().st_mtime_ns for p in files}
     dry = topics.build(v, index(vault), dry_run=True)
     assert {p: p.stat().st_mtime_ns for p in files} == mtimes  # a dry run writes nothing
-    assert not (vault / ".cortex" / "lock").exists()
+    assert not (vault / ".keepfold" / "lock").exists()
     done = topics.build(v, index(vault))
     assert done == dry and done["hubs"] == 12 and done["months"] == 1 and not done["unsafe"]
     ax = body(vault, "notes/a-x.md")
@@ -252,26 +252,26 @@ def test_build_never_rewrites_hand_text(vault, monkeypatch):
     assert done["unsafe"] >= 1 and body(vault, "notes/a-x-1.md") == before
 
 
-# ---- 5. cortex_add --------------------------------------------------------------------
+# ---- 5. keepfold_add --------------------------------------------------------------------
 
-def test_cortex_add_files_or_suggests(vault, monkeypatch):
+def test_keepfold_add_files_or_suggests(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Dims())
 
     async def go(call):
-        sure = await call("cortex_add", {"kind": "resource", "title": "Loose zero",
+        sure = await call("keepfold_add", {"kind": "resource", "title": "Loose zero",
                                          "fields": {"summary": f"{BASE} d0"}})
         assert sure["topic"]["id"] == "a-x-1" and "<untrusted_note" in sure["topic"]["title"]
         assert "Filed under [[a-x-1]]" in sure["next"] and "topic_suggestions" not in sure
-        unsure = await call("cortex_add", {"kind": "note", "title": "Mixed bag",
+        unsure = await call("keepfold_add", {"kind": "note", "title": "Mixed bag",
                                            "fields": {"summary": f"{BASE} d0 d3"}})
         assert "topic" not in unsure and len(unsure["topic_suggestions"]) == 3
         assert all("<untrusted_note" in s["title"] for s in unsure["topic_suggestions"])
         assert "set_topics" in unsure["next"]
-        named = await call("cortex_add", {"kind": "resource", "title": "Named hub",
+        named = await call("keepfold_add", {"kind": "resource", "title": "Named hub",
                                           "fields": {"summary": f"{BASE} d0",
                                                      "related": ["a-x-2"]}})
         assert "topic" not in named and "topic_suggestions" not in named
-        end = await call("cortex_end", {})
+        end = await call("keepfold_end", {})
         assert "set topics on resources/loose-zero" in end["display"]
 
     run(vault, go)
@@ -282,9 +282,9 @@ def test_cortex_add_files_or_suggests(vault, monkeypatch):
     assert 'related: ["[[a-x-2]]"]' in body(vault, "resources/named-hub.md")
 
 
-def test_cortex_add_without_embedder(vault):
+def test_keepfold_add_without_embedder(vault):
     async def go(call):
-        out = await call("cortex_add", {"kind": "resource", "title": "No model",
+        out = await call("keepfold_add", {"kind": "resource", "title": "No model",
                                         "fields": {"summary": f"{BASE} d0"}})
         assert "topic" not in out and "topic_suggestions" not in out and "error" not in out
 
@@ -300,15 +300,15 @@ def test_set_topics(vault):
 
     async def go(call):
         for bad in ("nope", "p-ax1-0", "a-x-1,a-x-2,a-y-1,b-z-1,b-z-2"):
-            assert (await call("cortex_patch", patch(bad)))["error"] == "invalid_argument", bad
-        assert (await call("cortex_patch", patch("a-x-1", "two-pointers")))["error"] \
+            assert (await call("keepfold_patch", patch(bad)))["error"] == "invalid_argument", bad
+        assert (await call("keepfold_patch", patch("a-x-1", "two-pointers")))["error"] \
             == "invalid_argument"
-        ok = await call("cortex_patch", patch("a-x-1, b-z-2"))
+        ok = await call("keepfold_patch", patch("a-x-1, b-z-2"))
         assert ok["changed"] is True
         assert 'related: ["[[a-x-1]]", "[[b-z-2]]"]' in body(vault, "resources/loose-0.md")
-        cleared = await call("cortex_patch", patch(""))
+        cleared = await call("keepfold_patch", patch(""))
         assert cleared["changed"] is True
-        end = await call("cortex_end", {})
+        end = await call("keepfold_end", {})
         assert "set topics on resources/loose-0" in end["display"]
 
     run(vault, go)
@@ -413,25 +413,25 @@ def split_children(p, **extra):
 
 
 def split(call, args):
-    return call("cortex_reflect", {"action": "split", **args})
+    return call("keepfold_reflect", {"action": "split", **args})
 
 
-def test_reflect_and_cortex_split(vault, monkeypatch):
+def test_reflect_and_keepfold_split(vault, monkeypatch):
     groups = big_hub(vault)
     monkeypatch.setattr(semantic, "_embedder", Dims())
     out = {}
 
     async def go(call):
-        r = await call("cortex_reflect")
+        r = await call("keepfold_reflect")
         (s,) = r["splits"]
         assert s["hub"] == "big" and "action=\'split\'" in r["next"]
         assert all(c["titles"].startswith('<untrusted_note id="split">') for c in s["clusters"])
         assert "<untrusted_note" in s["title"] and [c["n"] for c in s["clusters"]] == [10] * 3
-        prop = json.loads((vault / ".cortex/proposals/split-big.json").read_text("utf-8"))
+        prop = json.loads((vault / ".keepfold/proposals/split-big.json").read_text("utf-8"))
         assert prop["hash"] == s["hash"]
         kids = split_children(prop)
         bad = await split(call, {"hub": "big", "hash": "0" * 16, "children": kids})
-        assert bad["error"] == "invalid_argument" and "cortex_reflect" in bad["message"]
+        assert bad["error"] == "invalid_argument" and "keepfold_reflect" in bad["message"]
         bad = await split(call, {"hub": "big", "hash": s["hash"], "children": kids[:2]})
         assert bad["error"] == "invalid_argument"
         outside = [{**k, "members": ["p-ax1-0"]} for k in kids]
@@ -440,7 +440,7 @@ def test_reflect_and_cortex_split(vault, monkeypatch):
         args = {"hub": "big", "hash": s["hash"], "children": kids, "key": "split-1"}
         out["ok"] = await split(call, args)
         assert (await split(call, args)) == out["ok"]  # a repeated key writes nothing
-        out["end"] = (await call("cortex_end", {}))["display"]
+        out["end"] = (await call("keepfold_end", {}))["display"]
 
     run(vault, go)
     ok = out["ok"]
@@ -472,7 +472,7 @@ def test_reflect_caps_splits_at_two(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Dims())
 
     async def go(call):
-        r = await call("cortex_reflect")
+        r = await call("keepfold_reflect")
         assert [s["hub"] for s in r["splits"]] == ["big1", "big2"]
 
     run(vault, go)
@@ -491,7 +491,7 @@ def test_cli_split_list_propose_apply_and_eval(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Dims())
     out = call("split", "big", "--propose")
     assert "k=3" in out and "bfs, dfs, graph" in out
-    assert (vault / ".cortex/proposals/split-big.json").is_file()
+    assert (vault / ".keepfold/proposals/split-big.json").is_file()
     assert not (vault / "notes/big-bfs-dfs-graph.md").exists()  # --propose writes no page
     out = call("split", "big", "--apply", "--auto-names")
     assert "created 3 provisional sub-topics; 0 pages stay" in out

@@ -9,9 +9,9 @@ from dataclasses import replace
 import pytest
 from test_browse_sites import OWNER, hist, imp, vault  # noqa: F401  (fixtures)
 
-from cortex import browse_serve as bs
-from cortex import cloudllm, localllm
-from cortex.vault import Vault
+from keepfold import browse_serve as bs
+from keepfold import cloudllm, localllm
+from keepfold.vault import Vault
 
 CONFIG = {"cloudllm": {"provider": "openai", "model": "gpt-x", "api_key_env": "TEST_CLOUD_KEY"}}
 HIDDEN = ("pornhub", "adulttitle", "adultterm", "adultvid", "healthmarker", "webmd")
@@ -64,8 +64,8 @@ def deepen(monkeypatch, vault, settings, *, cloud=True, flip=None):  # noqa: F81
     monkeypatch.setattr(bs, "load_settings", lambda config=None: cur[0])
     monkeypatch.setattr(bs, "local_runner",
                         lambda budget_s=None: (local, localllm.Budget(100)))
-    monkeypatch.setattr("cortex.taint.config", lambda: CONFIG if cloud else {})
-    monkeypatch.setattr("cortex.browse.sites.update_vectors", lambda v, say=None, **kw: None)
+    monkeypatch.setattr("keepfold.taint.config", lambda: CONFIG if cloud else {})
+    monkeypatch.setattr("keepfold.browse.sites.update_vectors", lambda v, say=None, **kw: None)
     if flip:
         real = cloudllm.CloudRunner._post
 
@@ -142,7 +142,7 @@ def test_turning_cloud_processing_off_stops_the_next_call(vault, hist, key, open
 def test_the_audit_line_holds_counts_only(vault, hist, key, opener, monkeypatch):  # noqa: F811
     imp(vault, hist)
     deepen(monkeypatch, vault, replace(OWNER, cloud_processing=True))
-    lines = (vault / ".cortex" / "cloud-log.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = (vault / ".keepfold" / "cloud-log.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])
     assert set(row) == {"ts", "provider", "model", "items", "chars", "skipped"}

@@ -1,14 +1,13 @@
-"""Cortex.exe: the installed app's own program, so Windows shows Cortex, not Python.
+"""Keepfold.exe: the installed app's own program, so Windows shows Keepfold, not Python.
 
-`make` copies uv's base `pythonw.exe` into the tool's venv as `app\\Cortex.exe` with the DLLs
+`make` copies uv's base `pythonw.exe` into the tool's venv as `app\\Keepfold.exe` with the DLLs
 it loads (the loader looks beside the exe). Python's site.py takes the folder above the exe's
-as the venv (its pyvenv.cfg), so the exe sits one level down, and not in `Scripts\\`, where
-uv's `cortex.exe` has the same name to Windows. It then replaces its resources: the Cortex
-icon (the package's assets/cortex.ico), a version resource that names it Cortex (Task
-Manager, the taskbar) and pythonw's own manifest. The shortcuts run `Cortex.exe -m
-cortex.app.launch` and carry APP_ID, the AppUserModelID the app sets on itself
-(cortex.app.desktop), so a pinned taskbar button is this shortcut. Stdlib only:
-CortexSetup.exe imports it."""
+as the venv (its pyvenv.cfg), so the exe sits one level down, not in uv's `Scripts\\`. It then
+replaces its resources: the Keepfold icon (the package's assets/keepfold.ico), a version resource
+that names it Keepfold (Task Manager, the taskbar) and pythonw's own manifest. The shortcuts
+run `Keepfold.exe -m keepfold.app.launch` and carry APP_ID, the AppUserModelID the app sets on
+itself (keepfold.app.desktop), so a pinned taskbar button is this shortcut. 0.6.1 and older
+named it `app\\Cortex.exe` (OLD_NAME). Stdlib only: KeepfoldSetup.exe imports it."""
 
 from __future__ import annotations
 
@@ -22,24 +21,25 @@ import time
 from ctypes import wintypes as w
 from pathlib import Path
 
-NAME = "Cortex.exe"
-APP_ID = "Cortex.Learner"  # cortex.app.desktop.APP_ID
-ENTRY = ["-m", "cortex.app.launch"]
+NAME = "Keepfold.exe"  # keepfold.app.launch.APP_EXE
+OLD_NAME = "Cortex.exe"  # 0.6.1 and older; setup_app deletes it once NAME is made
+APP_ID = "Keepfold.Learner"  # keepfold.app.desktop.APP_ID
+ENTRY = ["-m", "keepfold.app.launch"]
 DLLS = ("python3*.dll", "vcruntime140*.dll")
 RT_ICON, RT_GROUP_ICON, RT_VERSION, RT_MANIFEST = 3, 14, 16, 24
 LANG = 0x0409  # US English, as pythonw's own resources
 
 
 def venv(d: Path) -> Path:
-    return d / "tools" / "cortex-learner"
+    return d / "tools" / "keepfold"
 
 
 def path(d: Path) -> Path:
-    return venv(d) / "app" / NAME  # cortex.app.launch.installed_app: <sys.prefix>\app
+    return venv(d) / "app" / NAME  # keepfold.app.launch.installed_app: <sys.prefix>\app
 
 
 def ico(d: Path) -> Path:
-    return venv(d) / "Lib" / "site-packages" / "cortex" / "assets" / "cortex.ico"
+    return venv(d) / "Lib" / "site-packages" / "keepfold" / "assets" / "keepfold.ico"
 
 
 def base_python(d: Path) -> Path:
@@ -52,7 +52,7 @@ def base_python(d: Path) -> Path:
 
 
 def make(d: Path, version: str, say) -> Path:
-    """Copy and stamp Cortex.exe; a stamp that fails leaves a working Cortex.exe with
+    """Copy and stamp Keepfold.exe; a stamp that fails leaves a working Keepfold.exe with
     Python's icon (a warning), a copy that fails raises OSError."""
     home, exe = base_python(d), path(d)
     exe.parent.mkdir(exist_ok=True)
@@ -95,7 +95,7 @@ def _node(key: str, value: bytes = b"", text: bool = False, children: tuple = ()
     return struct.pack("<HHH", len(out), vlen, int(text)) + out[6:]
 
 
-def version_resource(version: str, name: str = "Cortex") -> bytes:
+def version_resource(version: str, name: str = "Keepfold") -> bytes:
     nums = [int(x) for x in re.findall(r"\d+", version)[:4]]
     nums += [0] * (4 - len(nums))
     ms, ls = nums[0] << 16 | nums[1], nums[2] << 16 | nums[3]
@@ -147,7 +147,7 @@ def read_resource(exe: Path, kind: int, name: int) -> bytes | None:
 
 
 def stamp(exe: Path, ico_data: bytes, version: str) -> None:
-    """Replace every resource of `exe` with the Cortex icon, a Cortex version resource and
+    """Replace every resource of `exe` with the Keepfold icon, a Keepfold version resource and
     the manifest it had (pythonw's: Windows versions, long paths)."""
     if sys.platform != "win32":
         raise OSError("resources are stamped on Windows only")
@@ -211,7 +211,7 @@ def _query(obj, iid: str) -> ctypes.c_void_p:
 
 
 def shortcut(lnk: Path, target: Path, args: str, icon: Path, app_id: str = APP_ID,
-             description: str = "Open the Cortex app") -> None:
+             description: str = "Open Keepfold") -> None:
     """Write `lnk` (IShellLinkW) with an AppUserModelID (IPropertyStore), which WScript.Shell
     cannot set; the folder is the user's home, as before."""
     ole32 = ctypes.windll.ole32
@@ -241,6 +241,33 @@ def shortcut(lnk: Path, target: Path, args: str, icon: Path, app_id: str = APP_I
         persist = _query(link, "{0000010B-0000-0000-C000-000000000046}")  # IPersistFile
         held.append(persist)
         _call(persist, 6, str(lnk), True, types=(w.LPCWSTR, w.BOOL))  # Save
+    finally:
+        for obj in reversed(held):
+            if obj:
+                _call(obj, 2, restype=ctypes.c_ulong)  # Release
+        if init in (0, 1):
+            ole32.CoUninitialize()
+
+
+def shortcut_target(lnk: Path) -> str:
+    """The program `lnk` runs ("" when it runs none); OSError when it cannot be read."""
+    ole32 = ctypes.windll.ole32
+    init = ole32.CoInitializeEx(None, 2)
+    link = ctypes.c_void_p()
+    held = []
+    try:
+        ctypes.oledll.ole32.CoCreateInstance(
+            ctypes.byref(_guid("{00021401-0000-0000-C000-000000000046}")), None, 1,  # ShellLink
+            ctypes.byref(_guid("{000214F9-0000-0000-C000-000000000046}")),  # IShellLinkW
+            ctypes.byref(link))
+        held.append(link)
+        persist = _query(link, "{0000010B-0000-0000-C000-000000000046}")  # IPersistFile
+        held.append(persist)
+        _call(persist, 5, str(lnk), 0, types=(w.LPCWSTR, w.DWORD))  # Load, STGM_READ
+        buf = ctypes.create_unicode_buffer(32768)
+        _call(link, 3, buf, len(buf), None, 0,
+              types=(w.LPWSTR, ctypes.c_int, ctypes.c_void_p, w.DWORD))  # GetPath
+        return buf.value
     finally:
         for obj in reversed(held):
             if obj:

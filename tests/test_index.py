@@ -8,12 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from cortex.catalog import Catalog
-from cortex.index import READ_CAP_CHARS, Index, fts_query
-from cortex.vault import Vault, VaultError
+from keepfold.catalog import Catalog
+from keepfold.index import READ_CAP_CHARS, Index, fts_query
+from keepfold.vault import Vault, VaultError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
-REAL = Path(os.environ.get("CORTEX_REAL_VAULT", "/nonexistent-real-vault"))
+REAL = Path(os.environ.get("KEEPFOLD_REAL_VAULT", "/nonexistent-real-vault"))
 
 
 @pytest.fixture
@@ -132,11 +132,11 @@ def test_read_wraps_and_fields(idx):
 def test_read_hides_tool_props_and_resolves_alias(vault):
     p = vault.root / "concepts" / "two-pointers.md"
     p.write_text(p.read_text(encoding="utf-8").replace(
-        'mistakes:', 'cortex_status: "learning"\ncortex_next: "2026-12-01"\nmistakes:'),
+        'mistakes:', 'keepfold_status: "learning"\nkeepfold_next: "2026-12-01"\nmistakes:'),
         encoding="utf-8")
     r = Index(vault, Catalog.load(vault)).read("2 pointers")
     assert r["id"] == "two-pointers"
-    assert not any(k.startswith("cortex_") for k in r["fields"])
+    assert not any(k.startswith("keepfold_") for k in r["fields"])
 
 
 def test_read_cannot_break_out_of_wrapper(vault):
@@ -246,6 +246,15 @@ def test_refresh_edit_and_delete(vault, idx):
     assert idx.refresh() == 0
 
 
+def test_a_broken_page_is_logged_without_its_text(vault, caplog):
+    """D1 §4.2: the log names the page, the error class and line, never the note's text."""
+    (vault.root / "concepts" / "leaky.md").write_text("---\nbad: [unclosed SECRETWORD\n---\n")
+    idx = Index(vault, Catalog.load(vault))
+    idx.refresh()
+    assert "leaky.md" in caplog.text and "SECRETWORD" not in caplog.text
+    assert "leaky" not in ids(idx.find("unclosed"))
+
+
 def test_a_page_deleted_between_the_scan_and_its_read_is_skipped(vault, idx, monkeypatch):
     """L1: a page the scan listed but gone before its read (a sync, an editor's save) costs
     no refresh: the other changed page is indexed, the gone one is out, the next refresh
@@ -299,8 +308,8 @@ def test_real_vault_smoke(monkeypatch):
 
 def test_one_link_target_rule_for_alias_heading_and_block_refs():
     """Audit F25: every link parser cuts a target at |, # and ^ the way index._target does."""
-    from cortex import lint, topics
-    from cortex.index import _target, link_targets
+    from keepfold import lint, topics
+    from keepfold.index import _target, link_targets
 
     for raw in ("[[x]]", "[[x|Label]]", "[[x#Heading]]", "[[x^block]]", "[[concept:x]]", " x "):
         assert _target(raw) == "x"
@@ -311,7 +320,7 @@ def test_one_link_target_rule_for_alias_heading_and_block_refs():
 
 
 def test_wrap_escapes_id():
-    from cortex.index import _wrap
+    from keepfold.index import _wrap
     assert _wrap('a"b>', "x").startswith('<untrusted_note id="a&quot;b&gt;">')
 
 
@@ -342,7 +351,7 @@ def _page(vault, rel, front, body):
 
 
 def _aliased(vault):
-    _page(vault, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Cortex]\n",
+    _page(vault, "projects/k-graph.md", "title: K-Graph\nkind: project\naliases: [Keepfold]\n",
           "# K-Graph\n\nA learner model.")
     _page(vault, "people/northwest-tech.md",
           "title: Northwest Tech\nkind: person\nprivate: false\naliases: NWTU\n",
@@ -350,7 +359,7 @@ def _aliased(vault):
     _page(vault, "people/ana.md", "title: Ana\nkind: person\naliases: [Zorbina]\n",
           "# Ana\n\nA friend.")  # a people page is private unless it says private: false
     _page(vault, "notes/mentions.md", "title: Mentions\n",
-          "# Mentions\n\nCortex and NWTU, said in passing.")
+          "# Mentions\n\nKeepfold and NWTU, said in passing.")
     _page(vault, "notes/hidden.md", "title: Hidden\nprivate: true\naliases: [Zorblax]\n",
           "# Hidden\n\nA secret.")
 
@@ -358,10 +367,10 @@ def _aliased(vault):
 def test_an_alias_finds_any_page_kind_as_its_title_does(vault):
     _aliased(vault)
     idx = Index(vault, Catalog.load(vault))
-    assert ids(idx.find("Cortex"))[0] == "k-graph"  # a list alias, ranked over a mention
+    assert ids(idx.find("Keepfold"))[0] == "k-graph"  # a list alias, ranked over a mention
     assert ids(idx.find("nwtu"))[0] == "northwest-tech"  # one string, any case
     assert ids(idx.find("K-Graph"))[0] == "k-graph"  # the title still
-    assert idx.title_matches("Cortex", "project") == ["k-graph"]
+    assert idx.title_matches("Keepfold", "project") == ["k-graph"]
     # a private page's alias does not reveal it
     assert idx.find("Zorblax") == [] and "hidden" not in ids(idx.find("secret"))
     assert idx.find("Zorbina") == []
@@ -374,13 +383,13 @@ def test_aliases_hold_after_a_snapshot_load(vault):
     Index(vault, Catalog.load(vault)).save_snapshot()
     idx = Index(vault, Catalog.load(vault))
     assert idx._parsed == 0  # every page came from the snapshot
-    assert ids(idx.find("Cortex"))[0] == "k-graph"
+    assert ids(idx.find("Keepfold"))[0] == "k-graph"
     assert ids(idx.find("NWTU"))[0] == "northwest-tech"
     assert idx.find("Zorblax") == []
 
 
 def test_aliases_are_read_as_a_list_or_one_string():
-    from cortex.index import aliases
-    assert aliases({"aliases": ["Cortex", " ", None, "KG "]}) == ["Cortex", "KG"]
+    from keepfold.index import aliases
+    assert aliases({"aliases": ["Keepfold", " ", None, "KG "]}) == ["Keepfold", "KG"]
     assert aliases({"aliases": "NWTU"}) == ["NWTU"]
     assert aliases({}) == [] and aliases({"aliases": None}) == []

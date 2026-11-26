@@ -1,4 +1,4 @@
-"""FW: cortex_find's `where`, frontmatter filters (cortex.where), with and without a query,
+"""FW: keepfold_find's `where`, frontmatter filters (keepfold.where), with and without a query,
 through find's own privacy (private pages, a profile's withheld pages). Made-up vaults only."""
 
 import statistics
@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 from conftest import note
 
-from cortex import mcp_server, where, xray
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault, VaultError
+from keepfold import mcp_server, where, xray
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -106,7 +106,7 @@ def test_a_missing_field_fails_all_but_not_equal():
     assert ok("x!=1", {"y": 1}) and ok("x!=1", {"x": None})
 
 
-# ---- cortex_find ------------------------------------------------------------------------------
+# ---- keepfold_find ------------------------------------------------------------------------------
 
 def page(root, folder, id, front, body="x"):
     note(root, f"{folder}/{id}.md", front, f"# {id}\n\n{body}")
@@ -129,10 +129,10 @@ def vroot(root):
 
 
 def find(root, client=None, **kw):
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     if client:
         c.over_mcp, c.sessions.client = True, client
-    return c.cortex_find(**kw)
+    return c.keepfold_find(**kw)
 
 
 def ids(out):
@@ -231,7 +231,7 @@ def test_a_listing_is_a_read_for_the_broad_read_flag(vroot):
     v = Vault(vroot)
     out = find(vroot, "cursor-vscode", where="status=open")
     row = xray.rows(v)[-1]
-    assert row["tool"] == "cortex_find" and row["client"] == "cursor-vscode"
+    assert row["tool"] == "keepfold_find" and row["client"] == "cursor-vscode"
     assert row["served"] == {"found": ids(out)} and ids(out)
     assert "status" not in str(row)  # ids only, never the filter text
 
@@ -243,15 +243,15 @@ def test_a_where_listing_stays_quick_on_5k_notes(tmp_path, capsys):
 
     root = tmp_path / "big"
     _big(root)
-    cx = mcp_server.Cortex(Vault(root))
+    cx = mcp_server.Keepfold(Vault(root))
     cx._ready.wait()
-    cx.cortex_find(where="tags=t7")  # the first call folds the log and warms the caches
+    cx.keepfold_find(where="tags=t7")  # the first call folds the log and warms the caches
 
     def median(**kw):
         times = []
         for _ in range(7):
             t = time.perf_counter()
-            out = cx.cortex_find(**kw)
+            out = cx.keepfold_find(**kw)
             times.append(time.perf_counter() - t)
         return statistics.median(times), out
 

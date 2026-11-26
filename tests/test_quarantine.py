@@ -1,5 +1,5 @@
 """R29b: a damaged SQLite store is moved aside (never deleted) and started again; doctor names
-the copy, backup leaves it out and forget deletes it (cortex.quarantine)."""
+the copy, backup leaves it out and forget deletes it (keepfold.quarantine)."""
 
 import logging
 import sqlite3
@@ -8,10 +8,10 @@ from contextlib import closing
 import pytest
 from conftest import FakeEmbed
 
-from cortex import chat_import, doctor, forget, quarantine, semantic, vecstore
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.vault import Vault, VaultError
+from keepfold import chat_import, doctor, forget, quarantine, semantic, vecstore
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -67,7 +67,7 @@ def test_a_damaged_vector_store_is_moved_aside_and_recall_works_after(root, monk
     assert fake.texts == [] and len(quarantine.found(root)) == 1  # healthy now: no second move
 
     (row,) = doctor.check_damaged_stores(root)
-    assert row[0] == "WARN" and row[2] == f".cortex/{copy.name}" and "Delete" in row[3]
+    assert row[0] == "WARN" and row[2] == f".keepfold/{copy.name}" and "Delete" in row[3]
 
 
 def test_a_damaged_chat_import_state_is_moved_aside(root):
@@ -81,7 +81,7 @@ def test_a_damaged_chat_import_state_is_moved_aside(root):
     assert copy.name.startswith("chat-import.sqlite.damaged-")
     assert copy.read_bytes().startswith(b"this is not") and (root / chat_import.STATE).is_file()
     (row,) = doctor.check_damaged_stores(root)
-    assert row[2].startswith(".cortex/chat-import.sqlite.damaged-") and "-wal" not in row[2]
+    assert row[2].startswith(".keepfold/chat-import.sqlite.damaged-") and "-wal" not in row[2]
 
 
 def test_a_store_held_open_stays_whole_and_the_error_stands(root, monkeypatch, caplog):
@@ -128,13 +128,13 @@ def test_a_store_that_cannot_be_moved_is_tried_once_per_process(root, monkeypatc
 
 
 def test_a_forget_deletes_the_damaged_copies_and_backup_leaves_them_out(root):
-    from cortex import backup
+    from keepfold import backup
 
     names = ["vectors.db.damaged-20261124T101500Z", "vectors.db.damaged-20261124T101500Z-wal",
              "chat-import.sqlite.damaged-20261124T101501Z"]
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     for n in names:
-        (root / ".cortex" / n).write_bytes(b"zqcanary rows")
+        (root / ".keepfold" / n).write_bytes(b"zqcanary rows")
     import zipfile
     with zipfile.ZipFile(backup.backup(root, root.parent / "zips")) as z:
         assert not [n for n in z.namelist() if ".damaged-" in n]

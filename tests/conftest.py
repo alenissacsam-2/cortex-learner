@@ -29,7 +29,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def _no_real_home(tmp_path_factory, monkeypatch):
-    """Tests never read or write the real ~/.cortex (the vault pointer every chat reads),
+    """Tests never read or write the real ~/.keepfold (the vault pointer every chat reads),
     ~/.claude or the Claude desktop configs. Per-file `home` fixtures override this with their
     own folder; this one uses a separate temp dir so it never collides with tmp_path."""
     h = tmp_path_factory.mktemp("home")
@@ -39,7 +39,7 @@ def _no_real_home(tmp_path_factory, monkeypatch):
     for var in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME"):  # clients.py, doctor.py
         monkeypatch.setenv(var, str(h / var))
     # the other coding agents' homes (chats.codex_files...) follow Path.home() too
-    for var in ("CORTEX_VAULT", "CLAUDE_PROJECT_DIR", "CODEX_HOME", "GEMINI_CLI_HOME",
+    for var in ("KEEPFOLD_VAULT", "CLAUDE_PROJECT_DIR", "CODEX_HOME", "GEMINI_CLI_HOME",
                 "COPILOT_HOME"):
         monkeypatch.delenv(var, raising=False)
     # git reads ~/.gitconfig from HOME; commits still need an identity
@@ -64,11 +64,11 @@ def _own_temp_folder(tmp_path_factory, monkeypatch):
 def _no_real_installs(tmp_path_factory, monkeypatch):
     """Tests find git only on PATH (never in the real Program Files or the registry's PATH),
     and never the real LM Studio `lms` on PATH (a test must not run it)."""
-    from cortex import session
+    from keepfold import session
 
     monkeypatch.setenv("ProgramFiles", str(tmp_path_factory.mktemp("programfiles")))
     monkeypatch.setattr(session, "_registry_path", lambda: "")
-    from cortex import clients
+    from keepfold import clients
     monkeypatch.setattr(clients, "_registry_install", lambda: None)  # never the real install
     real = shutil.which
     monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if cmd == "lms"
@@ -79,7 +79,7 @@ def _no_real_installs(tmp_path_factory, monkeypatch):
 def _no_real_run_key(monkeypatch):
     """Tests never read or write the real HKCU Run key (Start at login, Start with Windows): an
     in-memory dict of value name -> command instead. Returns the dict."""
-    from cortex.app import status
+    from keepfold.app import status
 
     run: dict = {}
     monkeypatch.setattr(status, "run_get", lambda name=status.LOGIN_TASK: run.get(name))
@@ -90,7 +90,7 @@ def _no_real_run_key(monkeypatch):
 
 
 class FakeUser32:
-    """The user32 calls quick capture's hotkey thread makes (cortex.app.desktop.Hotkey): a
+    """The user32 calls quick capture's hotkey thread makes (keepfold.app.desktop.Hotkey): a
     message queue per process, `held` combinations another app holds, and every call
     recorded in `calls`. `press()` is a WM_HOTKEY."""
 
@@ -130,7 +130,7 @@ class FakeUser32:
 def _no_real_hotkey(monkeypatch):
     """Tests never register a real global hotkey: the desktop app's hotkey thread gets a
     FakeUser32. Returns it."""
-    from cortex.app import desktop
+    from keepfold.app import desktop
 
     fake = FakeUser32()
     monkeypatch.setattr(desktop, "_user32", lambda: fake)
@@ -140,7 +140,7 @@ def _no_real_hotkey(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_real_windows_hello(monkeypatch):
     """Tests never show a real Windows Hello prompt: the Private switch's tests mock it."""
-    from cortex.app import hello
+    from keepfold.app import hello
 
     def refuse(*a, **k):
         raise AssertionError("a test reached the real Windows Hello prompt")
@@ -150,9 +150,9 @@ def _no_real_windows_hello(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_real_chat_export(tmp_path_factory, monkeypatch):
     """Tests never see the user's imported chat exports or Claude Code transcripts."""
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path_factory.mktemp("chat-export")))
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(tmp_path_factory.mktemp("claude-projects")))
-    monkeypatch.setenv("CORTEX_DOWNLOADS_DIR", str(tmp_path_factory.mktemp("downloads")))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path_factory.mktemp("chat-export")))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(tmp_path_factory.mktemp("claude-projects")))
+    monkeypatch.setenv("KEEPFOLD_DOWNLOADS_DIR", str(tmp_path_factory.mktemp("downloads")))
 
 
 @pytest.fixture(autouse=True)
@@ -160,17 +160,17 @@ def _status_probes_fresh(monkeypatch):
     """Status's kept probes are asked every time in tests (a test changes a fake runner and
     reads Status again); test_app's cache test puts `status.kept` back. No warm-up thread at
     `start` either: one that outlived its test could run the real probes."""
-    from cortex.app import server, status
+    from keepfold.app import server, status
 
     monkeypatch.setattr(status, "kept", lambda key, fn: fn())
     monkeypatch.setattr(server, "WARM_STATUS", False)
     # nor a fact-harvest piggyback after a Chat turn (test_fact_harvest.py turns it on)
     monkeypatch.setattr(server, "PIGGYBACK", False)
-    # the Claude Code row: never a real `cortex --version` (the venv's cortex is on PATH) or
+    # the Claude Code row: never a real `keepfold --version` (the venv's keepfold is on PATH) or
     # the real system PATH; tests/test_status_copies.py sets its own
-    from cortex import update
-    from cortex.app import winpath
-    monkeypatch.setattr(status, "cortex_version", lambda exe: update.current())
+    from keepfold import update
+    from keepfold.app import winpath
+    monkeypatch.setattr(status, "keepfold_version", lambda exe: update.current())
     monkeypatch.setattr(winpath, "in_system", lambda folder: False)
 
 
@@ -178,7 +178,7 @@ def _status_probes_fresh(monkeypatch):
 def _relayed_cutoff_later(monkeypatch):
     """Tests write relayed yeses on the real clock; keep them act-grade whatever the date.
     Tests of the cutoff (claims.late_relay) set claims.RELAYED_FROM themselves."""
-    from cortex import claims
+    from keepfold import claims
 
     monkeypatch.setattr(claims, "RELAYED_FROM", "9999-12-31")
 
@@ -186,7 +186,7 @@ def _relayed_cutoff_later(monkeypatch):
 @pytest.fixture(autouse=True)
 def _mcp_client_sees_all(monkeypatch):
     """An MCP test client that passes no `client_info` is named like a local model app, which
-    the default agent profile gives every scope (cortex.profiles), so it sees what the SDK's
+    the default agent profile gives every scope (keepfold.profiles), so it sees what the SDK's
     default name "mcp" saw before profiles: "mcp" is now an unknown, restricted client
     (tests/test_agent_context.py). Not a Claude or cloud name: no chat log, private search ok."""
     from mcp.client import session
@@ -198,8 +198,8 @@ def _mcp_client_sees_all(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_reranker(monkeypatch):
-    """Tests never load a real cross-encoder from ~/.cortex/models; they inject a fake one."""
-    from cortex import semantic
+    """Tests never load a real cross-encoder from ~/.keepfold/models; they inject a fake one."""
+    from keepfold import semantic
 
     monkeypatch.setattr(semantic, "_reranker", None)
     monkeypatch.setattr(semantic, "_ranker", semantic._Held(semantic._ranker.load))
@@ -210,10 +210,10 @@ def _no_real_reranker(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_embedder(monkeypatch):
-    """Tests never load the real embedding model (cortex_add now embeds new pages to file them
+    """Tests never load the real embedding model (keepfold_add now embeds new pages to file them
     under a topic); they inject a FakeEmbed as semantic._embedder. No build_server warm-up
     thread either: one that outlived its test could call the unpatched loader."""
-    from cortex import mcp_server, semantic
+    from keepfold import mcp_server, semantic
 
     monkeypatch.setattr(mcp_server, "WARM_EMBEDDER", False)
     # a source edit during the run must not turn every tool into restart_needed
@@ -250,7 +250,7 @@ def git(root, *args):
 def _vault(tmp_path, *, commit, contract=False):
     r = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", r)
-    (r / ".gitignore").write_text(".cortex/*\n")
+    (r / ".gitignore").write_text(".keepfold/*\n")
     if contract:
         (r / "me/teaching-contract.md").write_bytes(CONTRACT.encode())
     git(r, "init", "-q")
@@ -282,8 +282,8 @@ def run(root, body, role="owner"):
     """Run `body(call)` against a fresh server over the SDK's in-memory connection."""
     from mcp import Client
 
-    from cortex.mcp_server import build_server
-    from cortex.vault import Vault
+    from keepfold.mcp_server import build_server
+    from keepfold.vault import Vault
 
     server = build_server(Vault(root), role)
 
@@ -311,9 +311,9 @@ def events(root):
 
 def tiers(root):
     """{claim text: tier} over the vault's me/* claims."""
-    from cortex import claims
-    from cortex.events import EventLog
-    from cortex.vault import Vault
+    from keepfold import claims
+    from keepfold.events import EventLog
+    from keepfold.vault import Vault
 
     v = Vault(root)
     return {r["text"].split(" (")[0]: r["tier"] for r in claims.tiers(v, EventLog(v).iter_events())}

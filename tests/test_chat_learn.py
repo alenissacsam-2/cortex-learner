@@ -1,4 +1,4 @@
-"""v5 Phase 2 G3: learning from past chats on /cortex. Synthetic transcripts only."""
+"""v5 Phase 2 G3: learning from past chats on /keepfold. Synthetic transcripts only."""
 
 import os
 import shutil
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import events, run
 
-from cortex import chats
+from keepfold import chats
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -22,7 +22,7 @@ def chats_dir(tmp_path, monkeypatch):
     shutil.copytree(FIXTURES, d)
     for i, rel in enumerate((ALPHA, BBBB, BETA)):
         os.utime(d / f"{rel}.jsonl", (1_000_000 + i, 1_000_000 + i))
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(d))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
     return d
 
 
@@ -51,11 +51,11 @@ def test_read_user_turns_only(chats_dir):
 
 def test_home_count_list_read_and_ledger(root, chats_dir):
     async def body(call):
-        start = await call("cortex_start", {})
+        start = await call("keepfold_start", {})
         assert start["unlearned"] == 2
         assert "2 past chats to learn from" in start["display"]
         assert "chat_learned" in start["next"] and "who='user'" in start["next"]
-        out = await call("cortex_chats", {"action": "read", "id": BETA, "who": "user"})
+        out = await call("keepfold_chats", {"action": "read", "id": BETA, "who": "user"})
         assert "<untrusted_note" in out["text"] and "Assistant:" not in out["text"]
         assert "User: Plan my DP revision second line" in out["text"]
         assert "chat_learned" in out["next"]
@@ -63,16 +63,16 @@ def test_home_count_list_read_and_ledger(root, chats_dir):
                   {"chat_id": "", "source": "claude-code", "found": 1},
                   {"chat_id": BETA, "source": "claude-code", "found": -1},
                   {"chat_id": BETA, "source": "claude-code", "found": "2"}):
-            out = await call("cortex_log", {"kind": "chat_learned", "payload": p})
+            out = await call("keepfold_log", {"kind": "chat_learned", "payload": p})
             assert out["error"] == "invalid_argument", p
-        await call("cortex_log", {"kind": "chat_learned", "payload": {
+        await call("keepfold_log", {"kind": "chat_learned", "payload": {
             "chat_id": BETA, "source": "claude-code", "found": 2, "id": "forged"}})
-        listed = await call("cortex_chats", {"unlearned": True})
+        listed = await call("keepfold_chats", {"unlearned": True})
         assert [c["id"] for c in listed["chats"]] == [ALPHA]
-        listed = await call("cortex_chats", {})
+        listed = await call("keepfold_chats", {})
         assert [(c["id"], c["learned"]) for c in listed["chats"]] == [(BETA, True),
                                                                       (ALPHA, False)]
-        again = await call("cortex_start", {})
+        again = await call("keepfold_start", {})
         assert again["unlearned"] == 1 and "1 past chat to learn from" in again["display"]
 
     run(root, body)
@@ -88,10 +88,10 @@ def test_user_only_read_does_not_expose(root, chats_dir):
          "user_confirmed": True}
 
     async def body(call):
-        await call("cortex_chats", {"action": "read", "id": ALPHA, "who": "user"})
-        await call("cortex_patch", {**p, "text": "- Uses Vim"})
-        await call("cortex_chats", {"action": "read", "id": ALPHA})  # assistant turns too
-        out = await call("cortex_patch", {**p, "text": "- Uses tabs"})
+        await call("keepfold_chats", {"action": "read", "id": ALPHA, "who": "user"})
+        await call("keepfold_patch", {**p, "text": "- Uses Vim"})
+        await call("keepfold_chats", {"action": "read", "id": ALPHA})  # assistant turns too
+        out = await call("keepfold_patch", {**p, "text": "- Uses tabs"})
         assert out["changed"] is True and "(ask)" in out["next"]  # R3-2: exposed: a guess
 
     run(root, body)

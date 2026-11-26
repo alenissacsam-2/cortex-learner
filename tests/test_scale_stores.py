@@ -1,4 +1,4 @@
-"""The stores that keep big data paths light: the SQLite vector stores (cortex.vecstore), the
+"""The stores that keep big data paths light: the SQLite vector stores (keepfold.vecstore), the
 site counts in the browsing store and its privacy memo, and background embedding."""
 
 import json
@@ -16,11 +16,11 @@ from conftest import FakeEmbed, note
 from test_browse_sites import OWNER, ROWS, days_text, imp
 from test_private_search import pages as browse_pages
 
-from cortex import semantic, vecstore
-from cortex.browse import build, forget, legacy, privacy, sites, sources, store, vectors
-from cortex.catalog import Catalog
-from cortex.index import Index
-from cortex.vault import Vault, VaultError
+from keepfold import semantic, vecstore
+from keepfold.browse import build, forget, legacy, privacy, sites, sources, store, vectors
+from keepfold.catalog import Catalog
+from keepfold.index import Index
+from keepfold.vault import Vault, VaultError
 
 REAL_LOAD = semantic.load_embedder  # before the autouse fixture wraps it
 
@@ -36,7 +36,7 @@ def on_disk(path) -> bytes:
     return b"".join(p.read_bytes() for p in path.parent.glob(path.name + "*"))
 
 
-# ---- cortex.vecstore -----------------------------------------------------------------------
+# ---- keepfold.vecstore -----------------------------------------------------------------------
 
 
 def test_upsert_delete_and_a_change_stamp_seen_by_another_connection(tmp_path):
@@ -68,11 +68,11 @@ def test_upsert_delete_and_a_change_stamp_seen_by_another_connection(tmp_path):
     assert b"MANIFESTX" not in on_disk(p)  # a deleted row is overwritten, the WAL emptied
 
 
-# ---- the vault's vectors (cortex.semantic) -------------------------------------------------
+# ---- the vault's vectors (keepfold.semantic) -------------------------------------------------
 
 
 def _legacy_npz(root, cache: dict) -> bytes:
-    """The .npz cache as Cortex wrote it before the store (the writer is gone: G-5-5)."""
+    """The .npz cache as Keepfold wrote it before the store (the writer is gone: G-5-5)."""
     ids = list(cache)
     rows = [cache[i] for i in ids]
     np.savez(root / semantic.NPZ, ids=np.array(ids, dtype=str),
@@ -177,8 +177,8 @@ def test_the_private_npz_is_migrated_once_and_renamed(root, monkeypatch):
 
 def test_the_app_start_migrates_the_old_browse_files(root):
     """F3: the app's start reads a legacy file in and renames it, before any import."""
-    from cortex.app import server
-    (root / ".cortex").mkdir(exist_ok=True)
+    from keepfold.app import server
+    (root / ".keepfold").mkdir(exist_ok=True)
     p = root / sites.DAYS
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(DAYS), encoding="utf-8")
@@ -346,7 +346,7 @@ def test_review_scores_with_the_embedder_only_while_it_is_in_memory(counted):
     """M3: review's scorer (the app's about-me tidy) uses the embedder only while it is in
     memory, and that use keeps it no longer; after an idle drop it loads nothing and scores
     by words."""
-    from cortex import review
+    from keepfold import review
     used = semantic._main.used
     _, cut = review.scorer(["likes spicy food", "enjoys spicy dishes"])
     assert cut == review.COS and semantic._main.used == used  # in memory: the clock left alone
@@ -359,7 +359,7 @@ def test_background_import_setup_loads_no_model(home, root, monkeypatch):
     """M3: inside background(), load_embedder loads nothing (the browse import asks for it
     every run); the first embed loads only the capped copy, which goes when the work ends,
     and `_embedder` (prime and review's "already loaded") stays unset."""
-    from cortex import browse_serve
+    from keepfold import browse_serve
 
     monkeypatch.setattr(semantic, "load_embedder", REAL_LOAD)
     monkeypatch.setattr(Counted, "loads", 0)
@@ -386,7 +386,7 @@ def test_background_import_setup_loads_no_model(home, root, monkeypatch):
     assert Counted.loads == 1 and semantic._capped.model is None  # dropped as the run ended
     assert trims == [1]  # no model left: the working set emptied too
     assert semantic._main.model is None and semantic._embedder is None
-    from cortex import safety_net
+    from keepfold import safety_net
     assert safety_net.background_tools()[1] is None  # nothing in memory: the net uses none
 
 
@@ -398,7 +398,7 @@ DAYS = {"2026-11-09": {"lichess.org|gaming|0": {
 
 
 def test_site_days_json_is_migrated_once_and_renamed(root):
-    from cortex import doctor
+    from keepfold import doctor
     v = Vault(root)
     p = root / sites.DAYS
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -543,8 +543,8 @@ def test_a_big_vector_store_adds_a_page_without_rewriting_the_rest(tmp_path):
 
 
 def test_the_background_net_uses_the_embedder_only_while_it_is_in_memory(monkeypatch):
-    from cortex import safety_net
-    from cortex.browse import titles
+    from keepfold import safety_net
+    from keepfold.browse import titles
     monkeypatch.setattr(titles, "may_run", lambda: (None, "no model"))
     monkeypatch.setattr(semantic, "_embedder", semantic._embed_real)
     monkeypatch.setattr(semantic._main, "model", None)  # dropped after IDLE_UNLOAD

@@ -1,4 +1,4 @@
-"""Agent X-ray (v9 plan item 6): the ring of what cortex_prime and cortex_context served (ids
+"""Agent X-ray (v9 plan item 6): the ring of what keepfold_prime and keepfold_context served (ids
 and counts, no text, bounded, trimmed ids), the app's view (private pages never by name), and
 the owner's Pin and Mute (prime and context obey them; only the app sets them)."""
 
@@ -14,9 +14,9 @@ from mcp import Client
 from test_app import _serve, call
 from test_app_js import HARNESS, _run
 
-from cortex import prime, semantic, xray
-from cortex.mcp_server import Cortex, build_server, dry_prime
-from cortex.vault import Vault
+from keepfold import prime, semantic, xray
+from keepfold.mcp_server import Keepfold, build_server, dry_prime
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -27,7 +27,7 @@ PREFS = ("# Preferences\n\n## Coding\n- Python first, type hints.\n\n## Personal
 @pytest.fixture
 def vault(root, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     note(root, "notes/engines.md", "title: Engines\nsummary: how a motor works\n",
          "# Engines\n\nAutomobile car motor basics.")
     note(root, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA recipe from the kitchen.")
@@ -46,13 +46,13 @@ def related(ctx):
 
 def test_ring_records_ids_only_and_stays_bounded(vault, monkeypatch):
     monkeypatch.setattr(xray, "CAP", 3)
-    c = Cortex(Vault(vault))
+    c = Keepfold(Vault(vault))
     c.sessions.client = "claude-ai"
     for n in range(4):
-        c.cortex_prime(f"How does a car motor work? take {n}")
-    c.cortex_context(topic="car motor")
+        c.keepfold_prime(f"How does a car motor work? take {n}")
+    c.keepfold_context(topic="car motor")
     rows = xray.rows(Vault(vault))
-    assert len(rows) == 3 and rows[-1]["tool"] == "cortex_context"
+    assert len(rows) == 3 and rows[-1]["tool"] == "keepfold_context"
     first = rows[0]
     assert first["client"] == "claude-ai" and first["chars"] > 0
     assert "engines" in first["served"]["related"]
@@ -80,7 +80,7 @@ def test_trimmed_ids_are_recorded(vault, monkeypatch):
 
 def test_view_never_names_a_private_page(vault):
     v = Vault(vault)
-    xray.record(v, "cortex_prime", "claude-code", {"related": ["secret-diary", "engines"]},
+    xray.record(v, "keepfold_prime", "claude-code", {"related": ["secret-diary", "engines"]},
                 {"related": ["secret-diary"]}, 120)
     xray.set_flag(v, "mute", "secret-diary", True)
     view = xray.view(v)
@@ -99,12 +99,12 @@ def test_view_never_names_a_private_page(vault):
 def test_pin_serves_a_page_and_a_claim_in_prime(vault):
     v = Vault(vault)
     prompt = "How does a car motor work?"
-    ctx = Cortex(v).cortex_prime(prompt)["context"]
+    ctx = Keepfold(v).keepfold_prime(prompt)["context"]
     assert "[[pasta]]" not in ctx
     python = claim_id(vault, "Python first, type hints.")
     xray.set_flag(v, "pin", "pasta", True)
     xray.set_flag(v, "pin", python, True)
-    ctx = Cortex(v).cortex_prime(prompt)["context"]
+    ctx = Keepfold(v).keepfold_prime(prompt)["context"]
     assert related(ctx).index("[[pasta]]") < related(ctx).index("[[engines]]")  # pins lead
     prefs = ctx.split("## Preferences\n", 1)[1]
     assert prefs.index("Python first") < prefs.index("motor racing")
@@ -116,10 +116,10 @@ def test_mute_keeps_a_page_and_a_claim_out_of_prime_and_context(vault):
     racing = claim_id(vault, "Weekend motor racing fan.")
     xray.set_flag(v, "mute", "engines", True)
     xray.set_flag(v, "mute", racing, True)
-    c = Cortex(v)
-    ctx = c.cortex_prime("How does a car motor work?")["context"]
+    c = Keepfold(v)
+    ctx = c.keepfold_prime("How does a car motor work?")["context"]
     assert "engines" not in ctx and "motor racing" not in ctx and "Python first" in ctx
-    ctx = c.cortex_context(topic="car motor")["context"]
+    ctx = c.keepfold_context(topic="car motor")["context"]
     assert "engines" not in ctx and "motor racing" not in ctx and "Python first" in ctx
     assert all("engines" not in json.dumps(r["served"]) for r in xray.rows(v))
     xray.set_flag(v, "pin", "engines", True)  # pinning unmutes
@@ -135,8 +135,8 @@ def test_pin_and_mute_cannot_be_set_over_mcp(vault):
             for t in tools:  # no tool takes a pin or mute argument
                 props = set(t.input_schema.get("properties", {}))
                 assert not props & {"pin", "mute", "pinned", "muted", "xray"}, t.name
-            r = await client.call_tool("cortex_patch", {
-                "id": ".cortex/xray", "op": "append_to_section", "target": "x", "text": "pin"})
+            r = await client.call_tool("keepfold_patch", {
+                "id": ".keepfold/xray", "op": "append_to_section", "target": "x", "text": "pin"})
             assert r.is_error or "error" in (r.structured_content or {})
 
     anyio.run(main)
@@ -218,7 +218,7 @@ def test_the_xray_page(tmp_path):
             "muted": False}
     private = {"kind": "page", "title": "a private page", "token": "t1", "pinned": False,
                "muted": True}
-    call_ = {"ts": "2026-11-20T10:00:00Z", "tool": "cortex_prime", "chars": 900,
+    call_ = {"ts": "2026-11-20T10:00:00Z", "tool": "keepfold_prime", "chars": 900,
              "served": [{"block": "related", "items": [item]}],
              "trimmed": [{"block": "profile", "items": [
                  {"id": "me/profile", "kind": "me", "title": "Profile"}]}]}
@@ -295,9 +295,9 @@ def _blocks(d):
 def test_dry_run_serves_what_a_real_prime_serves(vault, client):
     _aperture(vault)
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.over_mcp, c.sessions.client = True, client  # as over MCP: the client's profile applies
-    ctx = c.cortex_prime(PROMPT)["context"]
+    ctx = c.keepfold_prime(PROMPT)["context"]
     real = xray.rows(v)[-1]
     dry = dry_prime(v, client, PROMPT)
     assert _blocks(dry["served"]) == real["served"] and real["served"]
@@ -317,13 +317,13 @@ def test_dry_run_serves_what_a_real_prime_serves(vault, client):
 
 
 def test_dry_run_writes_nothing(vault, home, monkeypatch):
-    from cortex import index
+    from keepfold import index
     _aperture(vault)
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.sessions.client = "claude-ai"
-    c.cortex_prime(PROMPT)  # the caches a real call makes exist now
-    c._call("cortex_log", c.cortex_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
+    c.keepfold_prime(PROMPT)  # the caches a real call makes exist now
+    c._call("keepfold_log", c.keepfold_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
     c.sessions.close(summary="test")  # an events file
     note(vault, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA car motor kitchen recipe.")
     monkeypatch.setattr(index, "SNAPSHOT_MIN", 0)  # any refresh would save the snapshot
@@ -358,19 +358,19 @@ def _same(a, b):
 
 def test_a_shared_index_serves_each_client_what_a_fresh_one_does(vault):
     """One read-only index across alternating clients (all scopes, core only, coding): each
-    run equals a fresh index's and a real cortex_prime's, and nothing one client may get is
+    run equals a fresh index's and a real keepfold_prime's, and nothing one client may get is
     left in the index for the next."""
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
     _withheld_pages(vault)
     v = Vault(vault)
     shared = Index(v, Catalog.load(v), save=False)
     personal = claim_id(vault, "Weekend motor racing fan.")
     try:
         for client in ("claude-ai", "mcp", "cursor", "claude-ai", "cursor", "mcp", "claude-ai"):
-            c = Cortex(v)
+            c = Keepfold(v)
             c.over_mcp, c.sessions.client = True, client
-            ctx = c.cortex_prime(PROMPT)["context"]
+            ctx = c.keepfold_prime(PROMPT)["context"]
             real = xray.rows(v)[-1]
             got, fresh = dry_prime(v, client, PROMPT, index=shared), dry_prime(v, client, PROMPT)
             assert _same(got, fresh), client
@@ -389,8 +389,8 @@ def test_a_shared_index_serves_each_client_what_a_fresh_one_does(vault):
 
 
 def test_a_shared_index_sees_pages_added_edited_and_deleted(vault):
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
     v = Vault(vault)
     shared = Index(v, Catalog.load(v), save=False)
     try:
@@ -413,8 +413,8 @@ def test_a_shared_index_sees_pages_added_edited_and_deleted(vault):
 def test_a_shared_index_takes_each_runs_catalog(vault):
     """A concept added to catalog.yaml under a private domain after the shared index was built
     is hidden in the next run, as in a fresh index's (a public one beside it is served)."""
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
 
     def domains(with_concepts):
         out = ""
@@ -448,14 +448,14 @@ def test_a_shared_index_takes_each_runs_catalog(vault):
 
 
 def test_a_shared_index_writes_nothing(vault, home, monkeypatch):
-    from cortex import index
-    from cortex.catalog import Catalog
+    from keepfold import index
+    from keepfold.catalog import Catalog
     _withheld_pages(vault)
     v = Vault(vault)
-    c = Cortex(v)
+    c = Keepfold(v)
     c.sessions.client = "claude-ai"
-    c.cortex_prime(PROMPT)  # the caches a real call makes exist now
-    c._call("cortex_log", c.cortex_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
+    c.keepfold_prime(PROMPT)  # the caches a real call makes exist now
+    c._call("keepfold_log", c.keepfold_log, {"kind": "touch", "payload": {"ids": ["engines"]}})
     c.sessions.close(summary="test")  # an events file
     monkeypatch.setattr(index, "SNAPSHOT_MIN", 0)  # any refresh would save the snapshot
 
@@ -474,7 +474,7 @@ def test_a_shared_index_writes_nothing(vault, home, monkeypatch):
 
 
 def test_the_app_keeps_one_dry_run_index_and_lets_it_go(vault, monkeypatch):
-    from cortex.app import server
+    from keepfold.app import server
     _aperture(vault)
     srv, app = _serve(vault)
     try:
@@ -503,8 +503,8 @@ def test_the_app_keeps_one_dry_run_index_and_lets_it_go(vault, monkeypatch):
 def test_dry_runs_on_a_shared_index_stay_quick_on_5k_notes(tmp_path, capsys):
     from test_home import _big
 
-    from cortex.catalog import Catalog
-    from cortex.index import Index
+    from keepfold.catalog import Catalog
+    from keepfold.index import Index
     root = tmp_path / "big"
     _big(root)
     v = Vault(root)
@@ -526,12 +526,12 @@ def test_dry_runs_on_a_shared_index_stay_quick_on_5k_notes(tmp_path, capsys):
 
 
 def test_scope_bar_and_served_most_often(vault):
-    from cortex import profiles
+    from keepfold import profiles
     v = Vault(vault)
     for client, ids in (("claude-code", ["engines", "pasta"]), ("claude-code", ["engines"]),
                         ("claude-ai", ["engines"]), ("mystery-app", ["pasta"]),
                         (None, ["pasta"]), ("cursor", ["engines"])):
-        xray.record(v, "cortex_prime", client, {"related": ids, "profile": ["me/profile"]},
+        xray.record(v, "keepfold_prime", client, {"related": ids, "profile": ["me/profile"]},
                     {}, 10)
     data = profiles.load(v)
     view = xray.view(v)

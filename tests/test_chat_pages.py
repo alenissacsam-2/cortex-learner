@@ -8,14 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from cortex import ask, chat, chat_eval, chat_facts, chat_pages, taint
+from keepfold import ask, chat, chat_eval, chat_facts, chat_pages, taint
 
 TODAY = chat_eval.TODAY
 ON = {"notes": True, "chats": True, "browsing": True, "private": False}
 
 
 @pytest.mark.parametrize("text, kind, term", [
-    ("How many git repositories have I imported into Cortex?", "inventory", "git repositories"),
+    ("How many git repositories have I imported into Keepfold?", "inventory", "git repositories"),
     ("how many repos do I have", "inventory", "git repositories"),
     ("list my projects", "inventory", "projects"),
     ("show me all my people", "inventory", "people"),
@@ -73,11 +73,11 @@ def _facts(vault, text, sources=ON):
 
 @pytest.mark.slow  # one build of the made-up vault (~6 s)
 def test_q03_counts_the_imported_repositories(vault):
-    f = _facts(vault, "How many git repositories have I imported into Cortex?")
+    f = _facts(vault, "How many git repositories have I imported into Keepfold?")
     assert f["total"] == 4 and [r["id"] for r in f["rows"]] == [
         "repo-veloxkv", "repo-cs412-labs", "repo-tiny-sql", "repo-notes-cli"]  # newest first
     said = chat_facts.say(f, TODAY)
-    assert said.startswith("Cortex holds 4 git repositories, newest first:")
+    assert said.startswith("Keepfold holds 4 git repositories, newest first:")
     assert "veloxkv" in said and "tiny-sql" in said and "and 1 more" in said
     assert "- 2026-11-15: Git repo: veloxkv" in chat_facts._lines(f, TODAY)
 
@@ -95,7 +95,7 @@ def test_q31_lists_the_upcoming_assessments_soonest_first(vault):
 
 @pytest.mark.slow
 def test_calendar_lines_of_the_next_30_days_come_too(vault):
-    from cortex.vault import Vault
+    from keepfold.vault import Vault
 
     v = Vault(vault.root)
     p = v.path_for("resource", "calendar-2026-11")
@@ -126,7 +126,7 @@ def test_a_superseded_decision_is_shown_as_replaced(vault):
                          'engine: switch from RocksDB to SQLite WAL".')
     assert "PWNED" not in said  # the page's injected line is never in the facts
     none = _facts(vault, "What did I decide about GraphQL?")
-    assert chat_facts.say(none, TODAY) == 'I found no decision about "graphql" in Cortex.'
+    assert chat_facts.say(none, TODAY) == 'I found no decision about "graphql" in Keepfold.'
 
 
 @pytest.mark.slow
@@ -136,14 +136,14 @@ def test_the_switches_decide_what_is_counted(vault):
     assert _facts(vault, people, {**ON, "private": True})["total"] == 6
     off = _facts(vault, "list my projects", {**ON, "notes": False})
     assert off["total"] == 0 and chat_facts.say(off, TODAY) == (
-        "I found no projects in Cortex. Notes are switched off in Chat settings.")
+        "I found no projects in Keepfold. Notes are switched off in Chat settings.")
     assert _facts(vault, "list my projects", {**ON, "notes": False, "private": True})[
         "total"] == 0  # no private project: the private switch adds only private pages
 
 
 @pytest.mark.slow
 def test_reply_answers_them_by_code_without_a_model(vault):
-    for text, step in (("How many git repositories have I imported into Cortex?",
+    for text, step in (("How many git repositories have I imported into Keepfold?",
                         "Counting your git repositories"),
                        ("What upcoming tests or interviews do I have scheduled?",
                         "Reading your upcoming tests, interviews and calendar")):
@@ -152,7 +152,7 @@ def test_reply_answers_them_by_code_without_a_model(vault):
                    {**chat.get_settings({}), "sources": ON}, today=TODAY)
         kinds = [e["t"] for e in events]
         assert kinds == ["start", "step", "facts", "tok", "src", "done"], kinds
-        assert events[0]["model"] == "Cortex" and events[1]["s"] == step
+        assert events[0]["model"] == "Keepfold" and events[1]["s"] == step
 
 
 @pytest.mark.slow
@@ -170,7 +170,7 @@ def test_with_a_model_the_counted_pages_are_read_to_be_cited(vault, monkeypatch)
             yield "Four repositories [1]."
     r = Runner()
     events = []
-    chat.reply(vault, None, "How many git repositories have I imported into Cortex?", r,
+    chat.reply(vault, None, "How many git repositories have I imported into Keepfold?", r,
                events.append, threading.Event(), {**chat.get_settings({}), "sources": ON},
                today=TODAY)
     assert read == [["repo-veloxkv", "repo-cs412-labs", "repo-tiny-sql", "repo-notes-cli"]]
@@ -185,4 +185,4 @@ def test_say_names_one_thing_in_the_singular():
         {"id": "repo-x", "title": "Git repo: x", "day": "2026-11-15"}],
         "coverage": {"off": []}}
     assert chat_pages.say(f, date(2026, 11, 20)) == (
-        'Cortex holds 1 git repository, newest first: "Git repo: x" (15 Nov).')
+        'Keepfold holds 1 git repository, newest first: "Git repo: x" (15 Nov).')

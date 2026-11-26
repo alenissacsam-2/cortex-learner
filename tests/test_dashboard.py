@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import dashboard, levels, planner
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.session import SessionManager
-from cortex.vault import Vault
+from keepfold import dashboard, levels, planner
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.session import SessionManager
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # uv's cache and Pythons, read before conftest points these at a temp home (wheel test only)
@@ -166,7 +166,7 @@ def _note(root, folder, id, fields, body):
 def test_pages_embed_bodies_but_never_private_or_raw(root):
     _note(root, "notes", "pointer-invariant", {
         "title": '"Shrink from both ends"', "kind": "note", "summary": '"One invariant"',
-        "tags": "[dsa, invariants]", "cortex_status": "learning"},
+        "tags": "[dsa, invariants]", "keepfold_status": "learning"},
         "# Idea\n\nSee [[two-pointers|the technique]] and [[secret-diary]] and [[nowhere]].\n")
     _note(root, "projects", "hidden-project", {"kind": "project", "private": "true"},
           "Private project body\n")
@@ -182,7 +182,7 @@ def test_pages_embed_bodies_but_never_private_or_raw(root):
     assert note["tags"] == ["dsa", "invariants"] and note["path"] == "notes/pointer-invariant.md"
     assert "[[two-pointers|the technique]]" in note["body"]
     assert note["links"] == ["two-pointers"]  # private and missing ids are dropped
-    assert "cortex_status" not in note["props"] and note["props"]["kind"] == "note"
+    assert "keepfold_status" not in note["props"] and note["props"]["kind"] == "note"
     assert "Move the pointer on the smaller side." in pages["two-pointers"]["body"]
     assert pages["two-pointers"]["links"] == ["dsa.arrays", "arrays-basics", "dsa.off-by-one"]
     assert pages["huge"]["body"].endswith(dashboard.TRUNCATED)
@@ -213,7 +213,7 @@ def test_init_writes_the_wiki_bases(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.delenv("CORTEX_VAULT", raising=False)
+    monkeypatch.delenv("KEEPFOLD_VAULT", raising=False)
     r = tmp_path / "v"
     res = CliRunner().invoke(app, ["init", str(r)])
     assert res.exit_code == 0, res.output
@@ -286,17 +286,17 @@ def test_build_data_500_concepts_is_fast(tmp_path):
 
 
 def test_cli_dashboard_no_open_writes_index_only_and_retires_the_old_page(root, monkeypatch):
-    """`cortex dashboard` no longer writes .cortex/dashboard.html: an old one moves to
-    .cortex/backups/ once (never deleted), and index.md is still made on demand."""
-    monkeypatch.delenv("CORTEX_VAULT", raising=False)
-    old = root / ".cortex" / "dashboard.html"
+    """`keepfold dashboard` no longer writes .keepfold/dashboard.html: an old one moves to
+    .keepfold/backups/ once (never deleted), and index.md is still made on demand."""
+    monkeypatch.delenv("KEEPFOLD_VAULT", raising=False)
+    old = root / ".keepfold" / "dashboard.html"
     old.parent.mkdir(exist_ok=True)
     old.write_text("<html>old page</html>", encoding="utf-8")
     for _ in range(2):
         r = CliRunner().invoke(app, ["dashboard", "--no-open", "--vault", str(root)])
         assert r.exit_code == 0, r.output
     assert not old.exists()
-    kept = list((root / ".cortex" / "backups").glob("dashboard-*.html"))
+    kept = list((root / ".keepfold" / "backups").glob("dashboard-*.html"))
     assert len(kept) == 1 and kept[0].read_text(encoding="utf-8") == "<html>old page</html>"
     assert "## Concepts" in (root / "index.md").read_text(encoding="utf-8")
 
@@ -320,7 +320,7 @@ def test_close_writes_neither_dashboard_nor_index(root, monkeypatch):
     mgr.note("graded", "two-pointers")  # a learning session: the full close
     assert mgr.close()["session"].startswith("s_")
     assert (root / "Today.md").is_file()
-    assert not (root / ".cortex" / "dashboard.html").exists()
+    assert not (root / ".keepfold" / "dashboard.html").exists()
     assert not (root / "index.md").exists()
 
 
@@ -358,7 +358,7 @@ def test_clusters_are_top_hubs_domains_and_unfiled(root):
     _note(root, "journal", "2026-11-12", {"kind": "journal"}, "x\n")
     _note(root, "sessions", "s-1", {"kind": "session"}, "x\n")
     hub("people", "my-topic-map")  # a real hub with a group lobe's id
-    _note(root, "projects", "cortex", {"kind": "project"}, "x\n")
+    _note(root, "projects", "keepfold", {"kind": "project"}, "x\n")
     _note(root, "decisions", "use-sql", {"kind": "decision", "related": '["[[sql]]"]'}, "x\n")
     _note(root, "loops", "call-bob", {"kind": "loop"}, "x\n")
     _note(root, "people", "bob", {"kind": "person", "private": "false"}, "x\n")  # opted in
@@ -380,7 +380,7 @@ def test_clusters_are_top_hubs_domains_and_unfiled(root):
     assert {pages[i]["cluster"] for i in ("acme-oa-2026", "acme-2026", "sprint-test")} == {
         "placements"}
     assert pages["loose"]["cluster"] == "unfiled" and pages["in-secret"]["cluster"] == "unfiled"
-    assert {pages[i]["cluster"] for i in ("cortex", "call-bob")} == {"projects"}
+    assert {pages[i]["cluster"] for i in ("keepfold", "call-bob")} == {"projects"}
     assert pages["use-sql"]["cluster"] == "sql"  # a hub wins over the group
     assert pages["bob"]["cluster"] == "people-group" and pages["people"]["cluster"] == "people"
     assert pages["yt-1"]["cluster"] == pages["nb-1"]["cluster"] == "media"
@@ -459,7 +459,7 @@ def test_page_wires_brain_v2(root):
 def test_page_wires_the_look_panel(root):
     # brain v4 §5: the Look panel is generated from the renderer's schema and kept in localStorage.
     for part in ("STYLE_SCHEMA", "PRESETS", "DEFAULT_STYLE", ".setStyle(", "onStyle", "onCrumbs",
-                 "'cortex.brain.style'", "aria-describedby", "aria-valuetext", "Reset to default",
+                 "'keepfold.brain.style'", "aria-describedby", "aria-valuetext", "Reset to default",
                  "aria-keyshortcuts', 'L'"):
         assert part in JS, part
     assert "Wallpaper" not in JS and "wallpaper" not in JS  # dropped by the owner
@@ -537,7 +537,7 @@ def test_plan_title_comes_from_the_track(root):
 
 @pytest.mark.slow  # builds the wheel, about 7 s
 def test_help_files_ship_in_the_wheel(tmp_path, monkeypatch):
-    # D2: an installed Cortex has no checkout, so the Help tab reads the wheel's copies
+    # D2: an installed Keepfold has no checkout, so the Help tab reads the wheel's copies
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("needs uv")
@@ -547,11 +547,11 @@ def test_help_files_ship_in_the_wheel(tmp_path, monkeypatch):
                        capture_output=True, text=True, env=os.environ | UV_ENV)
     assert r.returncode == 0, r.stderr
     [whl] = out.glob("*.whl")
-    assets = tmp_path / "site" / "cortex" / "assets"
+    assets = tmp_path / "site" / "keepfold" / "assets"
     with zipfile.ZipFile(whl) as z:
         names = set(z.namelist())
-        assert {"cortex/assets/help/help.md", "cortex/assets/help/GUIDE.md"} <= names
-        z.extractall(tmp_path / "site", [n for n in names if n.startswith("cortex/assets/help/")])
+        assert {"keepfold/assets/help/help.md", "keepfold/assets/help/GUIDE.md"} <= names
+        z.extractall(tmp_path / "site", [n for n in names if n.startswith("keepfold/assets/help/")])
     monkeypatch.setattr(dashboard, "ASSETS", assets)
     monkeypatch.setattr(dashboard, "REPO", tmp_path / "not-a-checkout")
     h = dashboard._help()
@@ -582,7 +582,7 @@ def test_empty_vault_is_a_first_run_not_done(tmp_path):
     d = dashboard.build_data(Vault(_empty_vault(tmp_path)), now=NOW)
     assert d["today"] == [] and d["first_run"] is True and d["plan_cleared"] is False
     assert "Start here" in JS and "Add a test date" in JS and "Import your notes or chats" in JS
-    assert "In the Cortex app: Setup → Add your history." in JS  # the app's guided imports
+    assert "In the Keepfold app: Setup → Add your history." in JS  # the app's guided imports
 
 
 def test_studies_is_false_on_an_empty_vault(tmp_path):
@@ -604,7 +604,7 @@ def test_one_study_page_alone_means_studies(tmp_path, folder, page):
 
 
 def test_one_grade_alone_means_studies_until_voided(tmp_path):
-    from cortex.events import void_event
+    from keepfold.events import void_event
     r = _empty_vault(tmp_path)
     log = EventLog(Vault(r))
     g = log.append(session="cli", kind="grade", source="external", now=NOW,
@@ -615,7 +615,7 @@ def test_one_grade_alone_means_studies_until_voided(tmp_path):
 
 
 def test_the_sample_vault_studies(tmp_path):
-    from cortex import sample
+    from keepfold import sample
     r = _empty_vault(tmp_path)
     sample.seed(Vault(r), now=NOW)
     assert dashboard.build_data(Vault(r), now=NOW)["studies"] is True
@@ -642,8 +642,8 @@ def test_empty_plan_is_done_only_after_work_today(tmp_path):
     assert d["first_run"] is False and d["plan_cleared"] is False
 
 
-def test_day_is_the_cortex_day_not_the_calendar_date(root):
-    # D8: at 01:30 local time it is still yesterday in Cortex (04:00 rollover)
+def test_day_is_the_keepfold_day_not_the_calendar_date(root):
+    # D8: at 01:30 local time it is still yesterday in Keepfold (04:00 rollover)
     late = datetime(2026, 11, 14, 1, 30).astimezone()
     d = dashboard.build_data(Vault(root), now=late)
     assert d["as_of"].startswith("2026-11-14") and d["day"] == "2026-11-13"
@@ -651,7 +651,7 @@ def test_day_is_the_cortex_day_not_the_calendar_date(root):
 
 
 def test_today_ids_are_pages_the_owner_saved_today(root):
-    # the brain's Today: never a page a Cortex job rewrote today; an import by its item's date
+    # the brain's Today: never a page a Keepfold job rewrote today; an import by its item's date
     old = time.time() - 30 * 86400
     for p in root.rglob("*"):
         os.utime(p, (old, old))
@@ -714,7 +714,8 @@ def test_me_pages_get_friendly_titles(root):
 def test_copy_buttons_copy_ids_never_titles():
     # D13: a copied prompt is pasted as the user's own words, outside <untrusted_note>
     copies = (re.findall(r"(?:copyText|copyBtn)\((`[^`]*`)", JS)
-              + re.findall(r"prompt: [^,}]*`[^`]*`", JS) + re.findall(r"return `/cortex[^`]*`", JS))
+              + re.findall(r"prompt: [^,}]*`[^`]*`", JS)
+              + re.findall(r"return `/keepfold[^`]*`", JS))
     assert copies and not [c for c in copies if re.search(r"\$\{[^}]*(title|company|kind)", c)]
     assert "const loopPrompt = (id) =>" in JS and "loopPrompt(l.title)" not in JS
 
@@ -781,8 +782,8 @@ console.log(JSON.stringify({ deep: depth(deep), ok: depth(ok) }));
 
 def test_snapshot_parses_build_the_same_dashboard(root):
     # D15: notes served from the index snapshot (no file read, no YAML) give the same blob
-    from cortex import vault as vault_mod
-    from cortex.index import Index
+    from keepfold import vault as vault_mod
+    from keepfold.index import Index
 
     v = Vault(root)
     idx = Index(v, Catalog.load(v))

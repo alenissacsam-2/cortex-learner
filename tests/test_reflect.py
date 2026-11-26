@@ -10,10 +10,10 @@ import pytest
 from mcp import Client
 from typer.testing import CliRunner
 
-from cortex.cli import app
-from cortex.events import local_day
-from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from keepfold.cli import app
+from keepfold.events import local_day
+from keepfold.mcp_server import build_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -51,12 +51,12 @@ def test_context_related_from_fts_and_neighbours(root):
     note(root, "projects", "linked", 'title: "Linked project"\nsummary: "Hop one"\n'
          'related: ["[[graph-0]]"]\n')
     note(root, "notes", "hidden", 'title: "Graph hidden"\nprivate: true\n')
-    ctx = call_tool(root, "cortex_context", {"topic": "graph"})["context"]
+    ctx = call_tool(root, "keepfold_context", {"topic": "graph"})["context"]
     assert ctx.count("- [[") <= 5 and "- [[graph-" in ctx and "hidden" not in ctx
     assert '<untrusted_note id="related">' in ctx and len(ctx) <= 2400
     # a topic with one FTS hit pulls in its linked neighbour
     note(root, "notes", "lonely", 'title: "Zebra stripes"\nrelated: ["[[linked]]"]\n')
-    ctx = call_tool(root, "cortex_context", {"topic": "zebra"})["context"]
+    ctx = call_tool(root, "keepfold_context", {"topic": "zebra"})["context"]
     assert "- [[lonely]] — Zebra stripes" in ctx and "- [[linked]] — Hop one" in ctx
 
 
@@ -77,7 +77,7 @@ def test_reflect_pack(root):
         note(root, "notes", f"p-{i}", 'title: "Pair"\ntags: ["solo", "duo"]\n')
     for i in "def":  # old notes sharing the same
         note(root, "notes", f"o-{i}", 'title: "Old"\ntags: ["old", "dusty"]\n', age_days=40)
-    out = call_tool(root, "cortex_reflect")
+    out = call_tool(root, "keepfold_reflect")
     # deduped (latest stamp kept), 60+ days old left out and counted, undated kept
     assert out["unconfirmed"] == [
         {"text": '<untrusted_note id="inbox">\nCoding: likes vim\n</untrusted_note>',

@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 from conftest import run
 
-from cortex import planner
-from cortex.catalog import Catalog
-from cortex.events import EventLog
-from cortex.levels import ConceptState
-from cortex.vault import Vault
+from keepfold import planner
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog
+from keepfold.levels import ConceptState
+from keepfold.vault import Vault
 
 NOW = datetime(2026, 11, 16, 12, tzinfo=UTC)
 
@@ -89,15 +89,15 @@ def test_sweep_over_mcp_and_the_confidence_nudge(root):
         fields={"object": "concept:arrays-basics", "question": "imported", "verdict": "correct"})
 
     async def body(call):
-        sure = await call("cortex_grade", {"concept": "two pointers", "items": [
+        sure = await call("keepfold_grade", {"concept": "two pointers", "items": [
             {"question": "q", "answer": "a", "correct": True, "confidence": 3}]})
-        out = await call("cortex_start", {"mode": "sweep"})
+        out = await call("keepfold_start", {"mode": "sweep"})
         assert out["mode"] == "sweep" and "Sweep" in out["display"]
         assert [i["id"] for i in out["today"]][:1] == ["arrays-basics"]
         assert "secret-diary" not in str(out["today"])
         items = [{"question": "q", "answer": "a", "correct": True}]
-        first = await call("cortex_grade", {"concept": "two pointers", "items": items})
-        again = await call("cortex_grade", {"concept": "two pointers", "items": items})
+        first = await call("keepfold_grade", {"concept": "two pointers", "items": items})
+        again = await call("keepfold_grade", {"concept": "two pointers", "items": items})
         assert nudge not in sure["next"]
         assert nudge in first["next"] and nudge not in again["next"]
 

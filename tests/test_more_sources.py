@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import importers, more_sources, semantic, sources
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import importers, more_sources, semantic, sources
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 runner = CliRunner()
 C = sources.Audience.CLOUD
@@ -314,7 +314,7 @@ def test_a_pdf_keeps_every_page_under_its_page_heading(root_plain):
     assert "\n\n## Page 1\nChapter 1 heaps" in page and "## Page 2" not in page  # no text
     assert "\n\n## Page 3\nChapter 3 heaps" in page
     assert page.split("## Page 1")[1].count("smallest key") == 60
-    assert 'summary: "Chapter 1 heaps keep' in page and "Cortex kept" not in page
+    assert 'summary: "Chapter 1 heaps keep' in page and "Keepfold kept" not in page
     assert "Source: Documents · Date: " in page and "\n\nWhen: " in page  # the header as before
     note = v.read_path(v.root / "resources" / "docs-book.md")
     chunks = semantic._chunks({"title": "book", "kind": "resource", "fields": note.fields,
@@ -327,14 +327,14 @@ def test_past_the_cap_whole_pages_are_kept_and_the_page_says_so(root_plain, monk
     v = Vault(root_plain)
     assert _doc_run(v, _pdfs(_book(4, empty=0)))["imported"] == 1
     page = _page(v, "docs-book")
-    assert "\n\nWhen: " + more_sources._day(0.0) + "\n\nCortex kept the first 2 of 4 pages.\n\n"\
+    assert "\n\nWhen: " + more_sources._day(0.0) + "\n\nKeepfold kept the first 2 of 4 pages.\n\n"\
         "## Page 1\nChapter 1" in page and "## Page 2\nChapter 2" in page
     assert "Chapter 3" not in page and 'summary: "Chapter 1 heaps' in page
     paged = more_sources._paged
     assert paged(["a", " ", "b  c"], 5) == (
-        "Cortex kept the first 3 of 5 pages.\n\n## Page 1\na\n\n## Page 3\nb c", "a b c")
+        "Keepfold kept the first 3 of 5 pages.\n\n## Page 1\na\n\n## Page 3\nb c", "a b c")
     one, _ = paged(["x " * 2000], 1)  # one page over the cap alone: clipped, never dropped
-    assert one.startswith("## Page 1\nx x") and len(one) <= 2502 and "Cortex kept" not in one
+    assert one.startswith("## Page 1\nx x") and len(one) <= 2502 and "Keepfold kept" not in one
 
 
 def test_a_long_scan_says_how_many_pages_ocr_read(root_plain, ocr, monkeypatch):
@@ -343,7 +343,7 @@ def test_a_long_scan_says_how_many_pages_ocr_read(root_plain, ocr, monkeypatch):
     data = scan_pdf(["a", "b"])
     assert _doc_run(v, data, "scan.pdf")["imported"] == 1
     page = _page(v, "docs-scan")
-    assert "Cortex kept the first 1 of 2 pages.\n\n## Page 1\nread page 1\n\n" in page
+    assert "Keepfold kept the first 1 of 2 pages.\n\n## Page 1\nread page 1\n\n" in page
     assert page.endswith(more_sources.OCR_LINE + "\n") and 'summary: "read page 1"' in page
 
 
@@ -450,7 +450,7 @@ def test_a_250_page_pdf_parses_well_inside_the_timeout():
     assert not isinstance(got, str) and took < more_sources.PARSE_TIMEOUT / 3, took
     text, _ = more_sources._paged(list(got[2]), got[3])
     head, pages = text.split("\n\n", 1)  # KEPT's line, then whole pages up to the cap
-    assert head.startswith("Cortex kept the first 24") and head.endswith(" of 250 pages.")
+    assert head.startswith("Keepfold kept the first 24") and head.endswith(" of 250 pages.")
     assert 490_000 < len(pages) <= more_sources.DOC_FULL_CHARS
 
 
@@ -613,11 +613,11 @@ def test_git_with_no_output_is_a_clear_skip(tmp_path, monkeypatch):
 def test_review_approves_and_dismisses_commit_decisions(root, tmp_path):
     from test_review import changes
 
-    from cortex.app import server
+    from keepfold.app import server
     projects = tmp_path / "projects"
     _decisions_repo(projects)
     sources.run(Vault(root), more_sources.repos_source(projects), sources.Audience.LOCAL)
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     app = server.App(root)
     view = app.review()
     first, second = view["decisions"]
@@ -670,7 +670,7 @@ def test_a_kindle_or_whatsapp_txt_past_the_note_cap_still_imports(root_plain, tm
                                                                    monkeypatch):
     """Audit 21 Nov I10: My Clippings.txt and WhatsApp exports are .txt but not notes: the
     note cap (MAX_BYTES, made tiny here) does not refuse them."""
-    from cortex import life_sources
+    from keepfold import life_sources
     monkeypatch.setattr(importers, "MAX_BYTES", 100)
     v = Vault(root_plain)
     clip = tmp_path / "My Clippings.txt"

@@ -1,4 +1,4 @@
-"""Private browse search for local AIs: browse/vectors.py, `cortex mcp --private` and the
+"""Private browse search for local AIs: browse/vectors.py, `keepfold mcp --private` and the
 normal server, which never reaches browse/private/ (browse-brain.md, "Private search")."""
 
 import anyio
@@ -6,10 +6,10 @@ import pytest
 from conftest import FakeEmbed, note, run
 from typer.testing import CliRunner
 
-from cortex import mcp_server, semantic
-from cortex.browse import vectors
-from cortex.cli import app
-from cortex.vault import Vault, VaultError
+from keepfold import mcp_server, semantic
+from keepfold.browse import vectors
+from keepfold.cli import app
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -33,8 +33,8 @@ def fake(monkeypatch):
 
 
 def config(home, text):
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(text, encoding="utf-8")
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(text, encoding="utf-8")
 
 
 # ---- vectors ------------------------------------------------------------------------------
@@ -50,7 +50,7 @@ def test_vector_update_is_incremental_and_counts_only(root, fake):
 
     fake.texts.clear()
     assert vectors.update(v)["embedded"] == 0
-    assert fake.texts == ["cortex"]  # only the dimension probe: nothing re-embedded
+    assert fake.texts == ["keepfold"]  # only the dimension probe: nothing re-embedded
 
     p = root / "browse/private/browse-private-2026-11-10.md"
     p.write_text(p.read_text(encoding="utf-8") + "- More car news\n", encoding="utf-8")
@@ -95,14 +95,14 @@ def tools(server):
 
 def test_normal_server_has_no_private_search_and_hides_private_pages(root, fake):
     pages(root)
-    assert "cortex_browse_search" not in tools(mcp_server.build_server(Vault(root)))
+    assert "keepfold_browse_search" not in tools(mcp_server.build_server(Vault(root)))
 
     async def body(call):
-        found = await call("cortex_find", {"query": "Zebracorn"})
+        found = await call("keepfold_find", {"query": "Zebracorn"})
         assert "Zebracorn" not in str(found)
-        recalled = await call("cortex_recall", {"query": "pasta recipe"})
+        recalled = await call("keepfold_recall", {"query": "pasta recipe"})
         assert "Zebracorn" not in str(recalled) and "browse-private" not in str(recalled)
-        read = await call("cortex_read", {"id": "browse-private-2026-11-09"})
+        read = await call("keepfold_read", {"id": "browse-private-2026-11-09"})
         assert "error" in read and "Zebracorn" not in str(read)
 
     run(root, body)
@@ -113,15 +113,15 @@ def test_private_server_searches_and_wraps(root, home, fake):
     pages(root)
     config(home, "browse:\n  private_mcp: true\n")
     server = mcp_server.build_server(Vault(root), private=True)
-    assert "cortex_browse_search" in tools(server)
+    assert "keepfold_browse_search" in tools(server)
     excluded = mcp_server.build_server(Vault(root), excluded="D:\\Work", private=True)
-    assert "cortex_browse_search" not in tools(excluded)
+    assert "keepfold_browse_search" not in tools(excluded)
 
     from mcp import Client
 
     async def main():
         async with Client(server) as c:
-            r = await c.call_tool("cortex_browse_search", {"query": "pasta", "k": 2})
+            r = await c.call_tool("keepfold_browse_search", {"query": "pasta", "k": 2})
             return r.structured_content
 
     out = anyio.run(main)
@@ -162,7 +162,7 @@ def test_private_search_refuses_cloud_clients(root, home, fake, name, refused):
 
     async def main():
         async with Client(server, client_info=Implementation(name=name, version="1")) as c:
-            r = await c.call_tool("cortex_browse_search", {"query": "pasta"})
+            r = await c.call_tool("keepfold_browse_search", {"query": "pasta"})
             return r.structured_content
 
     out = anyio.run(main)

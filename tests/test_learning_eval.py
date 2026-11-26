@@ -8,10 +8,10 @@ import pytest
 from conftest import git
 from typer.testing import CliRunner
 
-from cortex import learning_eval
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import learning_eval
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 T0 = datetime(2026, 11, 1, 12, tzinfo=UTC)
@@ -148,7 +148,7 @@ def test_cli_is_read_only(tmp_path, monkeypatch):
         monkeypatch.setenv(var, "test@example.invalid")
     root = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", root)
-    (root / ".gitignore").write_text(".cortex/*\n")
+    (root / ".gitignore").write_text(".keepfold/*\n")
     log = EventLog(Vault(root))
     for i, v in enumerate(("correct", "wrong", "correct")):
         log.append(session="cli", kind="grade", source="tutor", mode="learn", predicted_p=0.6,

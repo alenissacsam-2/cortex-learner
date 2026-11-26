@@ -10,10 +10,10 @@ import pytest
 from test_app import _serve, call, chat_stream, embed, fakes, llm  # noqa: F401  (fixtures)
 from test_home import _big, _note
 
-from cortex import ask, chat
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import ask, chat
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 OFF = {k: False for k in ("notes", "chats", "browsing", "private")}
@@ -21,7 +21,7 @@ OFF = {k: False for k in ("notes", "chats", "browsing", "private")}
 
 @pytest.fixture
 def vault(root_committed):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     return root_committed
 
 

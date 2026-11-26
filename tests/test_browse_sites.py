@@ -1,4 +1,4 @@
-"""The site pages, the profile and `cortex browse deepen` (browse-brain.md §3a), on synthetic
+"""The site pages, the profile and `keepfold browse deepen` (browse-brain.md §3a), on synthetic
 History only. The core rule: nothing from a hidden category ever reaches a file outside
 browse/private/."""
 
@@ -11,11 +11,11 @@ from datetime import UTC, timedelta
 import pytest
 from test_browse import LINK, Embed, chromium, hubbed, m
 
-from cortex import browse_serve as bs
-from cortex import localllm
-from cortex.browse import Settings, build, privacy, sites, sources, store
-from cortex.browse.build import Item
-from cortex.vault import Vault, VaultError
+from keepfold import browse_serve as bs
+from keepfold import localllm
+from keepfold.browse import Settings, build, privacy, sites, sources, store
+from keepfold.browse.build import Item
+from keepfold.vault import Vault, VaultError
 
 # the owner's settings: Claude may see everything but adult, which is kept private
 OWNER = Settings(adult="private", hidden_from_claude=("adult",), visible_to_claude=True)
@@ -266,7 +266,7 @@ def test_run_deepen_needs_a_runner_and_updates_the_vectors(vault, monkeypatch):
     called = []
     monkeypatch.setattr(bs, "local_runner", lambda budget_s=None: (None, None))
     assert bs.run_deepen(Vault(vault)) is None
-    from cortex.browse import titles, vectors
+    from keepfold.browse import titles, vectors
 
     monkeypatch.setattr(vectors, "update", lambda v, progress=None, **kw: called.append(kw) or {})
     monkeypatch.setattr(bs, "local_runner",
@@ -282,7 +282,7 @@ def test_run_deepen_needs_a_runner_and_updates_the_vectors(vault, monkeypatch):
 
 
 def test_a_vector_failure_is_reported_not_raised(vault, monkeypatch):
-    from cortex.browse import vectors
+    from keepfold.browse import vectors
 
     def boom(v, progress=None):
         raise RuntimeError("nope")
@@ -293,12 +293,12 @@ def test_a_vector_failure_is_reported_not_raised(vault, monkeypatch):
     assert lines == ["private browse search not updated: RuntimeError"]
 
     def unset(v, progress=None):
-        raise VaultError("not_set_up", "Run cortex model download first.")
+        raise VaultError("not_set_up", "Run keepfold model download first.")
 
     monkeypatch.setattr(vectors, "update", unset)
     lines.clear()
     sites.update_vectors(Vault(vault), lines.append)
-    assert lines == ["private browse search not updated: Run cortex model download first."]
+    assert lines == ["private browse search not updated: Run keepfold model download first."]
 
 
 def test_the_receiver_deepens_once_30_minutes_after_start(tmp_path, monkeypatch):
@@ -333,7 +333,7 @@ def test_the_receiver_deepen_waits_for_a_loaded_model_and_retries(tmp_path, monk
 
 
 def test_background_deepen_never_loads_a_model(vault, monkeypatch):
-    from cortex.browse import titles
+    from keepfold.browse import titles
 
     def no_load(*a, **k):
         raise AssertionError("the background deepen must not start a runner or load a model")
@@ -425,7 +425,7 @@ def test_r2_1_a_subdomain_hidden_or_denied_later_leaves_the_forgotten_days(tmp_p
                    for b in {**visible(tmp_path), **hidden(tmp_path)}.values())
 
 
-def test_r2_2_the_reconcile_removes_only_pages_cortex_made(vault, hist):
+def test_r2_2_the_reconcile_removes_only_pages_keepfold_made(vault, hist):
     imp(vault, hist)
     ours = vault / "browse/sites/gaming/browse-lichess.org.md"
     assert ours.is_file()
@@ -463,7 +463,7 @@ class Router:
     after the first cloud call."""
 
     def __init__(self, monkeypatch, settings, flip=None):
-        from cortex import cloudllm
+        from keepfold import cloudllm
 
         self.cur, self.local, self.cloud = [settings], FakeLLM(), FakeLLM()
         self.topics = []

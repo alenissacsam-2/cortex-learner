@@ -1,4 +1,4 @@
-"""R26: cortex_find(kind="timeline"), the pages from the days around one page, in date order,
+"""R26: keepfold_find(kind="timeline"), the pages from the days around one page, in date order,
 through find's own filters (private, browse-private, a client profile's withheld kinds)."""
 
 import re
@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from conftest import note
 
-from cortex.mcp_server import CORE_ONLY_NEXT, Cortex
-from cortex.vault import Vault
+from keepfold.mcp_server import CORE_ONLY_NEXT, Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -25,7 +25,7 @@ def vroot(root):
     page(root, "decisions", "move-to-sqlite", "2026-03-10", "Move to SQLite")
     page(root, "notes", "wal-notes", "2026-03-08", "WAL notes")
     page(root, "resources", "fts5-paper", "2026-03-12", "FTS5 paper")
-    page(root, "projects", "cortex-db", "2026-03-13", "Cortex DB")
+    page(root, "projects", "keepfold-db", "2026-03-13", "Keepfold DB")
     page(root, "notes", "too-early", "2026-03-06", "Too early")
     page(root, "notes", "too-late", "2026-03-14", "Too late")
     page(root, "problems", "lc-x", "2026-03-10", "A problem: not a timeline kind")
@@ -37,10 +37,10 @@ def vroot(root):
 
 
 def timeline(root, client=None, **kw):
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     if client:
         c.over_mcp, c.sessions.client = True, client
-    return c.cortex_find(kind="timeline", **kw)
+    return c.keepfold_find(kind="timeline", **kw)
 
 
 def lines(out):
@@ -53,7 +53,7 @@ def test_date_order_window_and_the_anchor_mark(vroot):
     assert [(d, i) for _, d, _, i, _ in got] == [
         ("2026-03-08", "wal-notes"), ("2026-03-09", "2026-03-09"),
         ("2026-03-10", "move-to-sqlite"), ("2026-03-12", "fts5-paper"),
-        ("2026-03-13", "cortex-db")]
+        ("2026-03-13", "keepfold-db")]
     assert [m for m, *_ in got if m == "▸"] == ["▸"] and got[2][0] == "▸"
     assert got[2][2] == "decision" and got[1][2] == "journal"
     assert out["text"].startswith('<untrusted_note id="find">')
@@ -66,7 +66,7 @@ def test_date_order_window_and_the_anchor_mark(vroot):
 
 def test_words_find_the_anchor_and_since_until_override(vroot):
     out = timeline(vroot, query="FTS5 paper", since="2026-03-12", until="2026-03-14")
-    assert [i for _, _, _, i, _ in lines(out)] == ["fts5-paper", "cortex-db", "too-late"]
+    assert [i for _, _, _, i, _ in lines(out)] == ["fts5-paper", "keepfold-db", "too-late"]
     assert lines(out)[0][0] == "▸"
     wide = timeline(vroot, query="move-to-sqlite", since="2026-03-01")
     ids = [i for _, _, _, i, _ in lines(wide)]
@@ -147,15 +147,15 @@ def test_timeline_is_quick_on_5k_notes(tmp_path):
 
     root = tmp_path / "big"
     _big(root)
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     day = sorted(p.stem for p in Path(root / "journal").glob("*.md"))[30]
-    c.cortex_find(kind="timeline", query=day)  # the first builds the index
+    c.keepfold_find(kind="timeline", query=day)  # the first builds the index
 
     def best(**kw):  # the best of 3: a refresh, then the call
         times = []
         for _ in range(3):
             t = time.perf_counter()
-            out = c.cortex_find(**kw)
+            out = c.keepfold_find(**kw)
             times.append(time.perf_counter() - t)
         return min(times), out
 

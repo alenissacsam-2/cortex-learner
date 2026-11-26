@@ -1,6 +1,6 @@
-"""C5, the chat archive (cortex.chat_archive): imported AI chat pages move from resources/ to the
+"""C5, the chat archive (keepfold.chat_archive): imported AI chat pages move from resources/ to the
 git-ignored archive/chats/ and back; they stay readable, searchable and linkable, a private one
-stays private, git stops tracking them, and Cortex's commit never adds a file from there."""
+stays private, git stops tracking them, and Keepfold's commit never adds a file from there."""
 
 import json
 import threading
@@ -10,10 +10,10 @@ import pytest
 from conftest import FakeEmbed, git, note, run
 from typer.testing import CliRunner
 
-from cortex import chat_archive, chat_import, doctor, relink, semantic, session, taint
-from cortex.events import EventLog
-from cortex.mcp_server import Cortex
-from cortex.vault import CHAT_ARCHIVE, Vault
+from keepfold import chat_archive, chat_import, doctor, relink, semantic, session, taint
+from keepfold.events import EventLog
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import CHAT_ARCHIVE, Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -68,7 +68,7 @@ def test_there_and_back_with_git_and_links(chats):
     assert v.path_for("resource", "chat-cars") == chats / CHAT_ARCHIVE / "chat-cars.md"
     assert v.read("resource", "chat-cars").kind == "resource"
     assert "chat-cars" not in {u["target"] for u in relink.run(v)["unresolved"]}
-    assert "automobile" in Cortex(v).cortex_read("chat-cars")["text"]
+    assert "automobile" in Keepfold(v).keepfold_read("chat-cars")["text"]
     assert {n.id for n in v.iter_notes("resource")} >= set(IDS)
 
     assert chat_archive.auto(v) is None  # the marker: the app never moves twice
@@ -81,7 +81,7 @@ def test_there_and_back_with_git_and_links(chats):
     assert taint.config()["app"]["chats_archive"] is False
     assert chat_archive.folder() is None and chat_archive.auto(v) is None  # stays off
 
-    from cortex.cli import app
+    from keepfold.cli import app
     out = CliRunner().invoke(app, ["chats", "archive", "--vault", str(chats)])
     assert out.exit_code == 0, out.output
     assert "Moved 3 chat pages from resources/ to archive/chats/." in out.output
@@ -99,18 +99,18 @@ def test_find_and_recall_hit_an_archived_chat_and_a_private_one_stays_hidden(cha
                                                                              monkeypatch):
     chat_archive.move(Vault(chats))
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    c = Cortex(Vault(chats))
-    assert "chat-cars" in [h["id"] for h in c.cortex_find("automobile engines")["hits"]]
-    assert "chat-cars" in [h["id"] for h in c.cortex_recall("vehicle", chats=True)["hits"]]
+    c = Keepfold(Vault(chats))
+    assert "chat-cars" in [h["id"] for h in c.keepfold_find("automobile engines")["hits"]]
+    assert "chat-cars" in [h["id"] for h in c.keepfold_recall("vehicle", chats=True)["hits"]]
     diary = next(n for n in Vault(chats).iter_notes("resource") if n.id == "chat-diary")
     assert diary.fields["private"] is True  # still private, still read locally
 
     got = []
 
     async def body(call):
-        got.append(await call("cortex_find", {"query": f"{SECRET} diary"}))
-        got.append(await call("cortex_recall", {"query": f"{SECRET} diary", "chats": True}))
-        got.append(await call("cortex_read", {"id": "chat-diary"}))
+        got.append(await call("keepfold_find", {"query": f"{SECRET} diary"}))
+        got.append(await call("keepfold_recall", {"query": f"{SECRET} diary", "chats": True}))
+        got.append(await call("keepfold_read", {"id": "chat-diary"}))
 
     run(chats, body)
     assert got[2]["error"] == "unknown_id"
@@ -120,18 +120,18 @@ def test_find_and_recall_hit_an_archived_chat_and_a_private_one_stays_hidden(cha
 
 
 def test_the_commit_never_adds_an_archive_file(chats):
-    (chats / ".gitignore").write_bytes(b".cortex/*\n")  # even with the line missing
+    (chats / ".gitignore").write_bytes(b".keepfold/*\n")  # even with the line missing
     v = Vault(chats)
     v.create_note("resource", "chat-new", {"title": "New", "kind": "resource"}, "# New",
                   folder=CHAT_ARCHIVE)
     v.create_note("note", "plain", {"title": "Plain", "kind": "note"}, "# Plain")
-    assert session._commit(v, "cortex: test", v.wrote_since(0))
+    assert session._commit(v, "keepfold: test", v.wrote_since(0))
     tracked = git(chats, "ls-files").splitlines()
     assert "notes/plain.md" in tracked and f"{CHAT_ARCHIVE}/chat-new.md" not in tracked
 
 
 def test_init_and_doctor_for_the_gitignore_line(tmp_path, root_committed):
-    from cortex.cli import _init
+    from keepfold.cli import _init
     _init(tmp_path / "new")
     assert "archive/chats/" in (tmp_path / "new/.gitignore").read_text("utf-8").splitlines()
 
@@ -142,7 +142,7 @@ def test_init_and_doctor_for_the_gitignore_line(tmp_path, root_committed):
 
 
 def test_the_app_pass_moves_once(chats):
-    from cortex.app import actions
+    from keepfold.app import actions
 
     said = []
     job = types.SimpleNamespace(say=said.append, cancelled=threading.Event())
@@ -156,14 +156,14 @@ def test_the_app_pass_moves_once(chats):
 
 def test_status_says_what_moved_and_how_to_undo(chats):
     """R3-10: one Status line after the automatic move, gone after `--undo`."""
-    from cortex.app import status
+    from keepfold.app import status
 
     v = Vault(chats)
     assert status.archive_row(chats) is None  # never moved
     chat_archive.auto(v)
     row = status.archive_row(chats)
     assert row["value"].startswith("3 chat pages moved to archive/chats/ on 20")
-    assert "cortex chats archive --undo" in row["detail"]
+    assert "keepfold chats archive --undo" in row["detail"]
     assert row in status.rows(chats)
     (chats / chat_archive.MARKER).write_text("2026-11-01T00:00:00+00:00\n", "utf-8")  # older
     assert status.archive_row(chats)["value"].endswith("archive/chats/ on 2026-11-01")

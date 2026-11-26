@@ -2,7 +2,7 @@
 
 Generates N notes with the real vault's kind and size mix (§1.1) in a temp directory, then
 times a cold index build, a build from the snapshot, and the MCP `initialize` round trip of
-`cortex mcp` over stdio. Never touches a real vault.
+`keepfold mcp` over stdio. Never touches a real vault.
 
     uv run python scripts/bench_index.py [--notes 5000] [--keep]
 """
@@ -19,10 +19,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from cortex import vault as vault_mod
-from cortex.catalog import Catalog
-from cortex.index import SNAPSHOT, Index
-from cortex.vault import Vault
+from keepfold import vault as vault_mod
+from keepfold.catalog import Catalog
+from keepfold.index import SNAPSHOT, Index
+from keepfold.vault import Vault
 
 # §1.1 counts of .md files per folder (5,198 in all)
 MIX = {"resources": 3682, "notes": 477, "concepts": 397, "problems": 281, "mistakes": 60,
@@ -70,9 +70,9 @@ def timed(label: str, fn):
 
 
 def initialize_round_trip(root: Path) -> float:
-    exe = shutil.which("cortex", path=str(Path(sys.executable).parent))
+    exe = shutil.which("keepfold", path=str(Path(sys.executable).parent))
     if exe is None:
-        raise SystemExit("cortex executable not found next to this Python; run via uv run")
+        raise SystemExit("keepfold executable not found next to this Python; run via uv run")
     msg = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                       "clientInfo": {"name": "bench", "version": "0"}}}
@@ -97,7 +97,7 @@ def main() -> None:
     ap.add_argument("--notes", type=int, default=5000)
     ap.add_argument("--keep", action="store_true", help="keep the temp vault")
     args = ap.parse_args()
-    tmp = Path(tempfile.mkdtemp(prefix="cortex-bench-"))
+    tmp = Path(tempfile.mkdtemp(prefix="keepfold-bench-"))
     root = tmp / "vault"
     try:
         timed(f"generate {args.notes} notes", lambda: generate(root, args.notes))

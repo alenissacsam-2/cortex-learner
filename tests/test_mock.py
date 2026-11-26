@@ -7,11 +7,11 @@ from pathlib import Path
 
 from conftest import events, run
 
-from cortex import events as events_mod
-from cortex import learning_eval, planner, session
-from cortex.catalog import Catalog
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import events as events_mod
+from keepfold import learning_eval, planner, session
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -23,7 +23,7 @@ def test_mock_is_a_no_plan_non_study_mode():
 
 def test_mock_start_writes_are_allowed_and_stamped(root):
     async def body(call):
-        out = await call("cortex_start", {"mode": "mock", "topic": "two pointers"})
+        out = await call("keepfold_start", {"mode": "mock", "topic": "two pointers"})
         assert out["mode"] == "mock" and out["today"] == []
         assert "Mock interview" in out["display"] and "modes/mock.md" in out["next"]
         # review r4 M5: the rubric and keys reach a model-started mock without the skill
@@ -31,19 +31,19 @@ def test_mock_start_writes_are_allowed_and_stamped(root):
         for part in ("clarifying-questions", "mock-<stamp>-plan", "-check", "felt_weak",
                      "assessment_result"):
             assert part in out["brief"], part
-        await call("cortex_add", {"kind": "domain", "title": "Interview"})
-        await call("cortex_add", {"kind": "area", "title": "Skills", "parent": "interview"})
-        await call("cortex_add", {"kind": "concept", "title": "Clarifying questions",
+        await call("keepfold_add", {"kind": "domain", "title": "Interview"})
+        await call("keepfold_add", {"kind": "area", "title": "Skills", "parent": "interview"})
+        await call("keepfold_add", {"kind": "concept", "title": "Clarifying questions",
                                   "parent": "interview.skills"})
-        await call("cortex_grade", {"concept": "clarifying-questions", "question": "q",
+        await call("keepfold_grade", {"concept": "clarifying-questions", "question": "q",
                                     "learner_answer": "a", "verdict": "partial",
                                     "item_type": "application"})
-        await call("cortex_patch", {"id": "clarifying-questions", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "clarifying-questions", "op": "append_to_section",
                                     "target": "Notes", "text": "- asks range first"})
-        await call("cortex_log", {"kind": "assessment_result", "payload": {
+        await call("keepfold_log", {"kind": "assessment_result", "payload": {
             "assessment": "mock-2026-11-16-coding", "assessment_kind": "mock",
             "outcome": "fail", "felt_weak": ["clarifying-questions"]}})
-        await call("cortex_end", {"summary": "mock"})
+        await call("keepfold_end", {"summary": "mock"})
 
     run(root, body)
     evs = [e for e in events(root) if e["kind"] in ("grade", "log")]
@@ -61,20 +61,20 @@ def test_same_keys_write_nothing(root):
             {"question": "complexity", "answer": "a", "verdict": "correct",
              "item_type": "recall"}]
     writes = [
-        ("cortex_grade", {"concept": "two pointers", "items": plan, "key": f"{stamp}-plan"}),
-        ("cortex_grade", {"concept": "two pointers", "question": "code", "learner_answer": "a",
+        ("keepfold_grade", {"concept": "two pointers", "items": plan, "key": f"{stamp}-plan"}),
+        ("keepfold_grade", {"concept": "two pointers", "question": "code", "learner_answer": "a",
                           "verdict": "correct", "item_type": "application", "problem": "lc-167",
                           "confidence": 3, "key": f"{stamp}-code"}),
-        ("cortex_grade", {"concept": "two pointers", "key": f"{stamp}-check", "items": [
+        ("keepfold_grade", {"concept": "two pointers", "key": f"{stamp}-check", "items": [
             {"question": "test", "answer": "a", "verdict": "correct", "item_type": "application"},
             {"question": "explain", "answer": "a", "verdict": "partial",
              "item_type": "application"}]}),
-        ("cortex_log", {"kind": "problem_status", "key": f"{stamp}-status",
+        ("keepfold_log", {"kind": "problem_status", "key": f"{stamp}-status",
                         "payload": {"problem": "lc-167", "status": "solved", "hints": 0}}),
     ]
 
     async def body(call):
-        await call("cortex_start", {"mode": "mock"})
+        await call("keepfold_start", {"mode": "mock"})
         for name, args in writes:
             await call(name, args)
         n = len(events(root))

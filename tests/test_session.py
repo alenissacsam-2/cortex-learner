@@ -7,12 +7,12 @@ import pytest
 from conftest import git
 from typer.testing import CliRunner
 
-from cortex import cli as cli_mod
-from cortex import session as sm_mod
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.session import SessionManager, sweep
-from cortex.vault import SECRET_RES, Vault, VaultError
+from keepfold import cli as cli_mod
+from keepfold import session as sm_mod
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.session import SessionManager, sweep
+from keepfold.vault import SECRET_RES, Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -136,7 +136,7 @@ def _change(mgr, id):
 
 
 def test_exposure_lasts_two_hours_after_the_last_outside_read(mgr, clock, root):
-    mgr.expose()  # a Cortex read with no session open
+    mgr.expose()  # a Keepfold read with no session open
     _change(mgr, "a")
     assert mgr.current.exposed
     mgr.close()
@@ -172,14 +172,14 @@ def test_a_close_keeps_hook_exposure(mgr, clock, root):
 
 
 def test_exposed_pages_ignore_file_mtime(mgr, clock, root):
-    """`_end` rewrites cortex_status on touched concepts; that is no change event, so the
+    """`_end` rewrites keepfold_status on touched concepts; that is no change event, so the
     page stays exposed."""
     mgr.expose()
     mgr.require("patch")
     mgr.note("added", "two-pointers", change={"tool": "add", "id": "two-pointers",
                                               "kind": "concept"})
     mgr.close()
-    assert "cortex_status" in (root / "concepts" / "two-pointers.md").read_text("utf-8")
+    assert "keepfold_status" in (root / "concepts" / "two-pointers.md").read_text("utf-8")
     assert sm_mod.exposed_pages(EventLog(Vault(root)).iter_events()) == {"two-pointers"}
 
 
@@ -211,10 +211,10 @@ def test_close_pipeline(mgr, clock, root):
     assert "20 min" in text and "Two pointers (two-pointers)" in text
     assert "Worked on two pointers" in text and "http" not in text and "<b>" not in text
     assert "# Today" in (root / "Today.md").read_text(encoding="utf-8")
-    assert 'cortex_status: "learning"' in (root / "concepts/two-pointers.md").read_text(
+    assert 'keepfold_status: "learning"' in (root / "concepts/two-pointers.md").read_text(
         encoding="utf-8")
     assert out["commit"] and git(root, "log", "-1", "--format=%s").strip() == \
-        f"cortex: session {s.id} learn"
+        f"keepfold: session {s.id} learn"
     assert git(root, "status", "--porcelain") == ""
     assert "session learn: 0 changes, 1 graded" in (root / "journal/2026-11-13.md").read_text(
         encoding="utf-8")
@@ -267,9 +267,9 @@ def test_a_touch_only_session_closes_quietly(mgr, clock, root, swept, monkeypatc
     assert kinds(root, s.id) == ["open", "log", "close"]
     (events,) = files_in(root, commit)  # its commit holds only its own event file
     assert events.endswith(f"/{s.id}.jsonl")
-    assert subjects(root)[0] == f"cortex: session {s.id} ambient"
+    assert subjects(root)[0] == f"keepfold: session {s.id} ambient"
     for quiet in ("journal", "sessions", "log.md", "Today.md", "index.md",
-                  ".cortex/dashboard.html"):
+                  ".keepfold/dashboard.html"):
         assert not (root / quiet).exists(), quiet
     assert git(root, "status", "--porcelain") == ""
 
@@ -318,7 +318,7 @@ def test_a_hung_git_fails_the_commit_and_frees_the_lock(mgr, root, monkeypatch, 
     mgr.note("logged")
     monkeypatch.setattr(sm_mod.subprocess, "run", hung)
     assert mgr.close()["commit"] is None
-    assert not (root / ".cortex" / "lock").exists()
+    assert not (root / ".keepfold" / "lock").exists()
     assert calls and all(kw["timeout"] == 60 and kw["encoding"] == "utf-8" for kw in calls)
     assert "timed out" in caplog.text
     calls.clear()
@@ -338,13 +338,13 @@ def test_commit_runs_git_add_and_commit_outside_the_vault_lock(root, monkeypatch
     real, held = sm_mod._commit_paths, []
 
     def spy(top, paths, message):
-        held.append((root / ".cortex" / "lock").exists())
+        held.append((root / ".keepfold" / "lock").exists())
         Vault(root).write_text(root / "inbox.md", "written while git runs\n")  # no wait
         return real(top, paths, message)
 
     monkeypatch.setattr(sm_mod, "_commit_paths", spy)
     (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
-    sha = sm_mod._commit(Vault(root), "cortex: test")
+    sha = sm_mod._commit(Vault(root), "keepfold: test")
     assert held == [False]
     assert sha == git(root, "rev-parse", "HEAD").strip()
     assert git(root, "show", "--name-only", "--format=", sha).split() == ["clean.md"]
@@ -366,7 +366,7 @@ def test_a_file_rewritten_after_the_snapshot_stays_out_of_the_commit(root, monke
     (root / "inbox.md").write_text("session A's text\n", encoding="utf-8")
     (root / "clean.md").write_text("an unchanged hand edit\n", encoding="utf-8")
     (root / "BRIEF.md").unlink()  # a tracked file's deletion
-    sha = sm_mod._commit(Vault(root), "cortex: test")
+    sha = sm_mod._commit(Vault(root), "keepfold: test")
     assert "inbox.md" in calls[0]  # it was in the snapshot
     assert files_in(root, sha) == {"clean.md", "BRIEF.md"}
     assert git(root, "ls-tree", "--name-only", sha, "BRIEF.md").strip() == ""  # deleted
@@ -386,7 +386,7 @@ def test_a_same_size_replace_within_one_mtime_tick_is_still_caught(root, monkeyp
 
     monkeypatch.setattr(sm_mod, "_withhold_secrets", scan)
     p.write_text("AAAA\n", encoding="utf-8")
-    assert sm_mod._commit(Vault(root), "cortex: test") is None  # nothing of ours left
+    assert sm_mod._commit(Vault(root), "keepfold: test") is None  # nothing of ours left
     assert git(root, "status", "--porcelain").strip() == "M inbox.md"
 
 
@@ -394,11 +394,11 @@ def test_commit_fails_cleanly_when_another_git_holds_the_index(root, caplog):
     (root / "clean.md").write_text("a hand edit\n", encoding="utf-8")
     (root / ".git/index.lock").write_text("", encoding="utf-8")  # a commit running elsewhere
     head = git(root, "rev-parse", "HEAD")
-    assert sm_mod._commit(Vault(root), "cortex: test") is None
+    assert sm_mod._commit(Vault(root), "keepfold: test") is None
     assert "index.lock" in caplog.text and git(root, "rev-parse", "HEAD") == head
-    assert not (root / ".cortex" / "lock").exists()
+    assert not (root / ".keepfold" / "lock").exists()
     (root / ".git/index.lock").unlink()
-    assert sm_mod._commit(Vault(root), "cortex: test")  # the next commit takes it
+    assert sm_mod._commit(Vault(root), "keepfold: test")  # the next commit takes it
 
 
 def test_budget_flags_only(mgr):
@@ -416,7 +416,7 @@ def test_budget_hint_once_on_crossing(mgr):
     hints = [mgr.note("patched") for _ in range(13)]
     assert hints[:10] == [""] * 10 and hints[11:] == ["", ""]
     assert hints[10] == (" This session has made 11 changes; consider wrapping up with "
-                         "cortex_end.")
+                         "keepfold_end.")
 
 
 def test_close_lists_changes_in_session_note(mgr, root):
@@ -452,7 +452,7 @@ def test_sweep(root, clock):
     assert kinds(root, old) == ["grade", "close"]
     assert kinds(root, recent) == ["grade"]
     assert list((root / "sessions").glob(f"*-review-{old[-8:].lower()}.md"))
-    assert 'cortex_status: "learning"' in (root / "concepts/two-pointers.md").read_text(
+    assert 'keepfold_status: "learning"' in (root / "concepts/two-pointers.md").read_text(
         encoding="utf-8")
     assert sweep(Vault(root), clock) == []  # already closed
 
@@ -468,7 +468,7 @@ def test_cli_session_sweep_close_and_hook(root, home):
     assert r.exit_code == 0 and f"closed {recent}" in r.output
     r = runner.invoke(app, ["session", "sweep", "--vault", str(root)])
     assert "No orphan sessions" in r.output
-    assert not (home / ".cortex").exists()
+    assert not (home / ".keepfold").exists()
 
 
 def test_exam_retention_agrees_across_start_close_and_replay(mgr, root, monkeypatch):
@@ -486,7 +486,7 @@ def test_exam_retention_agrees_across_start_close_and_replay(mgr, root, monkeypa
     assert out["moved"] == []
     note = root / "concepts/two-pointers.md"
     stamped = note.read_text(encoding="utf-8")
-    assert 'cortex_status: "needs_refresh"' in stamped
+    assert 'keepfold_status: "needs_refresh"' in stamped
 
     class Frozen(datetime):
         @classmethod
@@ -496,7 +496,7 @@ def test_exam_retention_agrees_across_start_close_and_replay(mgr, root, monkeypa
     monkeypatch.setattr(cli_mod, "datetime", Frozen)
     r = CliRunner().invoke(app, ["replay", "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    assert note.read_text(encoding="utf-8") == stamped  # same cortex_status / cortex_next
+    assert note.read_text(encoding="utf-8") == stamped  # same keepfold_status / keepfold_next
 
 
 # ---- sweep keeps Changed: and closes sessions of exited servers (§15.2 N2, N3) ------------
@@ -571,7 +571,7 @@ def test_a_write_after_another_process_closed_the_session_opens_a_fresh_one(root
     desk = SessionManager(Vault(root), clock=clock)
     s = desk.start("learn", topic="graphs")
     desk.expose()
-    assert sweep(Vault(root), clock, force=True) == [s.id]  # e.g. `cortex session close`
+    assert sweep(Vault(root), clock, force=True) == [s.id]  # e.g. `keepfold session close`
     assert desk.require("find") is s  # a read writes nothing: no need to reopen
     new = desk.require("grade")
     assert new is not s and desk.current is new
@@ -615,13 +615,13 @@ def test_session_commit_holds_only_its_files_and_undo_spares_the_rest(root, cloc
     (root / "inbox.md").write_text("- hand edit\n", encoding="utf-8")
     r = CliRunner().invoke(app, ["log", "taught", "arrays-basics", "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    assert subjects(root)[0] == "cortex: cli log taught"  # the CLI write committed itself
+    assert subjects(root)[0] == "keepfold: cli log taught"  # the CLI write committed itself
     (cli_events,) = files_in(root, "HEAD")
     assert cli_events.startswith("events/") and cli_events.endswith("/cli.jsonl")
     clock.tick(minutes=20)
     commit = mgr.close()["commit"]
-    assert subjects(root)[:2] == [f"cortex: session {s.id} learn",
-                                  f"cortex: other changes before session {s.id}"]
+    assert subjects(root)[:2] == [f"keepfold: session {s.id} learn",
+                                  f"keepfold: other changes before session {s.id}"]
     assert files_in(root, "HEAD~1") == {"notes/hand.md", "inbox.md"}
     mine = files_in(root, commit)
     assert not mine & {"notes/hand.md", "inbox.md", cli_events}
@@ -636,13 +636,13 @@ def test_session_commit_holds_only_its_files_and_undo_spares_the_rest(root, cloc
     assert (root / "notes/hand.md").read_text(encoding="utf-8") == "# Written in Obsidian\n"
     assert (root / "inbox.md").read_text(encoding="utf-8") == "- hand edit\n"
     assert (root / cli_events).is_file() and not list(root.glob(f"events/*/*/{s.id}.jsonl"))
-    assert subjects(root)[0] == f"cortex: undo {s.id}"
+    assert subjects(root)[0] == f"keepfold: undo {s.id}"
 
 
 def test_two_open_sessions_each_commit_only_their_own_notes(tmp_path, clock):
     root = tmp_path / "vault"
     shutil.copytree(FIXTURES / "vault_mini", root)
-    (root / ".gitignore").write_text(".cortex/*\n")
+    (root / ".gitignore").write_text(".keepfold/*\n")
     git(root, "init", "-q")  # no commit yet: the first close starts the history
     a, b = (SessionManager(Vault(root), clock=clock) for _ in range(2))  # two servers
     for m, nid in ((a, "note-a"), (b, "note-b")):
@@ -653,15 +653,15 @@ def test_two_open_sessions_each_commit_only_their_own_notes(tmp_path, clock):
     sa, sb = a.current.id, b.current.id
     clock.tick(minutes=5)
     a.close()
-    assert subjects(root) == [f"cortex: session {sa} learn",
-                              f"cortex: other changes before session {sa}"]
+    assert subjects(root) == [f"keepfold: session {sa} learn",
+                              f"keepfold: other changes before session {sa}"]
     first, other = files_in(root, "HEAD"), files_in(root, "HEAD~1")
     assert "notes/note-a.md" in first and "concepts/two-pointers.md" in other
     assert "notes/note-b.md" not in first | other
     assert not any(sb in p for p in first | other)  # b is still open: its files wait for it
     clock.tick(minutes=5)
     b.close()
-    assert subjects(root)[0] == f"cortex: session {sb} learn"
+    assert subjects(root)[0] == f"keepfold: session {sb} learn"
     second = files_in(root, "HEAD")
     assert "notes/note-b.md" in second and "notes/note-a.md" not in second
     assert any(p.endswith(f"/{sb}.jsonl") for p in second)
@@ -671,7 +671,7 @@ def test_two_open_sessions_each_commit_only_their_own_notes(tmp_path, clock):
 def test_a_new_file_deleted_before_the_commit_does_not_fail_it(tmp_path):
     import subprocess
 
-    from cortex import session as s
+    from keepfold import session as s
     top = tmp_path / "r"
     top.mkdir()
     for args in (["init", "-q"], ["config", "user.email", "t@example.com"],

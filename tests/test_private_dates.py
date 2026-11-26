@@ -1,4 +1,4 @@
-"""L1: a `<private>…</private>` span is never saved (chats.drop_private, wherever Cortex keeps
+"""L1: a `<private>…</private>` span is never saved (chats.drop_private, wherever Keepfold keeps
 chat text a person typed), and the relative dates of a durable statement are pinned to the
 day they meant when it was written (dates.pin)."""
 
@@ -12,10 +12,10 @@ from conftest import run, tiers
 from mcp import Client
 from mcp.types import Implementation
 
-from cortex import chat, chats, dates, fact_harvest, recall_log, session, tags, voice
-from cortex.app import server
-from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from keepfold import chat, chats, dates, fact_harvest, recall_log, session, tags, voice
+from keepfold.app import server
+from keepfold.mcp_server import build_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -65,11 +65,11 @@ def test_the_chat_log_and_tags_never_keep_a_private_span(root):
     got = {}
 
     async def body(call):
-        p = await call("cortex_prime", {"prompt": (
+        p = await call("keepfold_prime", {"prompt": (
             f"My landlord <private>{SECRET}</private> called.\n//fact: I rent a flat in Kochi\n"
             f"<private>//fact: I owe {SECRET}</private>")})
         got["chat"] = p["chat"]
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "chat": p["chat"], "user": f"//fact: I moved to Pune yesterday\nand <private>{SECRET}",
             "gist": f"About <private>{SECRET}</private>."}})
 
@@ -93,20 +93,20 @@ def test_add_patch_and_journal_drop_private_spans_and_pin_dates(root, monday):
     got = {}
 
     async def body(call):
-        got["d"] = (await call("cortex_add", {
+        got["d"] = (await call("keepfold_add", {
             "kind": "decision", "title": "Take the offer next Monday",
             "fields": {"summary": f"Agreed yesterday with <private>{SECRET}</private>"}}))["id"]
-        got["l"] = (await call("cortex_add", {
+        got["l"] = (await call("keepfold_add", {
             "kind": "loop", "title": "Send the form tomorrow",
             "fields": {"summary": "Asked for it last week"}}))["id"]
-        await call("cortex_patch", {
+        await call("keepfold_patch", {
             "id": "me/profile", "op": "append_to_section", "target": "Brief",
             "user_confirmed": True,
             "text": f"- Moved to Pune last week <private>{SECRET}</private>"})
-        await call("cortex_log", {"kind": "journal", "payload": {
+        await call("keepfold_log", {"kind": "journal", "payload": {
             "text": f"Met the recruiter yesterday; <private>{SECRET}</private> exam this Friday"}})
         # last: raw_text exposes the session, which then may not change me/
-        got["r"] = (await call("cortex_add", {
+        got["r"] = (await call("keepfold_add", {
             "kind": "resource", "title": "Lecture tomorrow",  # not a durable statement kind
             "raw_text": f"Slides <private>{SECRET}</private> here"}))["id"]
 
@@ -138,7 +138,7 @@ def test_an_imported_tag_is_pinned_to_its_own_day(root):
 
 
 def test_an_imported_tag_with_no_day_is_never_pinned(root):
-    """No timestamp, no day: cortex_patch must not pin it with today either."""
+    """No timestamp, no day: keepfold_patch must not pin it with today either."""
     tags.apply_in(Vault(root), [("fact", "Started at Beta Corp yesterday", "")])
     profile = (root / "me/profile.md").read_text(encoding="utf-8")
     assert "Started at Beta Corp yesterday" in profile and "yesterday (20" not in profile
@@ -146,7 +146,7 @@ def test_an_imported_tag_with_no_day_is_never_pinned(root):
 
 def test_a_backdated_journal_line_is_pinned_as_of_its_own_day(root, monday):
     async def body(call):
-        await call("cortex_log", {"kind": "journal", "payload": {
+        await call("keepfold_log", {"kind": "journal", "payload": {
             "text": "Ran 5k yesterday", "date": "2026-11-20"}})
 
     run(root, body)
@@ -156,7 +156,7 @@ def test_a_backdated_journal_line_is_pinned_as_of_its_own_day(root, monday):
 
 def test_approve_in_the_app_never_pins(root):
     """A line proposed days ago and approved now: today is not the day it was written."""
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
     then = date.today() - dt.timedelta(days=3)  # inside the Review's 14 days
     (root / "inbox.md").write_text("# Inbox\n\n## About me (unconfirmed)\n- Coding: Reviews "
@@ -195,7 +195,7 @@ def test_an_imported_export_keeps_no_private_span():
 
 def test_the_recall_log_and_voice_samples_keep_no_private_span(root):
     v = Vault(root)
-    recall_log.log_recall(v, "cortex_recall", f"rent <private>{SECRET}</private>", [])
+    recall_log.log_recall(v, "keepfold_recall", f"rent <private>{SECRET}</private>", [])
     assert [r["query"] for r in recall_log.rows(v)] == ["rent [private]"]
     sample = voice.fields({"audience": "friend", "act": "update", "channel": "chat",
                            "text": f"Paid <private>{SECRET}</private> today"})

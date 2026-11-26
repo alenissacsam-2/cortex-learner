@@ -1,9 +1,9 @@
 
 from typer.testing import CliRunner
 
-from cortex import doctor
-from cortex.cli import ME_PAGES, app
-from cortex.contract import scope_contract
+from keepfold import doctor
+from keepfold.cli import ME_PAGES, app
+from keepfold.contract import scope_contract
 
 TEXT = """# Contract
 
@@ -59,6 +59,6 @@ def test_doctor_contract_size(tmp_path):
     assert doctor.check_contract_size(tmp_path)[0] == "PASS"
     (tmp_path / "me").mkdir()
     (tmp_path / "me/teaching-contract.md").write_text("x" * 4800, encoding="utf-8")
-    assert doctor.check_contract_size(tmp_path)[0] == "PASS"  # same cap as cortex_start
+    assert doctor.check_contract_size(tmp_path)[0] == "PASS"  # same cap as keepfold_start
     (tmp_path / "me/teaching-contract.md").write_text("x" * 4801, encoding="utf-8")
     assert doctor.check_contract_size(tmp_path)[0] == "WARN"

@@ -1,4 +1,4 @@
-"""The chat safety net (cortex.safety_net) on vault_mini with synthetic chat pages, a fake
+"""The chat safety net (keepfold.safety_net) on vault_mini with synthetic chat pages, a fake
 runner and a fake embedder: the skip rules (private, hidden, old), what was logged already, layer 1
 touches, layer 2 (match, create under a hub or in From chats, caps, junk), no model loaded,
 the ledger's no-op second pass, undo, dry run and the CLI. Nothing real runs or loads."""
@@ -15,11 +15,11 @@ from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or
 from test_app import vault as vault  # noqa: F401 (fixture)
 from typer.testing import CliRunner
 
-from cortex import cli
-from cortex import safety_net as sn
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.vault import Vault
+from keepfold import cli
+from keepfold import safety_net as sn
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -198,7 +198,7 @@ def test_layer2_caps_per_chat_and_per_pass(root, monkeypatch):
     assert out["chats"] == sn.MAX_CHATS and out["left"] > 0  # the chat cap
 
 
-def test_layer2_taught_is_capped_per_cortex_day_across_chats_and_passes(root):
+def test_layer2_taught_is_capped_per_keepfold_day_across_chats_and_passes(root):
     chat(root, "c1", "Explain heap sort and two pointers")
     out = go(root, Runner({"concepts": ["Heap sort"]}))
     assert out["taught"] == 1
@@ -275,5 +275,5 @@ def test_the_app_pass_waits_for_jobs_and_commits(app, monkeypatch):  # noqa: F81
     assert app.safety_net_auto() is None and mine(app.root) == []
     monkeypatch.setattr(app.jobs, "running", lambda: False)
     assert app.safety_net_auto()["touches"] == 1  # no model loaded in tests: layer 1 only
-    assert git(app.root, "log", "-1", "--format=%s").strip() == "cortex: app import safety net"
+    assert git(app.root, "log", "-1", "--format=%s").strip() == "keepfold: app import safety net"
     assert not app.safety_net_auto()  # nothing new (it only asks again for a loaded model)

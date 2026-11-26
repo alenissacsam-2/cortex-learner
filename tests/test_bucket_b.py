@@ -8,12 +8,12 @@ import pytest
 from conftest import events, git, run
 from typer.testing import CliRunner
 
-from cortex import session as session_mod
-from cortex.cli import app
-from cortex.events import EventLog, _check_fields
-from cortex.mcp_server import _norm_answer
-from cortex.planner import is_ready
-from cortex.vault import Vault, VaultError
+from keepfold import session as session_mod
+from keepfold.cli import app
+from keepfold.events import EventLog, _check_fields
+from keepfold.mcp_server import _norm_answer
+from keepfold.planner import is_ready
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -28,7 +28,7 @@ runner = CliRunner()
 
 
 def void(call, event_id, reason):
-    return call("cortex_log", {"kind": "void",
+    return call("keepfold_log", {"kind": "void",
                                "payload": {"event_id": event_id, "reason": reason}})
 
 
@@ -39,9 +39,9 @@ def test_void_tool_and_end_card(root):
     out = {}
 
     async def body(call):
-        await call("cortex_start", {"mode": "learn"})
-        ask = await call("cortex_ask", ASK)
-        await call("cortex_grade", {"item_id": ask["item_id"], "learner_answer": "a",
+        await call("keepfold_start", {"mode": "learn"})
+        ask = await call("keepfold_ask", ASK)
+        await call("keepfold_grade", {"item_id": ask["item_id"], "learner_answer": "a",
                                     "verdict": "wrong"})
         gid = next(e["id"] for e in events(root) if e["kind"] == "grade")
         v = await void(call, gid, "typo")
@@ -52,7 +52,7 @@ def test_void_tool_and_end_card(root):
         assert (await void(call, vid, "x"))["error"]
         assert (await void(call, "nope", "x"))[
             "error"] == "unknown_id"
-        out["card"] = (await call("cortex_end"))["display"]
+        out["card"] = (await call("keepfold_end"))["display"]
         out["gid"] = gid
 
     run(root, body)
@@ -88,12 +88,12 @@ def test_minted_mistake_in_changed_list(root):
     out = {}
 
     async def body(call):
-        await call("cortex_start", {"mode": "learn"})
-        g = await call("cortex_grade", {
+        await call("keepfold_start", {"mode": "learn"})
+        g = await call("keepfold_grade", {
             "concept": "two-pointers", "question": "Q?", "learner_answer": "a",
             "verdict": "wrong", "new_mistake": {"title": "Skips the middle", "why": "bounds"}})
         out["mid"] = g["mistake"]
-        out["card"] = (await call("cortex_end"))["display"]
+        out["card"] = (await call("keepfold_end"))["display"]
 
     run(root, body)
     assert f"- added mistake {out['mid']}" in out["card"]
@@ -103,8 +103,8 @@ def test_event_budget_hint_once(root, monkeypatch):
     monkeypatch.setattr(session_mod, "EVENT_BUDGET", 2)
 
     async def body(call):
-        await call("cortex_start", {"mode": "learn"})
-        nexts = [(await call("cortex_ask", ASK))["next"] for _ in range(4)]
+        await call("keepfold_start", {"mode": "learn"})
+        nexts = [(await call("keepfold_ask", ASK))["next"] for _ in range(4)]
         assert ["events" in n for n in nexts] == [False, False, True, False]
 
     run(root, body)
@@ -133,9 +133,9 @@ def test_text_caps_2000():
 
 
 def test_dashboard_opens_the_app(root, monkeypatch):
-    """`cortex dashboard` opens the running app's home (its window, else the browser), or
-    starts the app as `cortex app` does."""
-    from cortex.app import server
+    """`keepfold dashboard` opens the running app's home (its window, else the browser), or
+    starts the app as `keepfold app` does."""
+    from keepfold.app import server
     opened, shown, ran = [], [], []
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
     monkeypatch.setattr(server, "running_url", lambda: "http://127.0.0.1:1/?t=k")
@@ -147,7 +147,7 @@ def test_dashboard_opens_the_app(root, monkeypatch):
     monkeypatch.setattr(server, "running_url", lambda: None)
     assert runner.invoke(app, ["dashboard", "--vault", str(root)]).exit_code == 0
     assert ran == [Vault(root).root] and len(opened) == 1
-    assert not (root / ".cortex" / "dashboard.html").exists()
+    assert not (root / ".keepfold" / "dashboard.html").exists()
 
 
 def test_init_appends_workspace_ignore_once(root):
@@ -155,8 +155,8 @@ def test_init_appends_workspace_ignore_once(root):
         r = runner.invoke(app, ["init", str(root)])
         assert r.exit_code == 0, r.output
     lines = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert lines == [".cortex/*", ".obsidian/workspace*.json", "browse/private/",  # C3
-                     "archive/chats/"]  # v9 C5
+    assert lines == [".keepfold/*", ".obsidian/workspace*.json", "browse/private/",  # C3
+                     "archive/chats/", ".*.tmp"]  # v9 C5, D1
 
 
 def test_norm_answer():
@@ -167,13 +167,13 @@ def test_norm_answer():
 
 def test_answer_key_normalised_match_only_upgrades(root):
     async def body(call):
-        await call("cortex_start", {"mode": "learn"})
-        a = await call("cortex_ask", {**ASK, "answer_key": "O(n log n)"})
-        await call("cortex_grade", {"item_id": a["item_id"], "learner_answer": "`O(N log N)`"})
-        b = await call("cortex_ask", {**ASK, "answer_key": "O(n)"})
-        err = await call("cortex_grade", {"item_id": b["item_id"], "learner_answer": "O(1)"})
+        await call("keepfold_start", {"mode": "learn"})
+        a = await call("keepfold_ask", {**ASK, "answer_key": "O(n log n)"})
+        await call("keepfold_grade", {"item_id": a["item_id"], "learner_answer": "`O(N log N)`"})
+        b = await call("keepfold_ask", {**ASK, "answer_key": "O(n)"})
+        err = await call("keepfold_grade", {"item_id": b["item_id"], "learner_answer": "O(1)"})
         assert err["error"] == "invalid_argument"  # a mismatch cannot supply a verdict
-        await call("cortex_grade", {"item_id": b["item_id"], "learner_answer": "O(1)",
+        await call("keepfold_grade", {"item_id": b["item_id"], "learner_answer": "O(1)",
                                     "verdict": "partial"})
 
     run(root, body)
@@ -184,7 +184,7 @@ def test_answer_key_normalised_match_only_upgrades(root):
 
 def test_short_mode_offers_stop(root):
     async def body(call):
-        out = await call("cortex_start", {"mode": "short"})
+        out = await call("keepfold_start", {"mode": "short"})
         assert "Offer to stop after 5 items." in out["next"]
 
     run(root, body)
@@ -209,10 +209,10 @@ def test_is_ready_predicate():
 @pytest.mark.parametrize("mode", ["capture", "reflect", "project"])
 def test_new_modes_start_with_hint_not_plan_and_allow_writes(root, mode):
     async def body(call):
-        out = await call("cortex_start", {"mode": mode})
+        out = await call("keepfold_start", {"mode": mode})
         assert out["mode"] == mode and out["today"] == [] and out["brief"] is not None
         assert "Today's plan" not in out["display"] and len(out["display"].splitlines()) == 2
-        assert "error" not in await call("cortex_log", {"kind": "journal",
+        assert "error" not in await call("keepfold_log", {"kind": "journal",
                                                          "payload": {"text": "hi"}})
 
     run(root, body)
@@ -222,10 +222,10 @@ def test_journal_only_session_is_a_change(root):
     end = {}
 
     async def body(call):
-        await call("cortex_start", {"mode": "log"})
+        await call("keepfold_start", {"mode": "log"})
         for t in ("one", "two"):
-            await call("cortex_log", {"kind": "journal", "payload": {"text": t}})
-        end.update(await call("cortex_end"))
+            await call("keepfold_log", {"kind": "journal", "payload": {"text": t}})
+        end.update(await call("keepfold_end"))
 
     run(root, body)
     assert "- journal line added ×2" in end["display"]
@@ -239,9 +239,9 @@ def test_log_next_gets_budget_hint_once(root, monkeypatch):
     monkeypatch.setattr(session_mod, "EVENT_BUDGET", 1)
 
     async def body(call):
-        await call("cortex_start", {"mode": "log"})
+        await call("keepfold_start", {"mode": "log"})
         pl = {"kind": "self_report", "payload": {"concept": "two-pointers", "verdict": "correct"}}
-        nexts = [(await call("cortex_log", pl))["next"] for _ in range(3)]
+        nexts = [(await call("keepfold_log", pl))["next"] for _ in range(3)]
         assert ["events" in n for n in nexts] == [False, True, False]
 
     run(root, body)

@@ -15,8 +15,8 @@ import pytest
 from conftest import note
 from test_chat import ALL_ON, TODAY, _turn, stream, vault  # noqa: F401  (fixtures)
 
-from cortex import ask, chat, semantic
-from cortex.vault import Vault
+from keepfold import ask, chat, semantic
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 OFF = {k: False for k in ALL_ON}
@@ -128,16 +128,16 @@ def test_a_range_with_nothing_is_answered_without_a_model(vault, monkeypatch, em
     cid, ev = _turn(vault, None, "car motor notes in March 2025", Refuse())
     kinds = [e["t"] for e in ev]
     assert kinds == ["start", "step", "tok", "src", "done"], ev
-    assert ev[0]["model"] == "Cortex" == ev[-1]["model"]
+    assert ev[0]["model"] == "Keepfold" == ev[-1]["model"]
     assert ev[1]["s"] == "Searching your notes and browsing from 1 Mar 2025 to 31 Mar 2025"
-    said = ("Cortex has nothing from 1 Mar 2025 to 31 Mar 2025. "
+    said = ("Keepfold has nothing from 1 Mar 2025 to 31 Mar 2025. "
             "Your data covers Nov 2026 – Nov 2026.")  # all of `vault` is from Nov 2026
     assert ev[2]["s"] == said
     src = ev[3]
     assert src["certainty"] == "none" and src["sources"] == [] == src["searched"]
     assert src["horizon"] == {"first": "2026-11", "last": "2026-11", "months": ["2026-11"]}
     saved = chat.load(vault, cid)[-1]
-    assert saved["text"] == said and saved["model"] == "Cortex"
+    assert saved["text"] == said and saved["model"] == "Keepfold"
     assert saved["certainty"] == "none" and saved["horizon"] == {"first": "2026-11",
                                                                  "last": "2026-11"}
 
@@ -145,9 +145,9 @@ def test_a_range_with_nothing_is_answered_without_a_model(vault, monkeypatch, em
 def test_a_gap_inside_the_data_says_only_what_is_missing(wide, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Refuse())
     _, ev = _turn(wide, None, "car motor notes in October 2025", Refuse())
-    assert ev[2]["s"] == "Cortex has nothing from 1 Oct 2025 to 31 Oct 2025."
+    assert ev[2]["s"] == "Keepfold has nothing from 1 Oct 2025 to 31 Oct 2025."
     _, ev = _turn(wide, None, "what car motor notes from 1 Oct 2023?", Refuse())
-    assert ev[2]["s"] == "Cortex has nothing on 1 Oct 2023. Your data covers Jan 2024 – Nov 2026."
+    assert ev[2]["s"] == "Keepfold has nothing on 1 Oct 2023. Your data covers Jan 2024 – Nov 2026."
 
 
 def test_a_follow_up_borrows_the_range_with_nothing(vault, stream, monkeypatch):
@@ -156,10 +156,10 @@ def test_a_follow_up_borrows_the_range_with_nothing(vault, stream, monkeypatch):
     assert ev[0]["model"] == "gemma3:2b"
     monkeypatch.setattr(semantic, "_embedder", Refuse())
     _, ev = _turn(vault, cid, "car motor in March 2025", Refuse())
-    assert ev[0]["model"] == "Cortex"
+    assert ev[0]["model"] == "Keepfold"
     _, ev = _turn(vault, cid, "and which of those was best?", Refuse())  # borrows March 2025
-    assert ev[0]["model"] == "Cortex" and ev[2]["s"].startswith(
-        "Cortex has nothing from 1 Mar 2025 to 31 Mar 2025.")
+    assert ev[0]["model"] == "Keepfold" and ev[2]["s"].startswith(
+        "Keepfold has nothing from 1 Mar 2025 to 31 Mar 2025.")
 
 
 @pytest.mark.parametrize("q", ["car motor notes in March 2025", "car motor in June 2025",
@@ -266,7 +266,7 @@ def test_certainty_of_each_answer(vault, stream, monkeypatch):
     assert ev[2]["s"] == chat.NO_ANSWER and ev[-2]["certainty"] == "none"
     assert "horizon" not in ev[-2]  # it could read nothing
     _, ev = _turn(vault, None, "what did I do on 16 Nov?", s.runner())  # the digest
-    assert ev[0]["model"] == "Cortex" and ev[-2]["certainty"] == "exact"
+    assert ev[0]["model"] == "Keepfold" and ev[-2]["certainty"] == "exact"
     assert "horizon" not in ev[-2]  # data answers count their own data
     _, ev = _turn(vault, None, "what did I do on 2 Nov?", s.runner())
     assert ev[-2]["certainty"] == "none"  # an empty digest

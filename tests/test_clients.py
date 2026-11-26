@@ -1,12 +1,12 @@
-"""Claude desktop config discovery per OS and the shared writer of the cortex entry."""
+"""Claude desktop config discovery per OS and the shared writer of the keepfold entry."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from cortex import clients, doctor
-from cortex.app import targets
+from keepfold import clients, doctor
+from keepfold.app import targets
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -53,7 +53,7 @@ def test_desktop_writer_keeps_keys_backs_up_and_is_idempotent(tmp_path):
     path.write_text(json.dumps(old), encoding="utf-8")
     (tmp_path / (CFG + ".bak")).write_text("mine", encoding="utf-8")
     vault = tmp_path / "My Vault"
-    entry = clients.server_entry(clients.cortex_command(), vault)
+    entry = clients.server_entry(clients.keepfold_command(), vault)
     assert Path(entry["command"]).is_absolute()
     assert entry["args"] == ["mcp", "--vault", str(vault)]
 
@@ -62,16 +62,16 @@ def test_desktop_writer_keeps_keys_backs_up_and_is_idempotent(tmp_path):
     assert targets.edit_json(path, "mcpServers", entry) == "add"
     got = json.loads(path.read_text(encoding="utf-8"))
     assert got["theme"] == "dark" and got["mcpServers"]["other"] == {"command": "x"}
-    assert got["mcpServers"]["cortex"] == entry
+    assert got["mcpServers"]["keepfold"] == entry
     assert (tmp_path / (CFG + ".bak")).read_text(encoding="utf-8") == "mine"
-    baks = list(tmp_path.glob(CFG + ".cortex-*.bak"))
+    baks = list(tmp_path.glob(CFG + ".keepfold-*.bak"))
     assert [json.loads(b.read_text(encoding="utf-8")) for b in baks] == [old]
     before = path.read_bytes()
     assert targets.edit_json(path, "mcpServers", entry) == "none"
     assert path.read_bytes() == before
     assert not list(tmp_path.glob("*.tmp"))
-    # doctor sees the merged entry as a Cortex server
-    assert doctor._is_cortex_server(got["mcpServers"]["cortex"])
+    # doctor sees the merged entry as a Keepfold server
+    assert doctor._is_keepfold_server(got["mcpServers"]["keepfold"])
 
 
 def test_setup_targets_prefers_existing_configs(tmp_path):
@@ -88,11 +88,12 @@ def test_setup_targets_prefers_existing_configs(tmp_path):
 def test_desktop_writer_accepts_a_bom(tmp_path):  # Notepad / PowerShell 5.1 "UTF-8"
     path = tmp_path / CFG
     path.write_text('{"mcpServers": {"other": {"command": "x"}}}', encoding="utf-8-sig")
-    entry = clients.server_entry("/abs/cortex", tmp_path)
+    entry = clients.server_entry("/abs/keepfold", tmp_path)
     assert targets.edit_json(path, "mcpServers", entry) == "add"
     assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
-    assert json.loads(path.read_text(encoding="utf-8"))["mcpServers"].keys() == {"other", "cortex"}
-    assert doctor._read_json(path)["mcpServers"]["cortex"] == entry
+    servers = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+    assert servers.keys() == {"other", "keepfold"}
+    assert doctor._read_json(path)["mcpServers"]["keepfold"] == entry
 
 
 def _busy_replace(monkeypatch, fails: int | None):

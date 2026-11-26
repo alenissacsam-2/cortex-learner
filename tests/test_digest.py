@@ -1,4 +1,4 @@
-"""`cortex digest` (council item 9): new imported chats since the last digest, mapped to
+"""`keepfold digest` (council item 9): new imported chats since the last digest, mapped to
 concepts by local search, written only on the student's yes, as touches plus a marker."""
 
 import json
@@ -7,11 +7,11 @@ import pytest
 from conftest import events
 from typer.testing import CliRunner
 
-from cortex import digest, planner
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.index import Index
-from cortex.vault import Vault
+from keepfold import digest, planner
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.index import Index
+from keepfold.vault import Vault
 
 runner = CliRunner()
 UUID = "6700aaaa-1111-2222-3333-44445555{:04d}"
@@ -19,8 +19,8 @@ UUID = "6700aaaa-1111-2222-3333-44445555{:04d}"
 
 @pytest.fixture
 def export(tmp_path, monkeypatch):
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(tmp_path / "projects"))
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(tmp_path / "exported"))
     return tmp_path
 
 

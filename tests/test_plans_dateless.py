@@ -7,11 +7,11 @@ from datetime import UTC, date, datetime, timedelta
 from conftest import run
 from typer.testing import CliRunner
 
-from cortex import dashboard, events, planner
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import dashboard, events, planner
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 DAY_WORDS = re.compile(r"\bDay \d|Sprint day|\bbehind\b|overdue|\b\d+ of \d+ days\b", re.I)
 ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -78,8 +78,8 @@ def test_switching_subjects_puts_the_latest_first_with_no_dates_or_pressure(root
     seen = {"cli": out.output, "today_md": md}
 
     async def body(call):
-        seen["card"] = (await call("cortex_start", {"mode": "learn"}))["display"]
-        seen["short"] = (await call("cortex_start", {"mode": "short"}))["display"]
+        seen["card"] = (await call("keepfold_start", {"mode": "learn"}))["display"]
+        seen["short"] = (await call("keepfold_start", {"mode": "short"}))["display"]
 
     run(root, body)
     data = dashboard.build_data(v, now=now)
@@ -116,7 +116,7 @@ def test_an_old_tracks_placement_date_stays_as_a_deadline_beside_exams(root, hom
     seen = {}
 
     async def body(call):
-        seen["card"] = (await call("cortex_start", {"mode": "learn"}))["display"]
+        seen["card"] = (await call("keepfold_start", {"mode": "learn"}))["display"]
 
     run(root, body)
     assert "- Test sprint: 9 days left" in md.splitlines()

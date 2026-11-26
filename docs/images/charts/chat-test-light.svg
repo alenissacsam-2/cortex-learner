@@ -2,7 +2,7 @@
 <title id="t">The 40-question Chat test, with no model</title>
 <desc id="d">Stacked bar chart by the kind of search a question needs. An exact name: 3 pass, 0 fail, 4 need a local model; Plain words: 8 pass, 0 fail, 5 need a local model; Other words: 0 pass, 0 fail, 5 need a local model; Several pages: 0 pass, 0 fail, 4 need a local model; A changed history: 0 pass, 0 fail, 4 need a local model; An outdated fact: 0 pass, 0 fail, 2 need a local model; Nothing to find: 3 pass, 0 fail, 2 need a local model</desc>
 <text x="0.0" y="20.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">The 40-question Chat test, with no model</text>
-<text x="0.0" y="40.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">14 of 14 questions Cortex answers from its own data passed; 26 need a local model</text>
+<text x="0.0" y="40.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">14 of 14 questions Keepfold answers from its own data passed; 26 need a local model</text>
 <rect x="0" y="56" width="12" height="12" rx="2" fill="#2a78d6"/>
 <text x="18.0" y="66.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="400">Pass</text>
 <rect x="62" y="56" width="12" height="12" rx="2" fill="#eb6834"/>

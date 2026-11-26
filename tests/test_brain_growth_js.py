@@ -1,4 +1,4 @@
-"""The growth moment's rules in brain3d.js (`CortexBrain.GROWTH`), run under node: which pages
+"""The growth moment's rules in brain3d.js (`KeepfoldBrain.GROWTH`), run under node: which pages
 count as new against the viewer's `seenAt`, a storage that fails, hidden pages never counted,
 the label text. The moment itself and Today are driven in a real browser by
 test_dashboard_js.py. Skipped without node."""
@@ -9,14 +9,14 @@ import subprocess
 
 import pytest
 
-from cortex import dashboard
+from keepfold import dashboard
 
 BRAIN_JS = dashboard.ASSETS / "brain3d.js"
 
 HARNESS = r"""
 globalThis.window = globalThis;
 require(process.argv[2]);
-const G = window.CortexBrain.GROWTH, out = {};
+const G = window.KeepfoldBrain.GROWTH, out = {};
 const added = { a: '2026-11-20T09:00:00.000Z', b: '2026-11-20T10:00:00.000Z',
   c: '2026-11-20T11:00:00.000Z', d: 7 };
 out.first = G.pending(added, null, null, 'NOW');

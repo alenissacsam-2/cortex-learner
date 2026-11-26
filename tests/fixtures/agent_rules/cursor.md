@@ -1,9 +1,9 @@
 ---
-description: About me, from Cortex
+description: About me, from Keepfold
 alwaysApply: true
 ---
 
-<!-- cortex:start (added by the Cortex app; it removes this block) -->
-## Cortex
-Call cortex_prime(prompt=<the user's message>) first when the cortex MCP tools are available.
-<!-- cortex:end -->
+<!-- keepfold:start (added by the Keepfold app; it removes this block) -->
+## Keepfold
+Call keepfold_prime(prompt=<the user's message>) first when the keepfold MCP tools are available.
+<!-- keepfold:end -->

@@ -1,4 +1,4 @@
-"""`cortex doctor --security` (cortex.redteam): the six probes PASS on this code, and each one
+"""`keepfold doctor --security` (keepfold.redteam): the six probes PASS on this code, and each one
 really detects its hole: with the one guard it depends on turned off, that probe and only that
 probe FAILs. The run builds its own made-up vaults in a temp folder it deletes."""
 
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cortex import claims, cli, dashboard, forget, prime, redteam, review, tags, vecstore
-from cortex.browse import store
+from keepfold import claims, cli, dashboard, forget, prime, redteam, review, tags, vecstore
+from keepfold.browse import store
 
 IDS = [p[0] for p in redteam.PROBES]
 

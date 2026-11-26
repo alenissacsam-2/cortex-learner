@@ -10,22 +10,22 @@ import time
 import pytest
 from conftest import git
 
-from cortex import session as session_mod
-from cortex import vault as vault_mod
-from cortex.vault import Vault
+from keepfold import session as session_mod
+from keepfold import vault as vault_mod
+from keepfold.vault import Vault
 
-# Runs `cortex <argv1>` as the console script does and reports, even past prime-hook's
-# os._exit, every top-level third-party module and every cortex module it imported.
+# Runs `keepfold <argv1>` as the console script does and reports, even past prime-hook's
+# os._exit, every top-level third-party module and every keepfold module it imported.
 PROBE = """
 import json, os, sys
 real_exit = os._exit
 def report():
     third = sorted({m.split('.')[0] for m in sys.modules} - set(sys.stdlib_module_names))
-    mine = sorted(m for m in sys.modules if m.startswith('cortex'))
-    sys.stderr.write('\\nIMPORTS ' + json.dumps({'third': third, 'cortex': mine}) + '\\n')
+    mine = sorted(m for m in sys.modules if m.startswith('keepfold'))
+    sys.stderr.write('\\nIMPORTS ' + json.dumps({'third': third, 'keepfold': mine}) + '\\n')
 os._exit = lambda c: (report(), real_exit(c))
-sys.argv = ['cortex', sys.argv[1]]
-from cortex import taint
+sys.argv = ['keepfold', sys.argv[1]]
+from keepfold import taint
 taint.main()
 report()
 """
@@ -33,7 +33,7 @@ report()
 # import ruamel (taint.config reads the pointer with it; r1-systems P2) and the prime path
 # imports fsrs; those are allowed here until P2 lands.
 HEAVY = {"mcp", "numpy", "fastembed", "onnxruntime", "typer", "tokenizers"}
-HEAVY_CORTEX = {"cortex.mcp_server", "cortex.semantic", "cortex.cli"}
+HEAVY_KEEPFOLD = {"keepfold.mcp_server", "keepfold.semantic", "keepfold.cli"}
 
 
 @pytest.fixture
@@ -49,13 +49,13 @@ def root(root_committed):
 def test_hook_import_budget(root, cmd, payload):
     r = subprocess.run([sys.executable, "-c", PROBE, cmd], input=json.dumps(payload),
                        capture_output=True, text=True, encoding="utf-8", timeout=120,
-                       env={**os.environ, "CORTEX_VAULT": str(root)})
+                       env={**os.environ, "KEEPFOLD_VAULT": str(root)})
     line = next(x for x in r.stderr.splitlines() if x.startswith("IMPORTS "))
     got = json.loads(line.removeprefix("IMPORTS "))
     # the path really ran: prime loaded its module, taint reached the vault write
-    assert {"prime-hook": "cortex.prime_hook", "taint": "cortex.vault"}[cmd] in got["cortex"]
+    assert {"prime-hook": "keepfold.prime_hook", "taint": "keepfold.vault"}[cmd] in got["keepfold"]
     assert not HEAVY & set(got["third"]), got["third"]
-    assert not HEAVY_CORTEX & set(got["cortex"]), got["cortex"]
+    assert not HEAVY_KEEPFOLD & set(got["keepfold"]), got["keepfold"]
 
 
 def test_a_tagged_prompt_saves_without_the_sdk(root):
@@ -65,12 +65,12 @@ def test_a_tagged_prompt_saves_without_the_sdk(root):
                "prompt": "Explain heaps\n//pref: Replies in British English"}
     r = subprocess.run([sys.executable, "-c", PROBE, "prime-hook"], input=json.dumps(payload),
                        capture_output=True, text=True, encoding="utf-8", timeout=120,
-                       env={**os.environ, "CORTEX_VAULT": str(root)})
+                       env={**os.environ, "KEEPFOLD_VAULT": str(root)})
     line = next(x for x in r.stderr.splitlines() if x.startswith("IMPORTS "))
     got = json.loads(line.removeprefix("IMPORTS "))
-    assert "cortex.mcp_server" in got["cortex"] and "Cortex saved" in r.stdout
+    assert "keepfold.mcp_server" in got["keepfold"] and "Keepfold saved" in r.stdout
     assert not HEAVY & set(got["third"]), got["third"]
-    assert "cortex.semantic" not in got["cortex"]
+    assert "keepfold.semantic" not in got["keepfold"]
 
 
 # No slow marker in this repo, so the vault stays small enough for a ~10 s test. Since close
@@ -97,7 +97,7 @@ def test_close_budget(root, monkeypatch):
     mgr.start("learn")
     mgr.note("logged")  # a learning log, so the close is the full (not the quiet) pipeline
     # Windows' virus scan holds the first open of each new file (~6 ms each, half the time
-    # here); read each once so the bound times Cortex, not the scanner. Real pages are old.
+    # here); read each once so the bound times Keepfold, not the scanner. Real pages are old.
     for p in root.rglob("*.md"):
         p.read_bytes()
     monkeypatch.setattr(vault_mod, "_PARSED", {})  # a cold parse, as in the SessionEnd sweep

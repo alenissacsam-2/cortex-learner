@@ -8,12 +8,12 @@ import pytest
 from mcp import Client
 from typer.testing import CliRunner
 
-from cortex.cli import app
-from cortex.dashboard import write_index
-from cortex.lint import lint_report
-from cortex.mcp_server import build_server
-from cortex.session import SessionManager
-from cortex.vault import Vault
+from keepfold.cli import app
+from keepfold.dashboard import write_index
+from keepfold.lint import lint_report
+from keepfold.mcp_server import build_server
+from keepfold.session import SessionManager
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -63,7 +63,7 @@ def test_log_md_appends_across_closes(root):
     close_session(root, 0)
     first = (root / "log.md").read_text(encoding="utf-8")
     assert first.endswith("## [2026-11-13] session | learn, 0 changes\n")
-    assert not (root / "index.md").exists()  # built on demand by `cortex dashboard`, not close
+    assert not (root / "index.md").exists()  # built on demand by `keepfold dashboard`, not close
     close_session(root, 60)
     second = (root / "log.md").read_text(encoding="utf-8")
     assert second.startswith(first) and second.count("] session |") == 2
@@ -87,13 +87,13 @@ def test_capture_log_line_and_validation(root):
     note(root, "resources", "clrs", 'title: "CLRS"\ncovers: []\n')
 
     async def body(call):
-        r = await call("cortex_log", {"kind": "capture", "payload": {
+        r = await call("keepfold_log", {"kind": "capture", "payload": {
             "resource": "clrs", "pages": ["two-pointers", "arrays-basics"]}})
         assert r["recorded"] == 1
-        bad = await call("cortex_log", {"kind": "capture", "payload": {
+        bad = await call("keepfold_log", {"kind": "capture", "payload": {
             "resource": "clrs", "pages": "nope"}})
         assert bad["error"] == "invalid_argument"
-        gone = await call("cortex_log", {"kind": "capture", "payload": {
+        gone = await call("keepfold_log", {"kind": "capture", "payload": {
             "resource": "nothere", "pages": []}})
         assert gone["error"] == "unknown_id"
 
@@ -145,7 +145,7 @@ def test_lint_cap_and_tool_and_cli(root):
     assert len(lint_report(Vault(root))[0]) == 30
 
     async def body(call):
-        r = await call("cortex_reflect", {"action": "lint"})
+        r = await call("keepfold_reflect", {"action": "lint"})
         assert len(r["findings"]) == 30 and {"kind", "id", "detail"} == set(r["findings"][0])
 
     mcp(root, body)
@@ -187,7 +187,7 @@ def test_lint_unlinked_mention(root):
 
 
 def test_lint_severity_order_caps_and_totals(root):
-    from cortex.lint import lint_report, not_shown
+    from keepfold.lint import lint_report, not_shown
 
     for i in range(40):  # 40 unlinked mentions, written before the broken link in vault order
         note(root, "notes", f"a{i:02d}", 'title: "A"\nrelated: ["[[arrays-basics]]"]\n',
@@ -203,7 +203,7 @@ def test_lint_severity_order_caps_and_totals(root):
     assert "30 more unlinked_mention" in not_shown(f, totals)
 
     async def body(call):
-        r = await call("cortex_reflect", {"action": "lint"})
+        r = await call("keepfold_reflect", {"action": "lint"})
         assert r["totals"]["unlinked_mention"] == 40 and "30 more unlinked_mention" in r["next"]
 
     mcp(root, body)
@@ -223,7 +223,7 @@ def test_lint_permanent_needs_summary_and_link_reasons(root):
 
 
 def test_lint_body_links_skip_code():
-    from cortex.lint import _out_edges
+    from keepfold.lint import _out_edges
     body = ("real [[a|x]] and `[[1,2]]`\n```cpp\nv[[3]];\n```\n~~~\n[[4]]\n~~~\n"
             "[[people/b#h]]\n")
     assert _out_edges({}, body) == (set(), {"a", "b"})
@@ -246,7 +246,7 @@ def test_lint_skips_imported_pages(root):
 
 def test_lint_weak_summary(root):
     """RR-26: a summary under 30 characters or one that mostly repeats the title."""
-    from cortex.lint import weak_summary
+    from keepfold.lint import weak_summary
 
     assert weak_summary({"title": "Two pointers", "summary": "x"}).startswith("summary is under")
     assert weak_summary({"title": "Graph walks in BFS order",
@@ -264,7 +264,7 @@ def test_lint_weak_summary(root):
 def test_lint_findability_reports_and_never_writes(root):
     """RR-26: a page whose own second-chunk words rank it below the top 3 is reported;
     keyword only with no model; nothing is written."""
-    from cortex.lint import findability
+    from keepfold.lint import findability
 
     words = "zeta eta theta iota kappa "
     note(root, "notes", "lost", 'title: "Lost page"\n', words * 80)

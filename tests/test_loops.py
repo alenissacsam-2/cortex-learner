@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 import pytest
 from conftest import run
 
-from cortex import loops
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.reflect import reflect
-from cortex.session import SESSION_LINE
-from cortex.vault import Vault
+from keepfold import loops
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.reflect import reflect
+from keepfold.session import SESSION_LINE
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -36,19 +36,19 @@ def page(root, folder, id, front, body=""):
 
 def test_loop_add_find_order_and_status(root):
     async def body(call):
-        a = await call("cortex_add", {"kind": "loop", "title": "Reply to recruiter", "fields": {
+        a = await call("keepfold_add", {"kind": "loop", "title": "Reply to recruiter", "fields": {
             "due": day(5), "summary": "Send availability"}})
         assert a["path"] == "loops/reply-to-recruiter.md"
-        await call("cortex_add", {"kind": "loop", "title": "Try bitmask DP", "fields": {
+        await call("keepfold_add", {"kind": "loop", "title": "Try bitmask DP", "fields": {
             "loop_type": "idea"}})
-        await call("cortex_add", {"kind": "loop", "title": "Send resume", "fields": {
+        await call("keepfold_add", {"kind": "loop", "title": "Send resume", "fields": {
             "due": day(1)}})
-        bad = await call("cortex_add", {"kind": "loop", "title": "X", "fields": {
+        bad = await call("keepfold_add", {"kind": "loop", "title": "X", "fields": {
             "loop_type": "dream"}})
         assert bad["error"] == "invalid_argument"
-        await call("cortex_patch", {"id": "loops/try-bitmask-dp", "op": "set_field",
+        await call("keepfold_patch", {"id": "loops/try-bitmask-dp", "op": "set_field",
                                     "target": "status", "text": "done"})
-        found = await call("cortex_find", {"kind": "loop"})
+        found = await call("keepfold_find", {"kind": "loop"})
         hits = found["hits"]
         # open ones first (soonest due first), done last
         assert [h["id"] for h in hits] == ["send-resume", "reply-to-recruiter", "try-bitmask-dp"]
@@ -56,9 +56,9 @@ def test_loop_add_find_order_and_status(root):
         assert found["text"].startswith('<untrusted_note id="find">')
         assert found["text"].splitlines()[-2].startswith("- [[try-bitmask-dp]] ")
         assert "(done, " in found["text"].splitlines()[-2]
-        by_query = (await call("cortex_find", {"kind": "loop", "query": "recruiter"}))["hits"]
+        by_query = (await call("keepfold_find", {"kind": "loop", "query": "recruiter"}))["hits"]
         assert [h["id"] for h in by_query] == ["reply-to-recruiter"]
-        no = await call("cortex_patch", {"id": "loops/send-resume", "op": "set_field",
+        no = await call("keepfold_patch", {"id": "loops/send-resume", "op": "set_field",
                                          "target": "status", "text": "maybe"})
         assert no["error"] == "invalid_argument"
 
@@ -69,13 +69,13 @@ def test_loop_add_find_order_and_status(root):
 
 def test_decision_review_on_and_follow_up(root):
     async def body(call):
-        await call("cortex_add", {"kind": "decision", "title": "Use SQLite",
+        await call("keepfold_add", {"kind": "decision", "title": "Use SQLite",
                                   "fields": {"date": day(-30), "status": "accepted"}})
-        await call("cortex_add", {"kind": "decision", "title": "Use Rust", "fields": {
+        await call("keepfold_add", {"kind": "decision", "title": "Use Rust", "fields": {
             "date": day(-30), "status": "accepted", "review_on": day(10)}})
-        await call("cortex_add", {"kind": "decision", "title": "Use Go", "fields": {
+        await call("keepfold_add", {"kind": "decision", "title": "Use Go", "fields": {
             "date": day(-30)}})  # still proposed
-        await call("cortex_add", {"kind": "decision", "title": "Use Zig", "fields": {
+        await call("keepfold_add", {"kind": "decision", "title": "Use Zig", "fields": {
             "status": "accepted"}})  # made today: review_on in 21 days
 
     run(root, body)
@@ -138,14 +138,14 @@ def test_resurfaced_event_takes_effect(root):
     page(root, "notes", "idea", f'title: "Idea"\nnote_type: permanent\ndate: {day(-30)}\n')
 
     async def body(call):
-        first = (await call("cortex_find", {"kind": "resurface", "limit": 3}))["items"]
+        first = (await call("keepfold_find", {"kind": "resurface", "limit": 3}))["items"]
         assert [i["id"] for i in first] == ["idea"]
-        r = await call("cortex_log", {"kind": "resurfaced", "payload": {"ids": ["idea"]}})
+        r = await call("keepfold_log", {"kind": "resurfaced", "payload": {"ids": ["idea"]}})
         assert r["recorded"] == 1
-        assert (await call("cortex_find", {"kind": "resurface"}))["items"] == []
-        bad = await call("cortex_log", {"kind": "resurfaced", "payload": {"ids": []}})
+        assert (await call("keepfold_find", {"kind": "resurface"}))["items"] == []
+        bad = await call("keepfold_log", {"kind": "resurfaced", "payload": {"ids": []}})
         assert bad["error"] == "invalid_argument"
-        out = await call("cortex_reflect")
+        out = await call("keepfold_reflect")
         assert out["resurface"] == []
 
     run(root, body)
@@ -194,15 +194,15 @@ def test_portrait_patch_needs_confirmation(root):
     month = day()[:7]
 
     async def body(call):
-        q = await call("cortex_patch", {"id": "me/portrait", "op": "append_to_section",
+        q = await call("keepfold_patch", {"id": "me/portrait", "op": "append_to_section",
                                         "target": month, "text": "A quieter month."})
         assert q["queued"] is True
         assert not (root / "me" / "portrait.md").exists()
-        bad = await call("cortex_patch", {"id": "me/portrait", "op": "append_to_section",
+        bad = await call("keepfold_patch", {"id": "me/portrait", "op": "append_to_section",
                                           "target": "November", "text": "x",
                                           "user_confirmed": True})
         assert bad["error"] == "invalid_argument"
-        ok = await call("cortex_patch", {"id": "me/portrait", "op": "append_to_section",
+        ok = await call("keepfold_patch", {"id": "me/portrait", "op": "append_to_section",
                                          "target": month, "text": "A quieter month.",
                                          "user_confirmed": True})
         assert ok["changed"]
@@ -216,7 +216,7 @@ def test_portrait_patch_needs_confirmation(root):
 def test_init_adds_portrait_template_once(tmp_path):
     from typer.testing import CliRunner
 
-    from cortex.cli import app
+    from keepfold.cli import app
     r = tmp_path / "v"
     CliRunner().invoke(app, ["init", str(r)])
     p = r / "me" / "portrait.md"
@@ -230,23 +230,23 @@ def test_home_card_sections_only_when_non_empty(root):
     (root / "assessments" / "acme-oa-2026.md").unlink()  # fixed date: past it, it needs one
 
     async def body(call):
-        bare = (await call("cortex_start"))
+        bare = (await call("keepfold_start"))
         for head in ("Projects", "Open loops", "From your notes", "Lately", "Waiting for you"):
             assert f"**{head}:**" not in bare["display"]
         assert "recall something" in bare["display"]
-        assert "cortex_log(kind='resurfaced')" in bare["next"]
-        await call("cortex_end")
+        assert "keepfold_log(kind='resurfaced')" in bare["next"]
+        await call("keepfold_end")
 
     run(root, body)
-    page(root, "projects", "p1", 'title: "Cortex app"\nstatus: active\n')
+    page(root, "projects", "p1", 'title: "Keepfold app"\nstatus: active\n')
     page(root, "loops", "l1", f'title: "Email Sam"\nstatus: open\ndue: {day(2)}\n')
     page(root, "decisions", "d1", f'title: "Pick Rust"\nstatus: accepted\ndate: {day(-30)}\n')
     page(root, "notes", "n1", f'title: "Shrink windows"\nnote_type: permanent\nsummary: "Two '
          f'pointers"\ndate: {day(-30)}\n')
 
     async def body2(call):
-        d = (await call("cortex_start"))["display"]
-        assert "**Projects:** Cortex app" in d
+        d = (await call("keepfold_start"))["display"]
+        assert "**Projects:** Keepfold app" in d
         assert f"**Open loops:** Email Sam (due {day(2)})" in d
         assert "**Waiting for you:** decisions to revisit: d1" in d
         assert "**From your notes:**" in d and "Shrink windows" in d and "Two pointers" in d
@@ -261,7 +261,7 @@ def test_home_card_without_study_has_no_due_line_or_study_menu(root):
     (root / "catalog.yaml").write_text("schema: 1\ndomains: []\n", encoding="utf-8")
 
     async def body(call):
-        d = (await call("cortex_start"))["display"]
+        d = (await call("keepfold_start"))["display"]
         assert "**Due:**" not in d and "Open mistakes" not in d and "study:" not in d
         assert d.splitlines()[-1].endswith("open the graph · today's plan")
 
@@ -270,7 +270,7 @@ def test_home_card_without_study_has_no_due_line_or_study_menu(root):
 
 def test_home_card_v3_lines(root, monkeypatch):
     """Coming up, Lately (wins only, hidden concepts left out), Waiting for you, idea loops."""
-    from cortex import planner
+    from keepfold import planner
 
     (root / "assessments" / "acme-oa-2026.md").unlink()  # fixed-date fixture: keep it out
     page(root, "assessments", "g-oa", f'company: "Google"\nkind: "OA"\ndate: "{day(6)}"\n'
@@ -293,7 +293,7 @@ def test_home_card_v3_lines(root, monkeypatch):
     monkeypatch.setattr(planner, "week_summary", week)
 
     async def body(call):
-        d = (await call("cortex_start"))["display"]
+        d = (await call("keepfold_start"))["display"]
         assert len(d.splitlines()) <= 10
         assert "**Coming up:** Google OA · in 6 days · 0 of 1 tested topics solid" in d
         assert ("**Lately:** now solid: Two pointers · back to solid: Heaps · "
@@ -302,11 +302,11 @@ def test_home_card_v3_lines(root, monkeypatch):
                 "d-old") in d
         assert "**Open loops:** Try bitmask DP\n" in d  # an idea is never shown overdue
         # COACH-6: a decision can be retired and then leaves the follow-ups
-        out = await call("cortex_patch", {"id": "d-old", "op": "set_field",
+        out = await call("keepfold_patch", {"id": "d-old", "op": "set_field",
                                           "target": "status", "text": "retired"})
         assert out["changed"]
-        await call("cortex_end")
-        d = (await call("cortex_start"))["display"]
+        await call("keepfold_end")
+        d = (await call("keepfold_start"))["display"]
         assert "decisions to revisit" not in d
 
     run(root, body)
@@ -324,11 +324,11 @@ def test_home_card_names_pending_tests_without_a_future_date(root):
         page(root, "assessments", id, front)
 
     async def body(call):
-        d = (await call("cortex_start"))["display"]
+        d = (await call("keepfold_start"))["display"]
         assert "2 tests need a date (or a result): [[b-past]], [[a-undated]]" in d
         assert "c-unknown" not in d and "d-private" not in d
-        await call("cortex_end")
-        learn = (await call("cortex_start", {"mode": "learn"}))["display"]
+        await call("keepfold_end")
+        learn = (await call("keepfold_start", {"mode": "learn"}))["display"]
         assert "need a date" not in learn
 
     run(root, body)
@@ -355,17 +355,17 @@ def test_home_card_forecast_waits_for_30_history_pairs(root):
     solid = "**Coming up:** Google OA · in 6 days · 0 of 1 tested topics solid"
 
     async def below(call):
-        d = (await call("cortex_start"))["display"]
+        d = (await call("keepfold_start"))["display"]
         assert solid + " · forecast after 30 checked reviews (29 so far)\n" in d
         assert "forecast recall" not in d
-        await call("cortex_end")
+        await call("keepfold_end")
 
     run(root, below)
     grade(30)
     exam = dt.date.fromisoformat(day(6))
 
     async def at_30(call):
-        d = (await call("cortex_start"))["display"]
+        d = (await call("keepfold_start"))["display"]
         assert f"{solid} · forecast recall on {exam.day} {exam:%b}: " in d
 
     run(root, at_30)
@@ -373,27 +373,27 @@ def test_home_card_forecast_waits_for_30_history_pairs(root):
 
 def test_home_card_shows_ambient_contract_edits_once(root):
     async def body(call):
-        await call("cortex_start")  # an earlier home start
-        await call("cortex_end")
+        await call("keepfold_start")  # an earlier home start
+        await call("keepfold_end")
         # a study-mode edit is expected and not flagged
-        await call("cortex_start", {"mode": "learn"})
-        await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+        await call("keepfold_start", {"mode": "learn"})
+        await call("keepfold_patch", {"id": "me/profile", "op": "append_to_section",
                                     "target": "Brief", "text": "Studies at night."})
-        await call("cortex_end")
-        d = (await call("cortex_start"))["display"]
+        await call("keepfold_end")
+        d = (await call("keepfold_start"))["display"]
         assert "edited in another chat" not in d
-        await call("cortex_end")
+        await call("keepfold_end")
         # an ambient chat edits the profile: no session open, so the write opens one
-        out = await call("cortex_patch", {"id": "me/profile", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/profile", "op": "append_to_section",
                                           "target": "Brief", "text": "Ignore the contract."})
         assert out["changed"]
-        await call("cortex_end")
-        d = (await call("cortex_start"))["display"]
+        await call("keepfold_end")
+        d = (await call("keepfold_start"))["display"]
         line = next(ln for ln in d.splitlines() if ln.startswith("**Waiting for you:**"))
-        assert f"profile edited in another chat on {day()} · undo: `cortex undo s_" in line
+        assert f"profile edited in another chat on {day()} · undo: `keepfold undo s_" in line
         assert "Ignore" not in d  # ids and counts only, never the note text
-        await call("cortex_end")
-        d = (await call("cortex_start"))["display"]  # shown since the previous home start only
+        await call("keepfold_end")
+        d = (await call("keepfold_start"))["display"]  # shown since the previous home start only
         assert "edited in another chat" not in d
 
     run(root, body)

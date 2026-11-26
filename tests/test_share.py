@@ -1,12 +1,12 @@
 """v5 PHASE4 V5: share tiers. (me/delegation.md, the delegate role, was removed on 20 Nov 2026:
-`cortex init` no longer writes it.)"""
+`keepfold init` no longer writes it.)"""
 
 import pytest
 from typer.testing import CliRunner
 
-from cortex import people, share
-from cortex.cli import app
-from cortex.vault import Vault
+from keepfold import people, share
+from keepfold.cli import app
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 

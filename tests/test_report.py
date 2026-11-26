@@ -1,5 +1,5 @@
 """Report a problem: the issue forms, the redaction helper, the text Status's Copy details and
-`cortex doctor --report` share (no paths, user name or notes), its GET route and the Status
+`keepfold doctor --report` share (no paths, user name or notes), its GET route and the Status
 board's two buttons (app.js under node)."""
 
 import json
@@ -11,9 +11,9 @@ import yaml
 from test_app_js import HARNESS, _run, _sweep_routes
 from typer.testing import CliRunner
 
-from cortex import localllm, update
-from cortex.app import actions, server, status, targets
-from cortex.cli import app as cli
+from keepfold import localllm, update
+from keepfold.app import actions, server, status, targets
+from keepfold.cli import app as cli
 
 ROOT = Path(__file__).parent.parent
 FORMS = ROOT / ".github" / "ISSUE_TEMPLATE"
@@ -64,7 +64,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "Users" / USER
     vault = home / "My Notes"
     shutil.copytree(Path(__file__).parent / "fixtures" / "vault_mini", vault)
-    (vault / ".cortex").mkdir(exist_ok=True)
+    (vault / ".keepfold").mkdir(exist_ok=True)
     for var in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(var, str(home))
     monkeypatch.setenv("USERNAME", USER)
@@ -108,7 +108,7 @@ def test_report_holds_no_path_user_name_or_notes(fake_home):
     for n in notes:
         words = [w for w in n.split() if len(w) > 8 and w.isalpha()]
         assert not any(w in out for w in words[:20])
-    assert out.startswith(f"Cortex {update.current()} (")
+    assert out.startswith(f"Keepfold {update.current()} (")
     assert "Status:\n- Vault: Ready" in out and "- Local model: off" in out
     assert "Optional parts:" in out and "Browsing import: no" in out
     assert "Python 3." in out
@@ -124,19 +124,19 @@ def test_report_survives_missing_rows(fake_home, monkeypatch):
 
 
 def test_status_warns_when_an_ai_app_names_the_old_vault(fake_home, monkeypatch):
-    """FX4: an app's Cortex entry still names the old vault folder (stale): the AI apps row
+    """FX4: an app's Keepfold entry still names the old vault folder (stale): the AI apps row
     warns and opens Connect, and the report says it needs attention."""
-    from cortex import clients
+    from keepfold import clients
     home, vault = fake_home
-    monkeypatch.setattr(clients, "mcp_command", lambda: "cortex")
+    monkeypatch.setattr(clients, "mcp_command", lambda: "keepfold")
     (home / ".codeium/windsurf").mkdir(parents=True)
-    targets.apply_all({"windsurf": True}, clients.server_entry("cortex", home / "old vault"))
+    targets.apply_all({"windsurf": True}, clients.server_entry("keepfold", home / "old vault"))
     apps = next(r for r in status.rows(vault) if r["id"] == "apps")
     assert apps["state"] == "warn" and apps["action"] == {"go": "connect", "label": "Open"}
     assert apps["detail"] == ("An AI app still uses your old vault folder. Open Connect AI apps "
                               "and click Apply.")
     assert "- AI apps: Needs attention" in status.report(vault)
-    targets.apply_all({"windsurf": True}, clients.server_entry("cortex", vault))
+    targets.apply_all({"windsurf": True}, clients.server_entry("keepfold", vault))
     status.forget()
     assert next(r for r in status.rows(vault) if r["id"] == "apps")["state"] == "ok"
 
@@ -206,7 +206,7 @@ def test_status_board_copies_the_servers_text_and_links_the_issue_form(root_comm
     if node is None:
         pytest.skip("node is not installed")
     routes = _sweep_routes(root_committed, monkeypatch)
-    routes["/api/status/report"] = {"text": "Cortex 9.9.9 (uv)\nStatus:\n- Vault: Ready"}
+    routes["/api/status/report"] = {"text": "Keepfold 9.9.9 (uv)\nStatus:\n- Vault: Ready"}
     out = _run(node, tmp_path, "report", BOARD, {"routes": routes, "stream": []})
     assert out["errors"] == [] and out["sinks"] == [], out["errors"]
     assert out["board"] and out["copyLabel"] == "Copy details"

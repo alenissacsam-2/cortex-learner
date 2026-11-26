@@ -1,4 +1,4 @@
-"""R10: a forget takes the text out of every store Cortex owns, and its receipt names the rest."""
+"""R10: a forget takes the text out of every store Keepfold owns, and its receipt names the rest."""
 
 import json
 import time
@@ -11,21 +11,21 @@ from test_browse_sites import OWNER
 from test_chat_log import serve
 from typer.testing import CliRunner
 
-from cortex import chat_import, claims, clients, forget, levels, prime_hook, semantic, tags
-from cortex.app import server, targets
-from cortex.browse import build, sources
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.events import EventLog, void_event
-from cortex.index import Index
-from cortex.vault import Vault, VaultError
+from keepfold import chat_import, claims, clients, forget, levels, prime_hook, semantic, tags
+from keepfold.app import server, targets
+from keepfold.browse import build, sources
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.events import EventLog, void_event
+from keepfold.index import Index
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 CANARY = "zqcanary9x"
 
 
 def hits(root, home):
-    """Every file under the vault (but .git) and the temp home (.cortex, the AI apps' rules
+    """Every file under the vault (but .git) and the temp home (.keepfold, the AI apps' rules
     files and their backups) holding the canary."""
     out = []
     for base in (root, home):
@@ -41,7 +41,7 @@ def cli(*args, ok=True):
 
 
 def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(home / ".cortex" / "claude-chat"))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(home / ".keepfold" / "claude-chat"))
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     hubbed(root)
     note(root, "me/core.md", "id: core\n", "# Core\n\n## Core\n- Call me Sam.\n")
@@ -50,20 +50,20 @@ def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
     got = {}
 
     async def body(call):  # a chat, a page, claim lines, all through the normal paths
-        p = await call("cortex_prime", {"prompt": f"remember my word {CANARY} please"})
-        got["add"] = await call("cortex_add", {"kind": "note", "title": f"Note {CANARY}",
+        p = await call("keepfold_prime", {"prompt": f"remember my word {CANARY} please"})
+        got["add"] = await call("keepfold_add", {"kind": "note", "title": f"Note {CANARY}",
                                                "fields": {"summary": f"Note {CANARY}"}})
-        await call("cortex_patch", {"id": got["add"]["id"], "op": "append_to_section",
+        await call("keepfold_patch", {"id": got["add"]["id"], "op": "append_to_section",
                                     "target": "Notes", "text": f"- Note {CANARY} car"})
-        got["claim"] = await call("cortex_patch", {
+        got["claim"] = await call("keepfold_patch", {
             "id": "me/profile", "op": "append_to_section", "target": "Brief",
             "user_confirmed": True, "text": f"- My lucky word is {CANARY}"})
-        await call("cortex_patch", {  # the pinned core, served into AI apps' rules files once
+        await call("keepfold_patch", {  # the pinned core, served into AI apps' rules files once
             "id": "me/core", "op": "append_to_section", "target": "Core",  # the owner approves
             "user_confirmed": True, "text": f"- Greet me with {CANARY}"})
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "chat": p["chat"], "user": f"My lucky word is {CANARY}", "gist": "noted"}})
-        await call("cortex_end", {"summary": f"added Note {CANARY}"})
+        await call("keepfold_end", {"summary": f"added Note {CANARY}"})
 
     serve(root, body)
     (home / ".codex").mkdir()  # Codex, Cursor and VS Code rules files, all under the temp home
@@ -71,10 +71,10 @@ def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
     targets._vscode_user().mkdir(parents=True)
     rules = [targets.by_id()[t] for t in ("codex", "cursor", "vscode")]
     for t in rules:
-        t.apply(clients.server_entry("cortex", root))
+        t.apply(clients.server_entry("keepfold", root))
     rules = [t.rule_path() for t in rules]
     a = server.App(root)
-    monkeypatch.setattr(a, "entry", lambda: clients.server_entry("cortex", root))
+    monkeypatch.setattr(a, "entry", lambda: clients.server_entry("keepfold", root))
     a.review_approve({"key": next(x for x in a.review()["pending"] if x["page"] == "core")["key"]})
     assert all(str(p).startswith(str(home)) and CANARY in p.read_text("utf-8") for p in rules)
     local = tmp_path / "local"  # a browse page
@@ -88,8 +88,8 @@ def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
     idx.save_snapshot()
     assert semantic.vectors(idx, FakeEmbed(), 4) is not None
     before = hits(root, home)
-    assert {"vault/.cortex/vectors.db", "vault/.cortex/index-snapshot.json",
-            "vault/.cortex/chat-import.sqlite", "home/.cortex/claude-chat"} & {
+    assert {"vault/.keepfold/vectors.db", "vault/.keepfold/index-snapshot.json",
+            "vault/.keepfold/chat-import.sqlite", "home/.keepfold/claude-chat"} & {
         h if h.startswith("vault/") else h.rsplit("/", 2)[0] for h in before}
     chat = next(e["payload"]["pages"][0] for e in EventLog(v).iter_events()
                 if (e.get("payload") or {}).get("kind") == "chat_saved")
@@ -122,7 +122,7 @@ def test_canary_leaves_every_store(root, home, tmp_path, monkeypatch):
 
 
 def _session(root, when, text, verdict="correct"):
-    from cortex.session import SessionManager
+    from keepfold.session import SessionManager
 
     mgr = SessionManager(Vault(root), clock=lambda: when)
     s = mgr.start()
@@ -173,16 +173,16 @@ def test_redacted_events_still_fold_void_and_undo(root):
 def test_app_forget_card_forgets_and_returns_the_receipt(root):
     from conftest import run
 
-    from cortex.app import server
+    from keepfold.app import server
 
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_text(
         "# Preferences\n\n## Coding\n- Writes Python with type hints\n"
         "- Writes Rust for small CLI tools\n", encoding="utf-8")
 
     async def body(call):  # matches both lines: a Review card
-        await call("cortex_prime", {"prompt": "hello"})
-        out = await call("cortex_log", {"kind": "chat_turn", "payload": {
+        await call("keepfold_prime", {"prompt": "hello"})
+        out = await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "user": "//forget: writes python rust", "gist": "x"}})
         assert "nothing changed" in out["tags"][0]
 
@@ -203,7 +203,7 @@ def test_app_forget_card_forgets_and_returns_the_receipt(root):
 
 def _texts_in(root, *texts):
     """The files under the vault (but .git) and the chat exports holding one of `texts`."""
-    from cortex import chats
+    from keepfold import chats
 
     return sorted(p.name for base in (root, chats.export_root()) for p in base.rglob("*")
                   if p.is_file() and ".git" not in p.relative_to(base).parts
@@ -212,7 +212,7 @@ def _texts_in(root, *texts):
 
 def _said(root):
     """The events and the live chat logs (a chat_turn writes no event), as one text."""
-    from cortex import chats
+    from keepfold import chats
 
     return json.dumps(list(EventLog(Vault(root)).iter_events())) + "".join(
         p.read_text("utf-8") for p in chats.export_root().rglob("*.jsonl"))
@@ -225,11 +225,11 @@ def test_a_common_title_sweeps_only_the_page_and_its_id(root, monkeypatch):
     got = {}
 
     async def body(call):
-        got["add"] = await call("cortex_add", {"kind": "note", "title": "Python",
+        got["add"] = await call("keepfold_add", {"kind": "note", "title": "Python",
                                                "fields": {"summary": "Snakes and scripts"}})
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "user": "I write Python every day", "gist": "noted"}})
-        await call("cortex_log", {"kind": "taught", "payload": {
+        await call("keepfold_log", {"kind": "taught", "payload": {
             "concept": "two-pointers", "summary": "Python slices meet in the middle"}})
 
     run(root, body)
@@ -259,11 +259,11 @@ def test_a_forget_tag_of_one_word_takes_only_its_line(root):
         "- Uses tabs for indentation\n", encoding="utf-8")
 
     async def body(call):
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "user": "I write Python every day", "gist": "x"}})
-        out = await call("cortex_prime", {"prompt": "//forget: python"})
-        assert out["tags"] == ["//forget retired a line on me/preferences; the Cortex app "
-                               "removes it from everywhere Cortex keeps it within 10 minutes"]
+        out = await call("keepfold_prime", {"prompt": "//forget: python"})
+        assert out["tags"] == ["//forget retired a line on me/preferences; the Keepfold app "
+                               "removes it from everywhere Keepfold keeps it within 10 minutes"]
 
     run(root, body)
     assert forget.run_due(Vault(root))  # the app's periodic pass
@@ -285,7 +285,7 @@ def _payloads(root, kind):
 def test_a_forget_tag_in_a_prompt_hook_only_retires_and_queues(root, monkeypatch):
     """A hook times out at 30 s and a cold sweep can take a minute: the hook retires the line
     and queues the sweep; the app's periodic pass (run_due) sweeps it, once."""
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     (root / "me" / "preferences.md").write_text(TABS, encoding="utf-8")
     (root / "log.md").write_text("# Log\n\n- 2026-11-20 uses tabs for indentation\n",
                                  encoding="utf-8")
@@ -298,7 +298,7 @@ def test_a_forget_tag_in_a_prompt_hook_only_retires_and_queues(root, monkeypatch
     t = time.monotonic()
     out = hook("//forget: tabs for indentation")
     assert time.monotonic() - t < 30  # Claude Code, Codex and Gemini kill a hook at 30 s
-    assert "//forget retired a line on me/preferences; the Cortex app removes it" in out
+    assert "//forget retired a line on me/preferences; the Keepfold app removes it" in out
     assert "tabs for indentation" in (root / "me/preferences.md").read_text(
         "utf-8").split("## Past")[1]  # retired at once: prime no longer serves it
     assert "tabs for indentation" in (root / "log.md").read_text("utf-8")  # swept nothing
@@ -306,7 +306,7 @@ def test_a_forget_tag_in_a_prompt_hook_only_retires_and_queues(root, monkeypatch
     (due,) = forget.due(EventLog(v).iter_events())
     assert due["payload"]["text"] == "tabs for indentation"
 
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     git(root, "add", "-A")
     git(root, "commit", "-qm", "the fixture", "--allow-empty")
     (receipt,) = server.App(root).forget_due()  # the app's periodic pass
@@ -336,13 +336,13 @@ def test_a_due_forget_whose_line_went_meanwhile_is_marked_done(root):
 def test_a_person_forget_redacts_every_mention_of_the_name(root):
     run = serve  # logs chats, as an owner app does
 
-    from cortex import people
+    from keepfold import people
 
     people.add(Vault(root), "Asha", {"relation": "friend"})
 
     async def body(call):
-        p = await call("cortex_prime", {"prompt": "Asha and I went hiking"})
-        await call("cortex_log", {"kind": "chat_turn", "payload": {
+        p = await call("keepfold_prime", {"prompt": "Asha and I went hiking"})
+        await call("keepfold_log", {"kind": "chat_turn", "payload": {
             "chat": p["chat"], "user": "Asha said hi to [[asha]]", "gist": "noted"}})
 
     run(root, body)
@@ -356,7 +356,7 @@ def test_a_person_forget_redacts_every_mention_of_the_name(root):
 
 
 def test_a_forgotten_page_from_a_watched_folder_stays_forgotten(root, tmp_path):
-    from cortex import watch
+    from keepfold import watch
 
     d = tmp_path / "Docs"
     d.mkdir()

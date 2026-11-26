@@ -1,5 +1,5 @@
-"""The browsing store (cortex.browse.store) and the local model's title checks in batches
-(cortex.browse.titles), on synthetic History files and temp vaults only: an import reads only
+"""The browsing store (keepfold.browse.store) and the local model's title checks in batches
+(keepfold.browse.titles), on synthetic History files and temp vaults only: an import reads only
 what is new and saving twice changes nothing; a History file unchanged since the last run is
 not even copied; titles go 25 to a call and each call's labels are saved at once; background
 checks wait for an idle PC and an already loaded model and never load one; the site pages move
@@ -21,11 +21,11 @@ from test_browse import LINK, Embed, chrome_raw, chromium, hubbed, m
 from test_browse_sites import OWNER, ROWS
 from test_browse_v7 import every_byte
 
-from cortex import backup, browse, cli, localllm
-from cortex.app.server import Job
-from cortex.browse import build, forget, sites, sources, store, titles
-from cortex.events import local_day
-from cortex.vault import Vault
+from keepfold import backup, browse, cli, localllm
+from keepfold.app.server import Job
+from keepfold.browse import build, forget, sites, sources, store, titles
+from keepfold.events import local_day
+from keepfold.vault import Vault
 
 HISTORY = ("Google", "Chrome", "User Data", "Default", "History")
 HIDDEN_WORDS = ("pornhub", "adulttitle", "adultterm", "adultvid")
@@ -208,8 +208,8 @@ def legacy(r, tmp_path, *, stop_after: int | None = None, old_build: bool = Fals
     (stopped after `stop_after` saved chunks, then run again; `old_build`: the stopped run
     left no "legacy" meta, as a build before it did). Day 0's private page before and
     after."""
-    from cortex import browse_serve, semantic
-    from cortex.app import actions
+    from keepfold import browse_serve, semantic
+    from keepfold.app import actions
 
     ud = tmp_path / "local" / "Google" / "Chrome" / "User Data"
     chromium(ud / "Default" / "History", ROWS)
@@ -219,7 +219,7 @@ def legacy(r, tmp_path, *, stop_after: int | None = None, old_build: bool = Fals
     v = Vault(r)
     build.run(v, found, OWNER, embed=Embed())
     sites._save(v, sites.DAYS, sites.load_days(v)[0])  # the counts as they were kept then
-    for p in (r / ".cortex" / "browse").glob("store.db*"):
+    for p in (r / ".keepfold" / "browse").glob("store.db*"):
         p.unlink()
     state = build.load_state(v)
     del state["sites_stamp"]
@@ -283,7 +283,7 @@ def test_the_first_read_into_the_store_keeps_a_partly_expired_oldest_day(vault, 
     v = Vault(vault)
     imp(vault, hist)
     sites._save(v, sites.DAYS, sites.load_days(v)[0])
-    for p in (vault / ".cortex" / "browse").glob("store.db*"):
+    for p in (vault / ".keepfold" / "browse").glob("store.db*"):
         p.unlink()
     with closing(sqlite3.connect(hist[0].joinpath(*HISTORY))) as con, con:
         con.execute("DELETE FROM visits WHERE id <= 3")

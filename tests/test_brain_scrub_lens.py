@@ -11,15 +11,15 @@ from datetime import UTC, datetime
 import pytest
 from test_dashboard_js import _run, demo_vault  # noqa: F401  (demo_vault: a fixture)
 
-from cortex import dashboard
-from cortex.vault import Vault
+from keepfold import dashboard
+from keepfold.vault import Vault
 
 BRAIN_JS = dashboard.ASSETS / "brain3d.js"
 
 HARNESS = r"""
 globalThis.window = globalThis;
 require(process.argv[2]);
-const L = window.CortexBrain.LENS, out = {};
+const L = window.KeepfoldBrain.LENS, out = {};
 const G = (edges) => {
   const m = new Map();
   const add = (a, b) => { if (!m.has(a)) m.set(a, new Set()); m.get(a).add(b); };

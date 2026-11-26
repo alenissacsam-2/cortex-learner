@@ -1,5 +1,5 @@
-"""RR-17a: vault files are written only through `cortex.vault` (lock, temp file, os.replace
-with retry). The scan finds direct writes in src/cortex — `open(..., 'w'/'a'/'x'/'+')`,
+"""RR-17a: vault files are written only through `keepfold.vault` (lock, temp file, os.replace
+with retry). The scan finds direct writes in src/keepfold — `open(..., 'w'/'a'/'x'/'+')`,
 `Path.open` with such a mode, `Path.write_text`/`write_bytes`, `os.replace`, `shutil.move` /
 `copy*` — and fails for any module not in ALLOWED. `vault.write_text(path, text)` (two
 positional arguments) is the Vault method and passes. A new module that writes outside the vault
@@ -9,25 +9,29 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src" / "cortex"
+SRC = ROOT / "src" / "keepfold"
 MODES = set("wax+")
 SHUTIL = {"move", "copy", "copy2", "copyfile", "copytree"}
-# module (relative to src/cortex): why it writes without cortex.vault
+# module (relative to src/keepfold): why it writes without keepfold.vault
 ALLOWED = {
     "vault.py": "it is the vault writer itself",
     "events.py": "the append-only event log: one O_APPEND line per event under the vault lock",
     "app/actions.py": "the Start-at-login file in the user's Startup folder, outside the vault",
-    "app/desktop.py": "~/.cortex/desktop.json, the desktop app's window state",
-    "app/launch.py": "~/.cortex/logs, the windowless app's stdout log",
-    "app/server.py": "the owner's chosen snapshot file and ~/.cortex app state, outside the vault",
+    "app/desktop.py": "~/.keepfold/desktop.json, the desktop app's window state",
+    "app/launch.py": "~/.keepfold/logs, the windowless app's stdout log",
+    "app/server.py": "the owner's chosen snapshot file and ~/.keepfold app state, outside "
+                     "the vault",
     "app/targets.py": "agent rule files in other tools' folders (backed up, temp + os.replace)",
     "backup.py": "the backup zip at a path the owner names",
+    "migrate.py": "the one-time move from Cortex: os.replace of the ~/.cortex and vault "
+                  ".cortex/ folders, its own marker files and renamed backup zips; note "
+                  "pages go through Vault._mutate",
     "browse/sources.py": "temp copies of browser history databases, deleted after reading",
     "browse/store.py": "browse page zips: temp + os.replace under the browse job lock",
-    "chats.py": "imported chat logs in the chats export folder (~/.cortex), not vault pages",
-    "cli.py": "--out files the owner names and the model-ready mark in ~/.cortex/models",
+    "chats.py": "imported chat logs in the chats export folder (~/.keepfold), not vault pages",
+    "cli.py": "--out files the owner names and the model-ready mark in ~/.keepfold/models",
     "redteam.py": "P2's made-up chat export in the red team's own temp folder, not a vault file",
-    "taint.py": "~/.cortex/config.yaml under its own lock (temp + os.replace)",
+    "taint.py": "~/.keepfold/config.yaml under its own lock (temp + os.replace)",
     "update.py": "the downloaded installer and its checksum in the update folder",
     "zotero.py": "copies Zotero's database into a temp folder to read it; never the vault",
     "anki.py": "copies Anki's collection into a temp folder to read it; never the vault",
@@ -68,7 +72,7 @@ def test_only_allowed_modules_write_files_directly():
         rel = p.relative_to(SRC).as_posix()
         if rel not in ALLOWED:
             bad += [f"{rel}:{line} {kind}" for kind, line in _writes(p)]
-    assert not bad, ("write vault files through cortex.vault (Vault.write_text/update_text), "
+    assert not bad, ("write vault files through keepfold.vault (Vault.write_text/update_text), "
                      "or add the module to ALLOWED with its reason: " + ", ".join(bad))
 
 

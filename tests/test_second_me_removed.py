@@ -9,10 +9,10 @@ import anyio
 import pytest
 from conftest import events, run
 
-from cortex import claims, know, prime
-from cortex.events import EventLog, local_day
-from cortex.reflect import reflect
-from cortex.vault import Vault
+from keepfold import claims, know, prime
+from keepfold.events import EventLog, local_day
+from keepfold.reflect import reflect
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -32,7 +32,7 @@ OLD_KINDS = [
 
 def _old_vault(root):
     """Write the removed features' events (one with the removed `probe` session mode) and
-    files, as an older Cortex left them."""
+    files, as an older Keepfold left them."""
     log = EventLog(Vault(root))
     for p in OLD_KINDS:
         log.append(session="cli", kind="log", source="tutor", fields={"payload": p})
@@ -43,7 +43,7 @@ def _old_vault(root):
     path.write_text(path.read_text(encoding="utf-8") + json.dumps(line) + "\n",
                     encoding="utf-8")
     (root / "me/letters.md").write_text("# Letters\n\n- Keep going ^l-aaaaa\n", encoding="utf-8")
-    (root / "me/delegation.md").write_text("# What Cortex may do as me\n\n## Never\n\n"
+    (root / "me/delegation.md").write_text("# What Keepfold may do as me\n\n## Never\n\n"
                                           "- Pay anyone\n", encoding="utf-8")
     (root / "voice").mkdir(exist_ok=True)
     (root / "voice/drafts.jsonl").write_text(json.dumps(
@@ -63,18 +63,18 @@ def test_an_old_vault_with_removed_kinds_still_loads(root):
     know.report(v, evs, day)
     prime.served_claims(v, evs)
     prime.core(v, "help me revise", evs, now)
-    from cortex.catalog import Catalog
+    from keepfold.catalog import Catalog
     pack = reflect(v, Catalog.load(v), now)
     assert not {"bets", "probes", "surprisal", "letters", "circling", "claim_check"} & set(pack)
 
     async def body(call):
-        assert (await call("cortex_prime", {"prompt": "help me write an email"}))["next"]
-        home = await call("cortex_start", {"mode": "home"})
+        assert (await call("keepfold_prime", {"prompt": "help me write an email"}))["next"]
+        home = await call("keepfold_start", {"mode": "home"})
         assert "letter" not in home
-        assert "error" not in await call("cortex_reflect")
-        me = await call("cortex_as_me", {"task": "ask for an extension", "audience": "professor"})
+        assert "error" not in await call("keepfold_reflect")
+        me = await call("keepfold_as_me", {"task": "ask for an extension", "audience": "professor"})
         assert not {"boundaries", "fidelity"} & set(me) and "notes" not in me["self"]
-        await call("cortex_end", {"summary": "done"})
+        await call("keepfold_end", {"summary": "done"})
 
     run(root, body)
     # the old files are untouched, and the old events are all still there
@@ -88,13 +88,13 @@ def test_removed_log_kinds_get_a_clear_refusal(root):
     kinds there are; no crash, and nothing is written."""
     from mcp import Client
 
-    from cortex.mcp_server import build_server
+    from keepfold.mcp_server import build_server
 
     async def main():
         async with Client(build_server(Vault(root))) as c:
             for kind in ("forecast", "settle", "baseline", "claim_flag", "letter",
                          "letter_feedback", "circling", "draft", "sent"):
-                r = await c.call_tool("cortex_log", {"kind": kind, "payload": {"text": "x"}})
+                r = await c.call_tool("keepfold_log", {"kind": kind, "payload": {"text": "x"}})
                 text = r.content[0].text
                 assert r.is_error and "Input should be" in text and "'touch'" in text, text
 

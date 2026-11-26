@@ -1,4 +1,4 @@
-"""`cortex setup` (idempotent wizard) and the packaged sample vault."""
+"""`keepfold setup` (idempotent wizard) and the packaged sample vault."""
 
 import json
 import shutil
@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 import pytest
 from test_cli import run  # the CliRunner helper, not a fixture
 
-from cortex import clients, dashboard, levels, packs, sample
-from cortex.app import targets
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.lint import lint_report
-from cortex.vault import Vault
+from keepfold import clients, dashboard, levels, packs, sample
+from keepfold.app import targets
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.lint import lint_report
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")  # isolates HOME, APPDATA and LOCALAPPDATA
 
@@ -33,7 +33,7 @@ def test_setup_twice_seeds_sample_and_is_idempotent(tmp_path, home):
     assert "created  sample concepts/loops.md" in first
     assert "created  git init" in first and "Checks:" in first and "Privacy:" in first
     assert "PASS  Vault git" in first and "FAIL" not in first
-    assert str(root.resolve()) in (home / ".cortex/config.yaml").read_text(encoding="utf-8")
+    assert str(root.resolve()) in (home / ".keepfold/config.yaml").read_text(encoding="utf-8")
     v = Vault(root)
     assert "Sam" in (root / "me/profile.md").read_text(encoding="utf-8")  # sample beat template
     assert (root / "me/teaching-contract.md").is_file()  # init still adds the rest
@@ -99,7 +99,7 @@ def test_dry_run_touches_nothing(tmp_path, home):
     assert "dry run: nothing written" in out and "plan     sample: 15 of 15" in out
     if clients.claude_desktop_config_paths():  # the Windows layout above
         assert f"{cfg}: updated" in out
-    assert not root.exists() and not (home / ".cortex").exists()
+    assert not root.exists() and not (home / ".keepfold").exists()
     assert json.loads(cfg.read_text(encoding="utf-8")) == {"mcpServers": {}}
 
 
@@ -129,15 +129,15 @@ def test_setup_writes_desktop_config(tmp_path, home, monkeypatch):
     root = tmp_path / "vault"
     out = run("setup", "--vault", root, "--yes", "--no-model", "--no-code", "--no-sample").output
     got = json.loads(cfg.read_text(encoding="utf-8"))
-    assert got["mcpServers"]["cortex"]["args"] == ["mcp", "--vault", str(root.resolve())]
+    assert got["mcpServers"]["keepfold"]["args"] == ["mcp", "--vault", str(root.resolve())]
     assert got["theme"] == "dark" and "Fully quit Claude desktop" in out
     assert targets.PASTE_DESKTOP in out and packs.USE_TEXT in out  # CN: what to paste, where
-    assert f"updated  {cfg}" in out and ".cortex-" in out
+    assert f"updated  {cfg}" in out and ".keepfold-" in out
     assert old_bak.read_text(encoding="utf-8") == "mine"
-    baks = list(cfg.parent.glob(cfg.name + ".cortex-*.bak"))  # the app's timestamped backup
+    baks = list(cfg.parent.glob(cfg.name + ".keepfold-*.bak"))  # the app's timestamped backup
     assert [json.loads(b.read_text(encoding="utf-8")) for b in baks] == [{"theme": "dark"}]
     out = run("setup", "--vault", root, "--yes", "--no-model", "--no-code").output
-    assert "cortex entry exists" in out
+    assert "keepfold entry exists" in out
     assert len(list(cfg.parent.glob("*.bak"))) == 2
 
 
@@ -147,12 +147,12 @@ def test_code_step_prints_commands_without_claude(tmp_path, home, monkeypatch):
                         else real(cmd, *a, **k))
     out = run("setup", "--vault", tmp_path / "v", "--yes", "--no-model", "--no-desktop",
               "--no-sample").output
-    assert "/plugin marketplace add" in out and "/plugin install cortex@cortex" in out
+    assert "/plugin marketplace add" in out and "/plugin install keepfold@keepfold" in out
 
 
 def test_setup_points_at_the_checkout_never_a_placeholder(tmp_path, home, monkeypatch):
     """Audit F10: the local checkout's marketplace, or a clear note; never `<owner>/<repo>`."""
-    from cortex import cli
+    from keepfold import cli
 
     real = shutil.which
     monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if cmd == "claude"
@@ -172,17 +172,17 @@ def test_setup_points_at_the_checkout_never_a_placeholder(tmp_path, home, monkey
     assert f"marketplace add {cli.REPO}" in out  # the published repo, once there is one
     assert "<owner>" not in out
     # CN: Claude Code clones the published repo with git; without git, say so first
-    from cortex import session
+    from keepfold import session
     monkeypatch.setattr(session, "git_exe", lambda: None)
     out = run(*args).output
     assert "Claude Code needs Git" in out and "marketplace add" not in out
 
 
 def test_setup_ends_by_offering_the_app(tmp_path, home, monkeypatch):
-    """N1: an interactive setup offers `cortex app`; --yes never opens it."""
+    """N1: an interactive setup offers `keepfold app`; --yes never opens it."""
     from test_cli import app, runner
 
-    from cortex import cli
+    from keepfold import cli
 
     opened = []
     monkeypatch.setattr(cli, "app_cmd", lambda vault=None, **k: opened.append(vault))
@@ -190,7 +190,7 @@ def test_setup_ends_by_offering_the_app(tmp_path, home, monkeypatch):
     args = ["setup", "--vault", str(root), "--no-model", "--no-desktop", "--no-code",
             "--no-sample"]
     r = runner.invoke(app, args, input="y\n")
-    assert r.exit_code == 0 and "Open the Cortex app" in r.output
+    assert r.exit_code == 0 and "Open the Keepfold app" in r.output
     assert opened == [root.resolve()]
     assert runner.invoke(app, args, input="n\n").exit_code == 0 and len(opened) == 1
     run(*args, "--yes")

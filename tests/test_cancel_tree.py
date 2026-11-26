@@ -1,4 +1,4 @@
-"""Cancel ends a download's whole process tree (cortex._proc.Tree), not just the immediate
+"""Cancel ends a download's whole process tree (keepfold._proc.Tree), not just the immediate
 child: a grandchild that inherits the output pipe would otherwise keep running and keep the
 job from ending. Real processes, but only synthetic Python scripts in tmp_path."""
 
@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from cortex import _proc
-from cortex.app import actions, server
+from keepfold import _proc
+from keepfold.app import actions, server
 
 # the real interpreter: a venv's python.exe is a launcher whose own job would hide the bug
 PY = getattr(sys, "_base_executable", None) or sys.executable

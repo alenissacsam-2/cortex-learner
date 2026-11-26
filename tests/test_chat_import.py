@@ -1,5 +1,5 @@
-"""The automatic chat import (cortex.chat_import): synthetic Claude Code transcripts and export
-conversations in temp CORTEX_CHATS_DIR / CORTEX_CHAT_EXPORT_DIR, vault_mini, a temp home.
+"""The automatic chat import (keepfold.chat_import): synthetic Claude Code transcripts and export
+conversations in temp KEEPFOLD_CHATS_DIR / KEEPFOLD_CHAT_EXPORT_DIR, vault_mini, a temp home.
 Ordinary pages hold the user's turns only, redacted; coding pages a capped summary with no code;
 re-runs are idempotent and stat-only; a changed transcript updates its page in place; live,
 sidechain, empty, hand-saved, skip-category and excluded chats are left out; the app's job
@@ -19,10 +19,10 @@ from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or
 from test_app import vault as vault  # noqa: F401 (fixture)
 from typer.testing import CliRunner
 
-from cortex import chat_import, chats, harvest, taint
-from cortex.app import desktop, server
-from cortex.events import local_day
-from cortex.vault import CHAT_ARCHIVE, Vault
+from keepfold import chat_import, chats, harvest, taint
+from keepfold.app import desktop, server
+from keepfold.events import local_day
+from keepfold.vault import CHAT_ARCHIVE, Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -37,8 +37,8 @@ def dirs(tmp_path, monkeypatch):
     code, exp = tmp_path / "projects", tmp_path / "exports"
     code.mkdir()
     exp.mkdir()
-    monkeypatch.setenv("CORTEX_CHATS_DIR", str(code))
-    monkeypatch.setenv("CORTEX_CHAT_EXPORT_DIR", str(exp))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(code))
+    monkeypatch.setenv("KEEPFOLD_CHAT_EXPORT_DIR", str(exp))
     return code, exp
 
 
@@ -83,7 +83,7 @@ def chat(code, name="sess1", extra=()):
     return write(code / "D--Dev-proj" / f"{name}.jsonl", [
         u("How do heaps work?\nsecond line of my question"),
         a("ASSISTANT-ANSWER heaps are trees"),
-        u("<command-name>/cortex</command-name>", isMeta=True),
+        u("<command-name>/keepfold</command-name>", isMeta=True),
         u("META-LINE", isMeta=True),
         u("SIDECHAIN-USER-TEXT", isSidechain=True),
         u("SUMMARY-OF-EARLIER-TALK", isCompactSummary=True),
@@ -106,7 +106,7 @@ def test_an_ordinary_chat_page_holds_my_turns_only_redacted(root_committed, dirs
     assert "\nWhen: 20" in body and "\nWho: me and Claude Code\n" in body  # R3-6
     assert "Where:" not in body
     assert "[redacted]" in body and KEY not in body
-    for gone in ("ASSISTANT", "SIDECHAIN", "META-LINE", "SUMMARY-OF", "/cortex"):
+    for gone in ("ASSISTANT", "SIDECHAIN", "META-LINE", "SUMMARY-OF", "/keepfold"):
         assert gone not in body, gone
     day = local_day(chat_import._when(T0))
     assert 'title: "How do heaps work?"' in body
@@ -363,7 +363,7 @@ def test_a_skip_category_is_never_written_and_a_local_one_is_private(root_commit
 
 def test_saved_by_hand_excluded_folders_and_earlier_imports_are_left_alone(root_committed,
                                                                          dirs, tmp_path):
-    from cortex.events import EventLog
+    from keepfold.events import EventLog
     code, exp = dirs
     chat(code, "hand")
     EventLog(Vault(root_committed)).append(
@@ -429,7 +429,7 @@ def test_the_app_job_shows_progress_and_notifies_once(vault, dirs):  # noqa: F81
     assert "8 of 8 chats (100%), about 0 s left" in job.lines and job.lines[-1] == \
         "8 chat pages written"
     assert sent == ["Chat import finished"]
-    assert "cortex: app import chats" in git(vault, "log", "-1", "--format=%s")
+    assert "keepfold: app import chats" in git(vault, "log", "-1", "--format=%s")
     assert app.chat_import_auto() is None  # nothing new: no job at all
     p = code / "p" / "c0.jsonl"
     os.utime(p, (time.time() - 200, time.time() - 200))  # touched, same text: a quiet job
@@ -482,14 +482,45 @@ def test_the_setting_turns_it_off(app, dirs):
     assert app.chat_import_auto() is not None
 
 
+def test_an_unreadable_config_turns_it_off_and_says_why(app, dirs, home):  # noqa: F811
+    """D1-audit 1.2: a typo in config.yaml must not read as "chat import on, nothing excluded".
+    The automatic pass skips with one log line, a manual import refuses, Status names the file
+    and line (never the line's text); a missing config is the default (on) again."""
+    from keepfold.cli import app as cli_app
+    from keepfold.vault import VaultError
+    code, _ = dirs
+    write(code / "p" / "c.jsonl", [u("a question")])
+    (home / ".keepfold").mkdir(exist_ok=True)
+    cfg = home / ".keepfold" / "config.yaml"
+    cfg.write_text("app:\n\tchat_import: true  # hunter2\n", encoding="utf-8")
+    err = taint.config_error()
+    assert err == f"{cfg} cannot be read: ScannerError at line 2"
+    lines = []
+    app.echo = lines.append
+    st = call(app, "GET", "/api/status")[1]
+    assert st["chat_import"] is False
+    assert st["rows"][0] == {"id": "config", "label": "Settings file", "state": "warn",
+                             "value": err, "detail": taint.CONFIG_FIX}
+    assert app.chat_import_auto() is None and app.safety_net_auto() is None
+    assert lines == [f"keepfold app: chat import skipped: {err}"]
+    with pytest.raises(VaultError, match="so the chat import is off until it is fixed"):
+        chat_import.run(Vault(app.root))
+    r = CliRunner().invoke(cli_app, ["import-chats", "--auto", "--vault", str(app.root)])
+    assert r.exit_code == 1 and err in r.output
+    assert "hunter2" not in json.dumps(st) + r.output and saved(app.root) == []
+    cfg.unlink()
+    assert app.chat_import_auto() is not None
+    assert _wait(app).result["counts"] == {"saved": 1}
+
+
 def test_the_cli_runs_one_pass(root_committed, dirs):
-    from cortex.cli import app
+    from keepfold.cli import app
     code, _ = dirs
     chat(code)
     out = CliRunner().invoke(app, ["import-chats", "--auto", "--vault", str(root_committed)])
     assert out.exit_code == 0, out.output
     assert "1 chat page written (1 saved)." in out.output
-    assert git(root_committed, "log", "-1", "--format=%s").strip() == "cortex: cli import chats"
+    assert git(root_committed, "log", "-1", "--format=%s").strip() == "keepfold: cli import chats"
     out = CliRunner().invoke(app, ["import-chats", "--auto", "--vault", str(root_committed)])
     assert "0 chat pages written; no new or changed chats." in out.output
     assert CliRunner().invoke(app, ["import-chats"]).exit_code == 1
@@ -497,7 +528,7 @@ def test_the_cli_runs_one_pass(root_committed, dirs):
 
 def test_threads_never_share_a_pass(root_committed, dirs):
     """LOCK: a second pass while one runs is refused as busy."""
-    from cortex.vault import VaultError
+    from keepfold.vault import VaultError
     v = Vault(root_committed)
     with v.job_lock(chat_import.LOCK, 0, chat_import.BUSY):
         box = []
@@ -526,7 +557,7 @@ def _line(role, ts, text):
 
 
 def _live(exp, extra=()):
-    """A Chat-tab log as cortex_prime and chat_turn write it, stamped when the model called
+    """A Chat-tab log as keepfold_prime and chat_turn write it, stamped when the model called
     (seconds after each message); the model forgot the chat_turn for "and deletion?"."""
     return write(exp / chats.LIVE / f"{LIVE_ID}.jsonl", [
         _line("user", "2026-11-10T10:00:04Z", " ".join(OPEN.split())),
@@ -640,9 +671,9 @@ def test_the_app_lists_chats_made_private_and_why_newest_first_paged(root_commit
     judged again from its body; no MCP tool reads it."""
     import inspect
 
-    from cortex import mcp_server
-    from cortex.app import hello
-    from cortex.events import EventLog
+    from keepfold import mcp_server
+    from keepfold.app import hello
+    from keepfold.events import EventLog
     code, _ = dirs
     for d in range(1, 26):
         write(code / "p" / f"h{d}.jsonl", [

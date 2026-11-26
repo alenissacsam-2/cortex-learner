@@ -1,4 +1,4 @@
-"""Plan 5b: cortex_patch's `possible_update_of` (word overlap, a warm embedder, never a model
+"""Plan 5b: keepfold_patch's `possible_update_of` (word overlap, a warm embedder, never a model
 load), the Review's conflict pairs and their Keep both / left / right, and repeated corrections
 mined from imported chats (two or three chats by kind, private chats skipped, the incremental
 scan, Approve into me/preferences or me/core, Dismiss remembered), with the API escaping note
@@ -13,9 +13,9 @@ from conftest import events, run
 from test_app import _serve, call
 from test_review import app, changes, live, today  # noqa: F401  (app is a fixture)
 
-from cortex import claims, corrections, review, semantic
-from cortex.app import server
-from cortex.vault import Vault
+from keepfold import claims, corrections, review, semantic
+from keepfold.app import server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -69,28 +69,28 @@ def test_possible_update_of_by_word_overlap(root):
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Uses Neovim for editing code"})
         # 22 Nov QA: "Neovim" / "Vim" may be a switch or two facts: both stay, the agent decides
         assert "replaced" not in out and out["possible_update_of"]["id"] == old
         assert "<untrusted_note" in out["possible_update_of"]["text"]
         assert "Both stay" in out["next"] and f"target='{old}'" in out["next"]
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Sleeps early on Sundays"})
         assert "possible_update_of" not in out
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding",
                                           "text": "- Uses Neovim for code editing"})
         # a guess that only rewords the user's own line is not saved twice
         assert out["changed"] is False and out["duplicate_of"]["id"] == new_id(root)
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Never sleeps early on Sundays"})
         assert out["possible_update_of"]["id"] == cid(root, "preferences", "Sleeps early")
         assert out["next"].startswith("This line may update ^")
-        assert "Cortex settles such a pair itself" in out["next"]  # two of theirs: a card
+        assert "Keepfold settles such a pair itself" in out["next"]  # two of theirs: a card
 
     run(root, body)
     text = (root / "me" / "preferences.md").read_text("utf-8")
@@ -112,7 +112,7 @@ def test_possible_update_of_with_a_warm_embedder(root, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", Fake())
     hit = review.collision(v, "preferences", "Likes a black theme everywhere", day)
     assert hit and hit["text"] == "Prefers dark mode in editors"
-    assert hit["apart"]  # no shared word: a guess the agent settles, never Cortex
+    assert hit["apart"]  # no shared word: a guess the agent settles, never Keepfold
     assert review.collision(v, "preferences", "Plays chess on Fridays", day) is None
 
 
@@ -126,7 +126,7 @@ def test_private_pages_are_never_matched(root):
 @pytest.mark.parametrize("warm", [False, True])
 def test_the_patch_never_loads_a_model(root, monkeypatch, warm):
     def no(*a, **k):
-        raise AssertionError("cortex_patch must never load or look for a model")
+        raise AssertionError("keepfold_patch must never load or look for a model")
 
     monkeypatch.setattr(semantic, "load_embedder", no)
     monkeypatch.setattr(semantic, "models_dir", no)
@@ -134,7 +134,7 @@ def test_the_patch_never_loads_a_model(root, monkeypatch, warm):
     prefs(root, "Prefers dark mode in editors")
 
     async def body(call):
-        out = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        out = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                           "target": "Coding", "user_confirmed": True,
                                           "text": "- Prefers dark mode at night"})
         assert out.get("replaced") or "possible_update_of" in out  # the pair was seen
@@ -175,7 +175,7 @@ def test_conflict_pairs_and_the_three_buttons(root, app):  # noqa: F811
 
 
 def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
-    """22 Nov (D2): a recorded pair Cortex can settle makes no Review card. W1: a guessed pair
+    """22 Nov (D2): a recorded pair Keepfold can settle makes no Review card. W1: a guessed pair
     whose newer line says more ("… at work") is left alone, both live: retiring the older would
     narrow its scope (a guessed pair of the same facts is settled: test_losslessness). W1b: it
     is a `maybe_update` card instead, so prime.held's hold on the older line can end."""
@@ -183,7 +183,7 @@ def test_a_recorded_update_pair_is_settled_never_shown(root, app):  # noqa: F811
     old = cid(root, "preferences", "Uses Vim")
 
     async def body(call):
-        await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                     "target": "Coding", "user_confirmed": True,
                                     "text": "- Uses Vim for editing code at work"})
 

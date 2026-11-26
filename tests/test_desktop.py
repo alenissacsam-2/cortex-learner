@@ -1,4 +1,4 @@
-"""The desktop app (cortex/app/desktop.py) with fake pywebview and pystray modules and the fake
+"""The desktop app (keepfold/app/desktop.py) with fake pywebview and pystray modules and the fake
 Run key (conftest): window and tray, close hides, Quit ends everything, a second launch shows
 the window, no idle stop, the browser fallback, Start with Windows (the first-run-once rule),
 notifications (once a day, private left out, job ends) and their settings API."""
@@ -16,8 +16,8 @@ from test_app import call, daytime
 from test_app import fakes as fakes  # noqa: F401 (fixture: nothing real runs or opens)
 from test_app import vault as vault  # noqa: F401 (fixture)
 
-from cortex.app import desktop, launch, server, status
-from cortex.levels import ConceptState
+from keepfold.app import desktop, launch, server, status
+from keepfold.levels import ConceptState
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -142,14 +142,14 @@ def gui(monkeypatch):
 
 @pytest.fixture
 def win32(monkeypatch, tmp_path):
-    """Windows, with `cortex.exe` and `cortex-app.exe` in a temp bin folder."""
+    """Windows, with `keepfold.exe` and `keepfold-app.exe` in a temp bin folder."""
     monkeypatch.setattr(sys, "platform", "win32")
-    exe = tmp_path / "bin" / "cortex.exe"
+    exe = tmp_path / "bin" / "keepfold.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"MZ")
-    (exe.parent / "cortex-app.exe").write_bytes(b"MZ")
-    monkeypatch.setattr("cortex.clients.cortex_command", lambda: str(exe))
-    return f'"{exe.with_name("cortex-app.exe")}" --hidden'
+    (exe.parent / "keepfold-app.exe").write_bytes(b"MZ")
+    monkeypatch.setattr("keepfold.clients.keepfold_command", lambda: str(exe))
+    return f'"{exe.with_name("keepfold-app.exe")}" --hidden'
 
 
 def _until(cond, timeout=10.0):
@@ -163,7 +163,7 @@ def _until(cond, timeout=10.0):
 def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
         gui, vault, monkeypatch, _no_real_run_key):
     """The window shows the app's own link; X hides it (the server and tray stay); a second
-    `cortex-app` brings it up, `--hidden` does nothing; no idle stop; Quit in the tray closes
+    `keepfold-app` brings it up, `--hidden` does nothing; no idle stop; Quit in the tray closes
     the window, ends the loop, stops the tray, removes app.json and remembers the place."""
     monkeypatch.setattr(server, "IDLE_S", 0)  # the browser app would stop at once
     monkeypatch.setattr(server, "WATCH_S", 0.05)
@@ -182,9 +182,9 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
         assert w.events.closing.set() == [False]  # the X: cancelled, then hidden
         _until(lambda: "hide" in w.calls)
         assert server.running_url() == url
-        monkeypatch.setattr(sys, "argv", ["cortex-app.exe"])
+        monkeypatch.setattr(sys, "argv", ["keepfold-app.exe"])
         launch.main()  # a second launch
-        monkeypatch.setattr(sys, "argv", ["cortex-app.exe", "--hidden"])
+        monkeypatch.setattr(sys, "argv", ["keepfold-app.exe", "--hidden"])
         launch.main()  # Start with Windows while it runs: nothing
         seen["calls"] = list(w.calls)
         icon = FakeIcon.made[0]
@@ -194,18 +194,20 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     gui(start)
     lines = []
     desktop.run(vault, echo=lines.append)
-    assert seen["url"] and seen["kw"]["url"] == seen["url"] and seen["kw"]["title"] == "Cortex"
+    assert seen["url"] and seen["kw"]["url"] == seen["url"] and seen["kw"]["title"] == "Keepfold"
     assert sys.modules["webview"].start_kw == {"icon": str(desktop.ICON)}  # the window's icon
     assert seen["kw"]["hidden"] is False and seen["kw"]["width"] == desktop.SIZE[0]
     assert seen["alive"] is True
     assert seen["calls"] == ["hide", "show"]
     key = " (Ctrl+Alt+Space)" if sys.platform == "win32" else ""  # the hotkey: Windows only
-    assert seen["menu"] == [("Open Cortex", True), (f"Quick capture{key}", False),
+    assert seen["menu"] == [("Open Keepfold", True), (f"Quick capture{key}", False),
                             ("Start with Windows", False), ("Quit", False)]
     assert FakeIcon.made[0].stopped.is_set() and ran == ["first_run"]
     assert not server.state_file().exists() and server.running_url() is None
     assert desktop.load_state()["window"] == {"width": 1000, "height": 700, "x": 50, "y": 60}
     assert any("tray" in s for s in lines)
+    token = seen["url"].split("?t=")[1]  # D1 §4.3: the window opens with the key, the log has none
+    assert token and not any(token in s for s in lines)
 
 
 def test_hidden_start_and_the_remembered_place(gui, vault, monkeypatch):
@@ -246,7 +248,7 @@ def test_a_hidden_start_opens_on_the_page_for_the_time_it_is_shown(gui, vault, m
         seen["first"] = w.kw["url"]
         clock[0] = datetime(2026, 11, 20, 21)
         for _ in range(2):
-            FakeIcon.made[-1].item("Open Cortex").action()
+            FakeIcon.made[-1].item("Open Keepfold").action()
         seen["calls"] = list(w.calls)
         FakeIcon.made[-1].item("Quit").action()
         w.events.shown.set()
@@ -263,7 +265,7 @@ def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypa
     d.win = FakeWindow()
     monkeypatch.setattr(desktop, "_shutting_down", lambda: False)
     assert d.closing() is True  # no tray to come back from
-    d.tray = FakeIcon("cortex", None, "Cortex", FakeMenu())
+    d.tray = FakeIcon("keepfold", None, "Keepfold", FakeMenu())
     monkeypatch.setattr(desktop, "_shutting_down", lambda: True)
     assert d.closing() is True  # never blocks sign-out or shutdown
     d.state = "minimized"
@@ -430,7 +432,7 @@ def test_a_window_that_fails_to_start_opens_the_browser(gui, vault, fakes, monke
     def start(wv):
         threading.Thread(target=lambda: (
             _until(lambda: any(c[0] == "open" for c in fakes)),
-            FakeIcon.made[0].item("Open Cortex").action(),  # the tray opens the browser too
+            FakeIcon.made[0].item("Open Keepfold").action(),  # the tray opens the browser too
             FakeIcon.made[0].item("Quit").action())).start()
         raise RuntimeError("WebView2 failed")
     gui(start)
@@ -459,10 +461,10 @@ def test_start_with_windows_off_before_the_first_run_sticks(win32, _no_real_run_
 
 def test_start_with_windows_needs_the_app_exe_and_windows(win32, tmp_path, monkeypatch,
                                                           _no_real_run_key):
-    (tmp_path / "bin" / "cortex-app.exe").unlink()
+    (tmp_path / "bin" / "keepfold-app.exe").unlink()
     lines = []
     desktop.first_run(lines.append)
-    assert _no_real_run_key == {} and "cortex-app.exe" in lines[0]
+    assert _no_real_run_key == {} and "keepfold-app.exe" in lines[0]
     assert status.config().get("app", {}).get("autostart_asked") is None  # tried again later
     monkeypatch.setattr(sys, "platform", "linux")
     assert desktop.autostart_state() == {"supported": False, "enabled": False}
@@ -496,7 +498,7 @@ def test_the_app_api_for_autostart_notify_and_window(served, win32, _no_real_run
     assert call(app, "POST", "/api/window/show", {})[1] == {"shown": False}  # browser app
     assert call(app, "POST", "/api/window/show", {}, token=False)[0] == 401
     d = desktop.Desktop(app, "http://x")
-    d.win, d.tray = FakeWindow(), FakeIcon("cortex", None, "Cortex", FakeMenu())
+    d.win, d.tray = FakeWindow(), FakeIcon("keepfold", None, "Keepfold", FakeMenu())
     app.desktop = d
     assert call(app, "POST", "/api/window/show", {})[1] == {"shown": True}
     assert d.win.calls == ["show"]
@@ -524,7 +526,7 @@ NOON = datetime(2026, 11, 17, 12, tzinfo=UTC)  # the Acme OA (vault_mini) is on 
 @pytest.fixture
 def due(vault, monkeypatch):
     """two-pointers and the private secret-diary are due; a private exam is in 3 days too."""
-    from cortex import planner
+    from keepfold import planner
     note(vault, "assessments/hidden-exam.md", 'id: "hidden-exam"\ncompany: "HiddenCorp"\n'
          'date: "2026-11-20"\noutcome: "pending"\nprivate: true\n', "# Hidden")
     states = {c: ConceptState(c, state="needs_refresh") for c in ("two-pointers", "secret-diary")}
@@ -599,7 +601,7 @@ def test_job_ends_notify_finished_or_failed_not_cancelled():
 
 def test_the_tray_notifies_and_toggles_start_with_windows(win32, _no_real_run_key):
     d = desktop.Desktop(types.SimpleNamespace(), "http://x")
-    d.tray = FakeIcon("cortex", desktop._icon_image(), "Cortex", FakeMenu())
+    d.tray = FakeIcon("keepfold", desktop._icon_image(), "Keepfold", FakeMenu())
     assert d.tray.image.size == (64, 64)
     d.notify("3 reviews due today")
     assert d.tray.notes == ["3 reviews due today"]
@@ -619,13 +621,13 @@ def test_desktop_json_is_written_whole(home):
 
 
 def test_the_mark_is_crisp_when_small_and_the_ico_is_drawn_from_it():
-    """The logo: a dark rounded square with an amber dot-matrix C. Up to 32 px each lit cell is
-    whole pixels of exactly AMBER on GROUND; the committed cortex.ico is `mark` at every size
+    """The logo: a dark rounded square with an amber dot-matrix K. Up to 32 px each lit cell is
+    whole pixels of exactly AMBER on GROUND; the committed keepfold.ico is `mark` at every size
     (scripts/make_icon.py), and the tray icon is the same mark."""
     from PIL import Image
 
     amber, ground = (255, 176, 0, 255), (11, 11, 10, 255)
-    lit = sum(line.count("#") for line in desktop.LETTER_C)
+    lit = sum(line.count("#") for line in desktop.LETTER_K)
     for size, pitch in ((16, 1), (24, 2), (32, 2)):
         img = desktop.mark(size)
         colours = dict((c, n) for n, c in img.getcolors(size * size))
@@ -641,9 +643,9 @@ def test_the_mark_is_crisp_when_small_and_the_ico_is_drawn_from_it():
     assert desktop._icon_image().tobytes() == desktop.mark(64).tobytes()
 
 
-def test_start_with_windows_runs_cortex_exe_when_installed(win32, tmp_path, monkeypatch):
+def test_start_with_windows_runs_keepfold_exe_when_installed(win32, tmp_path, monkeypatch):
     (tmp_path / "app").mkdir()
-    (tmp_path / "app" / "Cortex.exe").write_bytes(b"MZ")
+    (tmp_path / "app" / "Keepfold.exe").write_bytes(b"MZ")
     monkeypatch.setattr(sys, "prefix", str(tmp_path))  # the tool venv
-    want = f'"{tmp_path / "app" / "Cortex.exe"}" -m cortex.app.launch --hidden'
+    want = f'"{tmp_path / "app" / "Keepfold.exe"}" -m keepfold.app.launch --hidden'
     assert desktop.autostart_command() == want

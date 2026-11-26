@@ -14,9 +14,9 @@ from test_app import _serve, call, fakes  # noqa: F401 (fakes: autouse, nothing 
 from test_more_sources import _repo
 from typer.testing import CliRunner
 
-from cortex import importers, sources, watch
-from cortex.cli import app as cli
-from cortex.vault import Vault, VaultError
+from keepfold import importers, sources, watch
+from keepfold.cli import app as cli
+from keepfold.vault import Vault, VaultError
 
 runner = CliRunner()
 
@@ -251,7 +251,7 @@ def test_cli_watch_add_list_remove(root_plain, tmp_path):
 
 @pytest.fixture
 def server_app(root_committed, home):
-    (root_committed / ".cortex").mkdir(exist_ok=True)
+    (root_committed / ".keepfold").mkdir(exist_ok=True)
     srv, a = _serve(root_committed)
     yield a
     srv.shutdown()

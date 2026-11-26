@@ -4,8 +4,8 @@ browse search and recall, a local runner only, passages as untrusted data."""
 import pytest
 from conftest import FakeEmbed, note
 
-from cortex import ask, cloudllm, localllm, semantic
-from cortex.vault import Vault
+from keepfold import ask, cloudllm, localllm, semantic
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -97,18 +97,18 @@ def test_no_local_runner_is_an_error(vault, monkeypatch):
     monkeypatch.setattr(localllm, "find", lambda config=None, **_: None)
     out = ask.ask(vault, "car motor")
     assert out == {"error": "no_local_model",
-                   "message": "Start Ollama (recommended) or LM Studio: cortex app → Setup."}
+                   "message": "Start Ollama (recommended) or LM Studio: keepfold app → Setup."}
 
 
 def test_no_search_model_is_an_error(vault, monkeypatch):
     monkeypatch.setattr(semantic, "_embedder", None)
     out = ask.ask(vault, "car motor", private=True, runner=Fake())
-    assert out["error"] == "not_set_up" and "cortex model download" in out["message"]
+    assert out["error"] == "not_set_up" and "keepfold model download" in out["message"]
 
 
 def test_the_cloud_runner_is_never_used(vault, monkeypatch, home):
-    (home / ".cortex").mkdir(exist_ok=True)
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir(exist_ok=True)
+    (home / ".keepfold" / "config.yaml").write_text(
         "cloudllm: {provider: openai, model: gpt-x, api_key_env: TEST_CLOUD_KEY}\n"
         "browse: {cloud_processing: true}\n", encoding="utf-8")
     monkeypatch.setenv("TEST_CLOUD_KEY", "sk-test")
@@ -124,7 +124,7 @@ def test_the_cloud_runner_is_never_used(vault, monkeypatch, home):
 
 
 def test_private_pages_need_the_private_flag(vault):
-    """`cortex ask` prints its answer and sources to a terminal an AI app may read: private
+    """`keepfold ask` prints its answer and sources to a terminal an AI app may read: private
     notes and private browsing join only with --private (private=True)."""
     note(vault.root, "notes/diary.md", "title: Diary\nprivate: true\n",
          "# Diary\n\nMy car motor secret.")

@@ -7,19 +7,19 @@ import pytest
 from conftest import run
 from typer.testing import CliRunner
 
-from cortex import people
-from cortex.catalog import Catalog
-from cortex.cli import app
-from cortex.dashboard import build_data
-from cortex.index import Index
-from cortex.lint import lint_report
-from cortex.vault import Vault, VaultError, is_private
+from keepfold import people
+from keepfold.catalog import Catalog
+from keepfold.cli import app
+from keepfold.dashboard import build_data
+from keepfold.index import Index
+from keepfold.lint import lint_report
+from keepfold.vault import Vault, VaultError, is_private
 
 pytestmark = pytest.mark.usefixtures("home")
 
 
 def _add(call, title="Dr Rao", **fields):
-    return call("cortex_add", {"kind": "person", "title": title,
+    return call("keepfold_add", {"kind": "person", "title": title,
                                "fields": {"relation": "professor", **fields}})
 
 
@@ -27,22 +27,22 @@ def test_add_read_by_exact_id_only(root):
     async def body(call):
         out = await _add(call)
         assert out["id"] == "people/dr-rao" and out["path"] == "people/dr-rao.md"
-        await call("cortex_patch", {"id": "people/dr-rao", "op": "append_to_section",
+        await call("keepfold_patch", {"id": "people/dr-rao", "op": "append_to_section",
                                     "target": "Who they are to me", "text": "- My advisor"})
-        r = await call("cortex_read", {"id": "people/dr-rao"})
+        r = await call("keepfold_read", {"id": "people/dr-rao"})
         assert r["kind"] == "person" and r["fields"] == (
             '<untrusted_note id="people/dr-rao">\nrelation: professor\ntier: work\n'
             '</untrusted_note>')
         assert r["text"].startswith('<untrusted_note id="people/dr-rao">')
         assert "My advisor" in r["text"] and r["next"].startswith("Private")
         await _add(call, title="Ravi", private=False)
-        pub = await call("cortex_read", {"id": "people/ravi"})
+        pub = await call("keepfold_read", {"id": "people/ravi"})
         assert "[[people/ravi]]" in pub["next"]
-        assert (await call("cortex_read", {"id": "dr-rao"}))["error"] == "unknown_id"
-        assert (await call("cortex_read", {"id": "people/nobody"}))["error"] == "unknown_id"
-        assert (await call("cortex_find", {"query": "advisor"}))["hits"] == []
-        assert (await call("cortex_find", {"query": "Rao"}))["hits"] == []
-        end = await call("cortex_end", {})
+        assert (await call("keepfold_read", {"id": "dr-rao"}))["error"] == "unknown_id"
+        assert (await call("keepfold_read", {"id": "people/nobody"}))["error"] == "unknown_id"
+        assert (await call("keepfold_find", {"query": "advisor"}))["hits"] == []
+        assert (await call("keepfold_find", {"query": "Rao"}))["hits"] == []
+        end = await call("keepfold_end", {})
         assert "rao" not in end["display"].lower()
 
     run(root, body)
@@ -55,7 +55,7 @@ def test_add_read_by_exact_id_only(root):
 def test_add_validation(root):
     async def body(call):
         assert (await _add(call, tier="boss"))["error"] == "invalid_argument"
-        bad = await call("cortex_add", {"kind": "person", "title": "X",
+        bad = await call("keepfold_add", {"kind": "person", "title": "X",
                                         "fields": {"relation": "Best Friend!"}})
         assert bad["error"] == "invalid_argument"
         extra = await _add(call, summary="hi")

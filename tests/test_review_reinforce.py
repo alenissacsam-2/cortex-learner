@@ -8,11 +8,11 @@ import pytest
 from conftest import events
 from test_review import ago, app, changes, live, today  # noqa: F401  (app is a fixture)
 
-from cortex import claims, prime, review, xray
-from cortex.app import server
-from cortex.events import EventLog
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import claims, prime, review, xray
+from keepfold.app import server
+from keepfold.events import EventLog
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -39,21 +39,21 @@ def test_words_keep_accents_hindi_and_cjk():
 
 
 def test_non_english_copies_still_merge_and_others_stay(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "profile.md").write_text(
         f"# Profile\n\n## About\n- {HINDI}\n- {HINDI} \n- {HINDI.replace('दिल्ली', 'मुंबई')}\n"
         "- Lives in München\n- Lives in Mönchen\n", encoding="utf-8")
-    assert Cortex(Vault(root)).tidy()["retired"] == 1  # only the exact Hindi copy
+    assert Keepfold(Vault(root)).tidy()["retired"] == 1  # only the exact Hindi copy
     assert len([r for r in claims.rows(Vault(root)) if r["status"] == "live"]) == 4
 
 
 # ---- R13b: reinforce ----
 
 def patch(root, client, text, confirmed=False):
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     c.sessions.client = client  # as the MCP handshake sets it
     try:
-        return c._call("cortex_patch", c.cortex_patch, {
+        return c._call("keepfold_patch", c.keepfold_patch, {
             "id": "me/preferences", "op": "append_to_section", "target": "Coding",
             "text": text, "user_confirmed": confirmed})
     finally:
@@ -76,12 +76,12 @@ def test_a_line_said_again_adds_up_across_sessions_and_apps(root, app):  # noqa:
 def test_a_swapped_comparative_is_a_change_of_mind_not_a_repeat(root, app):  # noqa: F811
     patch(root, "claude-code", "Prefers Rust over Go")
     out = patch(root, "cursor", "Prefers Go over Rust")
-    assert out["replaced"]  # Cortex settled the update itself
+    assert out["replaced"]  # Keepfold settled the update itself
     assert review.reinforced(events(root), review.known_texts(Vault(root))) == {}
 
 
 def test_reinforce_event_shape_and_fold(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_text("# Preferences\n\n## Coding\n- Uses Vim\n",
                                                 encoding="utf-8")
     (cid,) = [r["id"] for r in claims.rows(Vault(root)) if r["page"] == "preferences"]
@@ -98,7 +98,7 @@ def test_reinforce_event_shape_and_fold(root):
 
 
 def test_a_line_that_came_back_is_not_stale(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_text(
         f"# Preferences\n\n## Coding\n- Old habit (confirmed {ago(300)})\n"
         f"- Other old habit (confirmed {ago(300)})\n", encoding="utf-8")
@@ -112,7 +112,7 @@ def test_a_line_that_came_back_is_not_stale(root):
 
 
 def test_prime_ranks_a_line_that_came_back_first_among_equals(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_text(
         "# Preferences\n\n## Coding\n- Uses Vim\n- Uses tabs\n- Uses dark mode\n",
         encoding="utf-8")
@@ -175,8 +175,8 @@ def test_promote_by_the_xray_top_five(root, app):  # noqa: F811
     order = [xray.claim(k[f"Line {n}"]) for n in range(7)]
     v = Vault(root)
     for _ in range(9):
-        xray.record(v, "cortex_prime", "claude-code", {"preferences": order}, {}, 100)
-    xray.record(v, "cortex_context", "claude-code", {"preferences": order}, {}, 100)
+        xray.record(v, "keepfold_prime", "claude-code", {"preferences": order}, {}, 100)
+    xray.record(v, "keepfold_context", "claude-code", {"preferences": order}, {}, 100)
     assert cards(root) == []  # 9 primes (a context call is not one)
     xray.record(v, "prime-hook", "claude-code", {"preferences": order[5:] + order[:5]}, {}, 100)
     (x,) = cards(root)  # lines 0-2 were in all 10 top fives; one card a month, the first by id
@@ -192,7 +192,7 @@ def test_pin_to_core_then_none_this_month(root, app):  # noqa: F811
     assert view["promote"] == []  # one a month: the other line waits for next month
     core = (root / "me" / "core.md").read_text("utf-8")
     assert f"- {x['text']}" in core.split("## Core")[1]
-    # shortcut of cortex_patch's own path: the preferences copy is settled as the older line
+    # shortcut of keepfold_patch's own path: the preferences copy is settled as the older line
     assert x["text"] in (root / "me" / "preferences.md").read_text("utf-8").split("## Past")[1]
     (c,) = changes(root, "core")
     assert (c["op"], c["card"], c["confirm"]) == ("append_to_section", "promote_core", "clicked")

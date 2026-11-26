@@ -10,10 +10,10 @@ from test_review import changes
 from test_review_auto import VIM, commit, live, page, past, tidy
 from typer.testing import CliRunner
 
-from cortex import claims
-from cortex.events import EventLog
-from cortex.mcp_server import TIDY_FILE, Cortex
-from cortex.vault import Vault
+from keepfold import claims
+from keepfold.events import EventLog
+from keepfold.mcp_server import TIDY_FILE, Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -24,8 +24,8 @@ HAND = "Drinks green tea at night"
 
 def retire_040(root, pairs):
     """What the 0.4.0 sweep wrote: each (page, retired text, kept text, why) through
-    Cortex._auto_retire in one session, then a hand retire of HAND (no `auto`)."""
-    c = Cortex(Vault(root))
+    Keepfold._auto_retire in one session, then a hand retire of HAND (no `auto`)."""
+    c = Keepfold(Vault(root))
     rows = {(r["page"], r["text"]): r
             for r in claims.tiers(c.vault, EventLog(c.vault).iter_events())}
     c.session = c.sessions.start("ambient")
@@ -44,7 +44,7 @@ def retire_040(root, pairs):
 
 @pytest.fixture
 def merged(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     page(root, "preferences", [NEWS, PAPERS, *VIM[:2], PUNE, MUMBAI, HAND], "Habits")
     page(root, "profile", [NEWS, PAPERS], "About", private=True)
     commit(root)
@@ -56,7 +56,7 @@ def merged(root):
     pid = {r["text"]: r["id"] for r in claims.rows(v) if r["page"] == "profile"}
     v._mutate(v.path_for("me", "profile"),
               lambda t: claims.move_to_past(t, "profile", pid[PAPERS], "2026-11-21")[0])
-    c = Cortex(v)
+    c = Keepfold(v)
     c.session = c.sessions.start("ambient")
     c._auto_retire({"page": "profile", "id": pid[PAPERS]}, {"page": "profile", "id": pid[NEWS]},
                    "duplicate")
@@ -96,7 +96,7 @@ def test_repair_runs_once_and_survives_a_later_auto_retire(merged):
     assert tidy(root) == {"moved": 0, "retired": 1}
     assert json.loads((root / TIDY_FILE).read_text("utf-8"))["repaired"] == 1
     # a fresh 0.4.0-style wrong retire now would not be repaired: the repair ran once
-    c = Cortex(Vault(root))
+    c = Keepfold(Vault(root))
     rows = live(root, "preferences")
     c.session = c.sessions.start("ambient")
     assert c._auto_retire(rows[NEWS], rows[PAPERS], "duplicate")
@@ -110,7 +110,7 @@ def test_undo_takes_the_repair_back(merged):
     assert tidy(root)["restored"] == 1
     (sid,) = {e["session"] for e in events(root) if e["kind"] == "change"
               and e["payload"].get("change", {}).get("why") == "repair"}
-    from cortex.cli import app as cli
+    from keepfold.cli import app as cli
     r = CliRunner().invoke(cli, ["undo", sid, "--vault", str(root)])
     assert r.exit_code == 0, r.output
     assert PAPERS in past(root, "preferences") and PAPERS not in live(root, "preferences")

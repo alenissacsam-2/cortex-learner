@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from cortex import importers, life_sources, sources, voice_memos
-from cortex.app import actions, server, status
-from cortex.cli import app
-from cortex.vault import Vault, VaultError
+from keepfold import importers, life_sources, sources, voice_memos
+from keepfold.app import actions, server, status
+from keepfold.cli import app
+from keepfold.vault import Vault, VaultError
 
 runner = CliRunner()
 L = sources.Audience.LOCAL
@@ -102,11 +102,11 @@ def test_silence_and_hallucination_filters(tmp_path, root_plain, fake):
 def test_refuses_without_the_speech_model(tmp_path, root_plain, monkeypatch):
     monkeypatch.setattr(voice_memos, "load_transcriber", lambda: None)
     d = _memos(tmp_path)
-    with pytest.raises(VaultError, match="cortex model download --voice"):
+    with pytest.raises(VaultError, match="keepfold model download --voice"):
         voice_memos.voice_source(d)
     r = runner.invoke(app, ["import", str(d), "--source", "voice-memos", "--vault",
                             str(root_plain)])
-    assert r.exit_code == 1 and "cortex model download --voice" in r.output
+    assert r.exit_code == 1 and "keepfold model download --voice" in r.output
     assert not list((root_plain / "resources").glob("voice-*.md"))
 
 
@@ -170,11 +170,11 @@ def test_detect_and_card_wiring(tmp_path, root_plain):
 
 
 def test_model_download_voice_installs_the_pin_then_the_model(home, monkeypatch):
-    """`cortex model download --voice` is the one path that installs faster-whisper (uv pip,
-    pinned, into this Python) and fetches the model into ~/.cortex/models; faked here."""
+    """`keepfold model download --voice` is the one path that installs faster-whisper (uv pip,
+    pinned, into this Python) and fetches the model into ~/.keepfold/models; faked here."""
     import sys
 
-    from cortex import semantic, update
+    from keepfold import semantic, update
     ran, got = [], []
     monkeypatch.setattr(voice_memos.importlib.util, "find_spec", lambda name: None)
     monkeypatch.setattr(update, "install_dir", lambda: None)
@@ -197,8 +197,8 @@ def test_model_download_voice_uses_the_install_folders_pins_relatively(home, tmp
     folder: uv 0.9.15 splits a -c path that has a space (John Smith)."""
     import sys
 
-    from cortex import update
-    d = tmp_path / "John Smith" / "Cortex"
+    from keepfold import update
+    d = tmp_path / "John Smith" / "Keepfold"
     d.mkdir(parents=True)
     (d / "uv.exe").write_bytes(b"uv")
     (d / "constraints.txt").write_text("av==1\n")

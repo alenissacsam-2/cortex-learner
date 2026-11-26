@@ -14,9 +14,9 @@ import pytest
 from conftest import note
 from typer.testing import CliRunner
 
-from cortex import anki, importers, sources
-from cortex.cli import app
-from cortex.vault import Vault, VaultError
+from keepfold import anki, importers, sources
+from keepfold.cli import app
+from keepfold.vault import Vault, VaultError
 
 runner = CliRunner()
 C, L = sources.Audience.CLOUD, sources.Audience.LOCAL

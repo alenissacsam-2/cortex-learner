@@ -1,13 +1,13 @@
 {
-  "name": "cortex",
-  "displayName": "Cortex",
-  "version": "0.6.1",
-  "description": "Cortex, the learner's always-on local knowledge graph: MCP server, /cortex study skill, a UserPromptSubmit prime hook (re-served on SessionStart after compact, resume or clear, with a PreCompact reminder), a SessionEnd sweep hook and a PostToolUse taint hook.",
+  "name": "keepfold",
+  "displayName": "Keepfold",
+  "version": "0.6.2",
+  "description": "Keepfold, the learner's always-on local knowledge graph: MCP server, /keepfold study skill, a UserPromptSubmit prime hook (re-served on SessionStart after compact, resume or clear, with a PreCompact reminder), a SessionEnd sweep hook and a PostToolUse taint hook.",
   "author": {
     "name": "alenissacsam-2"
   },
-  "homepage": "https://github.com/alenissacsam-2/cortex-learner",
-  "repository": "https://github.com/alenissacsam-2/cortex-learner",
+  "homepage": "https://github.com/alenissacsam-2/keepfold",
+  "repository": "https://github.com/alenissacsam-2/keepfold",
   "license": "MIT",
   "keywords": ["learning", "spaced-repetition", "second-brain", "obsidian", "mcp", "local-first"]
 }

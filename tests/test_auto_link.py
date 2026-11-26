@@ -1,14 +1,14 @@
 """Unknown names a chat model logs become linked concepts (safety_net.Linker over MCP):
-cortex_log taught/self_report, felt_weak, problem_status concepts, an assessment's
+keepfold_log taught/self_report, felt_weak, problem_status concepts, an assessment's
 fields.concepts and an application's assessments. vault_mini, a fake embedder, no model."""
 
 import pytest
 from conftest import events, run
 from test_safety_net import KEY, Embed, hub
 
-from cortex import planner, semantic
-from cortex.catalog import Catalog
-from cortex.vault import Vault
+from keepfold import planner, semantic
+from keepfold.catalog import Catalog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -27,10 +27,10 @@ def test_taught_unknown_name_is_created_under_the_session_area_and_reused(root, 
     outs = []
 
     async def body(call):
-        await call("cortex_grade", {"concept": "two-pointers", "question": "q",
+        await call("keepfold_grade", {"concept": "two-pointers", "question": "q",
                                     "learner_answer": "a", "verdict": "correct"})
         for _ in range(2):
-            outs.append(await call("cortex_log", {"kind": "taught", "payload": {
+            outs.append(await call("keepfold_log", {"kind": "taught", "payload": {
                 "concept": "Sliding window", "summary": "a window that slides"}}))
 
     run(root, body)
@@ -43,12 +43,12 @@ def test_taught_unknown_name_is_created_under_the_session_area_and_reused(root, 
     page = (root / "concepts" / "sliding-window.md").read_text(encoding="utf-8")
     assert "[[topic-windows]]" in page  # related: the hub topics.attach picked
     assert taught(root) == ["concept:sliding-window"] * 2
-    assert not (root.parent / "home" / ".cortex" / "models").exists()  # nothing downloaded
+    assert not (root.parent / "home" / ".keepfold" / "models").exists()  # nothing downloaded
 
 
 def test_no_session_area_and_no_embedder_goes_to_from_chats(root):
     async def body(call):
-        await call("cortex_log", {"kind": "self_report", "payload": {
+        await call("keepfold_log", {"kind": "self_report", "payload": {
             "concept": "OOP", "verdict": "partial"}})
 
     run(root, body)
@@ -61,7 +61,7 @@ def test_near_duplicate_resolves_to_the_existing_concept(root):
     before = concepts(root)
 
     async def body(call):
-        out = await call("cortex_log", {"kind": "taught", "payload": {"concept": "Two pointer"}})
+        out = await call("keepfold_log", {"kind": "taught", "payload": {"concept": "Two pointer"}})
         assert out["display_line"] == "Taught, not yet checked: Two pointers"
 
     run(root, body)
@@ -73,9 +73,9 @@ def test_junk_secret_and_hidden_names_create_nothing(root):
 
     async def body(call):
         for name in ("programming", "Private concept", "my Private concept notes"):
-            out = await call("cortex_log", {"kind": "taught", "payload": {"concept": name}})
+            out = await call("keepfold_log", {"kind": "taught", "payload": {"concept": name}})
             assert "inbox.md" in out["display_line"] and "Created" not in out["display_line"]
-        out = await call("cortex_log", {"kind": "taught", "payload": {"concept": KEY}})
+        out = await call("keepfold_log", {"kind": "taught", "payload": {"concept": KEY}})
         assert "error" in out or "inbox" in out["display_line"]
 
     run(root, body)
@@ -87,7 +87,7 @@ def test_junk_secret_and_hidden_names_create_nothing(root):
 
 def test_felt_weak_name_becomes_a_concept(root):
     async def body(call):
-        await call("cortex_log", {"kind": "assessment_result", "payload": {
+        await call("keepfold_log", {"kind": "assessment_result", "payload": {
             "company": "Initech", "assessment_kind": "oa", "date": "2026-11-26",
             "outcome": "pending", "felt_weak": ["grid DP", "Two pointers"]}})
 
@@ -99,12 +99,12 @@ def test_felt_weak_name_becomes_a_concept(root):
 
 def test_assessment_concepts_are_tested_and_an_application_links_it(root):
     async def body(call):
-        out = await call("cortex_add", {"kind": "assessment", "title": "Hyland OA", "fields": {
+        out = await call("keepfold_add", {"kind": "assessment", "title": "Hyland OA", "fields": {
             "company": "Hyland", "kind": "oa", "date": "2026-12-01", "outcome": "pending",
             "concepts": ["Two pointers", "Docker volumes", "help"],
             "tests": {"Array basics": 2}}})
         assert out["id"] == "hyland-oa"
-        out = await call("cortex_add", {"kind": "application", "title": "Hyland SDE",
+        out = await call("keepfold_add", {"kind": "application", "title": "Hyland SDE",
                                         "fields": {"company": "Hyland", "role": "SDE"}})
         assert out["id"] == "hyland-sde"
 
@@ -122,12 +122,12 @@ def test_assessment_concepts_are_tested_and_an_application_links_it(root):
 
 def test_problem_status_creates_an_unknown_problem_with_its_concepts(root):
     async def body(call):
-        await call("cortex_log", {"kind": "problem_status", "payload": {
+        await call("keepfold_log", {"kind": "problem_status", "payload": {
             "problem": "Trapping Rain Water", "status": "attempted",
             "concepts": ["Two pointers", "Monotonic stack"]}})
-        await call("cortex_log", {"kind": "problem_status", "payload": {
+        await call("keepfold_log", {"kind": "problem_status", "payload": {
             "problem": "Trapping Rain Water", "status": "solved"}})
-        await call("cortex_log", {"kind": "problem_status", "payload": {
+        await call("keepfold_log", {"kind": "problem_status", "payload": {
             "problem": "lc-167", "status": "attempted"}})
 
     run(root, body)

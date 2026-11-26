@@ -1,4 +1,4 @@
-"""Chat's offline test (cortex.chat_eval): the made-up vault, the scoring rules and the Chat
+"""Chat's offline test (keepfold.chat_eval): the made-up vault, the scoring rules and the Chat
 fixes the test found. Model questions are not run here: the end-to-end test answers them with
 a loopback runner only to check what reaches a model."""
 
@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 from test_chat import Stream
 
-from cortex import chat, chat_eval, chat_facts, chat_study, levels, semantic, taint
-from cortex.events import EventLog
-from cortex.vault import Vault, VaultError
+from keepfold import chat, chat_eval, chat_facts, chat_study, levels, semantic, taint
+from keepfold.events import EventLog
+from keepfold.vault import Vault, VaultError
 
 pytestmark = pytest.mark.usefixtures("home")
 TODAY = chat_eval.TODAY
@@ -186,7 +186,7 @@ def test_a_compares_page_passages_are_recorded_as_served(root):
 
 def test_forget_drops_the_private_page_cache(tmp_path):
     """Audit 21 Nov C15: the run's deleted vault leaves no private pages in memory."""
-    from cortex import ask
+    from keepfold import ask
 
     ask._PRIVATE[tmp_path] = {"notes/x.md": ("memo",)}
     chat_eval.forget(tmp_path)
@@ -248,7 +248,7 @@ def test_a_second_run_is_refused_while_one_runs():
 
 
 def test_find_model_never_takes_a_bigger_model(monkeypatch):
-    from cortex import localllm
+    from keepfold import localllm
 
     big = localllm.Runner("lmstudio", "http://127.0.0.1:1234", "qwen3.5-9b")
     monkeypatch.setattr(localllm, "status", lambda: {"runner": big})
@@ -332,7 +332,7 @@ def _files(root: Path) -> dict[str, str]:
     out = {}
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if p.is_file() and p.suffix in _KEEP and not rel.startswith((".cortex/", "events/")):
+        if p.is_file() and p.suffix in _KEEP and not rel.startswith((".keepfold/", "events/")):
             out[rel] = p.read_text(encoding="utf-8")
     return out
 
@@ -343,7 +343,7 @@ def test_the_made_up_vault_end_to_end(tmp_path, monkeypatch):
     r = chat_eval.run(use_model=False, keep=tmp_path / "vault")
     rows = {q["id"]: q for q in r["questions"]}
 
-    # every question Cortex answers with no model passes; the model ones are blocked, and so
+    # every question Keepfold answers with no model passes; the model ones are blocked, and so
     # is the result (not a fail)
     code = [q["id"] for q in sp["questions"] if q["mode"] == "code"]
     assert {i: rows[i]["why"] for i in code if rows[i]["status"] != "pass"} == {}
@@ -367,8 +367,8 @@ def test_the_made_up_vault_end_to_end(tmp_path, monkeypatch):
     s = Stream("openai", ["I could not find that in your notes."])
     model_qs = [q for q in sp["questions"] if q["mode"] == "model"]
     try:
-        from cortex.catalog import Catalog
-        from cortex.index import Index
+        from keepfold.catalog import Catalog
+        from keepfold.index import Index
 
         semantic.vectors(Index(v, Catalog.load(v)), _hash_embed, 64)
         with taint.pinned(sp["meta"]["config"]), chat_eval._watching():
@@ -447,7 +447,7 @@ def test_the_made_up_vault_end_to_end(tmp_path, monkeypatch):
     # span of a week that runs into it (week 31 ends 2 Aug, week 36 starts 31 Aug) names it
     every = {p.relative_to(v.root).as_posix(): p.read_text(encoding="utf-8", errors="replace")
              for p in v.root.rglob("*") if p.is_file() and p.suffix in _KEEP
-             and not p.relative_to(v.root).as_posix().startswith(".cortex/browse/chat/")}
+             and not p.relative_to(v.root).as_posix().startswith(".keepfold/browse/chat/")}
     span = re.compile(r"(?:date|end): 2026-08-\d\d|Up: \[\[rollup-2026-08\]\]")
     aug = [(k, m[0]) for k, t in every.items()
            for m in re.finditer(r"(?m)^.*(?:2026-08|August 2026).*$", t)

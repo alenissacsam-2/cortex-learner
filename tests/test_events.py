@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from cortex import events
-from cortex.events import EventLog, local_day
-from cortex.vault import Vault, VaultError
+from keepfold import events
+from keepfold.events import EventLog, local_day
+from keepfold.vault import Vault, VaultError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "vault_mini"
 NOON = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
@@ -210,7 +210,7 @@ def test_keys_are_shared_across_logs_and_follow_a_revert(ev):
     assert grade(b, key="k1", now=NOON + timedelta(hours=1)) == first
     [path] = files(ev)
     assert path.read_bytes().count(b"\n") == 1
-    path.write_bytes(b"")  # cortex undo reverts the file
+    path.write_bytes(b"")  # keepfold undo reverts the file
     again = grade(a, key="k1", now=NOON + timedelta(hours=2))
     assert again["id"] != first["id"] and path.read_bytes().count(b"\n") == 1
 
@@ -362,7 +362,7 @@ def test_another_process_append_and_key_are_seen(ev):
 
 
 @pytest.mark.parametrize("how,keys", [
-    ("replace", ["ka", "kc"]),  # cortex undo: temp file + os.replace, here also longer
+    ("replace", ["ka", "kc"]),  # keepfold undo: temp file + os.replace, here also longer
     ("in_place_same_size", ["ka", "kc"]),
     ("shorter", ["ka"]),
     ("grew_tail_changed", ["ka", "kb"]),

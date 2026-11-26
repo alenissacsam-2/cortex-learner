@@ -1,6 +1,6 @@
 [project]
-name = "cortex-learner"
-version = "0.6.1"
+name = "keepfold"
+version = "0.6.2"
 description = "A local-first second brain: Markdown + JSONL vault, MCP server, CLI and skill."
 requires-python = ">=3.12"
 license = "MIT"
@@ -24,15 +24,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# voice memos: local transcription, installed only by `cortex model download --voice`
+# voice memos: local transcription, installed only by `keepfold model download --voice`
 voice = ["faster-whisper==1.2.1"]
 
 [project.scripts]
-cortex = "cortex.taint:main"
+keepfold = "keepfold.taint:main"
 
 [project.gui-scripts]
-cortex-app = "cortex.app.launch:main"
-cortex-receiver = "cortex.app.launch:receiver"
+keepfold-app = "keepfold.app.launch:main"
+keepfold-receiver = "keepfold.app.launch:receiver"
 
 [dependency-groups]
 dev = ["pytest", "pytest-xdist>=3.8.0", "ruff"]
@@ -42,12 +42,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cortex"]
+packages = ["src/keepfold"]
 
 [tool.hatch.build.targets.wheel.force-include]
 # the dashboard's Help tab and glossary; the repo files stay the one source (dashboard._help)
-"skills/cortex/modes/help.md" = "cortex/assets/help/help.md"
-"docs/GUIDE.md" = "cortex/assets/help/GUIDE.md"
+"skills/keepfold/modes/help.md" = "keepfold/assets/help/help.md"
+"docs/GUIDE.md" = "keepfold/assets/help/GUIDE.md"
 
 [tool.ruff]
 line-length = 100

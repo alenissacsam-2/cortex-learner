@@ -1,5 +1,5 @@
 """E3 Learning loop (docs/design/v6/TEST-PLAN.md §4): start, ask, grade, a spot-check flip that
-keeps the ask's links (G1), end and undo, then the fold against `cortex today` and `replay`.
+keeps the ask's links (G1), end and undo, then the fold against `keepfold today` and `replay`.
 In-process: the MCP server over the SDK's memory connection, the CLI through CliRunner."""
 
 import json
@@ -12,10 +12,10 @@ import pytest
 from conftest import FIXTURES, events, git, run
 from typer.testing import CliRunner
 
-from cortex import levels
-from cortex.cli import app
-from cortex.events import EventLog, local_day
-from cortex.vault import Vault
+from keepfold import levels
+from keepfold.cli import app
+from keepfold.events import EventLog, local_day
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -42,7 +42,7 @@ def load_ladder(root: Path) -> None:
 
 
 def stamps(root: Path) -> dict[str, tuple]:
-    return {n.id: (n.fields.get("cortex_status"), str(n.fields.get("cortex_next")))
+    return {n.id: (n.fields.get("keepfold_status"), str(n.fields.get("keepfold_next")))
             for n in Vault(root).iter_notes("concept")}
 
 
@@ -52,30 +52,30 @@ def test_e3_learning_loop(root, tmp_path):
 
     async def body(call):
         # 1. a learn session: the card holds no private text
-        start = await call("cortex_start", {"mode": "learn"})
+        start = await call("keepfold_start", {"mode": "learn"})
         got["session"] = start["session"]
         assert not any(s in json.dumps(start) for s in PRIVATE), start
 
         # 2. ask with the item's links; grade with one hint; a second grade is refused (#15)
-        ask = await call("cortex_ask", ASK)
+        ask = await call("keepfold_ask", ASK)
         got["ask"] = ask["item_id"]
-        g = await call("cortex_grade", {"item_id": ask["item_id"], "learner_answer": "two ends",
+        g = await call("keepfold_grade", {"item_id": ask["item_id"], "learner_answer": "two ends",
                                         "verdict": "correct", "hints": 1, "confidence": 3})
         assert "error" not in g, g
-        again = await call("cortex_grade", {"item_id": ask["item_id"], "learner_answer": "x",
+        again = await call("keepfold_grade", {"item_id": ask["item_id"], "learner_answer": "x",
                                             "verdict": "wrong"})
         assert again["error"] == "invalid_argument" and "already graded" in again["message"]
 
         # 3. reflect lists the grade to spot-check; a flip keeps the ask's links (G1)
         gid = next(e["id"] for e in events(root) if e["kind"] == "grade")
-        rows = (await call("cortex_reflect"))["spot_check"]
+        rows = (await call("keepfold_reflect"))["spot_check"]
         assert [r["event_id"] for r in rows] == [gid]
-        flip = await call("cortex_log", {"kind": "spot_check",
+        flip = await call("keepfold_log", {"kind": "spot_check",
                                          "payload": {"event_id": gid, "verdict": "wrong"}})
         assert "flipped correct to wrong" in flip["display_line"]
 
         # 4. end: the session's changes land in one commit
-        got["commit"] = (await call("cortex_end", {"summary": "two pointers"}))["commit"]
+        got["commit"] = (await call("keepfold_end", {"summary": "two pointers"}))["commit"]
 
     run(root, body)
     evs = events(root)
@@ -90,13 +90,13 @@ def test_e3_learning_loop(root, tmp_path):
 
     sid = got["session"]
     subjects = git(root, "log", "--format=%s").splitlines()
-    assert [s for s in subjects if s.startswith(f"cortex: session {sid}")] == [subjects[0]]
+    assert [s for s in subjects if s.startswith(f"keepfold: session {sid}")] == [subjects[0]]
     assert git(root, "rev-parse", "HEAD").strip().startswith(got["commit"])
     assert "reverted" in cli("undo", sid, vault=root)
-    assert git(root, "log", "-1", "--format=%s").strip() == f"cortex: undo {sid}"
+    assert git(root, "log", "-1", "--format=%s").strip() == f"keepfold: undo {sid}"
     assert not [e for e in events(root) if e.get("session") == sid]
 
-    # 5. the fold: `cortex today` shows the fold's levels
+    # 5. the fold: `keepfold today` shows the fold's levels
     load_ladder(root)
     today = local_day(datetime.now(UTC))
     states = levels.replay(Vault(root), today)[0]

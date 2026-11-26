@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from conftest import _vault, run
 
-from cortex import importers, loops, watch
-from cortex.vault import Vault
+from keepfold import importers, loops, watch
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -149,7 +149,7 @@ def test_a_private_note_makes_a_private_loop_no_list_shows(root_plain, tmp_path)
     assert [r["id"] for r in loops.loops(v, None)] == ["water-the-plants"]
 
     async def body(call):
-        hits = (await call("cortex_find", {"kind": "loop"}))["hits"]
+        hits = (await call("keepfold_find", {"kind": "loop"}))["hits"]
         assert [h["id"] for h in hits] == ["water-the-plants"]
 
     run(root_plain, body)

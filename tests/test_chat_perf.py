@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from cortex.browse import load_settings, sites
-from cortex.vault import Vault
+from keepfold.browse import load_settings, sites
+from keepfold.vault import Vault
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("bench_chat_data",
@@ -30,8 +30,8 @@ def heavy(tmp_path_factory):
 
 @pytest.fixture
 def lists(home):
-    (home / ".cortex").mkdir()
-    (home / ".cortex" / "config.yaml").write_text(
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold" / "config.yaml").write_text(
         "browse:\n  visible_to_claude: true\n  private_domains: [s1.example, docs.s2.example]\n"
         "  deny_domains: [docs.s4.example]\n", encoding="utf-8")
 

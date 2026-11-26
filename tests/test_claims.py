@@ -7,10 +7,10 @@ import pytest
 from conftest import run, tiers
 from typer.testing import CliRunner
 
-from cortex import claims
-from cortex.cli import app
-from cortex.events import EventLog, local_day
-from cortex.vault import Vault
+from keepfold import claims
+from keepfold.cli import app
+from keepfold.events import EventLog, local_day
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -26,7 +26,7 @@ ID = re.compile(r"^c-[a-z2-7]{5}$")
 def write(root, rel, text):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(text.encode("utf-8"))  # a hand edit: straight to disk, no Cortex
+    p.write_bytes(text.encode("utf-8"))  # a hand edit: straight to disk, no Keepfold
 
 
 def read(root, rel):
@@ -81,19 +81,19 @@ def test_ids_written_and_tiers(root):
     goal = {"id": "me/goals", "op": "append_to_section", "target": "Now"}
 
     async def body(call):
-        out = await call("cortex_patch", {**pref, "text": "- Vim ^c-zzzzz"})  # model id ignored
+        out = await call("keepfold_patch", {**pref, "text": "- Vim ^c-zzzzz"})  # model id ignored
         assert ID.match(out["claim"]) and out["claim"] != "c-zzzzz"
-        await call("cortex_patch", {**goal, "text": "Ship v5"})
-        await call("cortex_read", {"id": "raw/src.md"})
-        await call("cortex_patch", {**goal, "text": "- Tabs"})
-        assert (await call("cortex_patch", {**pref, "text": "- Spaces"}))["changed"] is True
-        await call("cortex_end")
-        await call("cortex_read", {"id": "raw/src.md"})  # no session: marks the next ambient
-        await call("cortex_patch", {**goal, "text": "- Fish shell"})
-        await call("cortex_end")
-        await call("cortex_patch", {**goal, "text": "- Dark mode"})  # v6 T2: a close keeps it
-        await call("cortex_start", {"mode": "capture"})
-        await call("cortex_patch", {**goal, "text": "- Light mode"})
+        await call("keepfold_patch", {**goal, "text": "Ship v5"})
+        await call("keepfold_read", {"id": "raw/src.md"})
+        await call("keepfold_patch", {**goal, "text": "- Tabs"})
+        assert (await call("keepfold_patch", {**pref, "text": "- Spaces"}))["changed"] is True
+        await call("keepfold_end")
+        await call("keepfold_read", {"id": "raw/src.md"})  # no session: marks the next ambient
+        await call("keepfold_patch", {**goal, "text": "- Fish shell"})
+        await call("keepfold_end")
+        await call("keepfold_patch", {**goal, "text": "- Dark mode"})  # v6 T2: a close keeps it
+        await call("keepfold_start", {"mode": "capture"})
+        await call("keepfold_patch", {**goal, "text": "- Light mode"})
 
     run(root, body)
     prefs = read(root, "me/preferences.md")
@@ -126,30 +126,30 @@ def test_revise_retire_reject_and_not_me(root):
 
     async def body(call):
         p = {"id": "me/preferences", "target": vim}
-        bad = await call("cortex_patch", {**p, "op": "revise", "text": "Neovim"})
+        bad = await call("keepfold_patch", {**p, "op": "revise", "text": "Neovim"})
         assert bad["error"] == "invalid_argument" and "user_confirmed" in bad["message"]
-        new = (await call("cortex_patch", {**p, "op": "revise", "text": "- Neovim",
+        new = (await call("keepfold_patch", {**p, "op": "revise", "text": "- Neovim",
                                            "user_confirmed": True}))["claim"]
         assert ID.match(new) and new != vim
-        assert (await call("cortex_patch", {**p, "op": "retire", "target": f"^{tabs}"}))[
+        assert (await call("keepfold_patch", {**p, "op": "retire", "target": f"^{tabs}"}))[
             "claim"] == tabs
-        gone = await call("cortex_patch", {**p, "op": "retire", "target": tabs})
+        gone = await call("keepfold_patch", {**p, "op": "retire", "target": tabs})
         assert gone["error"] == "invalid_argument"
-        g = await call("cortex_patch", {"id": "me/goals", "op": "revise", "target": goal,
+        g = await call("keepfold_patch", {"id": "me/goals", "op": "revise", "target": goal,
                                         "text": "Pass the OA with 3/3"})
         assert ID.match(g["claim"])
-        no = await call("cortex_patch", {"id": "me/portrait", "op": "retire", "target": vim})
+        no = await call("keepfold_patch", {"id": "me/portrait", "op": "retire", "target": vim})
         assert no["error"] == "invalid_argument"
         q = {"id": "me/preferences", "op": "append_to_section", "target": "Personal",
              "text": "Night owl"}
         write(root, "inbox.md", "# Inbox\n\n## About me (unconfirmed)\n- Personal: Night owl "
-              f"(proposed {d}, me/preferences)\n")  # as an older Cortex queued it (D3)
-        rej = await call("cortex_patch", {"id": "me/preferences", "op": "reject",
+              f"(proposed {d}, me/preferences)\n")  # as an older Keepfold queued it (D3)
+        rej = await call("keepfold_patch", {"id": "me/preferences", "op": "reject",
                                           "target": "Personal: Night owl"})
         assert rej["changed"] is True and "claim" not in rej
-        again = await call("cortex_patch", {**q, "text": "- night   OWL"})
+        again = await call("keepfold_patch", {**q, "text": "- night   OWL"})
         assert again["queued"] is False and "Not me" in again["summary"]
-        ctx = (await call("cortex_context"))["context"]
+        ctx = (await call("keepfold_context"))["context"]
         assert "Neovim" in ctx and "Vim (" not in ctx and "Tabs" not in ctx
         assert "Night owl" not in ctx and "^c-" not in ctx and "(since" not in ctx  # R13a
 
@@ -179,7 +179,7 @@ def test_serving_newest_first_never_past_or_not_me(root):
                                "## Later\n- Learn Rust\n\n## Past\n- Old goal\n")
 
     async def body(call):
-        ctx = (await call("cortex_context"))["context"]
+        ctx = (await call("keepfold_context"))["context"]
         assert len(ctx) <= 2400
         assert ctx.index("new one") < ctx.index("old one") and "^c-" not in ctx
         assert ctx.index("Terse later") < ctx.index("Terse first")
@@ -188,9 +188,9 @@ def test_serving_newest_first_never_past_or_not_me(root):
             assert hidden not in ctx
         assert "pref 399" in ctx  # the cap trims the oldest lines
         assert '<untrusted_note id="me/goals">' in ctx
-        coding = (await call("cortex_context", {"scope": "coding"}))["context"]
+        coding = (await call("keepfold_context", {"scope": "coding"}))["context"]
         assert "Ship Phase" not in coding and "new one" in coding
-        home = (await call("cortex_start"))["preferences"]
+        home = (await call("keepfold_start"))["preferences"]
         assert "Ship Phase 2" in home and "never" not in home
 
     run(root, body)
@@ -199,7 +199,7 @@ def test_serving_newest_first_never_past_or_not_me(root):
 def test_own_until_marker_expires_on_read_and_lints(root):
     """Agenda 4: a live line's `(until DAY)` stops it being served after DAY (DAY itself still
     is); nothing moves until the user retires it, which lint suggests."""
-    from cortex import export_context, lint
+    from keepfold import export_context, lint
     d = today()
     EventLog(Vault(root)).append(session="cli", kind="change", source="tutor", fields={
         "payload": {"note": "claims_baseline", "claims": {}}})  # hand lines: tier typed
@@ -213,13 +213,13 @@ def test_own_until_marker_expires_on_read_and_lints(root):
     assert claims.expired(f"x (until {d})", d) is None and claims.expired("x", d) is None
 
     async def body(call):
-        for out in ((await call("cortex_context"))["context"],
-                    (await call("cortex_prime", {"prompt": "exam mode today"}))["context"],
-                    str((await call("cortex_as_me", {"task": "x", "audience": "friend"}))[
+        for out in ((await call("keepfold_context"))["context"],
+                    (await call("keepfold_prime", {"prompt": "exam mode today"}))["context"],
+                    str((await call("keepfold_as_me", {"task": "x", "audience": "friend"}))[
                         "self"])):
             assert "Old exam mode" not in out and "Gone" not in out
             assert "Today only" in out and "Far future" in out and "Plain line" in out
-        added = await call("cortex_patch", {"id": "me/preferences", "op": "append_to_section",
+        added = await call("keepfold_patch", {"id": "me/preferences", "op": "append_to_section",
                                             "target": "Communication", "user_confirmed": True,
                                             "text": "- Added (until 2999-02-02)"})
         assert ID.match(added["claim"])
@@ -266,10 +266,10 @@ def test_confirming_an_inferred_line_replaces_it(root):
          "text": "Short answers (from a chat on 2026-11-07)"}
 
     async def body(call):
-        guess = await call("cortex_patch", p)  # D3: saved at once, as a guess
+        guess = await call("keepfold_patch", p)  # D3: saved at once, as a guess
         assert guess["changed"] is True and "queued" not in guess
-        assert (await call("cortex_reflect"))["unconfirmed"] == []
-        out = await call("cortex_patch", {**p, "user_confirmed": True})
+        assert (await call("keepfold_reflect"))["unconfirmed"] == []
+        out = await call("keepfold_patch", {**p, "user_confirmed": True})
         assert out["changed"] is True and [r["id"] for r in out["replaced"]] == [guess["claim"]]
 
     run(root, body)
@@ -288,23 +288,23 @@ def test_saved_list_and_reflect_yes_promotes_only_when_clean(root):
         return {"kind": "reconfirm", "payload": {"claim": cid, "verdict": "yes"}}
 
     async def body(call):
-        ship = (await call("cortex_patch", {**goal, "text": "Ship v5"}))["claim"]
-        other = (await call("cortex_patch", {**goal, "text": "Agent <b>two</b>"}))["claim"]
-        await call("cortex_log", yes(ship))  # ambient: no promotion
-        await call("cortex_end")
-        await call("cortex_start", {"mode": "reflect"})
-        saved = (await call("cortex_reflect"))["saved"]
+        ship = (await call("keepfold_patch", {**goal, "text": "Ship v5"}))["claim"]
+        other = (await call("keepfold_patch", {**goal, "text": "Agent <b>two</b>"}))["claim"]
+        await call("keepfold_log", yes(ship))  # ambient: no promotion
+        await call("keepfold_end")
+        await call("keepfold_start", {"mode": "reflect"})
+        saved = (await call("keepfold_reflect"))["saved"]
         assert [r["id"] for r in saved["claims"]] == [ship, other]
         assert saved["claims"][1]["text"].startswith('<untrusted_note id="claim">')
-        assert saved["claims"][0]["undo"].startswith("cortex undo s_")
-        await call("cortex_log", yes(ship))  # a clean, user-started reflect: promotes
-        await call("cortex_end")
-        await call("cortex_read", {"id": "raw/src.md"})
-        planted = (await call("cortex_patch", {**goal, "text": "Planted"}))["claim"]
-        await call("cortex_end")
-        await call("cortex_start", {"mode": "reflect"})  # starts exposed (read < 2 h ago)
-        await call("cortex_log", yes(other))
-        await call("cortex_log", yes(planted))
+        assert saved["claims"][0]["undo"].startswith("keepfold undo s_")
+        await call("keepfold_log", yes(ship))  # a clean, user-started reflect: promotes
+        await call("keepfold_end")
+        await call("keepfold_read", {"id": "raw/src.md"})
+        planted = (await call("keepfold_patch", {**goal, "text": "Planted"}))["claim"]
+        await call("keepfold_end")
+        await call("keepfold_start", {"mode": "reflect"})  # starts exposed (read < 2 h ago)
+        await call("keepfold_log", yes(other))
+        await call("keepfold_log", yes(planted))
 
     run(root, body)
     assert {k: v for k, v in tiers(root).items() if k != "Test learner, synthetic."} == {
@@ -319,7 +319,7 @@ def test_saved_list_and_reflect_yes_promotes_only_when_clean(root):
     lines = out.output.splitlines()
     assert lines[0] == "Claim lines saved unasked: 2"
     assert "from outside text" in lines[1] and "Planted" in lines[1]
-    assert lines[2].strip().startswith("undo: cortex undo s_")
+    assert lines[2].strip().startswith("undo: keepfold undo s_")
     assert "unasked" in lines[3] and "Agent" in lines[3]
     assert "Ship" not in out.output.split("me/ changes")[0]
     assert "append_to_section Now" in out.output  # Ship v5's write, now a confirmed line
@@ -349,7 +349,7 @@ def test_a_relayed_yes_from_the_cutoff_is_ask_until_a_clean_reflect_yes(root, mo
     """A relayed yes from RELAYED_FROM on is served (ask) and is not act-grade (export,
     unasked list); earlier relayed and clicked yeses are the user's, served plain. A clean
     reflect yes stamps `reflected`, which is act-grade."""
-    from cortex import export_context, know, prime
+    from keepfold import export_context, know, prime
 
     monkeypatch.setattr(claims, "RELAYED_FROM", "2026-11-17")
     write(root, "me/preferences.md", "# Preferences\n\n## Study\n- Early relayed ^c-aaaaa\n"
@@ -388,9 +388,9 @@ def test_a_relayed_yes_from_the_cutoff_is_ask_until_a_clean_reflect_yes(root, mo
 
 def test_expired_claims_drop_out_of_every_consumer(root):
     """Review r4 L1: a line past its own (until …) day is not served by reflect's saved list,
-    cortex know or the claim resolver."""
-    from cortex import know
-    from cortex.vault import VaultError
+    keepfold know or the claim resolver."""
+    from keepfold import know
+    from keepfold.vault import VaultError
 
     write(root, "me/preferences.md", "# Preferences\n\n## Study\n"
           "- prefers night study (until 2026-10-01) ^c-bbbbb\n- likes tea ^c-ccccc\n")
@@ -428,11 +428,11 @@ def test_an_old_setup_page_becomes_a_claim_page_and_keeps_every_line(root):
         "Windows 11 and VS Code": "legacy"}  # no recorded baseline: the lines as they are
 
     async def body(call):
-        ctx = (await call("cortex_context", {"scope": "environment"}))["context"]
+        ctx = (await call("keepfold_context", {"scope": "environment"}))["context"]
         assert "RTX 4060" in ctx and "Windows 11" in ctx and "^c-" not in ctx
-        prime = (await call("cortex_prime", {"prompt": "my laptop GPU"}))["context"]
+        prime = (await call("keepfold_prime", {"prompt": "my laptop GPU"}))["context"]
         assert "- [Hardware] Laptop with an RTX 4060" in prime
-        out = await call("cortex_patch", {"id": "me/setup", "op": "retire",
+        out = await call("keepfold_patch", {"id": "me/setup", "op": "retire",
                                           "target": rows[0]["id"]})
         assert out["claim"] == rows[0]["id"]
 

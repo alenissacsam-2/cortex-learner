@@ -1,4 +1,4 @@
-"""v6 agenda 7: `cortex export context`, the prime core as a paste-ready snapshot."""
+"""v6 agenda 7: `keepfold export context`, the prime core as a paste-ready snapshot."""
 
 import json
 import re
@@ -8,10 +8,10 @@ import pytest
 from conftest import git
 from typer.testing import CliRunner
 
-from cortex import export_context as ec
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.vault import Vault
+from keepfold import export_context as ec
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -56,7 +56,7 @@ def _setup(root, prefs=PREFS):
                fields={"payload": {"note": "claims_baseline", "claims": {}}})
     for cid, (page, tier) in TIERS.items():
         log.append(session="cli", kind="change", source="tutor", fields={"payload": {
-            "change": {"tool": "cortex_patch", "id": page, "claim": f"c-{cid}", "tier": tier}}})
+            "change": {"tool": "keepfold_patch", "id": page, "claim": f"c-{cid}", "tier": tier}}})
 
 
 def _build(root):
@@ -67,7 +67,7 @@ def _build(root):
 def test_only_confirmed_and_typed_live_lines_leave(root):
     _setup(root)
     text, skipped = _build(root)
-    assert text.startswith("# About me (Cortex snapshot, 2026-11-16)")
+    assert text.startswith("# About me (Keepfold snapshot, 2026-11-16)")
     for want in ("Test learner, synthetic.", "- Ask before you teach.",
                  "- [Communication] Short answers please",
                  "- [Communication] Direct talker", "- Finish thesis"):
@@ -87,7 +87,7 @@ def test_profile_without_summary_keeps_only_act_grade_lines(root):
         "# Profile\n\n## Brief\n- Typed fact ^c-kkkkk\n- Exposed guess ^c-lllll\n"
         "- Old fact (until 2020-01-01) ^c-mmmmm\n", encoding="utf-8")
     EventLog(Vault(root)).append(session="cli", kind="change", source="tutor", fields={
-        "payload": {"change": {"tool": "cortex_patch", "id": "profile", "claim": "c-lllll",
+        "payload": {"change": {"tool": "keepfold_patch", "id": "profile", "claim": "c-lllll",
                                "tier": "exposed"}}})
     text, _ = _build(root)
     profile = text.split("## Profile\n")[1].split("\n\n")[0]
@@ -146,8 +146,8 @@ def test_cli_writes_outside_the_vault_only_and_writes_nothing_in_it(root, tmp_pa
 def test_cli_refuses_an_excluded_folder(root, tmp_path, home):
     work = tmp_path / "Work"
     work.mkdir()
-    (home / ".cortex").mkdir()
-    (home / ".cortex" / "config.yaml").write_text(f"exclude:\n  - '{work}'\n", encoding="utf-8")
+    (home / ".keepfold").mkdir()
+    (home / ".keepfold" / "config.yaml").write_text(f"exclude:\n  - '{work}'\n", encoding="utf-8")
     r = CliRunner().invoke(app, ["export", "context", str(work / "me.md"), "--vault", str(root)])
     assert r.exit_code == 1 and "excluded" in r.output and not (work / "me.md").exists()
 
@@ -155,7 +155,7 @@ def test_cli_refuses_an_excluded_folder(root, tmp_path, home):
 def test_mcp_config_snippet(root):
     r = CliRunner().invoke(app, ["export", "context", "--mcp-config", "--vault", str(root)])
     assert r.exit_code == 0, r.output
-    entry = json.loads(r.stdout)["mcpServers"]["cortex"]
+    entry = json.loads(r.stdout)["mcpServers"]["keepfold"]
     assert entry["args"] == ["mcp", "--vault", str(root.resolve())]
     new = CliRunner().invoke(app, ["setup", "--print-mcp-config", "--vault", str(root)])
     assert new.exit_code == 0 and new.output == r.output  # review r4 S8

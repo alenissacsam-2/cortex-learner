@@ -14,12 +14,12 @@ from conftest import FakeEmbed, note
 from test_app import fakes  # noqa: F401  (autouse: nothing real runs, opens or answers)
 from test_chat import Stream
 
-from cortex import chat, dashboard, importers, prime_hook, review, semantic
-from cortex.catalog import Catalog
-from cortex.events import EventLog, local_day
-from cortex.index import Index
-from cortex.mcp_server import Cortex
-from cortex.vault import Vault
+from keepfold import chat, dashboard, importers, prime_hook, review, semantic
+from keepfold.catalog import Catalog
+from keepfold.events import EventLog, local_day
+from keepfold.index import Index
+from keepfold.mcp_server import Keepfold
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
@@ -85,20 +85,20 @@ def vault(root, monkeypatch):
     note(root, "notes/engines.md", "title: Engines\nsummary: how a motor works\n",
          "# Engines\n\nAutomobile car motor basics.")
     note(root, "notes/pasta.md", "title: Pasta\n", "# Pasta\n\nA recipe from the kitchen.")
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     return Vault(root)
 
 
 def test_everyday_paths_make_no_outbound_connection(vault, offline, monkeypatch, tmp_path):
     root = vault.root
     Index(vault, Catalog.load(vault)).refresh()  # build the index
-    c = Cortex(vault)
-    assert c.cortex_prime("How does a car motor work?")["next"]  # prime
-    monkeypatch.setenv("CORTEX_VAULT", str(root))
+    c = Keepfold(vault)
+    assert c.keepfold_prime("How does a car motor work?")["next"]  # prime
+    monkeypatch.setenv("KEEPFOLD_VAULT", str(root))
     hook = prime_hook.run(json.dumps({"session_id": "chat-e1", "prompt": "car motor",
                                       "hook_event_name": "UserPromptSubmit"}))
     assert json.loads(hook)["hookSpecificOutput"]["additionalContext"]  # the prime hook
-    assert c.cortex_recall("car motor")["next"]  # recall with the fake embedder
+    assert c.keepfold_recall("car motor")["next"]  # recall with the fake embedder
     s = Stream("ollama", ["Your notes say so [1]."])  # a Chat answer from a loopback runner
     try:
         events: list = []
@@ -116,7 +116,7 @@ def test_everyday_paths_make_no_outbound_connection(vault, offline, monkeypatch,
 
 
 def test_the_app_status_board_makes_no_outbound_connection(vault, offline):
-    from cortex.app import server
+    from keepfold.app import server
     srv, app = server.make_server(vault.root)  # fakes: PORT 0, never the owner's port
     try:
         d = app.status()

@@ -1,10 +1,10 @@
-"""RR-17b: a golden snapshot of each agent rules file Cortex writes (Cursor, VS Code, Codex
+"""RR-17b: a golden snapshot of each agent rules file Keepfold writes (Cursor, VS Code, Codex
 through `targets.Rules`, Gemini's GEMINI.md block), as a new file holds it with no vault (the
 prime line alone; the pinned core comes from the owner's vault and is not part of the shape).
 A change to the block's wording or markers then shows up in review.
 
 Regenerate after a deliberate change:
-    CORTEX_REGEN_GOLDEN=1 uv run pytest tests/test_agent_rules_golden.py
+    KEEPFOLD_REGEN_GOLDEN=1 uv run pytest tests/test_agent_rules_golden.py
 and read the diff under tests/fixtures/agent_rules/ before committing it."""
 
 import os
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from cortex.app import targets
+from keepfold.app import targets
 
 GOLDEN = Path(__file__).parent / "fixtures" / "agent_rules"
 
@@ -31,7 +31,7 @@ def _rule_files(missing: Path) -> dict[str, str]:
 def test_every_rule_block_matches_its_snapshot(tmp_path):
     got = _rule_files(tmp_path / "none.md")
     assert {"cursor", "vscode", "codex", "gemini-cli"} <= set(got)
-    if os.environ.get("CORTEX_REGEN_GOLDEN"):
+    if os.environ.get("KEEPFOLD_REGEN_GOLDEN"):
         GOLDEN.mkdir(parents=True, exist_ok=True)
         for old in GOLDEN.glob("*.md"):
             old.unlink()

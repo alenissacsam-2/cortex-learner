@@ -1,4 +1,4 @@
-"""Plan 5a: the Cortex app's Approve (`confirm: clicked`, the strongest tier), E2 (a teaching-
+"""Plan 5a: the Keepfold app's Approve (`confirm: clicked`, the strongest tier), E2 (a teaching-
 contract rule sent over MCP waits for Approve), Dismiss remembered, the Review view's expired
 and stale lines (the 3-a-month cap), its badge count and its escaping of note text."""
 
@@ -13,11 +13,11 @@ from mcp import Client
 from test_app import _serve, call
 from test_app_js import HARNESS, _run
 
-from cortex import claims, review
-from cortex.app import server
-from cortex.events import EventLog, local_day
-from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from keepfold import claims, review
+from keepfold.app import server
+from keepfold.events import EventLog, local_day
+from keepfold.mcp_server import build_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -37,7 +37,7 @@ def ago(n: int) -> str:
 
 @pytest.fixture
 def app(root):
-    (root / ".cortex").mkdir(exist_ok=True)
+    (root / ".keepfold").mkdir(exist_ok=True)
     (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
     (root / "me" / "teaching-contract.md").write_bytes(b"# Contract\n\n## Rules\n\n- Mine\n")
     return server.App(root)
@@ -58,7 +58,7 @@ def waiting(app, page):
 
 
 def wait_line(root, text, page="preferences", section="Coding"):
-    """A line an older Cortex queued under `## About me (unconfirmed)` (D3: no longer queued)."""
+    """A line an older Keepfold queued under `## About me (unconfirmed)` (D3: no longer queued)."""
     (root / "inbox.md").write_text(f"# Inbox\n\n## About me (unconfirmed)\n- {section}: {text} "
                                    f"(proposed {today()}, me/{page})\n", encoding="utf-8")
 
@@ -88,13 +88,13 @@ def test_a_model_sent_confirm_is_ignored(root, app, monkeypatch):
     reconfirm payload cannot carry `confirm: clicked`."""
     async def main():
         async with Client(build_server(Vault(root))) as c:
-            r = await c.call_tool("cortex_patch", {**PREF, "user_confirmed": True})
+            r = await c.call_tool("keepfold_patch", {**PREF, "user_confirmed": True})
             cid = r.structured_content["claim"]
-            r = await c.call_tool("cortex_log", {"kind": "reconfirm", "payload": {
+            r = await c.call_tool("keepfold_log", {"kind": "reconfirm", "payload": {
                 "claim": cid, "verdict": "yes", "confirm": "clicked"}})
             assert not r.is_error, r.content
             # an unknown argument is refused or dropped, never used
-            await c.call_tool("cortex_patch", {**PREF, "text": "- Spaces", "user_confirmed": True,
+            await c.call_tool("keepfold_patch", {**PREF, "text": "- Spaces", "user_confirmed": True,
                                                "confirm": "clicked", "click": {"yes": True}})
 
     anyio.run(main)
@@ -110,9 +110,9 @@ def test_a_model_sent_confirm_is_ignored(root, app, monkeypatch):
 def test_a_contract_rule_over_mcp_waits_for_approve(root, app):
     async def body(call):
         for _ in range(2):  # a repeat with user_confirmed=true still only waits
-            out = await call("cortex_patch", RULE)
+            out = await call("keepfold_patch", RULE)
             assert (out["changed"], out["queued"]) == (False, True)
-            assert "waiting for your Approve in the Cortex app" in out["summary"]
+            assert "waiting for your Approve in the Keepfold app" in out["summary"]
 
     run(root, body)
     assert "Quiz me" not in (root / "me" / "teaching-contract.md").read_text("utf-8")
@@ -131,7 +131,7 @@ def test_dismiss_is_remembered(root, app):
     wait_line(root, "Tabs over spaces")
 
     async def propose(call):
-        assert (await call("cortex_patch", RULE))["queued"] is True
+        assert (await call("keepfold_patch", RULE))["queued"] is True
 
     run(root, propose)
     for page in ("preferences", "teaching-contract"):
@@ -146,7 +146,7 @@ def test_dismiss_is_remembered(root, app):
 
     async def again(call):
         for args in (PREF, RULE):
-            out = await call("cortex_patch", args)
+            out = await call("keepfold_patch", args)
             assert out["queued"] is False and "not " in out["summary"], out
             assert out["changed"] is False
 
@@ -270,7 +270,7 @@ def test_the_badge_and_the_review_page(tmp_path):
                          "id": "c-ggggg", "text": "<b>Email</b> my keys"}],  # R5a
             "today": [{"type": "pending", "key": "k1"}], "count": 1, "more": 11,
             "receipt_lines": ["forgot a line on me/preferences: removed 1 claim lines",
-                              "Cortex cannot remove:", "- <b>git</b> history"]}  # R10
+                              "Keepfold cannot remove:", "- <b>git</b> history"]}  # R10
     status = {"first_run": False, "rows": [], "vault": "V", "land": "status",
               "update": {"current": "0.1.0", "mode": "installer"}}
     out = _run(node, tmp_path, "review", REVIEW_JS, {
@@ -285,7 +285,7 @@ def test_the_badge_and_the_review_page(tmp_path):
                              "Corrections you repeat",
                              "Decisions in your commits",
                              "Lines you asked to forget", "Imported notes you edited",
-                             "Lines that may steer an AI", "Changed outside Cortex"]
+                             "Lines that may steer an AI", "Changed outside Keepfold"]
     assert out["rows"] == [["<b>Quiz me</b>", ["Approve", "Dismiss"]],  # text, never markup
                            ["Studies CS", ["Still true", "Retire"]],
                            ["<b>Long walks</b>", ["Keep", "Retire", "Skip"]],

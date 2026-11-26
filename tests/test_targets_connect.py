@@ -1,6 +1,6 @@
-"""CN: connecting AI apps on a new laptop. An app installed after Cortex started is found on the
+"""CN: connecting AI apps on a new laptop. An app installed after Keepfold started is found on the
 registry's PATH, Claude Code's GitHub plugin route asks for git first, and the apps whose own
-instructions Cortex cannot write get the "use Cortex every time" text (packs.USE_TEXT) to paste,
+instructions Keepfold cannot write get the "use Keepfold every time" text (packs.USE_TEXT) to paste,
 with where. Temp home only (the `home` fixture); never the real registry or `claude`."""
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from cortex import mcp_server, packs, session
-from cortex.app import targets
+from keepfold import mcp_server, packs, session
+from keepfold.app import targets
 
-ENTRY = {"command": "C:\\tools\\cortex.exe", "args": ["mcp", "--vault", "C:\\vault"]}
+ENTRY = {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", "C:\\vault"]}
 
 
 def _exe(folder, name):
@@ -26,9 +26,9 @@ def _exe(folder, name):
     return p
 
 
-def test_an_app_installed_after_cortex_started_is_found(home, tmp_path, monkeypatch):
+def test_an_app_installed_after_keepfold_started_is_found(home, tmp_path, monkeypatch):
     """The app runs from login with the PATH it started with; Claude Code or Git installed
-    since is on the registry's PATH only. Cortex finds it, and what it runs finds it too."""
+    since is on the registry's PATH only. Keepfold finds it, and what it runs finds it too."""
     late = tmp_path / "late-bin"
     claude = _exe(late, "claude")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
@@ -79,7 +79,7 @@ def test_rows_say_where_to_paste_the_instructions(home, monkeypatch):
     assert all(rows[i]["detected"] for i in ("claude-code", "cursor", "copilot-cli"))
     # with the plugin (its hooks prime every chat), Claude Code needs no paste
     s = home / ".claude" / "settings.json"
-    s.write_text(json.dumps({"enabledPlugins": {"cortex@cortex": True}}), encoding="utf-8")
+    s.write_text(json.dumps({"enabledPlugins": {"keepfold@keepfold": True}}), encoding="utf-8")
     assert {r["id"]: r for r in targets.describe(ENTRY)}["claude-code"]["paste"] == ""
     s.unlink()
     monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
@@ -93,7 +93,7 @@ def test_the_pasted_text_shares_its_lines_with_the_server_and_the_rule_block():
     assert f"- {packs.PRIME_LINE}" in lines and packs.PRIME_LINE in packs.rule_block(None)
     for line in (packs.TOPIC_LINE, packs.SAFE_LINE):
         assert f"- {line}" in lines and f"- {line}" in mcp_server.INSTRUCTIONS
-    assert "cortex_prime" in lines[1] and "<untrusted_note>" in packs.USE_TEXT
+    assert "keepfold_prime" in lines[1] and "<untrusted_note>" in packs.USE_TEXT
     guide = (Path(__file__).resolve().parents[1] / "docs" / "CONNECT.md").read_text("utf-8")
     assert packs.USE_TEXT in guide  # the guide shows the text Copy instructions copies
     for where, file in ((targets.PASTE_CODE, "~/.claude/CLAUDE.md"),  # the files rows name

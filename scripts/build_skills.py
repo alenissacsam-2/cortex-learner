@@ -1,4 +1,4 @@
-"""Regenerate the plugin skill and Chat skill zip from skills/cortex/ (SKILL.md, modes/).
+"""Regenerate the plugin skill and Chat skill zip from skills/keepfold/ (SKILL.md, modes/).
 
 Run: uv run python scripts/build_skills.py
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PORTABLE = ("name", "description", "license")
-CODE_EXTRA = ["disable-model-invocation: true", "allowed-tools: mcp__plugin_cortex_cortex__*"]
+CODE_EXTRA = ["disable-model-invocation: true", "allowed-tools: mcp__plugin_keepfold_keepfold__*"]
 
 
 def split(text: str) -> tuple[list[str], str]:
@@ -26,10 +26,11 @@ def render(fields: list[str], body: str) -> str:
 
 
 def build(src: Path, out: Path) -> tuple[Path, Path]:
-    """Write <out>/plugin/skills/cortex/ (SKILL.md + modes/) and <out>/dist/cortex-skill.zip."""
+    """Write <out>/plugin/skills/keepfold/ (SKILL.md + modes/) and <out>/dist/keepfold-skill.zip
+    (the skill inside keeps its name, keepfold)."""
     fields, body = split(src.read_text(encoding="utf-8"))
     modes = sorted((src.parent / "modes").glob("*.md"))
-    code = out / "plugin" / "skills" / "cortex" / "SKILL.md"
+    code = out / "plugin" / "skills" / "keepfold" / "SKILL.md"
     shutil.rmtree(code.parent / "modes", ignore_errors=True)  # drop modes removed from the source
     (code.parent / "modes").mkdir(parents=True, exist_ok=True)
     code.write_text(render(fields + CODE_EXTRA, body), encoding="utf-8", newline="\n")
@@ -37,17 +38,17 @@ def build(src: Path, out: Path) -> tuple[Path, Path]:
         shutil.copyfile(m, code.parent / "modes" / m.name)
 
     portable = [f for f in fields if f.split(":", 1)[0].strip() in PORTABLE]
-    zpath = out / "dist" / "cortex-skill.zip"
+    zpath = out / "dist" / "keepfold-skill.zip"
     zpath.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("cortex/", "")
-        z.writestr("cortex/SKILL.md", render(portable, body))
-        z.writestr("cortex/modes/", "")
+        z.writestr("keepfold/", "")
+        z.writestr("keepfold/SKILL.md", render(portable, body))
+        z.writestr("keepfold/modes/", "")
         for m in modes:
-            z.writestr(f"cortex/modes/{m.name}", m.read_bytes())
+            z.writestr(f"keepfold/modes/{m.name}", m.read_bytes())
     return code, zpath
 
 
 if __name__ == "__main__":
-    for p in build(ROOT / "skills" / "cortex" / "SKILL.md", ROOT):
+    for p in build(ROOT / "skills" / "keepfold" / "SKILL.md", ROOT):
         print(p)

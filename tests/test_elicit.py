@@ -10,11 +10,11 @@ from mcp import Client
 from mcp.types import ElicitResult, ErrorData
 from typer.testing import CliRunner
 
-from cortex import claims, know, mcp_server
-from cortex.cli import app
-from cortex.events import EventLog
-from cortex.mcp_server import build_server
-from cortex.vault import Vault
+from keepfold import claims, know, mcp_server
+from keepfold.cli import app
+from keepfold.events import EventLog
+from keepfold.mcp_server import build_server
+from keepfold.vault import Vault
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -26,7 +26,7 @@ MODES = ("legacy", "auto")
 
 
 def drive(root, reply, *calls, mode="legacy"):
-    """Send each cortex_patch of `calls` (default: PREF) from a client whose dialog answers
+    """Send each keepfold_patch of `calls` (default: PREF) from a client whose dialog answers
     `reply` (an ElicitResult, an ErrorData, an exception to raise, or a coroutine function);
     NO_CAPABILITY: a client without elicitation. Returns (results, dialog params)."""
     (root / "me" / "preferences.md").write_bytes(b"# Preferences\n\n## Coding\n")
@@ -42,7 +42,7 @@ def drive(root, reply, *calls, mode="legacy"):
         cb = None if reply is NO_CAPABILITY else dialog
         async with Client(build_server(Vault(root)), mode=mode, elicitation_callback=cb) as c:
             for args in calls or (PREF,):
-                r = await c.call_tool("cortex_patch", args)
+                r = await c.call_tool("keepfold_patch", args)
                 assert not r.is_error, r.content
                 out.append(r.structured_content)
                 assert out[-1]["next"]
@@ -127,7 +127,7 @@ def test_no_capability_as_before_and_stamp_is_server_side(root, mode):
 
 def test_click_is_not_tool_input(root):
     tools = build_server(Vault(root))._tool_manager.list_tools()
-    patch = next(t for t in tools if t.name == "cortex_patch")
+    patch = next(t for t in tools if t.name == "keepfold_patch")
     assert "user_confirmed" in patch.parameters["properties"]
     assert not {"click", "ctx"} & set(patch.parameters["properties"])
 
