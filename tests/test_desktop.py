@@ -572,30 +572,29 @@ def test_daily_notes_follow_the_settings(due):
 def test_job_ends_notify_finished_or_failed_not_cancelled():
     n, sent = _notifier(None)
     jobs = server.Jobs()
-    jobs.on_end = n.job_ended
+    ended = []
 
-    def wait():
-        _until(lambda: not jobs.running())
-    jobs.start("Backing up the vault", "vault", lambda job: {"ok": True})
-    wait()
-    jobs.start("Running the doctor", "vault", lambda job: {"ok": False})
-    wait()
-    jobs.start("Importing", "setup", lambda job: 1 / 0)
-    wait()
+    def on_end(job):
+        n.job_ended(job)
+        ended.append(job)
+    jobs.on_end = on_end
+
+    def run(name, section, fn):  # until on_end ran: `running` clears before it, so a loaded
+        k = len(ended) + 1       # machine could otherwise reorder the notes
+        jobs.start(name, section, fn)
+        _until(lambda: len(ended) >= k, timeout=30.0)
+    run("Backing up the vault", "vault", lambda job: {"ok": True})
+    run("Running the doctor", "vault", lambda job: {"ok": False})
+    run("Importing", "setup", lambda job: 1 / 0)
 
     def cancelled(job):
         job.cancel()
         return {"cancelled": True}
-    jobs.start("Downloading", "setup", cancelled)
-    wait()
-    _until(lambda: len(sent) >= 3)
-    time.sleep(0.05)
+    run("Downloading", "setup", cancelled)
     assert sent == ["Backing up the vault finished", "Running the doctor failed",
                     "Importing failed"]
     desktop.save_notify({"jobs": False})
-    jobs.start("Backing up the vault", "vault", lambda job: {"ok": True})
-    wait()
-    time.sleep(0.05)
+    run("Backing up the vault", "vault", lambda job: {"ok": True})
     assert len(sent) == 3
 
 

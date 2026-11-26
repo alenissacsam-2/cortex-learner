@@ -21,6 +21,8 @@ PATTERNS = {
 # a maintainer's own names, user folder and app ids: one regex per line in a git-ignored file,
 # so the public repo never spells them out
 LOCAL = ROOT / "tests" / ".private_patterns"
+# public by design: the MCP Registry name, which the README's `mcp-name:` line must spell exactly
+PUBLIC_IDS = ("io.github.alenissacsam-2/keepfold",)
 if LOCAL.is_file():
     PATTERNS |= {f"local pattern {i}": re.compile(line.strip())
                  for i, line in enumerate(LOCAL.read_text(encoding="utf-8").splitlines(), 1)
@@ -42,6 +44,8 @@ def test_shipped_files_have_no_private_data():
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue  # binary assets
+        for public in PUBLIC_IDS:
+            text = text.replace(public, "")
         for name, rx in PATTERNS.items():
             for m in rx.finditer(text):
                 hits.append(f"{path.relative_to(ROOT)}: {name}: {m.group(0)}")

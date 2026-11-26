@@ -535,6 +535,7 @@ def test_prime_hook_nudges_when_prime_is_slow_or_fails(vault, monkeypatch):
     assert context("slow") == prime_hook.NUDGE and prime_hook.pending.is_alive()
     gate.set()
     prime_hook.pending.join(30)
+    monkeypatch.setattr(prime_hook, "BUDGET", 30.0)  # a real prime under load can top 0.2 s
     assert context("after-slow").startswith(prime_hook.HEAD)  # no lockout after a slow prime
     assert not list((vault / ".keepfold").glob("prime-slow*"))
 
