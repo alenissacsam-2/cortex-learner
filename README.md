@@ -4,6 +4,7 @@
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)](#install)
 [![Works through MCP](https://img.shields.io/badge/MCP-Claude%20%7C%20Cursor%20%7C%20Codex%20%7C%20Gemini%20CLI-8A5700)](#using-it)
 [![License: MIT](https://img.shields.io/github/license/alenissacsam-2/keepfold)](LICENSE)
+[![alenissacsam-2/keepfold MCP server](https://glama.ai/mcp/servers/alenissacsam-2/keepfold/badges/score.svg)](https://glama.ai/mcp/servers/alenissacsam-2/keepfold)
 
 **Keepfold is a memory for your AI apps that lives on your own computer: the AI apps you connect, such as Claude, Cursor and Codex, read from it and add to it, so a new chat can start from what you already told them.**
 
