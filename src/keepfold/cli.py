@@ -2030,7 +2030,11 @@ def mcp(vault: VaultOpt = None,
 
 @app.command()
 @_errors
-def forget(id: str, vault: VaultOpt = None) -> None:
+def forget(
+    id: str,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")] = False,
+    vault: VaultOpt = None,
+) -> None:
     """Forget a page (people/<slug>, a page id, a chat page) or one line of a me/ page
     (me/<page>^c-xxxxx) everywhere Keepfold keeps it: the page or line, the event log (its text
     redacted, ids and grades kept), Keepfold's own pages and caches, the chats it keeps, the
@@ -2038,8 +2042,9 @@ def forget(id: str, vault: VaultOpt = None) -> None:
     from keepfold import forget as forget_
 
     v = _vault(vault)
-    typer.confirm(f"Forget {forget_.check(v, id)} everywhere Keepfold keeps it? This cannot be "
-                  "undone.", abort=True)
+    if not yes:
+        typer.confirm(f"Forget {forget_.check(v, id)} everywhere Keepfold keeps it? This cannot be "
+                      "undone.", abort=True)
     for line in forget_.lines(forget_.forget(v, id)):
         typer.echo(line)
 

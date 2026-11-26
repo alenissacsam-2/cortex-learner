@@ -24,6 +24,18 @@ pytestmark = pytest.mark.usefixtures("home")
 CANARY = "zqcanary9x"
 
 
+def test_forget_yes_skips_prompt_and_prints_receipt(root):
+    page = root / "problems" / "lc-1.md"
+    assert page.exists()
+
+    result = CliRunner().invoke(app, ["forget", "lc-1", "--vault", str(root), "--yes"], input="")
+
+    assert result.exit_code == 0, result.output
+    assert "Forget Two Sum everywhere" not in result.output
+    assert "removed the page" in result.output
+    assert not page.exists()
+
+
 def hits(root, home):
     """Every file under the vault (but .git) and the temp home (.keepfold, the AI apps' rules
     files and their backups) holding the canary."""
