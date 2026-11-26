@@ -13,6 +13,8 @@
 
 Free. One file. No account. Windows 10 and 11.
 
+Keepfold is in beta until 1.0: its maker uses it every day, but expect rough edges, and please [open an issue](https://github.com/alenissacsam-2/keepfold/issues) when something breaks.
+
 Windows may say it "protected your PC", because the installer is not code-signed yet. Click **More info**, then **Run anyway**. You can read the [source code](https://github.com/alenissacsam-2/keepfold) and check the file's SHA-256, which is on each [release page](https://github.com/alenissacsam-2/keepfold/releases/latest).
 
 *Keepfold was called Cortex before 0.6.2. Version 0.6.2 moves your settings, your vault folder and your AI-app connections over by itself the first time it runs; see [Coming from Cortex](docs/INSTALL.md#coming-from-cortex).*

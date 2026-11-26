@@ -5,13 +5,13 @@
     "url": "https://github.com/alenissacsam-2"
   },
   "metadata": {
-    "description": "Marketplace for Keepfold, a local-first learner model and second brain for Claude"
+    "description": "Keepfold: one memory for all your AI apps, as plain Markdown files on your own computer"
   },
   "plugins": [
     {
       "name": "keepfold",
       "source": "./plugin",
-      "description": "Keepfold learning sessions backed by the learner's local knowledge graph",
+      "description": "Keepfold for Claude Code: one local memory shared with your other AI apps. Adds the Keepfold MCP server, the /keepfold skill and a hook that gives each new chat your related notes. Needs Keepfold installed (Windows installer or uv).",
       "version": "0.6.3",
       "author": {
         "name": "alenissacsam-2"
