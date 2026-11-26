@@ -1,0 +1,94 @@
+name: Publish to PyPI and the MCP Registry
+
+# Manual only: Actions tab -> "Publish to PyPI and the MCP Registry" -> Run workflow, or
+# `gh workflow run publish.yml`. A version on PyPI can never be replaced, so nothing here runs
+# on a push or a tag. No token is stored: PyPI trusts this workflow through a "trusted
+# publisher" (owner alenissacsam-2, repo keepfold, workflow publish.yml, environment pypi),
+# and the MCP Registry trusts GitHub's OIDC login for the io.github.alenissacsam-2 namespace.
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: Also publish server.json to the MCP Registry
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: Check that pyproject.toml, server.json and the README agree
+        run: |
+          set -euo pipefail
+          v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "pyproject.toml $v, server.json $(jq -r .version server.json) / $(jq -r '.packages[0].version' server.json)"
+          test "$v" = "$(jq -r .version server.json)"
+          test "$v" = "$(jq -r '.packages[0].version' server.json)"
+          grep -qF "<!-- mcp-name: $(jq -r .name server.json) -->" README.md
+      - run: uv build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/keepfold/
+    permissions:
+      id-token: write # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  registry:
+    needs: pypi
+    if: ${{ inputs.registry }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # MCP Registry login (github-oidc)
+      contents: read
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.16
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait until PyPI serves this version (the registry checks the package)
+        run: |
+          v=$(jq -r .version server.json)
+          for i in $(seq 1 30); do
+            curl -fsS "https://pypi.org/pypi/keepfold/$v/json" > /dev/null && exit 0
+            sleep 20
+          done
+          echo "keepfold $v is not on PyPI after 10 minutes"
+          exit 1
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
