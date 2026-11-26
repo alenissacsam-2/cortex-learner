@@ -27,6 +27,22 @@ def test_versions_and_names_agree():
         assert meta["author"]["name"]
 
 
+def test_mcp_registry_entry_matches_the_package():
+    """server.json (mcp-publisher) names the PyPI release and runs `keepfold mcp`; the registry
+    checks PyPI ownership by the README's mcp-name line, and caps the description at 100."""
+    server = load("server.json")
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"]["version"]
+    (pkg,) = server["packages"]
+    assert server["version"] == pkg["version"] == version
+    assert (pkg["registryType"], pkg["identifier"], pkg["transport"]) == (
+        "pypi", "keepfold", {"type": "stdio"})
+    assert [a["value"] for a in pkg["packageArguments"]] == ["mcp"]
+    assert len(server["description"]) <= 100
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"<!-- mcp-name: {server['name']} -->" in readme
+
+
 def test_plugin_runs_only_keepfold():
     servers = load("plugin/.mcp.json")["mcpServers"]
     assert {s["command"] for s in servers.values()} == {"keepfold"}
