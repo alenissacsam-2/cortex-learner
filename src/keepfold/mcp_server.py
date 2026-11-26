@@ -2521,7 +2521,10 @@ class Keepfold:
         if not isinstance(pages, list) or len(pages) > 50 or \
                 not all(isinstance(x, str) and ID_RE.fullmatch(x) for x in pages):
             raise invalid("capture needs payload.pages: a list of up to 50 page ids.")
-        rid = str(p.get("resource") or "")
+        rid = p.get("resource")
+        if not isinstance(rid, str) or not ID_RE.fullmatch(rid):
+            raise invalid("capture needs payload.resource: the id of the resource page the "
+                          "pages came from.")
         title = str(self.vault.read("resource", rid).fields.get("title") or rid)
         self.vault.append_log(local_day(self._now()), "capture",
                               f"{render.plain(title, 80)} ({len(pages)} pages)")

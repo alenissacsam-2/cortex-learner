@@ -516,7 +516,7 @@ def check_clients(root: Path, settings: Path | None = None,
     entry = _has_keepfold(home / ".claude.json")
     hook = plugin or "prime-hook" in json.dumps(_read_json(settings).get("hooks") or {})
     name, t = "Claude Code", last(False)
-    if not (home / ".claude").is_dir() and not (home / ".claude.json").is_file():
+    if not targets.ClaudeCode().detect():  # the app's test: `claude` on PATH counts too
         rows.append(("PASS", name, "not installed", ""))
         return rows
     how = "plugin" if plugin else "~/.claude.json" if entry else \

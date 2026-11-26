@@ -5,8 +5,10 @@ normal vault and event APIs: extra concepts and notes, two mistakes, graded answ
 "how sure" level of 1-4, two upcoming assessments and a few lessons taught. Every event is
 keyed `demo:<n>`, so running it again adds nothing. Dates are relative to today; everything
 else is fixed. It refuses the configured vault and any vault with events of its own (not demo
-or sample ones) unless --force. For imported chats, run `keepfold import` on the
-synthetic exports in tests/fixtures/exports afterwards.
+or sample ones) unless --force; in a home with no vault yet, `keepfold init` makes the new
+folder the configured one, so pass --force there only if that home is throwaway. For
+imported chats, run `keepfold import` on the synthetic exports in tests/fixtures/exports
+afterwards.
 
     uv run keepfold init <vault>
     uv run python scripts/make_demo_vault.py <vault>

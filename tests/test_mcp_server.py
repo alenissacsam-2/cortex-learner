@@ -73,6 +73,16 @@ def test_reads_need_no_session_and_write_nothing(root):
     assert git(root, "status", "--porcelain") == ""
 
 
+def test_log_ingest_without_resource_names_the_missing_field(root):
+    """Gate F11: pages given, resource missing: the refusal names payload.resource, not the ids."""
+    async def body(call):
+        out = await call("keepfold_log", {"kind": "capture",
+                                          "payload": {"pages": ["two-pointers"]}})
+        assert out["error"] == "invalid_argument" and "payload.resource" in out["message"], out
+
+    run(root, body)
+
+
 def test_first_write_opens_ambient_session(root):
     async def body(call):
         await call("keepfold_grade", {"concept": "two-pointers", "question": "q",

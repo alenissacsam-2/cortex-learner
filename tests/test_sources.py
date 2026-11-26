@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-import typer.testing
 from typer.testing import CliRunner
 
 from keepfold import sources
@@ -141,8 +140,8 @@ def test_cli_tier_flag_default_and_memory(root_plain):
 
 
 def test_cli_asks_once_per_source_in_a_terminal(root_plain, tmp_path, monkeypatch):
-    monkeypatch.setattr(typer.testing._NamedTextIOWrapper, "isatty", lambda self: True,
-                        raising=False)
+    from keepfold import cli
+    monkeypatch.setattr(cli, "_tty", lambda: True)
     notes = tmp_path / "notes"
     notes.mkdir()
     (notes / "One.md").write_bytes(b"# One\n\nfirst\n")

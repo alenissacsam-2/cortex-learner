@@ -1257,7 +1257,7 @@ def import_cmd(path: Annotated[Path | None, typer.Argument(
             importers.calendar_source(path) if kind == "calendar" else \
             more_sources.SOURCE_OF[kind](path)
         # C2: asked once per source in a real terminal, then remembered (sources.TIERS_FILE)
-        ask = _ask_tier if given is None and sys.stdin.isatty() else None
+        ask = _ask_tier if given is None and _tty() else None
         told: list[str] = []  # RR-29: what a stricter tier did to the pages already in
         t, how = sources.pick_tier(v, src, given, ask, save=not dry_run, said=told.append)
         typer.echo(f"{src.label}: tier {sources.word(t)} (" + (
@@ -1566,6 +1566,8 @@ def brief(vault: VaultOpt = None) -> None:
     v = _vault(vault)
     for rel in ("BRIEF.md", "me/teaching-contract.md"):
         p = v.root / rel
+        if rel == "BRIEF.md" and not p.is_file():  # optional: only a vault you wrote one in
+            continue
         text = p.read_bytes().decode("utf-8") if p.is_file() else f"({rel} is missing)\n"
         typer.echo(text.rstrip("\n") + "\n")
     _print_today(v, datetime.now(UTC))
@@ -2379,10 +2381,18 @@ def ask_cmd(question: str, vault: VaultOpt = None,
 
 
 def _tty() -> bool:
-    """stdin and stdout are both a real terminal (E3: a pipe or an AI app's runner is not)."""
+    """stdin and stdout are both a real terminal (E3: a pipe or an AI app's runner is not; nor
+    is NUL, which Windows calls a tty, so stdin must also be a console)."""
     try:
-        return sys.stdin.isatty() and sys.stdout.isatty()
-    except (AttributeError, ValueError):  # no stream, or a closed one
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+        if os.name != "nt":
+            return True
+        import ctypes
+        import msvcrt
+        return bool(ctypes.windll.kernel32.GetConsoleMode(
+            msvcrt.get_osfhandle(sys.stdin.fileno()), ctypes.byref(ctypes.c_ulong())))
+    except (AttributeError, ValueError, OSError):  # no stream, or a closed one
         return False
 
 

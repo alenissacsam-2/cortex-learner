@@ -158,6 +158,8 @@ def test_doctor_pass_and_fail(vault, monkeypatch):
     real = shutil.which
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: "keepfold" if c == "keepfold"
                         else real(c, *a, **k))
+    from keepfold.app import targets
+    monkeypatch.setattr(targets, "_which", lambda c: None)  # never the real `claude`
     r = run("doctor", "--vault", vault, ok=False)  # no git yet
     assert r.exit_code == 1 and "FAIL  Vault git" in r.output
     run("init", vault)
@@ -316,6 +318,9 @@ def test_brief_prints_contract_verbatim_and_today(vault):
     assert "- Plan step: Free text item: read the notes [Test sprint]" in lines
     assert "owed copy" not in today and "Day 2" not in today
     assert "Recap" not in today  # a done step
+    (vault / "BRIEF.md").unlink()  # optional (a fresh `keepfold init` vault has none): no note
+    out = run("brief", "--vault", vault).output
+    assert "BRIEF.md" not in out and contract in out
     assert "Done for today ✓" not in today  # items are open
 
 

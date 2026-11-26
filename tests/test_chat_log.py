@@ -189,7 +189,23 @@ def rows(root, home, **kw):
             doctor.check_clients(root, home / "settings.json", **kw)}
 
 
-def test_doctor_shows_each_client_and_its_last_call(root, home):
+@pytest.fixture
+def no_claude(monkeypatch):
+    """No `claude` on PATH (never the machine's real one)."""
+    from keepfold.app import targets
+    monkeypatch.setattr(targets, "_which", lambda c: None)
+
+
+def test_doctor_counts_claude_on_path_as_installed(root, home, monkeypatch):
+    """As the app's Connect: `claude` on PATH with no ~/.claude yet is installed, not set up."""
+    from keepfold.app import targets
+    monkeypatch.setattr(targets, "_which", lambda c: "C:\\bin\\claude.exe" if c == "claude"
+                        else None)
+    st, detail, fix = rows(root, home, desktop_configs=[])["Claude Code"]
+    assert st == "WARN" and "not configured" in detail and "Connect" in fix
+
+
+def test_doctor_shows_each_client_and_its_last_call(root, home, no_claude):
     desktop = home / "claude_desktop_config.json"
     assert rows(root, home, desktop_configs=[]) == {
         "Claude Desktop (Chat)": ("PASS", "not installed", ""),
@@ -234,7 +250,7 @@ def test_the_client_mark_is_written_at_most_once_a_minute(root, monkeypatch):
     serve(root, body)
 
 
-def test_doctor_runs_the_client_rows(root, home):
+def test_doctor_runs_the_client_rows(root, home, no_claude):
     from typer.testing import CliRunner
 
     from keepfold.cli import app
