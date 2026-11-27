@@ -626,7 +626,7 @@ class Vault:
         try:
             pid_s, ts_s, *rest = content.split()  # gethostname() never holds a space
             pid, ts = int(pid_s), float(ts_s)
-            born = float(rest[1]) if len(rest) > 1 else 0  # 0: a 0.6.4 token or unknown
+            born = float(rest[1]) if len(rest) > 1 else 0  # 0: an older token or unknown
             age = time.time() - ts
             local = not rest or rest[0] == socket.gethostname()
         except ValueError:
