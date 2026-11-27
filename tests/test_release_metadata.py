@@ -38,6 +38,10 @@ def test_mcp_registry_entry_matches_the_package():
     assert (pkg["registryType"], pkg["identifier"], pkg["transport"]) == (
         "pypi", "keepfold", {"type": "stdio"})
     assert [a["value"] for a in pkg["packageArguments"]] == ["mcp"]
+    # a registry install (VS Code's one-click, `uvx keepfold mcp`) has no config: without a
+    # vault the server exits at start, so the client must ask for the folder
+    (env,) = pkg["environmentVariables"]
+    assert (env["name"], env["isRequired"], env["format"]) == ("KEEPFOLD_VAULT", True, "filepath")
     assert len(server["description"]) <= 100
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert f"<!-- mcp-name: {server['name']} -->" in readme

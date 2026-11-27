@@ -22,6 +22,15 @@
           "type": "positional",
           "value": "mcp"
         }
+      ],
+      "environmentVariables": [
+        {
+          "name": "KEEPFOLD_VAULT",
+          "description": "The folder that holds your Keepfold notes: an existing empty folder for a new memory, or the vault the Keepfold app already uses. It also opens as an Obsidian vault.",
+          "isRequired": true,
+          "format": "filepath",
+          "placeholder": "C:\\Users\\you\\Keepfold or /Users/you/Keepfold"
+        }
       ]
     }
   ]
