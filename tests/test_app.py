@@ -1565,6 +1565,20 @@ def test_upload_is_capped_named_by_the_app_and_typed(app, home):
     assert files[0].read_bytes() == data and app.uploads[body["upload"]] == files[0]
 
 
+def test_tidy_about_me_starts_no_index_build(app, monkeypatch):
+    """Tidy reads me/ pages only, so its Keepfold builds no Index (one each pass otherwise)."""
+    from keepfold.mcp_server import Keepfold
+    builds = []
+
+    def no_build(self):
+        builds.append(1)
+        raise AssertionError("tidy needed the index")
+    monkeypatch.setattr(Keepfold, "_build_index", lambda self: builds.append(1))
+    monkeypatch.setattr(Keepfold, "index", property(no_build))
+    assert set(app.tidy_about_me()) >= {"moved", "retired"}
+    assert builds == []
+
+
 def test_guided_chat_import_previews_then_imports(app, home):
     from keepfold import chats
     data = (EXPORTS / "chatgpt_conversations.json").read_bytes()

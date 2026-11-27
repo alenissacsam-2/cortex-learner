@@ -944,7 +944,7 @@ class App:
         from keepfold import review
         with self.reviewing:  # never beside a Review click
             review.record_baseline(Vault(root))  # R5a, first run: the guard's baseline
-            return Keepfold(Vault(root)).tidy()
+            return Keepfold(Vault(root), build=False).tidy()  # tidy reads me/ pages only
 
     def review(self) -> dict:
         """The Review view and its badge count (keepfold.review); shown text only. UX-B: each
