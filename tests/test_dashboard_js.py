@@ -368,7 +368,7 @@ window.__L = (() => {
   const feed = () => (document.querySelector('.feed') || {}).textContent || '';
   async function settle() {  // until the camera stops moving
     let a = cam();
-    for (let i = 0; i < 50; i++) { await sleep(150); const b = cam(); if (same(a, b)) return b; a = b; }
+    for (let i = 0; i < 50; i++) { await sleep(150); const b = cam(); if (same(a, b) && !mounts[mounts.length - 1].busy) return b; a = b; }
     return a;
   }
   async function before() {

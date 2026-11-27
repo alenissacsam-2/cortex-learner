@@ -210,7 +210,7 @@ LENS_PROBE = r"""
   const cam = () => { const c = b.camera; return JSON.stringify([r3(((c.yaw % TAU) + TAU) % TAU), r3(c.pitch), r3(c.dist), r3(c.tx), r3(c.ty), r3(c.tz)]); };
   const buttons = () => [...document.querySelectorAll('#view-home [data-lens]')];
   const note = () => { const e = document.querySelector('#home-brain-tools .lens-bar'); return e.hidden ? null : e.textContent; };
-  const settle = async () => { let a = cam(); for (let i = 0; i < 60; i++) { await sleep(150); const c = cam(); if (c === a) return; a = c; } };
+  const settle = async () => { let a = cam(); for (let i = 0; i < 60; i++) { await sleep(150); const c = cam(); if (c === a && !b.busy) return; a = c; } };
   out.rows = [...document.querySelectorAll('#view-home .brow')].map((r) => [r.querySelector('.ttl').textContent, !!r.querySelector('[data-lens]')]);
   const btns = buttons();
   out.n = btns.length;
