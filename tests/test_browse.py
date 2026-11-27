@@ -1704,3 +1704,56 @@ def test_idn_hosts_are_kept_as_punycode_and_still_filtered(url, host):
     for adult in ("https://xvideosü.com/x", "https://सेक्स.com/x"):
         assert privacy.judge(adult, "t", settings=S).category == "adult"
     assert privacy.drop_reason("https://" + "ü" * 70 + ".de/") == "scheme"  # not encodable
+
+
+# idle detection off Windows (titles._query is replaced: never a real ioreg or gdbus)
+IOREG = '    | |   "HIDIdleTime" = 125000000000\n'
+
+
+def test_parse_ioreg():
+    from keepfold.browse import titles
+
+    assert titles.parse_ioreg(IOREG) == 125.0
+    assert titles.parse_ioreg("nothing") is None
+
+
+def test_parse_gdbus_idle():
+    from keepfold.browse import titles
+
+    assert titles.parse_gdbus_idle("(uint64 4500,)\n") == 4.5
+
+
+def test_idle_seconds_mac(monkeypatch):
+    from keepfold.browse import titles
+
+    monkeypatch.setattr(titles.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(titles, "_query", lambda args: calls.append(args) or IOREG)
+    assert titles.idle_seconds() == 125.0
+    assert calls == [["ioreg", "-c", "IOHIDSystem", "-d", "4"]]
+
+
+def test_idle_seconds_linux_falls_back(monkeypatch):
+    from keepfold.browse import titles
+
+    monkeypatch.setattr(titles.sys, "platform", "linux")
+    calls = []
+
+    def query(args):
+        calls.append(args)
+        return "(uint32 30,)" if "org.freedesktop.ScreenSaver" in args else None
+
+    monkeypatch.setattr(titles, "_query", query)
+    assert titles.idle_seconds() == 30.0
+    assert "org.gnome.Mutter.IdleMonitor" in calls[0]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_idle_missing_tool(monkeypatch, platform):
+    from keepfold.browse import titles
+
+    monkeypatch.setattr(titles.sys, "platform", platform)
+    monkeypatch.setattr(titles, "_query", lambda args: None)
+    assert titles.idle_seconds() is None
+    assert titles.idle() is False

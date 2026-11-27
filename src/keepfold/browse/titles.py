@@ -6,7 +6,7 @@ reply); a reply that leaves lines out is asked again in halves, down to one text
 before the next is asked (`save`), so a stop keeps them and no text is asked twice.
 
 `may_run` is the gate for work nobody is waiting for (the app's background pass, the import
-job's title checks): the PC idle for IDLE_S (Windows' last input; nothing full screen), and the
+job's title checks): the PC idle for IDLE_S (the OS's last input; nothing full screen), and the
 configured local model already loaded (`localllm.find_loaded`: Ollama's /api/ps, LM Studio's
 model list). It never starts a runner or loads a model.
 """
@@ -14,6 +14,8 @@ model list). It never starts a runner or loads a model.
 from __future__ import annotations
 
 import ctypes
+import re
+import subprocess
 import sys
 import time
 from collections import Counter, deque
@@ -24,8 +26,51 @@ PAUSE_S = 1.0  # between batches in the background, so the GPU is never held fla
 IDLE_S = 120
 
 
+MUTTER = ["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor",
+          "--object-path", "/org/gnome/Mutter/IdleMonitor/Core",
+          "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"]
+SCREENSAVER = ["gdbus", "call", "--session", "--dest", "org.freedesktop.ScreenSaver",
+               "--object-path", "/org/freedesktop/ScreenSaver",
+               "--method", "org.freedesktop.ScreenSaver.GetSessionIdleTime"]
+
+
+def _query(args: list[str]) -> str | None:  # tests replace this: never a real ioreg or gdbus
+    """The command's stdout, or None on any error, a timeout or a missing program."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=5,
+                              check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def parse_ioreg(text: str | None) -> float | None:
+    """The first `"HIDIdleTime" = <ns>` in `ioreg` output, in seconds."""
+    m = re.search(r'"HIDIdleTime" = (\d+)', text or "")
+    return int(m.group(1)) / 1e9 if m else None
+
+
+def _gdbus_uint(text: str | None) -> int | None:
+    m = re.search(r"\(uint(?:32|64) (\d+),\)", text or "")
+    return int(m.group(1)) if m else None
+
+
+def parse_gdbus_idle(text: str | None) -> float | None:
+    """Mutter's `(uint64 <ms>,)` reply, in seconds."""
+    ms = _gdbus_uint(text)
+    return ms / 1000.0 if ms is not None else None
+
+
 def idle_seconds() -> float | None:
-    """Seconds since the last keyboard or mouse input (Windows), else None."""
+    """Seconds since the last keyboard or mouse input (Windows' last input, macOS' HIDIdleTime,
+    GNOME's Mutter idle monitor or else the freedesktop ScreenSaver), else None."""
+    if sys.platform == "darwin":
+        return parse_ioreg(_query(["ioreg", "-c", "IOHIDSystem", "-d", "4"]))
+    if sys.platform.startswith("linux"):
+        s = parse_gdbus_idle(_query(MUTTER))
+        if s is None:
+            sec = _gdbus_uint(_query(SCREENSAVER))  # this one answers in seconds
+            s = float(sec) if sec is not None else None
+        return s
     if sys.platform != "win32":
         return None
 
@@ -46,6 +91,7 @@ def full_screen() -> bool:
     """True while a full-screen app, game or presentation runs (Windows' notification state
     busy, D3D full screen or presentation mode)."""
     if sys.platform != "win32":
+        # shortcut: no full-screen check on Mac/Linux, add when a user reports a game interrupted
         return False
     state = ctypes.c_int(0)
     try:
@@ -58,7 +104,7 @@ def full_screen() -> bool:
 
 def idle(min_s: float = IDLE_S) -> bool:
     """The owner is away: no input for `min_s` and nothing full screen. False where it cannot
-    tell (not Windows): background model work then waits for an explicit run."""
+    tell (no idle source): background model work then waits for an explicit run."""
     s = idle_seconds()
     return s is not None and s >= min_s and not full_screen()
 
