@@ -204,8 +204,7 @@ const out = { errors };
     out.posted = fetched.filter((f) => f.method === 'POST').map((f) => [f.path, f.body]);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 

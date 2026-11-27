@@ -1,6 +1,4 @@
 import json
-import os
-import shutil
 from pathlib import Path
 
 import pytest
@@ -10,16 +8,6 @@ from keepfold.vault import VaultError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "chats"
 ALPHA, BETA = "D--proj-alpha/aaaa-1111", "D--proj-beta/cccc-3333"
-
-
-@pytest.fixture
-def chats_dir(tmp_path, monkeypatch):
-    d = tmp_path / "projects"
-    shutil.copytree(FIXTURES, d)
-    for i, rel in enumerate((ALPHA, "D--proj-alpha/bbbb-2222", BETA)):
-        os.utime(d / f"{rel}.jsonl", (1_000_000 + i, 1_000_000 + i))
-    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
-    return d
 
 
 def test_parser_keeps_text_only(chats_dir):

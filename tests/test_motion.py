@@ -112,8 +112,7 @@ if (!DATA.noVT) document.startViewTransition = (fn) => { out.vt++; fn(); return 
     await click('connect');
     out.second = [out.vt, lit(), $('s-vault').hidden, $('s-connect').hidden];
   } catch (e) { errors.push(String(e && e.stack || e)); }
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 

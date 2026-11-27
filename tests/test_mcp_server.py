@@ -1,10 +1,9 @@
 import json
-import shutil
 from datetime import UTC, datetime
 
 import anyio
 import pytest
-from conftest import CONTRACT, FIXTURES, events, git, run
+from conftest import CONTRACT, events, git, run
 from mcp import Client
 
 from keepfold import planner
@@ -1031,10 +1030,7 @@ def test_start_caps_the_contract_with_a_doctor_hint(root):
     run(root, body)
 
 
-def test_chats_list_read_and_chat_saved_ledger(root, monkeypatch, tmp_path):
-    chats_dir = tmp_path / "projects"
-    shutil.copytree(FIXTURES / "chats", chats_dir)
-    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(chats_dir))
+def test_chats_list_read_and_chat_saved_ledger(root, chats_dir):
     alpha = "D--proj-alpha/aaaa-1111"
     saved = {"kind": "chat_saved", "payload": {"source": "claude-code", "chat_id": alpha,
                                                "title": "BFS chat", "pages": ["two-pointers"]}}

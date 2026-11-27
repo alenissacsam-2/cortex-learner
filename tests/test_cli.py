@@ -649,10 +649,7 @@ def test_help_lists_no_stray_why_command():  # §15.2 N1
     assert "why" not in out and "replay" in out
 
 
-def test_chats_lists_past_chats(vault, tmp_path, monkeypatch):
-    d = tmp_path / "projects"
-    shutil.copytree(FIXTURES / "chats", d)
-    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
+def test_chats_lists_past_chats(vault, chats_dir):
     lines = run("chats", "--vault", vault).stdout.splitlines()
     assert [ln.split()[1] for ln in lines] == ["D--proj-beta/cccc-3333",
                                                 "D--proj-alpha/aaaa-1111"]

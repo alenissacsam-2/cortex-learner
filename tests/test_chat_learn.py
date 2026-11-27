@@ -1,7 +1,6 @@
 """v5 Phase 2 G3: learning from past chats on /keepfold. Synthetic transcripts only."""
 
 import os
-import shutil
 import time
 from pathlib import Path
 
@@ -14,16 +13,6 @@ pytestmark = pytest.mark.usefixtures("home")
 
 FIXTURES = Path(__file__).parent / "fixtures" / "chats"
 ALPHA, BBBB, BETA = "D--proj-alpha/aaaa-1111", "D--proj-alpha/bbbb-2222", "D--proj-beta/cccc-3333"
-
-
-@pytest.fixture
-def chats_dir(tmp_path, monkeypatch):
-    d = tmp_path / "projects"
-    shutil.copytree(FIXTURES, d)
-    for i, rel in enumerate((ALPHA, BBBB, BETA)):
-        os.utime(d / f"{rel}.jsonl", (1_000_000 + i, 1_000_000 + i))
-    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
-    return d
 
 
 def test_learned_flag_unlearned_filter_and_count(chats_dir):

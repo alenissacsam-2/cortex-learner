@@ -275,6 +275,19 @@ def _vault(tmp_path, *, commit, contract=False):
 
 
 @pytest.fixture
+def chats_dir(tmp_path, monkeypatch):
+    """fixtures/chats as KEEPFOLD_CHATS_DIR, with fixed old mtimes (alpha/aaaa, alpha/bbbb, beta
+    newest last): a fresh checkout's mtimes would make the newest look live (chats.LIVE_SECONDS)."""
+    d = tmp_path / "projects"
+    shutil.copytree(FIXTURES / "chats", d)
+    for i, rel in enumerate(("D--proj-alpha/aaaa-1111", "D--proj-alpha/bbbb-2222",
+                             "D--proj-beta/cccc-3333")):
+        os.utime(d / f"{rel}.jsonl", (1_000_000 + i, 1_000_000 + i))
+    monkeypatch.setenv("KEEPFOLD_CHATS_DIR", str(d))
+    return d
+
+
+@pytest.fixture
 def root(tmp_path):
     """vault_mini with the test CONTRACT, in a git repo with one commit."""
     return _vault(tmp_path, commit=True, contract=True)

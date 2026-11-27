@@ -68,8 +68,7 @@ let cur = 'load';
 // a page that hangs must not hold node and the browser until pytest's timeout: kill both
 setTimeout(() => {
   try { proc.kill(); } catch (e) { /* already gone */ }
-  console.log(J({ fatal: `watchdog: no finish in ${cfg.limit || 300} s (at ${cur})` }));
-  process.exit(3);
+  process.stdout.write(J({ fatal: `watchdog: no finish in ${cfg.limit || 300} s (at ${cur})` }) + '\n', () => process.exit(3));
 }, (cfg.limit || 300) * 1000).unref();
 (async () => {
   let port = null;
@@ -192,9 +191,8 @@ setTimeout(() => {
   bws.send(J({ id: 1, method: 'Browser.close' }));
   await sleep(300);
 })().catch((e) => { out.fatal = String(e && e.stack || e); }).finally(() => {
-  console.log(J(out));
+  process.stdout.write(J(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
   try { proc.kill(); } catch (e) { /* gone */ }
-  process.exit(0);
 });
 """  # noqa: E501  (JavaScript)
 

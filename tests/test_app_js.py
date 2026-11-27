@@ -411,8 +411,7 @@ const out = {};
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.errors = errors;
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -735,8 +734,7 @@ const out = { errors, runs: [] };
     }
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -874,8 +872,7 @@ const welcomes = () => fetched.filter((f) => f.path === '/api/app/welcome' && f.
     }
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1017,8 +1014,7 @@ const line = () => ($('wg-job') || { textContent: null }).textContent;
     out.cleared = $('wg-q').value;
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1108,8 +1104,7 @@ const out = { errors };
     out.cancelled = fetched.some((f) => f.path === '/api/job/cancel' && f.method === 'POST');
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1156,8 +1151,7 @@ const polls = () => fetched.filter((f) => f.path === '/api/job').length;
     out.after = $('job-name').textContent;
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1199,8 +1193,7 @@ const out = { errors };
     out.posts = fetched.filter((f) => f.path === '/api/browse/import').map((f) => f.body);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1373,8 +1366,7 @@ async function hit(s, key, fail) {
     out.closed = [$('toast').className, $('toast-x').hidden];
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1632,8 +1624,7 @@ const out = { errors };
     out.removed = [fetched.filter((f) => f.path === '/api/chat/file/remove').map((f) => f.body), box().textContent];
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1735,8 +1726,7 @@ const out = { errors };
     out.stopped = lines($('chat-log').querySelectorAll('.msg')[3]);  // a stopped answer shows nothing
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1804,8 +1794,7 @@ const LOGIN_HINT = 'New history comes in only while Keepfold runs. Start the rec
     out.statusOn = [hist().textContent.includes(LOGIN_HINT), hist().querySelectorAll('button').map((x) => x.textContent)];
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1868,8 +1857,7 @@ const lines = (b) => b.querySelectorAll('li').map((l) => l.textContent);
     out.closed = card() === null;
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1967,8 +1955,7 @@ const toastNow = () => $('toast-msg').textContent;
     out.later = [$('chat-send').textContent, stopped()];
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -1998,8 +1985,7 @@ const answer = async () => { for (const r of waits.splice(0)) r(); await tick();
     out.asked = fetched.filter((f) => /^\/api\/status($|\?)/.test(f.path)).map((f) => f.path);  // not the report board's own GET
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2092,8 +2078,7 @@ const out = { errors };
     }
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2112,8 +2097,7 @@ const out = { errors };
       r.querySelector('.val').textContent, r.querySelectorAll('button').map((b) => b.textContent)]);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2202,8 +2186,7 @@ const out = { errors };
     out.posts = posts;
     out.kept = input.value;
   } catch (e) { errors.push(String(e && e.stack || e)); }
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2341,8 +2324,7 @@ const wait = () => new Promise((r) => setTimeout(r, 200)).then(tick);
     out.after = chips();
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2406,8 +2388,7 @@ const out = { errors };
     out.opened = fetched.filter((f) => f.path === '/api/open').map((f) => f.body);
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2492,8 +2473,7 @@ const posts = () => fetched.filter((f) => f.path === '/api/setup/vault').map((f)
     out.warnOpens = !!field();
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2538,8 +2518,7 @@ const row = () => $('vault').querySelectorAll('.brow').find((r) => (r.querySelec
     out.after = !row();
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
@@ -2585,8 +2564,7 @@ const rowOf = (box, title) => $(box).querySelectorAll('.brow').find((r) => (r.qu
     out.profiles = $('connect').querySelectorAll('.ttl').map((t) => t.textContent).filter((t) => t.startsWith('Apps '));
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 

@@ -132,8 +132,7 @@ const todayCards = () => $('review').childNodes[0].querySelectorAll('.rcard');
     out.afterSkip = todayCards().map((c) => c.getAttribute('aria-label'));
   } catch (e) { errors.push(String(e && e.stack || e)); }
   out.sinks = sinks;
-  console.log(JSON.stringify(out));
-  process.exit(0);
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
 })();
 """  # noqa: E501  (JavaScript)
 
