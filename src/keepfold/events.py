@@ -14,12 +14,8 @@ import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from keepfold.vault import ID_RE, Vault, VaultError, check_day, invalid, scan_secrets
-
-if TYPE_CHECKING:
-    from ulid import ULID
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +168,9 @@ class _Parsed:
 # same-size rewrite) is parsed again whole. Bad lines are logged once, when first parsed.
 _PARSED: dict[Path, _Parsed] = {}
 _PARSE_LOCK = threading.Lock()  # app and MCP threads would otherwise extend one _Parsed twice
+# per process, not per EventLog: the app server builds one EventLog per request
+_LAST_ID: int = 0
+_ID_LOCK = threading.Lock()
 
 
 def _stat_key(st: os.stat_result) -> tuple[int, int, int]:
@@ -271,7 +270,6 @@ def _merged(files: list[tuple[Path, _Parsed]], session: str | None = None) -> li
 class EventLog:
     def __init__(self, vault: Vault):
         self.vault = vault
-        self._last_id: ULID | None = None
         self._keys: dict[str, dict] = {}
         self._sig: dict[Path, tuple] | None = None  # the file keys self._keys was built from
 
@@ -345,10 +343,12 @@ class EventLog:
     def _new_id(self, now: datetime) -> str:
         from ulid import ULID  # lazy: its import costs ~0.3 s, and readers (prime-hook) never mint
 
+        global _LAST_ID
         new = ULID.from_datetime(now)
-        if self._last_id is not None and int(new) <= int(self._last_id):
-            new = ULID.from_int(int(self._last_id) + 1)  # keep ids monotonic in this process
-        self._last_id = new
+        with _ID_LOCK:
+            if int(new) <= _LAST_ID:
+                new = ULID.from_int(_LAST_ID + 1)  # keep ids monotonic in this process
+            _LAST_ID = int(new)
         return str(new)
 
     def append(self, *, session: str, kind: str, source: str, fields: dict,

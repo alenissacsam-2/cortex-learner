@@ -42,6 +42,17 @@ def test_append_stamps_server_fields(ev):
     assert json.loads(path.read_text("utf-8")) == e
 
 
+def test_ids_increase_across_eventlogs_in_one_process(ev):
+    # the app server builds one EventLog per request; ids must still order within a millisecond
+    other = EventLog(ev.vault)
+    # `now` steps back a millisecond now and then (two requests that read the clock in one
+    # order and append in the other); all within one second, so ts ties and id decides
+    ids = [(ev if i % 2 else other).append(
+        session="cli", kind="log", source="self", fields={"payload": {"i": i}},
+        now=NOON + timedelta(milliseconds=500 - i % 3))["id"] for i in range(200)]
+    assert ids == sorted(ids) and len(set(ids)) == len(ids)
+
+
 @pytest.mark.parametrize("field", ["id", "ts", "day", "source", "predicted_p", "grader",
                                    "schema", "key", "session"])
 def test_server_fields_rejected(ev, field):
