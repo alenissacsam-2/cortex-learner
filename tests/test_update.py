@@ -286,6 +286,73 @@ def test_mode_installer_when_a_parent_holds_the_marker(tmp_path, monkeypatch):
     assert update.mode() == "installer" and update.install_dir() == tmp_path / "Keepfold"
 
 
+def test_mode_app_when_frozen(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    for plat in ("darwin", "linux"):
+        monkeypatch.setattr(sys, "platform", plat)
+        assert update.mode() == "app"
+    monkeypatch.setattr(sys, "platform", "win32")  # Windows keeps installer/dev
+    assert update.mode() == "dev"
+    monkeypatch.setattr(sys, "frozen", False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert update.mode() == "dev"
+
+
+# ---- per-platform release files (Mac and Linux) ----------------------------------------------
+
+
+MAC = "Keepfold-0.2.0-macos-arm64.zip"
+
+
+def test_asset_name_per_platform():
+    assert update.asset_name((0, 7, 0), "darwin", "arm64") == "Keepfold-0.7.0-macos-arm64.zip"
+    assert update.asset_name((0, 7, 0), "linux", "x86_64") == "keepfold-0.7.0-linux-x86_64.tar.gz"
+    assert update.asset_name((0, 7, 0), "darwin", "x86_64") is None
+    assert update.asset_name((0, 7, 0), "linux", "aarch64") is None
+    assert update.asset_name((0, 7, 0), "win32", "AMD64") == update.EXE
+
+
+def _on(monkeypatch, plat, frozen, machine="arm64"):
+    monkeypatch.setattr(sys, "platform", plat)
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr("platform.machine", lambda: machine)
+
+
+def test_app_mode_missing_asset_is_not_ready(monkeypatch):
+    """CI attaches the Mac file 20-30 minutes after the release: until then, no update yet."""
+    _on(monkeypatch, "darwin", True)
+    got = update.latest(opener=fake({API: release()}))  # only KeepfoldSetup.exe so far
+    assert got["waiting"] is True and got["version"] == (0, 2, 0)
+    assert (got["exe_url"], got["sha_url"], got["exe_size"]) == (None, None, 0)
+    got = update.latest(opener=fake({API: release(assets=(MAC,))}))  # no .sha256 yet
+    assert got["waiting"] is True
+    got = update.latest(opener=fake({API: release(assets=(MAC, MAC + ".sha256"))}))
+    assert "waiting" not in got
+    assert (got["exe_url"], got["sha_url"]) == (DL + MAC, DL + MAC + ".sha256")
+
+
+def test_app_mode_still_refuses_links_that_are_not_this_release(monkeypatch):
+    _on(monkeypatch, "linux", True, "x86_64")
+    name = "keepfold-0.2.0-linux-x86_64.tar.gz"
+    data = {**release(), "assets": [{"name": n, "browser_download_url": DL + "../x/" + n}
+                                    for n in (name, name + ".sha256")]}
+    with pytest.raises(update.UpdateError, match="not this release"):
+        update.latest(opener=fake({API: data}))
+
+
+def test_dev_mode_needs_no_platform_asset(monkeypatch):
+    """A PyPI or uv install on a Mac offers the uv command, never an error."""
+    _on(monkeypatch, "darwin", False)
+    got = update.latest(opener=fake({API: release()}))
+    assert got["version"] == (0, 2, 0) and "waiting" not in got and got["exe_url"] is None
+
+
+def test_windows_missing_exe_still_raises(monkeypatch):
+    _on(monkeypatch, "win32", True, "AMD64")
+    with pytest.raises(update.UpdateError, match="has no KeepfoldSetup.exe"):
+        update.latest(opener=fake({API: release(assets=(MAC, MAC + ".sha256"))}))
+
+
 def test_dev_command_matches_the_install_guide(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "CHECKOUT", tmp_path)
     assert update.command("v0.2.0") == \

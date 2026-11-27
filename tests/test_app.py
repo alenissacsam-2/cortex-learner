@@ -2654,6 +2654,70 @@ def test_update_apply_when_already_latest_or_cancelled(app, github, monkeypatch)
     assert github == [] and not app.stop.is_set()
 
 
+def _waiting(version=(9, 0, 0)):
+    return {**_release(version), "exe_url": None, "sha_url": None, "exe_size": 0, "waiting": True}
+
+
+def test_update_check_waiting_release_is_not_ready(app, github, monkeypatch):
+    """The Mac or Linux file is attached 20-30 minutes after the release: not offered yet."""
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(update, "latest", _waiting)
+    call(app, "POST", "/api/update/check", {})
+    r = wait_job(app)["result"]
+    assert r["newer"] is False and r["waiting"] is True and "command" not in r
+    assert r["note"] == ("Keepfold 9.0.0 is out; the file for this computer is still being "
+                         "prepared. Try again in half an hour.")
+
+
+def test_update_quietly_app_mode_never_downloads(app, github, monkeypatch):
+    """D22: on Mac and Linux the background check only notifies; nothing downloads unasked."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(update, "download", lambda *a: pytest.fail("downloaded in the background"))
+    notes = []
+    app.desktop = SimpleNamespace(notify=notes.append, win=None)
+    monkeypatch.setattr(update, "latest", lambda: _waiting((9, 1, 0)))
+    app.update_quietly()  # its file is still being built: not told
+    assert notes == [] and app.update_ready is None
+    monkeypatch.setattr(update, "latest", _release)
+    app.update_quietly()
+    app.update_quietly()  # every 6 hours: told once per version
+    assert notes == ["Keepfold 9.0.0 is available"]
+    assert app.update_ready is None and github == []
+
+
+def test_update_apply_app_mode_points_to_the_release(app, github, monkeypatch):
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    code, js, _, _ = call(app, "POST", "/api/update/apply", {})
+    assert code == 400 and js["error"] == (
+        "Update now arrives in the next version of the app; download the new version from "
+        "https://github.com/o/r/releases/tag/v9.0.0.")
+    assert github == [] and app.jobs.cur is None
+
+
+@pytest.mark.parametrize("plat,want", [
+    ("darwin", "Open Keepfold from Applications or Launchpad to reopen it."),
+    ("linux", "Open Keepfold from the app menu to reopen it.")])
+def test_reopen_app_mode_per_os(monkeypatch, plat, want):
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(sys, "platform", plat)
+    assert server.reopen() == want
+
+
+@pytest.mark.parametrize("plat,opener", [("darwin", ["open"]), ("linux", ["xdg-open"])])
+def test_open_path_uses_os_opener(monkeypatch, tmp_path, plat, opener):
+    """Folders open in Finder or the file manager, not the browser."""
+    import webbrowser
+    ran = []
+    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: pytest.fail("opened the browser"))
+    monkeypatch.setattr(server, "_open", webbrowser.open)  # the default, not the fakes' recorder
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: ran.append((args, timeout))
+                        or (True, ""))
+    monkeypatch.setattr(sys, "platform", plat)
+    server._open_path(tmp_path)
+    assert ran == [([*opener, str(tmp_path)], 10)]
+
+
 # ---- v7 review A: install, app manager, first run --------------------------------------------
 
 

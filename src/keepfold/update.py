@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform as _platform
 import re
 import subprocess
 import sys
@@ -37,6 +38,8 @@ EXE = "KeepfoldSetup.exe"
 SHA = EXE + ".sha256"  # the release checksum, saved beside a downloaded installer
 MARKER = "keepfold-install.txt"  # installer/setup_app.py drops it in the install folder
 MAX_BYTES = 200 * 2**20
+# shortcut: Mac/Linux caps are guesses; part 2 sets them from the real archive sizes in CI
+MAX_BYTES_BY_OS = {"win32": MAX_BYTES, "darwin": 400 * 2**20, "linux": 400 * 2**20}
 TIMEOUT = 10
 DOWNLOADS = f"https://github.com/{REPO}/releases/download/"
 _VERSION = re.compile(r"v?(\d+(?:\.\d+){1,3})")
@@ -80,7 +83,25 @@ def install_dir(exe: str | None = None) -> Path | None:
 
 
 def mode() -> str:
+    """"app" for the frozen Mac or Linux app, "installer" for KeepfoldSetup.exe, else "dev"."""
+    if getattr(sys, "frozen", False) and (sys.platform == "darwin"
+                                          or sys.platform.startswith("linux")):
+        return "app"
     return "installer" if install_dir() else "dev"
+
+
+def asset_name(version: tuple[int, ...], platform: str | None = None,
+               machine: str | None = None) -> str | None:
+    """This computer's file in a release (each beside its .sha256), or None (none is built)."""
+    platform, machine = platform or sys.platform, machine or _platform.machine()
+    v = ".".join(map(str, version))
+    if platform == "win32":
+        return EXE
+    if platform == "darwin" and machine == "arm64":
+        return f"Keepfold-{v}-macos-arm64.zip"
+    if platform.startswith("linux") and machine == "x86_64":
+        return f"keepfold-{v}-linux-x86_64.tar.gz"
+    return None
 
 
 def tool_source() -> Path | None:
@@ -139,11 +160,17 @@ def latest(opener=None, api: str = API) -> dict:
     ver = parse_version(tag)
     notes = f"https://github.com/{REPO}/releases/tag/{tag}"  # built, never taken from the answer
     assets = {a.get("name"): a for a in data.get("assets") or [] if isinstance(a, dict)}
-    exe, sha = assets.get(EXE), assets.get(EXE + ".sha256")
+    name = asset_name(ver)
+    exe, sha = (assets.get(name), assets.get(name + ".sha256")) if name else (None, None)
     if not exe or not sha:
-        raise UpdateError(f"Keepfold {tag} has no {EXE} with its .sha256 on GitHub, so it cannot "
-                          f"be installed from here. See {notes}")
-    want = f"{DOWNLOADS}{tag}/{EXE}"  # exactly this release's files, no `..` tricks
+        if sys.platform == "win32":
+            raise UpdateError(f"Keepfold {tag} has no {EXE} with its .sha256 on GitHub, so it "
+                              f"cannot be installed from here. See {notes}")
+        # Mac/Linux: CI attaches this computer's file 20-30 minutes after the release (the app
+        # waits for it); a dev install updates with uv and needs none
+        return {"tag": tag, "version": ver, "notes_url": notes, "exe_url": None, "sha_url": None,
+                "exe_size": 0, **({"waiting": True} if mode() == "app" else {})}
+    want = f"{DOWNLOADS}{tag}/{name}"  # exactly this release's files, no `..` tricks
     links = (exe.get("browser_download_url"), sha.get("browser_download_url"))
     if links != (want, want + ".sha256"):
         raise UpdateError(f"Keepfold {tag}'s download links are not this release's files; stopped. "

@@ -88,7 +88,11 @@ def snapshot_name() -> str:
 
 def reopen() -> str:
     """How this user reopens the app (A12): the Start menu for an installer install."""
-    return ("Open Keepfold from the Start menu to reopen it." if update.mode() == "installer"
+    m = update.mode()
+    if m == "app":
+        return ("Open Keepfold from Applications or Launchpad to reopen it."
+                if sys.platform == "darwin" else "Open Keepfold from the app menu to reopen it.")
+    return ("Open Keepfold from the Start menu to reopen it." if m == "installer"
             else "Run keepfold app again to reopen it.")
 _open = webbrowser.open  # tests replace this
 
@@ -104,9 +108,18 @@ def skill_url() -> str:
     return f"{cli.RELEASES}/latest/download/keepfold-skill.zip"
 
 
+def _opener() -> list[str] | None:
+    """The OS's own file opener off Windows (Finder, the file manager), else None."""
+    if sys.platform == "darwin":
+        return ["open"]
+    return ["xdg-open"] if sys.platform.startswith("linux") else None
+
+
 def _open_path(p: Path) -> None:
     if sys.platform == "win32" and _open is webbrowser.open:
         os.startfile(p)  # noqa: S606  (a folder or file Keepfold chose, never the page's)
+    elif _open is webbrowser.open and (cmd := _opener()):
+        targets._run([*cmd, str(p)], timeout=10)
     else:
         _open(p.as_uri())
 
@@ -2462,19 +2475,23 @@ class App:
 
     def update_quietly(self) -> None:
         """The background check (UPDATE_FIRST_S after start, then every UPDATE_EVERY_S): a
-        newer release is downloaded and checked (installer), or its command noted (dev), then
+        newer release is downloaded and checked (installer), or its command noted (dev), or
+        only notified (app: Mac/Linux never download unasked, D22), then
         shown as Restart to update and notified once per version. Never applied here. Skipped
         while `app.update_check` is off (read each pass); the buttons work either way."""
         from keepfold.app import desktop
         if not desktop.update_check():
             return
         info, cur = update.latest(), update.current()
-        if not update.newer(info["version"], update.parse_version(cur)):
+        if info.get("waiting") or not update.newer(info["version"], update.parse_version(cur)):
             return
         version = ".".join(map(str, info["version"]))
         if self.update_ready and self.update_ready["version"] == version:
             return
         ready = {"version": version, "mode": update.mode(), "notes_url": info["notes_url"]}
+        if ready["mode"] == "app":  # D22: Mac/Linux only tell; the download waits for a click
+            self._notify_update(version, f"Keepfold {version} is available")
+            return
         if ready["mode"] == "installer":
             dest = update.dest_dir(info)
             actions.sweep_updates(dest)
@@ -2483,9 +2500,14 @@ class App:
         else:
             ready["command"] = update.command(info["tag"])
         self.update_ready = ready
+        self._notify_update(version, f"Keepfold {version} is ready: restart to update")
+
+    def _notify_update(self, version: str, text: str) -> None:
+        """Once per version, while the updates notification is on."""
+        from keepfold.app import desktop
         if self.desktop is not None and desktop.notify_settings()["updates"] \
                 and desktop.load_state().get("update_notified") != version:
-            self.desktop.notify(f"Keepfold {version} is ready: restart to update")
+            self.desktop.notify(text)
             desktop.save_state("update_notified", version)
 
     def _check(self, job) -> tuple[dict, dict]:
@@ -2495,6 +2517,9 @@ class App:
                "newer": update.newer(info["version"], update.parse_version(cur)),
                "notes_url": info["notes_url"], "mode": update.mode(),
                "size": info["exe_size"]}
+        if info.get("waiting"):  # this computer's file is not attached yet: not offered
+            out.update(newer=False, waiting=True, note=f"Keepfold {out['latest']} is out; the file "
+                       "for this computer is still being prepared. Try again in half an hour.")
         if out["mode"] == "dev":
             out["command"] = update.command(info["tag"])
         actions.sweep_updates(update.dest_dir(info) if out["newer"] else None)
@@ -2511,8 +2536,11 @@ class App:
     def update_apply(self, body: dict) -> dict:
         """Download the new installer (unless the quiet check already did), check it, start it
         and quit; it reopens the app. Restart to update and Update now both come here."""
-        if update.mode() != "installer":
+        if (m := update.mode()) != "installer":
             info = update.latest()
+            if m == "app":  # part 2 brings the in-app update
+                raise ValueError("Update now arrives in the next version of the app; download the "
+                                 f"new version from {info['notes_url']}.")
             raise ValueError("This copy of Keepfold was not installed with KeepfoldSetup.exe. "
                              f"Update it with: {update.command(info['tag'])}")
 
