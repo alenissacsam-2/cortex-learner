@@ -661,8 +661,9 @@ READWISE = ("Highlight,Book Title,Book Author,Amazon Book ID,Note,Color,Tags,Loc
             '"Make it work, then make it right.",Clean Code Notes,Kent Beck,,good one,yellow,,'
             "order,1,2024-06-01 10:00:00+00:00,\n"
             ",Clean Code Notes,Kent Beck,,,,,order,2,2024-06-02 10:00:00+00:00,\n")
+# 27 Oct 2024 14:00 UTC: the 27th in every zone from UTC-10 to UTC+14, past the 04:00 rollover
 POCKET = ("title,url,time_added,cursor,tags,status\n"
-          "How FSRS works,https://example.org/fsrs,1730000000,,learning|memory,unread\n"
+          "How FSRS works,https://example.org/fsrs,1730037600,,learning|memory,unread\n"
           "Bad row,https://example.org/x,,,,unread\n")
 
 

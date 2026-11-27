@@ -381,6 +381,18 @@ def test_a_lock_this_process_failed_to_delete_is_taken_back(v, monkeypatch):
     assert not lock.exists()
 
 
+def test_a_coarse_clock_never_lets_a_second_taker_steal_a_live_lock(v, monkeypatch):
+    """CI 27 Nov: time.time() ticks every 15.6 ms on Windows before Python 3.13, so a second
+    Vault of this process tried in the holder's tick, built the same token, and its failed try
+    unmarked the holder's: the live lock was then stolen as a leftover."""
+    monkeypatch.setattr(vault_mod.time, "time", lambda: 1795770412.091)
+    with Vault(v.root).lock(timeout=0.3):
+        with pytest.raises(VaultError):
+            with v.lock(timeout=0.3):
+                pass
+    assert not (v.root / ".keepfold" / "lock").exists()
+
+
 def test_release_retries_a_briefly_busy_lock_file(v, monkeypatch):
     from pathlib import Path
     lock = v.root / ".keepfold" / "lock"

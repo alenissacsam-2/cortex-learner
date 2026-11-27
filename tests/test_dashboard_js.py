@@ -105,7 +105,8 @@ setTimeout(() => {
   await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
   // a headless page is not focused, so focus() fires no focus event unless this says it is
   if (cfg.focus) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-  if (cfg.reduced) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  // pinned either way: a host with animations off (a CI server) would otherwise report reduce
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: cfg.reduced ? 'reduce' : 'no-preference' }] });
   if (cfg.narrow) await send('Emulation.setDeviceMetricsOverride', { width: cfg.narrow, height: 812, deviceScaleFactor: 1, mobile: false });
   const url = cfg.url || 'file:///' + path.resolve(cfg.page).replace(/\\/g, '/');
   async function load() {

@@ -2435,6 +2435,7 @@ const posts = () => fetched.filter((f) => f.path === '/api/setup/vault').map((f)
     await tick();
     out.open = [!!field(), field().querySelector('label').textContent, input().getAttribute('placeholder'),
       field().querySelector('.help').textContent, btnIn('Use this folder').disabled === true];
+    await new Promise((r) => setTimeout(r, 20));  // it focuses in a setTimeout, which tick() can outrun
     out.focused = document.activeElement === input();
     input().value = 'D:\\Notes\\MyVault';
     input().fire('input');

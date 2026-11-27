@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import io
+import itertools
 import json
 import logging
 import os
@@ -95,6 +96,7 @@ REPLACE_TRIES = 8
 # lock tokens this process holds now: a lock file with this pid and another token is one it
 # failed to delete (Windows refuses while another process reads it), so never a live holder
 _HELD: set[str] = set()
+_SEQ = itertools.count()
 
 
 def in_temp_folder(p: Path | str) -> bool:
@@ -546,7 +548,11 @@ class Vault:
         path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + timeout
         while True:
-            token = f"{os.getpid()} {time.time():.3f} {socket.gethostname()}"
+            # 3 counter digits after the ms keep tokens unique: before Python 3.13 time.time() on
+            # Windows ticks every 15.6 ms, so two takes in one tick shared a token, the loser's
+            # discard unmarked the holder's, and its live lock looked like a leftover to steal
+            token = (f"{os.getpid()} {time.time():.3f}{next(_SEQ) % 1000:03d} "
+                     f"{socket.gethostname()}")
             _HELD.add(token)  # before the file shows it, so no reader takes it for a leftover
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)

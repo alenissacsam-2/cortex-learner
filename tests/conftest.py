@@ -13,6 +13,11 @@ import anyio
 import numpy as np
 import pytest
 
+# typer forces colour (ANSI codes inside --help text) under these, GitHub Actions sets the first;
+# tests read plain help, as a terminal user does. Before any test module imports typer
+for _name in ("GITHUB_ACTIONS", "FORCE_COLOR", "PY_COLORS"):
+    os.environ.pop(_name, None)
+
 FIXTURES = Path(__file__).parent / "fixtures"
 CONTRACT = "# Teaching contract\n\n- Ask before you teach.\n- Keep **answers** short — ✓\n"
 
