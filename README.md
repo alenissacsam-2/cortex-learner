@@ -3,6 +3,7 @@
 <!-- mcp-name: io.github.alenissacsam-2/keepfold -->
 
 [![Latest release](https://img.shields.io/github/v/release/alenissacsam-2/keepfold?label=release)](https://github.com/alenissacsam-2/keepfold/releases/latest)
+[![CI](https://github.com/alenissacsam-2/keepfold/actions/workflows/ci.yml/badge.svg)](https://github.com/alenissacsam-2/keepfold/actions/workflows/ci.yml)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6)](#install)
 [![Works through MCP](https://img.shields.io/badge/MCP-Claude%20%7C%20Cursor%20%7C%20Codex%20%7C%20Gemini%20CLI-8A5700)](#using-it)
 [![License: MIT](https://img.shields.io/github/license/alenissacsam-2/keepfold)](LICENSE)
