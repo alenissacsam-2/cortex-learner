@@ -56,6 +56,13 @@ def _no_real_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _launch_has_tty(monkeypatch):
+    """pytest's captured stderr is no terminal: off Windows `launch._log_to` would then send a
+    test's output, and sys.stdout for the rest of the run, to the log file."""
+    monkeypatch.setattr("keepfold.app.launch._tty", lambda: True)
+
+
+@pytest.fixture(autouse=True)
 def _own_temp_folder(tmp_path_factory, monkeypatch):
     """The 'system temp folder' is a separate empty dir, so the vaults tests keep in tmp_path
     are not 'in a temporary folder' (the warning in status/_init); a test that wants one

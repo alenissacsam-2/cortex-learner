@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import traceback
@@ -34,21 +35,50 @@ def installed_app() -> Path | None:
 _KEY = re.compile(r"\?t=[\w-]+")
 
 
+def _tty() -> bool:  # tests replace this
+    return sys.stderr is not None and sys.stderr.isatty()
+
+
 def _log_to(name: str) -> Path:
     log = Path.home() / ".keepfold" / "logs" / name
-    if sys.stdout is None or sys.stderr is None:
+    # off Windows a dock or app-menu start has streams, but nobody reads them
+    if sys.stdout is None or sys.stderr is None or (sys.platform != "win32" and not _tty()):
         log.parent.mkdir(parents=True, exist_ok=True)
         big = log.is_file() and log.stat().st_size > LOG_MAX
         sys.stdout = sys.stderr = open(log, "w" if big else "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     return log
 
 
+def _quote_applescript(s: str) -> str:
+    """`s` as an AppleScript string literal."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _run_alert(argv: list[str]) -> None:  # tests replace this
+    subprocess.run(argv, check=False)  # an argv list: the text never meets a shell
+
+
 def _alert(text: str) -> None:  # tests replace this
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.user32.MessageBoxW(None, text, "Keepfold", 0x10)  # MB_ICONERROR
-    else:
-        print(text, file=sys.stderr)
+        return
+    argv = None
+    if sys.platform == "darwin":
+        argv = ["osascript", "-e",
+                f'display alert "Keepfold" message {_quote_applescript(text)} as critical']
+    elif sys.platform.startswith("linux"):
+        if shutil.which("zenity"):
+            argv = ["zenity", "--error", "--text", text]
+        elif shutil.which("notify-send"):
+            argv = ["notify-send", "Keepfold", text]
+    if argv:
+        try:
+            _run_alert(argv)
+            return
+        except OSError:
+            pass
+    print(text, file=sys.stderr)
 
 
 def main() -> None:

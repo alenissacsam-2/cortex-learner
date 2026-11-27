@@ -648,3 +648,65 @@ def test_start_with_windows_runs_keepfold_exe_when_installed(win32, tmp_path, mo
     monkeypatch.setattr(sys, "prefix", str(tmp_path))  # the tool venv
     want = f'"{tmp_path / "app" / "Keepfold.exe"}" -m keepfold.app.launch --hidden'
     assert desktop.autostart_command() == want
+
+
+def test_log_redirects_without_tty_off_windows(monkeypatch):
+    from pathlib import Path
+    log = Path.home() / ".keepfold" / "logs" / "app.log"
+    monkeypatch.setattr(launch, "_tty", lambda: True)
+    monkeypatch.setattr(sys, "platform", "linux")
+    out = sys.stdout
+    launch._log_to("app.log")  # a terminal: output stays there
+    assert sys.stdout is out and not log.exists()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(launch, "_tty", lambda: False)
+    launch._log_to("app.log")  # Windows with a console stays as it was
+    assert sys.stdout is out and not log.exists()
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "stdout", out)  # monkeypatch restores the real streams afterwards
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    launch._log_to("app.log")  # started from the dock or app menu: no terminal
+    try:
+        assert sys.stdout is not out and sys.stderr is sys.stdout
+        print("hello")
+    finally:
+        sys.stdout.close()
+    assert "hello" in log.read_text(encoding="utf-8")
+
+
+def test_quote_applescript():
+    assert launch._quote_applescript('a "b" \\ c') == '"a \\"b\\" \\\\ c"'
+
+
+@pytest.mark.parametrize(("platform", "have", "want"), [
+    ("darwin", set(), ["osascript", "-e",
+                       'display alert "Keepfold" message "say \\"hi\\"; rm -rf ~" as critical']),
+    ("linux", {"zenity", "notify-send"}, ["zenity", "--error", "--text", 'say "hi"; rm -rf ~']),
+    ("linux", {"notify-send"}, ["notify-send", "Keepfold", 'say "hi"; rm -rf ~']),
+])
+def test_alert_off_windows_runs_the_os_dialog_with_the_text_as_an_argument(
+        monkeypatch, platform, have, want):
+    ran = []
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}" if name in have
+                        else None)
+    monkeypatch.setattr(launch, "_run_alert", ran.append)
+    launch._alert('say "hi"; rm -rf ~')
+    assert ran == [want]
+
+
+def test_alert_on_linux_without_a_dialog_tool_writes_stderr(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(launch, "_run_alert", lambda argv: pytest.fail("ran a program"))
+    launch._alert("Keepfold could not start.")
+    assert "Keepfold could not start." in capsys.readouterr().err
+
+
+def test_alert_falls_back_to_stderr_when_the_dialog_fails(monkeypatch, capsys):
+    def broken(argv):
+        raise OSError("no display")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(launch, "_run_alert", broken)
+    launch._alert("Keepfold could not start.")
+    assert "Keepfold could not start." in capsys.readouterr().err
