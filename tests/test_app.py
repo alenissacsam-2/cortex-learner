@@ -1179,6 +1179,8 @@ def test_setup_pull_streams_progress_and_cancels(app, monkeypatch):
 def test_setup_install_runs_only_the_shown_command(app, monkeypatch):
     plan = wizard.install_plan()
     assert plan["size"] and plan["source"] and plan["page"].startswith("https://ollama.com")
+    if plan.get("fetch"):
+        pytest.skip("this platform downloads Ollama itself (tests/test_wizard.py covers it)")
     if plan["run"] is None:  # no winget/brew here: nothing to run
         assert call(app, "POST", "/api/setup/install", {})[0] == 200
         assert "yourself" in wait_job(app)["error"]

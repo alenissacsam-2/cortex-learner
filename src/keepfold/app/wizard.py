@@ -10,16 +10,22 @@ import ctypes
 import functools
 import json
 import os
+import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
-from keepfold import session
+from keepfold import session, update
 from keepfold._proc import proxy_env
 from keepfold.app import actions, status, targets
 
@@ -41,8 +47,25 @@ EMBED = {"size": "about 150 MB", "source": "huggingface.co"}
 ORDER = ("vault", "connect", "embed", "history", "llm")
 OLLAMA_PAGE = "https://ollama.com/download"
 LMSTUDIO_PAGE = "https://lmstudio.ai/download"
-OLLAMA_SIZE, OLLAMA_BYTES = "about 1 GB", 10**9
+# Ollama's download as shown to the owner, and the bytes its install needs (the free-space
+# check). Windows: winget's installer.
+_OLLAMA_SIZES = {"win32": ("about 1 GB", 10**9),
+                 # shortcut: estimated from the 0.40.19 assets, re-measure on a release bump
+                 "darwin": ("about 250 MB", 10**9), "linux": ("about 1.7 GB", 8 * 10**9)}
+
+
+def _ollama_size() -> tuple[str, int]:
+    return _OLLAMA_SIZES.get(sys.platform, _OLLAMA_SIZES["win32"])
+
+
+OLLAMA_SIZE, OLLAMA_BYTES = _ollama_size()  # this computer's: the server's free-space check
 OLLAMA_LICENSE = "https://github.com/ollama/ollama/blob/main/LICENSE"
+# Ollama's own release files, fetched on the owner's click where no package manager does it
+_OLLAMA_RELEASES = "https://github.com/ollama/ollama/releases/"
+OLLAMA_RELEASE = _OLLAMA_RELEASES + "latest/download/"
+OLLAMA_ASSET = {"darwin": "Ollama-darwin.zip", "linux": "ollama-linux-amd64.tar.zst"}
+OLLAMA_SUMS = "sha256sum.txt"
+OLLAMA_APP_BIN = Path("Ollama.app", "Contents", "Resources", "ollama")
 GIT_PAGE = "https://git-scm.com/downloads"
 GIT_SIZE, GIT_BYTES = "about 70 MB", 70 * 10**6
 GIT_LICENSE = "https://git-scm.com/about/free-and-open-source"
@@ -90,14 +113,32 @@ def _ram_gb() -> float | None:
         return None
 
 
+def _amd_vram_gb(drm: Path = Path("/sys/class/drm")) -> float | None:
+    """The largest AMD GPU's memory, from the amdgpu driver's sysfs file (bytes); None
+    without one, or when it is under 2 GB (an APU's carve-out of RAM: the RAM rule fits it)."""
+    sizes = []
+    for f in drm.glob("card*/device/mem_info_vram_total"):
+        try:
+            sizes.append(int(f.read_text().strip()))
+        except (OSError, ValueError):
+            continue
+    return round(max(sizes) / 2**30, 1) if sizes and max(sizes) >= 2 * 2**30 else None
+
+
 @functools.cache  # nvidia-smi or a RAM query: the machine does not change while the app runs
 def hardware() -> dict:
     if (gb := _vram_gb()) is not None:
         return {"kind": "gpu", "gb": gb, "label": f"{gb:g} GB of graphics memory (NVIDIA)"}
+    # Apple Silicon's GPU uses the RAM itself (unified memory)
+    if sys.platform == "darwin" and platform.machine() == "arm64" and (gb := _ram_gb()):
+        return {"kind": "gpu", "gb": gb, "label": f"{gb:g} GB of unified memory (Apple Silicon)"}
+    if sys.platform.startswith("linux") and (gb := _amd_vram_gb()) is not None:
+        return {"kind": "gpu", "gb": gb, "label": f"{gb:g} GB of graphics memory (AMD)"}
     gb = _ram_gb()
+    none = ("no NVIDIA graphics card found" if sys.platform == "win32"
+            else "no graphics memory found")
     return {"kind": "ram", "gb": gb,
-            "label": f"{gb:g} GB of memory (no NVIDIA graphics card found)" if gb
-            else "memory size unknown"}
+            "label": f"{gb:g} GB of memory ({none})" if gb else "memory size unknown"}
 
 
 def recommend(gb: float | None, kind: str = "gpu") -> str:
@@ -118,11 +159,31 @@ def model(id: str) -> dict:
 # ---- runners ------------------------------------------------------------------------------------
 
 
+def _mac_apps() -> tuple[Path, Path]:
+    """Where Ollama.app may be: the per-user folder Setup installs into, then the system one."""
+    return Path.home() / "Applications", Path("/Applications")
+
+
+def _linux_ollama() -> Path:
+    """Where Setup unpacks Ollama's Linux release (bin/ollama, lib/ollama)."""
+    return install_dir() / "keepfold" / "ollama"
+
+
+def _ollama_unit() -> Path:
+    """The systemd user unit that runs Setup's Linux Ollama."""
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return xdg / "systemd" / "user" / "keepfold-ollama.service"
+
+
 def ollama_exe() -> str | None:
     """`ollama` on PATH, or where the Windows installer puts it (PATH is not updated for a
-    process started before the install)."""
+    process started before the install), or inside Ollama.app on macOS, or Setup's Linux copy."""
     if found := targets._which("ollama"):
         return found
+    own = ([a / OLLAMA_APP_BIN for a in _mac_apps()] if sys.platform == "darwin"
+           else [_linux_ollama() / "bin" / "ollama"] if sys.platform.startswith("linux") else [])
+    if found := next((str(p) for p in own if p.is_file()), None):
+        return found  # the app's own copy: its PATH link may not be made yet
     local = os.environ.get("LOCALAPPDATA")
     p = Path(local, "Programs", "Ollama", "ollama.exe") if local else None
     return str(p) if p and p.is_file() else None
@@ -135,11 +196,18 @@ def install_plan() -> dict:
         return {"run": ["winget", "install", "--id", "Ollama.Ollama", "-e", *WINGET]
                 if ok else None, "source": "winget package Ollama.Ollama, from ollama.com",
                 "size": OLLAMA_SIZE, "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
-    if sys.platform == "darwin":
-        ok = targets._which("brew") is not None
-        return {"run": ["brew", "install", "ollama"] if ok else None,
-                "source": "Homebrew", "size": OLLAMA_SIZE, "page": OLLAMA_PAGE}
-    return {"run": None, "show": LINUX_INSTALL, "source": "ollama.com", "size": OLLAMA_SIZE,
+    size = _ollama_size()[0]
+    if sys.platform == "darwin" and targets._which("brew") is not None:
+        return {"run": ["brew", "install", "ollama"], "source": "Homebrew",
+                "size": size, "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
+    linux64 = sys.platform.startswith("linux") and platform.machine() == "x86_64"
+    if sys.platform == "darwin" or linux64:
+        return {"run": None, "fetch": OLLAMA_RELEASE + OLLAMA_ASSET[sys.platform],
+                "sums": OLLAMA_RELEASE + OLLAMA_SUMS,
+                "to": str(_linux_ollama() if linux64 else install_dir()),
+                "source": "github.com/ollama/ollama releases", "size": size,
+                "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
+    return {"run": None, "show": LINUX_INSTALL, "source": "ollama.com", "size": size,
             "page": OLLAMA_PAGE}
 
 
@@ -170,8 +238,12 @@ def _ollama_start_cmd() -> list[str]:
     if sys.platform == "win32" and local and (
             app := Path(local, "Programs", "Ollama", "ollama app.exe")).is_file():
         return [str(app)]
-    if sys.platform == "darwin" and Path("/Applications/Ollama.app").is_dir():
-        return ["open", "-a", "Ollama"]
+    if sys.platform == "darwin":
+        for a in _mac_apps():
+            if (app := a / "Ollama.app").is_dir():
+                return ["open", "-a", str(app)]
+    if sys.platform.startswith("linux") and _ollama_unit().is_file():
+        return ["systemctl", "--user", "start", "keepfold-ollama"]
     return [ollama_exe(), "serve"]
 
 
@@ -404,7 +476,12 @@ def free_space_ok(path, need_bytes: int) -> tuple[bool, str]:
 
 
 def install_dir() -> Path:
-    """Where winget's per-user installs go (Ollama, Git), for the free-space check."""
+    """Where winget's per-user installs go (Ollama, Git), for the free-space check; on macOS
+    the per-user Applications folder Ollama.app is unzipped into; on Linux ~/.local/share."""
+    if sys.platform == "darwin":
+        return Path.home() / "Applications"
+    if sys.platform.startswith("linux"):
+        return Path.home() / ".local" / "share"
     return Path(os.environ.get("LOCALAPPDATA") or Path.home())
 
 
@@ -415,8 +492,180 @@ def models_dir(runner: str) -> Path:
     return Path.home() / ".lmstudio"
 
 
+def _download(url: str, dest: Path, job) -> Path:
+    """`url`, an Ollama release file, saved as `dest` through the system proxy (the updater's
+    opener), following redirects only to GitHub's download hosts; job.say once per MB. Cancel
+    raises actions.Cancelled. A partial file is deleted."""
+    if not url.startswith(_OLLAMA_RELEASES):
+        raise ValueError(f"Refused a download that is not an Ollama release file: {url}")
+    for _ in range(5):
+        try:
+            r = update._get(url, None, "application/octet-stream")
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in update._REDIRECTS:
+                raise ValueError(f"GitHub answered {e.code} for {url}. Try again later.") \
+                    from None
+            url = urljoin(url, e.headers.get("Location") or "")
+            p = urlsplit(url)
+            if not url.startswith(_OLLAMA_RELEASES) and (
+                    p.scheme != "https" or (p.hostname or "") not in update._CDN):
+                raise ValueError(f"The download was sent to {p.hostname or url}, which is not "
+                                 "GitHub; stopped.") from None
+        except OSError as e:
+            raise ValueError("The download stopped. Check your internet connection and try "
+                             f"again ({getattr(e, 'reason', e)}).") from None
+    else:
+        raise ValueError("The download was redirected too many times; stopped.")
+    part = dest.with_name(dest.name + ".part")
+    total, got, said = int(r.headers.get("Content-Length") or 0), 0, -1
+    try:
+        with r, open(part, "wb") as f:
+            while chunk := r.read(1 << 16):
+                if job.cancelled.is_set():
+                    raise actions.Cancelled
+                f.write(chunk)
+                got += len(chunk)
+                if got >> 20 != said:
+                    said = got >> 20
+                    job.say(f"{dest.name}: {said} MB" + (f" of {total >> 20} MB" if total else ""))
+    except OSError as e:
+        part.unlink(missing_ok=True)
+        raise ValueError("The download stopped. Check your internet connection and try again "
+                         f"({getattr(e, 'reason', e)}).") from None
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    os.replace(part, dest)
+    return dest
+
+
+def _unpack(src: Path, to: Path) -> None:
+    """Unpack `src` into `to`. A .tar.zst (Linux) streams through zstandard into tarfile's
+    "data" filter, which refuses paths and links outside `to` and drops special bits.
+    A zip keeps each file's Unix permission bits (zipfile drops them, and Ollama.app's
+    programs need their executable bits; never setuid, setgid or sticky) and its symlinks (app
+    frameworks use them). ValueError, before anything is written, for a zip file or link that
+    would land outside `to`."""
+    if src.name.endswith(".tar.zst"):
+        import zstandard  # Linux only (the dependency's platform marker)
+        try:
+            with (open(src, "rb") as f, zstandard.ZstdDecompressor().stream_reader(f) as z,
+                  tarfile.open(fileobj=z, mode="r|") as t):
+                t.extractall(to, filter="data")
+        except (tarfile.TarError, zstandard.ZstdError) as e:
+            raise ValueError(f"Could not unpack {src.name}: {e}") from None
+        return
+    root = to.resolve()
+
+    def inside(p: Path) -> Path:
+        if not p.resolve().is_relative_to(root):
+            raise ValueError(f"Refused the archive: it would write outside {to} ({p.name}).")
+        return p
+
+    with zipfile.ZipFile(src) as z:
+        members = [(i, i.external_attr >> 16) for i in z.infolist()]
+        links = {i.filename: z.read(i).decode() for i, mode in members if stat.S_ISLNK(mode)}
+        for i, _ in members:  # all checked before the first write
+            inside(root / i.filename)
+            if i.filename in links:
+                inside((root / i.filename).parent / links[i.filename])
+        for i, mode in members:
+            out = inside(root / i.filename)  # again: the links made so far now resolve
+            if i.filename in links:
+                inside(out.parent / links[i.filename])
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.unlink(missing_ok=True)
+                os.symlink(links[i.filename], out)
+            elif i.is_dir():
+                out.mkdir(parents=True, exist_ok=True)
+            else:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(i) as r, open(out, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                if mode & 0o777:
+                    os.chmod(out, mode & 0o777)
+
+
+def _ollama_service(to: Path) -> list[str]:
+    """Linux with systemd: a user unit runs `<to>/bin/ollama serve` now and at each login.
+    Without one (or when systemctl fails, the unit then removed) Start runs `ollama serve`."""
+    if not status._systemd():
+        return ["Click Start to run Ollama."]
+    unit = _ollama_unit()
+    try:
+        text = status.render_login(".service", "Ollama for Keepfold",
+                                   [str(to / "bin" / "ollama"), "serve"])
+    except ValueError as e:
+        return [str(e), "Click Start to run Ollama."]
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(text, encoding="utf-8", newline="\n")
+    for args in (["systemctl", "--user", "daemon-reload"],
+                 ["systemctl", "--user", "enable", unit.stem],
+                 ["systemctl", "--user", "restart", unit.stem]):  # a reinstall runs the new copy
+        ok, out = targets._run(args, timeout=30)
+        if not ok:
+            unit.unlink(missing_ok=True)
+            return [f"`{' '.join(args)}` failed: {out[-300:]}", "Click Start to run Ollama."]
+    return [f"wrote {unit}; Ollama runs now and at each login."]
+
+
+def fetch_ollama(job, plan: dict) -> dict:
+    """Ollama from its GitHub release, on the owner's click: the archive into ~/.keepfold/tmp,
+    checked against the release's sha256sum.txt, unpacked into a staging folder beside its
+    place, then swapped in whole for any older copy: Ollama.app into plan["to"] (macOS), or
+    plan["to"] itself (Linux, which then gets its systemd user unit). A mismatch or failed
+    unpack raises ValueError and leaves no partial Ollama; nothing asks for an admin password."""
+    tmp = Path.home() / ".keepfold" / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    name = plan["fetch"].rsplit("/", 1)[-1]
+    archive, sums = tmp / name, tmp / OLLAMA_SUMS
+    zipped = name.endswith(".zip")
+    # in ~/Applications only Ollama.app is replaced; the Linux folder is Ollama's alone
+    dest = Path(plan["to"]) / "Ollama.app" if zipped else Path(plan["to"])
+    stage = None
+    try:
+        text = _download(plan["sums"], sums, job).read_text(encoding="utf-8", errors="replace")
+        m = re.search(rf"^([0-9a-fA-F]{{64}})\s+\*?(?:\./)?{re.escape(name)}\s*$", text, re.M)
+        if m is None:
+            raise ValueError(f"The release's checksum file has no line for {name}; stopped.")
+        _download(plan["fetch"], archive, job)
+        if update._sha256(archive) != m[1].lower():
+            raise ValueError(f"The download of {name} does not match the release's checksum, "
+                             "so it was deleted. Try again later.")
+        job.say(f"{name}: checksum OK; unpacking into {plan['to']}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=".keepfold-ollama-", dir=dest.parent))
+        _unpack(archive, stage / "new")
+        new = stage / "new" / dest.name if zipped else stage / "new"
+        if not (stage / "new" / OLLAMA_APP_BIN if zipped else new / "bin" / "ollama").is_file():
+            raise ValueError(f"{name} holds no ollama program; nothing was installed.")
+        if dest.exists() or dest.is_symlink():
+            os.replace(dest, stage / "old")
+        try:
+            os.replace(new, dest)
+        except OSError:
+            if (stage / "old").exists():  # put the older copy back
+                os.replace(stage / "old", dest)
+            raise
+    except actions.Cancelled:
+        return {"ok": False, "cancelled": True, "lines": ["Cancelled; Ollama was not installed."]}
+    finally:
+        archive.unlink(missing_ok=True)
+        sums.unlink(missing_ok=True)
+        if stage:
+            shutil.rmtree(stage, ignore_errors=True)
+    lines = [f"downloaded {name} from {plan['source']}; checksum OK",
+             f"Ollama is installed in {plan['to']}."]
+    if sys.platform.startswith("linux"):
+        lines += _ollama_service(dest)
+    return {"ok": True, "lines": lines}
+
+
 def install_ollama(job) -> dict:
     plan = install_plan()
+    if plan.get("fetch"):
+        return fetch_ollama(job, plan)
     if not plan["run"]:
         raise ValueError(f"Install Ollama yourself from {plan['page']}"
                          + (f" or run: {plan['show']}" if plan.get("show") else ""))

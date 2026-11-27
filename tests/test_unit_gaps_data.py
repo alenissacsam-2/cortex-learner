@@ -215,6 +215,8 @@ def test_test_and_save_writes_config_only_after_a_pass(config, monkeypatch):
 def test_install_ollama_runs_only_the_shown_command(monkeypatch):
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(actions, "_popen", lambda *a, **k: pytest.fail("nothing may run"))
+    if wizard.install_plan().get("fetch"):
+        pytest.skip("this platform downloads Ollama itself (tests/test_wizard.py covers it)")
     with pytest.raises(ValueError, match="Install Ollama yourself"):
         wizard.install_ollama(server.Job("i", "s", True))
     monkeypatch.setattr(targets, "_which", lambda c: f"C:/bin/{c}.exe")
