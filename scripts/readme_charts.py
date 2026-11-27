@@ -288,7 +288,8 @@ def chat_test_chart(r: dict, t: dict) -> str:
     rows = [(label, [ev[k]["pass"], ev[k]["fail"], ev[k]["needs_model"]])
             for k, label in QUERY_KINDS.items() if k in ev]
     return stacked(
-        t, "The 40-question Chat test, with no model",
+        t, f"The {ct['passed'] + ct['failed'] + ct['needs_model']}-question Chat test, "
+        "with no model",
         f"{ct['passed']} of {ct['ran']} questions Keepfold answers from its own data passed; "
         f"{ct['needs_model']} need a local model", rows, ("Pass", "Fail", "Needs a local model"),
         "Stacked bar chart by the kind of search a question needs. " + "; ".join(
