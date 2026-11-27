@@ -121,7 +121,8 @@ def latest(opener=None, api: str = API) -> dict:
         if e.code in (403, 429):  # 60 API calls an hour per address: a campus network runs out
             return _latest_from_page(opener, (e.headers or {}).get("X-RateLimit-Reset"))
         if e.code == 404:
-            raise UpdateError("GitHub has no Keepfold release yet.") from None
+            raise UpdateError("GitHub found no Keepfold release just now (the project page may be "
+                              "unavailable for a while). Try again later.") from None
         raise UpdateError(f"GitHub answered {e.code}. Try again later.") from None
     except (URLError, OSError) as e:
         raise UpdateError("Could not reach GitHub. Check your internet connection and try "
