@@ -451,18 +451,28 @@ def login_text(root: Path) -> str:
         raise ValueError("Start at login is not offered for a vault path holding a line break "
                          "or another control character; move the vault to a plainer folder.")
     kind = login_file().suffix
+    return render_login(kind, LOGIN_ID if kind == ".plist" else LOGIN_TASK, args)
+
+
+def render_login(kind: str, label: str, args: list[str]) -> str:
+    """A login entry that runs `args`: a LaunchAgent (kind `.plist`, `label` its Label), a
+    systemd user unit (`.service`) or an XDG autostart entry (`.desktop`), `label` their name.
+    The desktop app's Start at login (desktop.set_autostart) writes these too."""
+    if any(re.search(r"[\x00-\x1f\x7f]", a) for a in args):  # a newline would add a directive
+        raise ValueError("Start at login is not offered for a path holding a line break or "
+                         "another control character; move it to a plainer folder.")
     if kind == ".plist":  # plistlib escapes &, < and > as XML
-        return plistlib.dumps({"Label": LOGIN_ID, "ProgramArguments": args,
+        return plistlib.dumps({"Label": label, "ProgramArguments": args,
                                "RunAtLoad": True}).decode("utf-8")
     if kind == ".service":  # systemd quoting: \ and " escaped, % and $ doubled (expansions)
         cmd = " ".join('"' + a.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
                        .replace("$", "$$") + '"' for a in args)
-        return (f"[Unit]\nDescription={LOGIN_TASK}\n\n[Service]\nExecStart={cmd}\n\n"
+        return (f"[Unit]\nDescription={label}\n\n[Service]\nExecStart={cmd}\n\n"
                 "[Install]\nWantedBy=default.target\n")
     # Desktop Entry spec: \ " ` $ escaped inside quotes, then every \ doubled, % doubled
     cmd = " ".join('"' + re.sub(r'([\\"`$])', r"\\\1", a).replace("\\", "\\\\")
                    .replace("%", "%%") + '"' for a in args)
-    return f"[Desktop Entry]\nType=Application\nName={LOGIN_TASK}\nExec={cmd}\nNoDisplay=true\n"
+    return f"[Desktop Entry]\nType=Application\nName={label}\nExec={cmd}\nNoDisplay=true\n"
 
 
 def login_commands(on: bool) -> list[list[str]]:

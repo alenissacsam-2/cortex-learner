@@ -29,6 +29,8 @@ from urllib.parse import urlsplit
 from keepfold.app import server, status
 
 AUTOSTART = "Keepfold"  # the HKCU Run value: `"<Keepfold.exe>" -m keepfold.app.launch --hidden`
+AUTOSTART_ID = "io.github.alenissacsam-2.keepfold"  # the app's LaunchAgent label (bundle id)
+DESKTOP_ID = "io.github.alenissacsam_2.keepfold"  # its .desktop name (no "-" after a dot)
 # the AppUserModelID, also on the shortcuts: pins and groups as Keepfold
 APP_ID = "Keepfold.Learner"
 ICON = Path(__file__).resolve().parent.parent / "assets" / "keepfold.ico"  # scripts/make_icon.py
@@ -111,32 +113,75 @@ def autostart_command() -> str:
     return f'"{exe}" --hidden'
 
 
+def autostart_label() -> str:
+    """The setting's name, in the tray and on the page."""
+    return "Start with Windows" if sys.platform == "win32" else "Start at login"
+
+
+def autostart_file() -> Path | None:
+    """Start at login on Mac (a LaunchAgent) and Linux (an XDG autostart entry); None on Windows
+    (the Run value) and elsewhere."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "LaunchAgents" / f"{AUTOSTART_ID}.plist"
+    if sys.platform.startswith("linux"):
+        xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        return xdg / "autostart" / f"{DESKTOP_ID}.desktop"
+    return None
+
+
+def autostart_args() -> list[str]:
+    """What the login entry runs off Windows: the Keepfold app, starting in the tray."""
+    from keepfold import update
+    if update.mode() != "app":
+        raise ValueError("Start at login comes with the Keepfold app.")
+    return [sys.executable, "--hidden"]
+
+
+def _autostart_supported() -> bool:
+    from keepfold import update
+    return sys.platform == "win32" or (autostart_file() is not None and update.mode() == "app")
+
+
 def autostart_state() -> dict:
-    on = sys.platform == "win32"
-    return {"supported": on, "enabled": on and status.run_get(AUTOSTART) is not None}
+    on = _autostart_supported()
+    if sys.platform == "win32":
+        enabled = status.run_get(AUTOSTART) is not None
+    else:
+        enabled = on and autostart_file().is_file()
+    return {"supported": on, "enabled": enabled, "label": autostart_label()}
 
 
 def set_autostart(enabled: bool) -> dict:
-    """Start with Windows on or off. Either choice counts as made, so the first-run default
-    (`first_run`) never overrides it."""
-    if sys.platform != "win32":
-        raise ValueError("Start with Windows is a Windows setting.")
-    if enabled:
-        status.run_set(autostart_command(), AUTOSTART)
+    """Start with Windows (Start at login on Mac and Linux) on or off. Either choice counts as
+    made, so the first-run default (`first_run`) never overrides it."""
+    if sys.platform == "win32":
+        if enabled:
+            status.run_set(autostart_command(), AUTOSTART)
+        else:
+            status.run_delete(AUTOSTART)
+    elif (f := autostart_file()) is None:
+        raise ValueError("Start at login is not offered on this system.")
+    elif enabled:
+        kind = f.suffix
+        text = status.render_login(kind, AUTOSTART_ID if kind == ".plist" else "Keepfold",
+                                   autostart_args())
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8", newline="\n")
     else:
-        status.run_delete(AUTOSTART)
+        f.unlink(missing_ok=True)
     _merge_app(lambda a: {**a, "autostart_asked": True})
     return autostart_state()
 
 
 def first_run(echo=print) -> None:
-    """The desktop app's first start turns Start with Windows on (the owner's choice), once."""
-    if sys.platform != "win32" or _app_cfg().get("autostart_asked") is True:
+    """The desktop app's first start turns Start with Windows (Start at login) on, once: the
+    owner's choice. Off Windows only the Keepfold app has it."""
+    if not _autostart_supported() or _app_cfg().get("autostart_asked") is True:
         return
     try:
         set_autostart(True)
     except (OSError, ValueError) as e:  # tried again at the next start
-        echo(f"Keepfold app: Start with Windows stays off ({e})")
+        echo(f"Keepfold app: {autostart_label()} stays off ({e})")
 
 
 # ---- notifications ----------------------------------------------------------------------------
@@ -576,7 +621,7 @@ def _tray(d: Desktop):
     icon = pystray.Icon("keepfold", _icon_image(), "Keepfold", pystray.Menu(
         item("Open Keepfold", lambda: d.show(), default=True),
         item(lambda _: d.capture_label(), lambda: d.capture()),
-        item("Start with Windows", lambda: d.toggle_autostart(),
+        item(autostart_label(), lambda: d.toggle_autostart(),
              checked=lambda _: autostart_state()["enabled"]),
         pystray.Menu.SEPARATOR,
         item("Quit", lambda: d.quit())))

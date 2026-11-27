@@ -4,11 +4,14 @@ the window, no idle stop, the browser fallback, Start with Windows (the first-ru
 notifications (once a day, private left out, job ends) and their settings API."""
 
 import json
+import plistlib
+import shlex
 import sys
 import threading
 import time
 import types
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from conftest import note
@@ -201,7 +204,7 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     assert seen["calls"] == ["hide", "show"]
     key = " (Ctrl+Alt+Space)" if sys.platform == "win32" else ""  # the hotkey: Windows only
     assert seen["menu"] == [("Open Keepfold", True), (f"Quick capture{key}", False),
-                            ("Start with Windows", False), ("Quit", False)]
+                            (desktop.autostart_label(), False), ("Quit", False)]
     assert FakeIcon.made[0].stopped.is_set() and ran == ["first_run"]
     assert not server.state_file().exists() and server.running_url() is None
     assert desktop.load_state()["window"] == {"width": 1000, "height": 700, "x": 50, "y": 60}
@@ -444,11 +447,13 @@ def test_a_window_that_fails_to_start_opens_the_browser(gui, vault, fakes, monke
 
 
 def test_start_with_windows_on_off_and_the_first_run_rule(win32, _no_real_run_key):
-    assert desktop.autostart_state() == {"supported": True, "enabled": False}
+    assert desktop.autostart_state() == {"supported": True, "enabled": False,
+                                         "label": "Start with Windows"}
     desktop.first_run()
     assert _no_real_run_key == {desktop.AUTOSTART: win32}
     assert status.config()["app"]["autostart_asked"] is True
-    assert desktop.set_autostart(False) == {"supported": True, "enabled": False}
+    assert desktop.set_autostart(False) == {"supported": True, "enabled": False,
+                                            "label": "Start with Windows"}
     desktop.first_run()  # asked already: off stays off
     assert _no_real_run_key == {}
 
@@ -467,9 +472,123 @@ def test_start_with_windows_needs_the_app_exe_and_windows(win32, tmp_path, monke
     assert _no_real_run_key == {} and "keepfold-app.exe" in lines[0]
     assert status.config().get("app", {}).get("autostart_asked") is None  # tried again later
     monkeypatch.setattr(sys, "platform", "linux")
-    assert desktop.autostart_state() == {"supported": False, "enabled": False}
+    assert desktop.autostart_state() == {"supported": False, "enabled": False,
+                                         "label": "Start at login"}
     with pytest.raises(ValueError):
         desktop.set_autostart(True)
+
+
+def _keepfold_app(monkeypatch, platform: str) -> str:
+    """The frozen Keepfold app (update.mode() "app") on `platform`, its executable under ~."""
+    from keepfold import update
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    exe = (Path.home() / "Keepfold.app" / "Contents" / "MacOS" / "Keepfold").as_posix()
+    monkeypatch.setattr(sys, "executable", exe)
+    return exe
+
+
+def _exec_line(f: Path) -> str:
+    return next(s for s in f.read_text(encoding="utf-8").splitlines() if s.startswith("Exec="))
+
+
+def test_autostart_mac_writes_launchagent(monkeypatch):
+    exe = _keepfold_app(monkeypatch, "darwin")
+    f = Path.home() / "Library" / "LaunchAgents" / "io.github.alenissacsam-2.keepfold.plist"
+    assert desktop.AUTOSTART_ID == "io.github.alenissacsam-2.keepfold"
+    assert desktop.autostart_file() == f
+    assert desktop.autostart_state() == {"supported": True, "enabled": False,
+                                         "label": "Start at login"}
+    assert desktop.set_autostart(True)["enabled"] is True
+    assert plistlib.loads(f.read_bytes()) == {
+        "Label": desktop.AUTOSTART_ID, "ProgramArguments": [exe, "--hidden"], "RunAtLoad": True}
+    assert status.config()["app"]["autostart_asked"] is True
+    assert desktop.set_autostart(False)["enabled"] is False
+    assert not f.exists()
+
+
+def test_autostart_linux_desktop_entry(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    exe = _keepfold_app(monkeypatch, "linux")
+    f = tmp_path / "xdg" / "autostart" / "io.github.alenissacsam_2.keepfold.desktop"
+    assert desktop.autostart_file() == f
+    lines = []
+    desktop.first_run(lines.append)  # the first start turns it on, as on Windows
+    assert lines == [] and _exec_line(f) == f'Exec="{exe}" "--hidden"'
+    assert f.read_text(encoding="utf-8").startswith("[Desktop Entry]\nType=Application\n")
+    assert desktop.autostart_state()["enabled"] is True
+    desktop.set_autostart(False)
+    desktop.first_run()  # asked already: off stays off
+    assert not f.exists()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_autostart_files_quote_odd_home(monkeypatch, tmp_path, platform):
+    """Review focus 2: a home folder with a space and a non-ASCII letter still starts the app."""
+    h = tmp_path / "Ana María l"
+    h.mkdir()
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: h))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    exe = _keepfold_app(monkeypatch, platform)
+    assert "Ana María l/" in exe
+    desktop.set_autostart(True)
+    f = desktop.autostart_file()
+    assert f.is_relative_to(h)
+    if platform == "darwin":
+        assert plistlib.loads(f.read_bytes())["ProgramArguments"] == [exe, "--hidden"]
+    else:
+        assert f.parent == h / ".config" / "autostart"
+        line = _exec_line(f)
+        assert line == f'Exec="{exe}" "--hidden"'
+        assert shlex.split(line.removeprefix("Exec=")) == [exe, "--hidden"]
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_autostart_unsupported_in_dev_mode_off_windows(monkeypatch, platform):
+    from keepfold import update
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(update, "mode", lambda: "dev")
+    assert desktop.autostart_state() == {"supported": False, "enabled": False,
+                                         "label": "Start at login"}
+    with pytest.raises(ValueError, match="Start at login comes with the Keepfold app."):
+        desktop.autostart_args()
+    with pytest.raises(ValueError, match="comes with the Keepfold app"):
+        desktop.set_autostart(True)
+    lines = []
+    desktop.first_run(lines.append)  # a PyPI install: nothing to start, nothing said
+    assert lines == [] and not desktop.autostart_file().exists()
+    assert status.config().get("app", {}).get("autostart_asked") is None
+
+
+# status.login_text's output, captured from the code before render_login was factored out
+_GOLDEN_LOGIN = {
+    ("darwin", False): '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n\t<key>Label</key>\n\t<string>keepfold-browse-receiver</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/opt/kf bin/keepfold</string>\n\t\t<string>browse</string>\n\t\t<string>serve</string>\n\t\t<string>--vault</string>\n\t\t<string>/home/ana mar\xeda/v "q" $x %y `z` \\w &amp; &lt;t&gt;</string>\n\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n</dict>\n</plist>\n',  # noqa: E501
+    ("linux", True): '[Unit]\nDescription=Keepfold browse receiver\n\n[Service]\nExecStart="/opt/kf bin/keepfold" "browse" "serve" "--vault" "/home/ana mar\xeda/v \\"q\\" $$x %%y `z` \\\\w & <t>"\n\n[Install]\nWantedBy=default.target\n',  # noqa: E501
+    ("linux", False): '[Desktop Entry]\nType=Application\nName=Keepfold browse receiver\nExec="/opt/kf bin/keepfold" "browse" "serve" "--vault" "/home/ana mar\xeda/v \\\\"q\\\\" \\\\$x %%y \\\\`z\\\\` \\\\\\\\w & <t>"\nNoDisplay=true\n',  # noqa: E501
+}
+
+
+@pytest.mark.parametrize(("platform", "systemd"), list(_GOLDEN_LOGIN))
+def test_login_text_unchanged(monkeypatch, platform, systemd):
+    from pathlib import PurePosixPath
+    monkeypatch.setattr("keepfold.clients.keepfold_command", lambda: "/opt/kf bin/keepfold")
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(status, "_systemd", lambda: systemd)
+    root = PurePosixPath("/home/ana maría/v \"q\" $x %y `z` \\w & <t>")
+    assert status.login_text(root) == _GOLDEN_LOGIN[(platform, systemd)]
+
+
+def test_label_per_os(monkeypatch, gui):
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    for platform, want in (("win32", "Start with Windows"), ("darwin", "Start at login"),
+                           ("linux", "Start at login")):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert desktop.autostart_label() == want
+        assert desktop.autostart_state()["label"] == want  # the page's label
+        icon = desktop._tray(d)  # the tray's item
+        assert [FakeIcon.text(i) for i in icon.menu.items][2] == want
+        icon.stop()
 
 
 @pytest.fixture
@@ -484,7 +603,8 @@ def served(vault):
 
 def test_the_app_api_for_autostart_notify_and_window(served, win32, _no_real_run_key):
     app = served
-    assert call(app, "GET", "/api/app/autostart")[1] == {"supported": True, "enabled": False}
+    assert call(app, "GET", "/api/app/autostart")[1] == {
+        "supported": True, "enabled": False, "label": "Start with Windows"}
     assert call(app, "POST", "/api/app/autostart", {"enabled": True})[1]["enabled"] is True
     assert _no_real_run_key == {desktop.AUTOSTART: win32}
     assert call(app, "POST", "/api/app/autostart", {"enabled": "yes"})[0] == 400
