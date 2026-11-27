@@ -162,6 +162,14 @@ _TZ = {"UTC": 0, "GMT": 0, "IST": 330, "PST": -480, "PDT": -420, "MST": -420, "M
        "PHT": 480, "AWST": 480, "JST": 540, "KST": 540, "ACST": 570, "AEST": 600,
        "AEDT": 660, "NZST": 720, "NZDT": 780, "MEZ": 60, "MESZ": 120, "WEZ": 0, "WESZ": 60,
        "BRT": -180, "ART": -180, "WITA": 480, "WIT": 540}
+# abbreviations several zones share: the one equal to this PC's own offset on that date wins,
+# else the _TZ default (India, US Central, British Summer Time)
+_AMBIGUOUS = {"IST": (330, 60, 120), "CST": (-360, 480), "BST": (60, 360)}
+
+
+def _system_offset(naive: datetime) -> int:
+    """This PC's UTC offset in minutes at local time `naive`."""
+    return int(naive.astimezone().utcoffset().total_seconds() // 60)
 # month names and abbreviations: en, es, pt, fr, de, id, hi (ja dates are numeric). A word
 # matches whole, else by its first 4 or 3 letters ("noviembre" -> "nov", "juil." -> "juil").
 _MONTHS = {unicodedata.normalize("NFC", k): n for n, ks in enumerate((
@@ -206,9 +214,11 @@ def when(text: str) -> datetime | None:
     else:
         return None
     try:
-        return datetime(y, mo, d, hour, int(t[2]), int(t[3]),
-                        tzinfo=timezone(timedelta(minutes=mins))).astimezone(UTC)
-    except ValueError:
+        local = datetime(y, mo, d, hour, int(t[2]), int(t[3]))
+        if not m and (sys_mins := _system_offset(local)) in _AMBIGUOUS.get(tz, ()):
+            mins = sys_mins
+        return local.replace(tzinfo=timezone(timedelta(minutes=mins))).astimezone(UTC)
+    except (ValueError, OverflowError, OSError):  # astimezone can raise these for far years
         return None
 
 
