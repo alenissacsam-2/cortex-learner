@@ -9,8 +9,9 @@ so the local Chat (a small model reading a few ~700-character passages) can answ
   re-import refills a page imported clipped, unless the owner edited it (`keeps_edits`).
   .md/.txt go through importers.note_item, keyed as notes are, so a
   note imported before is a duplicate here. Encrypted, scanned (no text) and oversized files are
-  skipped with the reason. C2: on Windows a scanned PDF's pages are read with Windows' own
-  offline OCR in the parse child (`_pdf_pages`), and the page ends with OCR_LINE.
+  skipped with the reason. C2: a scanned PDF's pages are read with the OS's own offline OCR
+  (Windows OCR, macOS Vision, Tesseract on Linux) in the parse child (`_pdf_pages`), and the
+  page ends with `ocr_line` (OCR_LINE on Windows).
 - repos: one page per git repo one or two folders down (or the folder itself): the README's
   start, the stack from manifest file names, and from `git log --author=<that repo's
   user.email>` the commit count, first and last dates and the last SUBJECTS subjects. Code,
@@ -139,26 +140,107 @@ def _paged(pages: list[str], total: int) -> tuple[str, str]:
 
 @functools.cache
 def _ocr_engine():
-    """C2: Windows' offline OCR engine in the person's own languages, or None (not Windows, no
-    text-recognition language installed, or the winrt packages missing). Only the parse child
-    calls it: nothing is OCR'd in the server, and nothing leaves the computer."""
-    if sys.platform != "win32":
-        return None
+    """C2: this computer's offline OCR as (kind, what it needs), or None: ("windows", Windows'
+    OcrEngine in the person's own languages), ("vision", None) on macOS when pyobjc's Vision
+    imports, ("tesseract", "eng+hin") on Linux (`_tesseract_langs`). The parse child OCRs; the
+    server asks only after a page was OCR'd, to name the engine (`ocr_line`). Nothing leaves
+    the computer."""
+    if sys.platform == "win32":
+        try:
+            from winrt.windows.media.ocr import OcrEngine
+            engine = OcrEngine.try_create_from_user_profile_languages()
+        except Exception:  # noqa: BLE001 - an import or WinRT failure: no OCR, as before C2
+            return None
+        return None if engine is None else ("windows", engine)
+    if sys.platform == "darwin":
+        try:
+            import Vision  # noqa: F401
+        except Exception:  # noqa: BLE001 - pyobjc missing or broken: no OCR
+            return None
+        return ("vision", None)
+    if sys.platform.startswith("linux"):
+        langs = _tesseract_langs()
+        return ("tesseract", langs) if langs else None
+    return None
+
+
+def _tesseract_langs() -> str | None:
+    """Tesseract's installed languages but osd (script detection) as "eng+hin", or None (no
+    tesseract, or no language). Tests replace this."""
+    out = _run_ocr(["tesseract", "--list-langs"], b"")
+    langs = [ln.strip() for ln in (out or "").splitlines()[1:] if ln.strip() not in ("", "osd")]
+    return "+".join(langs) or None
+
+
+def _run_ocr(args: list[str], data: bytes) -> str | None:
+    """An OCR program's stdout with `data` on stdin, or None when it is missing, fails or runs
+    past 60 s. Tests replace this: they never run a real tesseract."""
     try:
-        from winrt.windows.media.ocr import OcrEngine
-        return OcrEngine.try_create_from_user_profile_languages()
-    except Exception:  # noqa: BLE001 - an import or WinRT failure: no OCR, as before C2
+        got = subprocess.run(args, input=data, capture_output=True, timeout=60,
+                             creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
         return None
+    return got.stdout.decode("utf-8", "replace") if got.returncode == 0 else None
+
+
+def ocr_line(kind: str) -> str:
+    """The mark on a page read by the `kind` engine (an `_ocr_engine` kind)."""
+    return {"vision": "Read with macOS text recognition: check names and numbers.",
+            "tesseract": "Read with Tesseract OCR: check names and numbers."}.get(kind, OCR_LINE)
 
 
 def _ocr(engine, page) -> str:
     """C2: the text OCR reads in `page`'s images, a line per line read, in reading order; ""
-    when the page fails, so that one page is skipped, not the file."""
+    when the page fails, so that one page is skipped, not the file. `engine` is
+    `_ocr_engine`'s (kind, what it needs); Windows is the kind otherwise."""
     import asyncio
     try:
-        return asyncio.run(_recognize(engine, [im.image for im in page.images]))
-    except Exception:  # noqa: BLE001 - an image pypdf or Windows cannot decode, a WinRT error
+        images = [im.image for im in page.images]
+        if engine[0] == "vision":
+            return _vision_text(images)
+        if engine[0] == "tesseract":
+            return _tesseract_text(images, engine[1])
+        return asyncio.run(_recognize(engine[1], images))
+    except Exception:  # noqa: BLE001 - an image pypdf or the OCR cannot decode, a WinRT error
         return ""
+
+
+def _png(im) -> bytes:
+    out = io.BytesIO()
+    im.convert("RGB").save(out, "PNG")  # a mode PNG holds (CMYK, palette...), lossless
+    return out.getvalue()
+
+
+def _tesseract_text(images, langs: str) -> str:
+    """Tesseract's lines for each image, blank lines left out; an image it fails on reads
+    nothing."""
+    lines = []
+    for im in images:
+        out = _run_ocr(["tesseract", "stdin", "stdout", "-l", langs], _png(im)) or ""
+        lines += [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return "\n".join(lines)
+
+
+def _vision_text(images) -> str:
+    """macOS Vision's text in each image, a line per observation, the language found by
+    itself. Checked on a Mac (P3), not in the tests."""
+    import Vision
+    from Foundation import NSData
+    lines = []
+    for im in images:
+        data = _png(im)
+        req = Vision.VNRecognizeTextRequest.alloc().init()
+        req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        req.setAutomaticallyDetectsLanguage_(True)
+        handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(
+            NSData.dataWithBytes_length_(data, len(data)), None)
+        ok, err = handler.performRequests_error_([req], None)
+        if not ok:
+            raise OSError(str(err))
+        for obs in req.results() or []:
+            if top := obs.topCandidates_(1):
+                lines.append(top[0].string())
+    return "\n".join(lines)
 
 
 async def _recognize(engine, images) -> str:
@@ -408,7 +490,8 @@ def _doc_items(path: Path, files: list, skip: tuple[str, ...], parse: _Parser):
         if not text.strip():
             yield "scanned or no text"
             continue
-        mark = ("\n\n" + OCR_LINE) * bool(ocr)  # last: the first body line is the page's summary
+        # last: the first body line is the page's summary; the engine is asked only after OCR ran
+        mark = "\n\n" + ocr_line((_ocr_engine() or ("windows",))[0]) if ocr else ""
         # the key is the text the import kept before R17, so its page is found and refilled
         yield sources.Item(title or PurePosixPath(name).stem, made or _day(mtime), text + mark,
                            _origin(path, name), key=_clip(flat, DOC_CHARS) + mark)

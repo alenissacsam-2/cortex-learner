@@ -238,6 +238,76 @@ def test_an_ocrd_document_page_says_so(root_plain, ocr):
     assert text["imported"] == 1 and more_sources.OCR_LINE not in _page(v, "docs-typed")
 
 
+@pytest.fixture
+def fresh_engine():
+    """`_ocr_engine` is cached: worked out again before and after the test."""
+    more_sources._ocr_engine.cache_clear()
+    yield
+    more_sources._ocr_engine.cache_clear()
+
+
+def test_tesseract_engine_found(fresh_engine, monkeypatch):
+    monkeypatch.setattr(more_sources.sys, "platform", "linux")
+    monkeypatch.setattr(more_sources, "_tesseract_langs", lambda: "eng+hin")
+    assert more_sources._ocr_engine() == ("tesseract", "eng+hin")
+
+
+def test_tesseract_langs_leave_out_osd(monkeypatch):
+    listed = 'List of available languages in "/usr/share/tesseract-ocr/5/tessdata/" (3):\n'
+    monkeypatch.setattr(more_sources, "_run_ocr", lambda args, data: listed + "eng\nhin\nosd\n")
+    assert more_sources._tesseract_langs() == "eng+hin"
+    monkeypatch.setattr(more_sources, "_run_ocr", lambda args, data: listed + "osd\n")
+    assert more_sources._tesseract_langs() is None
+    monkeypatch.setattr(more_sources, "_run_ocr", lambda args, data: None)  # no tesseract
+    assert more_sources._tesseract_langs() is None
+
+
+def test_tesseract_page_text(monkeypatch):
+    from pypdf import PdfReader
+    calls = []
+    monkeypatch.setattr(more_sources, "_run_ocr",
+                        lambda args, data: calls.append((args, data[:8])) or "hello\n")
+    page = PdfReader(io.BytesIO(scan_pdf(["Heaps"]))).pages[0]
+    assert more_sources._ocr(("tesseract", "eng"), page) == "hello"
+    assert calls == [(["tesseract", "stdin", "stdout", "-l", "eng"], b"\x89PNG\r\n\x1a\n")]
+
+
+def test_ocr_missing_tool(fresh_engine, monkeypatch):
+    monkeypatch.setattr(more_sources.sys, "platform", "linux")
+    monkeypatch.setattr(more_sources, "_tesseract_langs", lambda: None)
+    assert more_sources._ocr_engine() is None
+    data = scan_pdf(["Heaps"])
+    src = more_sources.doc_source("scan.pdf", len(data), 0.0, lambda *a, **k: data,
+                                  lambda kind, d: more_sources._pdf(d))
+    assert list(src.items()) == ["scanned or no text"]
+
+
+def test_vision_engine_needs_its_module(fresh_engine, monkeypatch):
+    """Vision itself is checked on a Mac (P3); here only the guard on its import."""
+    monkeypatch.setattr(more_sources.sys, "platform", "darwin")
+    monkeypatch.setitem(sys.modules, "Vision", None)  # `import Vision` raises ImportError
+    assert more_sources._ocr_engine() is None
+    more_sources._ocr_engine.cache_clear()
+    monkeypatch.setitem(sys.modules, "Vision", type(sys)("Vision"))
+    assert more_sources._ocr_engine() == ("vision", None)
+
+
+def test_ocr_line_names_engine(root_plain, monkeypatch):
+    assert more_sources.ocr_line("windows") == more_sources.OCR_LINE
+    assert more_sources.ocr_line("vision") == (
+        "Read with macOS text recognition: check names and numbers.")
+    tess = more_sources.ocr_line("tesseract")
+    assert tess == "Read with Tesseract OCR: check names and numbers."
+    monkeypatch.setattr(more_sources, "_ocr_engine", lambda: ("tesseract", "eng"))
+    monkeypatch.setattr(more_sources, "_ocr", lambda engine, page: "read page")
+    data, v = scan_pdf(["Heaps"]), Vault(root_plain)
+    src = more_sources.doc_source("tess-scan.pdf", len(data), 0.0, lambda *a, **k: data,
+                                  lambda kind, d: more_sources._pdf(d))
+    assert sources.run(v, src, C)["imported"] == 1
+    page = _page(v, "docs-tess-scan")
+    assert page.endswith(tess + "\n") and more_sources.OCR_LINE not in page
+
+
 @pytest.mark.slow
 def test_windows_ocr_reads_a_scan_in_the_child(tmp_path):
     """The real engine, through the parse child; skipped off Windows or with no OCR language."""
