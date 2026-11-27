@@ -25,7 +25,7 @@ from keepfold import doctor as doctor_mod
 from keepfold import levels, planner, render, taint
 from keepfold import session as session_mod
 from keepfold._proc import NO_WINDOW, proxy_env
-from keepfold.catalog import Catalog, resolve_or_inbox, slugify
+from keepfold.catalog import Catalog, page_slug, resolve_or_inbox
 from keepfold.catalog import sync as catalog_sync
 from keepfold.events import EventLog, local_day, log_assessment, parse_ts, void_event
 from keepfold.session import _git
@@ -1532,7 +1532,7 @@ def _today_line(it: dict) -> str:
     state = it["state"]
     head = f"{levels.GLYPH[state]} {levels.LABEL[state]}" if state else "- Plan step"
     # the id only when it says something the title doesn't ("Sorting", not "Sorting (sorting)")
-    name = it["title"] if not it["id"] or slugify(it["title"]) == it["id"] else \
+    name = it["title"] if not it["id"] or page_slug(it["title"]) == it["id"] else \
         f"{it['title']} ({it['id']})"
     return f"{head}: {name} [{it['why']}]"
 

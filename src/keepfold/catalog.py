@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import difflib
+import hashlib
 import io
 import re
 import unicodedata
@@ -54,6 +55,18 @@ def slugify(title: str) -> str:
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s[:81].rstrip("-")
+
+
+def page_slug(title: str) -> str:
+    """slugify for a title that becomes a page id. A title whose slug has no ASCII letter but
+    which has a non-ASCII letter or digit ('गणित', '日本語', 'Лекция 3') gets a stable
+    t-<8 hex> id instead, so it is not refused and 'Лекция 3' and 'Тема 3' do not both become
+    '3'. Every other title keeps its slugify id ('' when it has no letter or digit)."""
+    s = slugify(title)
+    t = unicodedata.normalize("NFC", " ".join(str(title).split()).casefold())
+    if re.search("[a-z]", s) or not any(c.isalnum() and not c.isascii() for c in t):
+        return s
+    return f"t-{hashlib.blake2s(t.encode(), digest_size=4).hexdigest()}"
 
 
 def _yaml() -> YAML:
@@ -167,10 +180,10 @@ class Catalog:
         for n, id in names:
             if n == key:
                 return id
-        slug = slugify(name)
+        slug = page_slug(name)
         if slug:
             for n, id in names:
-                if slugify(n) == slug:
+                if page_slug(n) == slug:
                     return id
         code = "unknown_concept" if "concept" in kinds else "unknown_id"
         suggestions = self.suggest(name, kinds, skip=skip)
@@ -211,7 +224,8 @@ class Catalog:
                 continue
             for mine in names:
                 if any(difflib.SequenceMatcher(None, mine.casefold(), o.casefold()).ratio()
-                       >= DUP_RATIO or slugify(mine) == slugify(o) for o in (e.title, *e.aliases)):
+                       >= DUP_RATIO or page_slug(mine) == page_slug(o)
+                       for o in (e.title, *e.aliases)):
                     out.append(e.id)
                     break
         return out
@@ -226,7 +240,7 @@ class Catalog:
             raise VaultError("invalid_argument", "Only a concept takes areas.")
         title = str(title).strip()
         aliases = [str(a).strip() for a in aliases if str(a).strip()]
-        slug = slugify(title)
+        slug = page_slug(title)
         if not slug:
             raise VaultError("invalid_argument", "The title needs at least one letter or digit.")
         with self.vault.lock():
@@ -514,7 +528,7 @@ def sync(vault: Vault, if_changed: bool = False) -> dict[str, list[str]]:
 def inbox_add(vault: Vault, name: str, context: str = "") -> str:
     """Park an unknown concept name in inbox.md; returns its 'inbox:<slug>' object id."""
     name = " ".join(str(name).split())
-    slug = slugify(name)
+    slug = page_slug(name)
     if not slug:
         raise VaultError("invalid_argument", "The name needs at least one letter or digit.")
     context = " ".join(str(context).split())

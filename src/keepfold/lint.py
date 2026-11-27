@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping
 
-from keepfold.catalog import slugify
+from keepfold.catalog import page_slug
 from keepfold.events import DAY_ROLLOVER
 from keepfold.index import EDGE_KEYS, STOPWORDS, _edge_targets
 from keepfold.people import PREFIX
@@ -139,7 +139,7 @@ def lint_report(vault: Vault, now: dt.datetime | None = None,
             add("expired_claim", f"me/{r['page']}", f"'{plain(r['text'], 60)}' is past its "
                 f"(until {until}); retire it: keepfold_patch(op='retire', target='^{r['id']}')")
     for text, since in old_fleeting(vault, now):
-        add("old_fleeting", f"inbox:{slugify(text)}", f"fleeting since {since}; "
+        add("old_fleeting", f"inbox:{page_slug(text)}", f"fleeting since {since}; "
             "process it into a note or drop it")
     totals = Counter(f["kind"] for f in out)
     rank = {k: i for i, k in enumerate(SEVERITY)}

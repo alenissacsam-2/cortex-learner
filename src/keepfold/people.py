@@ -12,7 +12,7 @@ import json
 import re
 
 from keepfold import relink
-from keepfold.catalog import slugify
+from keepfold.catalog import page_slug
 from keepfold.vault import Vault, VaultError, invalid
 
 PREFIX = "people/"
@@ -53,7 +53,7 @@ def add(vault: Vault, title: str, fields: dict) -> str:
     tier = fields.get("tier", "work")
     if tier not in TIERS:
         raise invalid(f"tier must be one of {', '.join(TIERS)}.")
-    slug = slugify(title)[:81].rstrip("-.")
+    slug = page_slug(title)[:81].rstrip("-.")
     if not slug:
         raise invalid("The title needs at least one letter or digit.")
     vault.create_note("person", slug, {"title": title, "kind": "person", "relation": relation,

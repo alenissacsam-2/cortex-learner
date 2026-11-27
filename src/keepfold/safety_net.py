@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from keepfold import chat_import, localllm, planner, topics
-from keepfold.catalog import Catalog, slugify
+from keepfold.catalog import Catalog, page_slug, slugify
 from keepfold.events import EventLog, live, local_day, parse_ts, void_event
 from keepfold.index import STOPWORDS, Index
 from keepfold.vault import Vault, VaultError, is_private, secret_pattern
@@ -433,7 +433,7 @@ class _Pass:
             if what == "new":
                 if self.dry:
                     self.counts["new"] += 1
-                    self.new_ids.append(slugify(name))
+                    self.new_ids.append(page_slug(name))
                     continue
                 cid, made = self.link.create(name, matched)
                 if cid is None:

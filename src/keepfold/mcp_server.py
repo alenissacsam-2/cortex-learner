@@ -50,7 +50,7 @@ from keepfold import lint as lint_mod
 from keepfold import session as session_mod
 from keepfold import where as where_mod
 from keepfold.catalog import KINDS as CATALOG_KINDS
-from keepfold.catalog import Catalog, inbox_add, slugify
+from keepfold.catalog import Catalog, inbox_add, page_slug, slugify
 from keepfold.catalog import sync as catalog_sync
 from keepfold.contract import MAX_CHARS as CONTRACT_MAX
 from keepfold.events import (
@@ -2083,7 +2083,7 @@ class Keepfold:
         title, why = str(spec.get("title") or "").strip(), str(spec.get("why") or "").strip()
         if len(why) > WHY_MAX:
             raise invalid(f"new_mistake.why is {len(why)} characters; keep it to {WHY_MAX}.")
-        slug = slugify(title)
+        slug = page_slug(title)
         if not slug:
             raise invalid("new_mistake.title needs at least one letter or digit.")
         domain = self.catalog.entries[cid].domain if cid in self.catalog.entries else ""
@@ -2852,10 +2852,10 @@ class Keepfold:
         with that title, linked to payload.concepts (names, through _link_names); never in review
         mode, which keeps the unknown_id error."""
         name = " ".join(str(p.get("problem") or "").split())
-        for i in (name, slugify(name)):
+        for i in (name, page_slug(name)):
             if i and ID_RE.fullmatch(i) and self.vault.path_for("problem", i).is_file():
                 return i
-        if not slugify(name) or self.session.mode == "review":
+        if not page_slug(name) or self.session.mode == "review":
             return self._problem(name).partition(":")[2]  # unknown_id with a hint
         cs = p.get("concepts")
         names = [cs] if isinstance(cs, str) else cs if isinstance(cs, list) else []
@@ -3799,7 +3799,7 @@ class Keepfold:
             v = fields["concepts"]
             fields = {**fields, "concepts": [f"[[{self._concept(_target(n) or str(n))}]]"
                                              for n in (v if isinstance(v, list) else [v])]}
-        slug = slugify(title)
+        slug = page_slug(title)
         if not slug:
             raise invalid("The title needs at least one letter or digit.")
         if kind == "mistake" and parent:
@@ -3896,7 +3896,7 @@ class Keepfold:
                  *([one] if one else [])]
         found = {n.id: n for n in self.vault.iter_notes("assessment") if not is_private(n)}
         me = {**fields, "title": title}
-        links = [f"[[{t}]]" if (t := _target(n) or slugify(str(n))) in found else str(n)
+        links = [f"[[{t}]]" if (t := _target(n) or page_slug(str(n))) in found else str(n)
                  for n in names]
         links += [f"[[{i}]]" for i, n in found.items() if _same_company(me, n.fields)]
         if links:

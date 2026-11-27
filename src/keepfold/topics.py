@@ -29,7 +29,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from keepfold.catalog import slugify
+from keepfold.catalog import page_slug
 from keepfold.index import STOPWORDS, Index, _edge_targets, _target
 from keepfold.relink import TOPIC_MAP as ROOT
 from keepfold.vault import (
@@ -933,7 +933,7 @@ def apply_split(vault: Vault, index: Index, embed, hub: str, hash: str, children
     plan, uses = [], Counter()
     for k, c in enumerate(children):
         title, desc = (" ".join(str(c.get(f) or "").split()) for f in ("title", "desc"))
-        if not slugify(title) or not desc:
+        if not page_slug(title) or not desc:
             raise invalid("Each child needs a title (with a letter or digit) and a desc.")
         ms = c.get("members")
         if ms is None:
@@ -950,7 +950,7 @@ def apply_split(vault: Vault, index: Index, embed, hub: str, hash: str, children
         raise invalid(f"A page goes in at most 2 children: {', '.join(over[:5])}.")
     ids: list[str] = []
     for title, _, _ in plan:
-        base = f"{hub}-{slugify(title)}"[:70].rstrip("-.")
+        base = f"{hub}-{page_slug(title)}"[:70].rstrip("-.")
         cid, n = base, 2
         while cid in ids or any((vault.root / d / f"{cid}.md").exists()
                                 for k in vault.KIND_DIRS for d in vault.dirs(k)):

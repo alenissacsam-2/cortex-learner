@@ -19,7 +19,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAMLError
 
-from keepfold.catalog import slugify
+from keepfold.catalog import page_slug
 from keepfold.index import EDGE_KEYS, _edge_targets, _target
 from keepfold.vault import (
     HEADING_RE,
@@ -285,7 +285,7 @@ def classify(target: str, ids: set[str]) -> tuple[str, str | None]:
     """('near', id) for a note id the target misspells (case, slug, folder prefix);
     ('missing', None) for a slug-like id that should be a note; ('junk', None) otherwise."""
     base = target.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".md").strip().lower()
-    for key in (base, re.sub(r"[^a-z0-9.]+", "-", base).strip("-"), slugify(base)):
+    for key in (base, re.sub(r"[^a-z0-9.]+", "-", base).strip("-"), page_slug(base)):
         if key in ids:
             return "near", key
     if ID_RE.fullmatch(base) and "-" in base and not base.replace("-", "").isdigit():
