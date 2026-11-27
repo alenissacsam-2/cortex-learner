@@ -134,6 +134,8 @@ def _local(host: str) -> bool:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
         return "." not in host  # an intranet single-label host
+    # ::ffff:192.168.1.5 is 192.168.1.5 (Python before 3.12.4 judges mapped addresses apart)
+    ip = getattr(ip, "ipv4_mapped", None) or ip
     return not ip.is_global  # private, loopback, link-local, CGNAT 100.64/10, reserved...
 
 

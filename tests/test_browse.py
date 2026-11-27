@@ -60,6 +60,12 @@ def test_public_hosts_and_ips_stay():
     assert kept("http://8.8.8.8/") is not None
 
 
+def test_ipv4_mapped_ipv6_is_judged_by_its_ipv4():  # Python < 3.12.4 judged them apart
+    assert privacy._local("::ffff:192.168.1.5") and privacy._local("[::ffff:127.0.0.1]")
+    assert not privacy._local("[::ffff:8.8.8.8]")
+    assert kept("http://[::ffff:192.168.1.5]/admin") is None
+
+
 @pytest.mark.parametrize("url", ["https://accounts.google.com/v3/signin/identifier",
                                  "https://example.com/login", "https://example.com/users/sign_in",
                                  "https://auth.example.com/", "https://example.com/oauth/authorize",
@@ -1524,6 +1530,21 @@ def test_q12_switching_visibility_off_voids_the_journal_lines_and_touches(vault,
 
 
 # ---- Google Takeout activity (keepfold browse import --takeout) -------------------------------
+
+@pytest.mark.parametrize("sys_mins, text, want_hour", [
+    (330, "Nov 17, 2026, 10:42:03 PM IST", 17),  # India: 22:42 - 5:30
+    (60, "Jul 17, 2026, 10:42:03 PM IST", 21),  # Ireland in summer (Irish Standard Time)
+    (120, "Nov 17, 2026, 10:42:03 PM IST", 20),  # Israel
+    (-300, "Nov 17, 2026, 10:42:03 PM IST", 17),  # unrelated zone: the India default
+    (480, "Nov 17, 2026, 10:42:03 PM CST", 14),  # China
+    (-300, "Nov 17, 2026, 10:42:03 PM CST", 4),  # unrelated zone: US Central default
+])
+def test_takeout_ambiguous_zone_follows_the_system_offset(monkeypatch, sys_mins, text, want_hour):
+    from keepfold.browse import takeout
+
+    monkeypatch.setattr(takeout, "_system_offset", lambda naive: sys_mins)
+    got = takeout.when(text)
+    assert got is not None and got.hour == want_hour
 
 def takeout_dir(tmp_path, rows):
     """A Takeout folder: My Activity/<product>/MyActivity.json, one per product."""
