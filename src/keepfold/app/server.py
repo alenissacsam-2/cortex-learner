@@ -112,9 +112,18 @@ def _open_path(p: Path) -> None:
 
 
 def _obsidian() -> bool:  # tests replace this
-    """An obsidian:// handler is registered (Windows); elsewhere assume Obsidian is there."""
+    """An obsidian:// handler is registered: the Windows registry, Obsidian.app on macOS, or
+    xdg-mime's default handler elsewhere."""
+    if sys.platform == "darwin":
+        try:
+            return any((d / "Applications" / "Obsidian.app").exists()
+                       for d in (Path("/"), Path.home()))
+        except (OSError, RuntimeError):  # no home, or a folder it may not read
+            return False
     if sys.platform != "win32":
-        return True
+        ok, out = targets._run(["xdg-mime", "query", "default", "x-scheme-handler/obsidian"],
+                               timeout=5)
+        return ok and bool(out)
     import winreg
     for hive, key in ((winreg.HKEY_CURRENT_USER, r"Software\Classes\obsidian"),
                       (winreg.HKEY_CLASSES_ROOT, "obsidian")):

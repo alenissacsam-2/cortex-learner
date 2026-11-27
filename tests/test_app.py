@@ -26,6 +26,7 @@ from keepfold.app import actions, server, status, targets, wizard
 pytestmark = pytest.mark.usefixtures("home")
 ENTRY = {"command": "C:\\tools\\keepfold.exe", "args": ["mcp", "--vault", "C:\\notes \"v\""]}
 REAL_KEPT = status.kept  # before conftest's fixture makes every probe fresh
+REAL_OBSIDIAN = server._obsidian  # before `fakes` replaces it
 MARKERS = (b"TITLEMARKER",b"URLMARKER", b"SEARCHMARKER", b"markerdomain", b"EXCERPTMARKER")
 
 
@@ -2777,6 +2778,30 @@ def test_open_without_obsidian_uses_the_default_app(app, vault, fakes, monkeypat
     monkeypatch.setattr(server, "_obsidian", lambda: True)
     assert call(app, "POST", "/api/open", {"what": "vault"})[1]["obsidian"] is True
     assert fakes[-1][1].startswith("obsidian://open?path=")
+
+
+def test_obsidian_is_found_on_macos_only_as_an_installed_app(monkeypatch, tmp_path):
+    present: set[str] = set()
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(Path, "exists", lambda p: p.as_posix() in present)
+    assert REAL_OBSIDIAN() is False
+    present.add((tmp_path / "Applications" / "Obsidian.app").as_posix())
+    assert REAL_OBSIDIAN() is True
+    present.clear()
+    present.add("/Applications/Obsidian.app")
+    assert REAL_OBSIDIAN() is True
+
+
+@pytest.mark.parametrize(("ran", "found"), [((True, "md.obsidian.desktop"), True),
+                                            ((True, ""), False), ((False, "no xdg-mime"), False)])
+def test_obsidian_is_found_on_linux_by_its_xdg_handler(monkeypatch, ran, found):
+    monkeypatch.setattr(sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: calls.append(
+        (args, timeout)) or ran)
+    assert REAL_OBSIDIAN() is found
+    assert calls == [(["xdg-mime", "query", "default", "x-scheme-handler/obsidian"], 5)]
 
 
 def test_search_model_counts_only_a_finished_download(home):
