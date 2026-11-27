@@ -86,11 +86,11 @@ def _sections(body: str) -> list[str]:
 
 
 def me(vault: Vault, id: str):
-    """A me/ note, or None if the file does not exist."""
+    """A me/ note, or None if the file does not exist or cannot be parsed."""
     try:
         return vault.read("me", id)
     except VaultError as e:
-        if e.code == "unknown_id":
+        if e.code in ("unknown_id", "invalid_argument"):  # unparsable: absent, not a failed prime
             return None
         raise
 

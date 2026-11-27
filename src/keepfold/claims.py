@@ -474,7 +474,11 @@ def rows(vault) -> list[dict]:
     out = []
     for page in PAGES:
         p = vault.root / "me" / f"{page}.md"
-        out += parse(page, p.read_bytes().decode("utf-8") if p.is_file() else "")
+        try:
+            text = p.read_bytes().decode("utf-8") if p.is_file() else ""
+        except UnicodeDecodeError:  # saved as ANSI or UTF-16 by hand: skipped, as iter_notes does
+            text = ""
+        out += parse(page, text)
     return out
 
 
