@@ -176,7 +176,7 @@ def _take_old(v, lock: Path, wait: float) -> str | None:
                 return None
             time.sleep(0.05)
             continue
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token)
         return token
 

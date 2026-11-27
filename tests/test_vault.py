@@ -551,3 +551,62 @@ def test_iter_notes_leaves_out_browse_site_pages(tmp_path):
         p.write_text(f'---\nid: "{p.stem}"\nkind: "browse"\n---\nx\n', encoding="utf-8")
     assert {n.id for n in v.iter_notes("browse")} == {"2026-11-09", "browse-sites"}
     assert len(v.note_paths("browse")) == 3
+
+
+def test_a_non_ascii_hostname_takes_and_releases_the_lock(v, monkeypatch):
+    """Audit #6: a Cyrillic PC name on a cp1252 locale broke the token write and left the lock."""
+    monkeypatch.setattr(vault_mod.socket, "gethostname", lambda: "Иван-ПК")
+    lock = v.root / ".keepfold" / "lock"
+    with v.lock(timeout=0.3):
+        assert lock.read_bytes().decode("utf-8").endswith(" Иван-ПК")
+        with pytest.raises(VaultError):  # a live holder in this very process: wait, not steal
+            with Vault(v.root).lock(timeout=0.3):
+                pass
+    assert not lock.exists()
+
+
+def test_own_live_lock_is_kept_after_the_hostname_changes(v, monkeypatch):
+    """Audit #3: a Mac that wakes on another network gets a new gethostname(); its own held
+    lock then looked like another host's and was stolen once LOCK_STALE_S passed."""
+    with v.lock(timeout=0.3):
+        later = time.time() + vault_mod.LOCK_STALE_S + 60
+        monkeypatch.setattr(vault_mod.socket, "gethostname", lambda: "dhcp-10-4-2-7.campus.edu")
+        monkeypatch.setattr(vault_mod.time, "time", lambda: later)
+        with pytest.raises(VaultError) as e:
+            with Vault(v.root).lock(timeout=0.3):
+                pass
+        assert code(e) == "vault_locked"
+    assert not (v.root / ".keepfold" / "lock").exists()
+
+
+def test_a_same_size_rewrite_in_one_mtime_tick_is_read_back(v):
+    """Audit #7: FAT32/HFS+ keep mtime and size across an atomic replace; the inode tells."""
+    path = v.create_note("problem", "tick-test", {"title": "Tick"}, "## Todo\n- [ ] one\n")
+    assert "- [ ] one" in v.read("problem", "tick-test").body  # cached now
+    st = path.stat()
+    assert v.check_item("problem", "tick-test", "Todo", "one")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))  # a coarse clock: the same tick
+    assert path.stat().st_size == st.st_size
+    assert "- [x] one" in v.read("problem", "tick-test").body
+
+
+def test_sqlite_ro_uri_gives_a_unc_path_an_empty_authority(tmp_path):
+    """Audit #5: file://nas/share/... is "invalid uri authority" to SQLite; a vault on a share or
+    a mapped drive (resolve() turns Z: into a UNC path) could not back up its stores."""
+    import sqlite3
+    from pathlib import PureWindowsPath
+
+    from keepfold.vault import sqlite_ro_uri
+    unc = sqlite_ro_uri(PureWindowsPath(r"\\nas\share\v\x.sqlite"))
+    assert unc == "file:////nas/share/v/x.sqlite?mode=ro"
+    assert sqlite_ro_uri(PureWindowsPath(r"C:\v\x.sqlite")) == "file:///C:/v/x.sqlite?mode=ro"
+    db = tmp_path / "Zoë #1.sqlite"
+    sqlite3.connect(db).close()
+    with pytest.raises(sqlite3.OperationalError, match="authority"):  # the old URI's failure
+        sqlite3.connect(PureWindowsPath(r"\\nas\share\v\x.sqlite").as_uri() + "?mode=ro",
+                        uri=True)
+    con = sqlite3.connect(sqlite_ro_uri(db), uri=True)
+    try:
+        assert con.execute("select 1").fetchone() == (1,)
+    finally:
+        con.close()

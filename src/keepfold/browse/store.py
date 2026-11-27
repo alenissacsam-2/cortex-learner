@@ -51,7 +51,7 @@ from urllib.parse import urlsplit
 from keepfold.browse import privacy, sites
 from keepfold.browse.privacy import Kept, Settings
 from keepfold.events import local_day
-from keepfold.vault import Vault, VaultError
+from keepfold.vault import Vault, VaultError, sqlite_ro_uri
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def connect(vault: Vault, *, memory: bool = False) -> sqlite3.Connection:
     if memory:
         con = sqlite3.connect(":memory:")
         if p.is_file():
-            with closing(sqlite3.connect(f"{p.as_uri()}?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(sqlite_ro_uri(p), uri=True)) as src:
                 src.backup(con)
     else:
         p.parent.mkdir(parents=True, exist_ok=True)

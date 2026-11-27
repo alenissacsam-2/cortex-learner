@@ -2,7 +2,7 @@
 Only the user starts it: `/keepfold mock`, or asking for a mock interview in any chat. `/keepfold mock [coding|aptitude|hr|project|full] [company]`; the default `full` is one coding problem, three HR questions and one project. Aptitude runs on its own. `/keepfold mock bank` builds the story bank (below). `/keepfold mock paper [15|30|45]` is a timed practice paper (below).
 
 ## A session
-1. `keepfold_start(mode="mock", topic, model)`. No plan; the card shows coming assessments and open mistakes. Its result has `stamp` (YYYYMMDDHHMM, when the mock started): use it as given in every key below; never make one up or reuse another mock's.
+1. `keepfold_start(mode="mock", topic, model)`. No plan; the card shows coming assessments and open mistakes. Its result has `stamp` (YYYYMMDDHHMMSS UTC, when the mock started): use it as given in every key below; never make one up or reuse another mock's.
 2. Pick material with reads, unseen by the learner:
    - **coding:** a `todo` problem on a weak or topic pattern (`keepfold_find(kind="problem", query)`, `keepfold_context`). Restate it; never show its title or URL. None found: pose your own and `keepfold_add(kind="problem", title, fields={status: "todo"})` first.
    - **aptitude:** up to 10 due or weak aptitude concepts.

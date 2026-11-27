@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from keepfold import quarantine
-from keepfold.vault import PRIVATE_BROWSE_DIR
+from keepfold.vault import PRIVATE_BROWSE_DIR, sqlite_ro_uri
 
 KEEP = 10  # owner's choice (verdict Q11 a)
 # store.PATH, vectors.CACHE and semantic.CACHE (not imported: numpy is slow to load)
@@ -82,7 +82,7 @@ def backup(root: Path, dest_dir: Path | None = None, private: bool = True) -> Pa
             for db in [db for db in dbs if db.is_file()]:
                 snap = tmp.with_suffix(".db.tmp")
                 try:
-                    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as src, \
+                    with closing(sqlite3.connect(sqlite_ro_uri(db), uri=True)) as src, \
                             closing(sqlite3.connect(snap)) as dst:
                         src.backup(dst)
                     z.write(snap, db.relative_to(root).as_posix())

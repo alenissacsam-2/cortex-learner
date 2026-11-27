@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
@@ -83,9 +83,9 @@ SECRET_RES = [
                re.IGNORECASE),
 ]
 
-# path -> ((mtime_ns, size), fields, body): in-process only, so re-reads skip the YAML parse.
-# shortcut: a same-size rewrite within one mtime tick is missed; add st_ino if that bites.
-_PARSED: dict[Path, tuple[tuple[int, int], CommentedMap, str]] = {}
+# path -> ((ino, mtime_ns, size), fields, body): in-process only, so re-reads skip the YAML parse.
+# shortcut: a same-size in-place rewrite within one mtime tick is missed (FAT: 2 s ticks).
+_PARSED: dict[Path, tuple[tuple[int, ...], CommentedMap, str]] = {}
 
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*$")
 UNCHECKED_RE = re.compile(r"^\s*[-*] \[ \] ")
@@ -109,6 +109,13 @@ def in_temp_folder(p: Path | str) -> bool:
     if os.name == "nt":
         t, q = tuple(x.casefold() for x in t), tuple(x.casefold() for x in q)
     return q[:len(t)] == t
+
+
+def sqlite_ro_uri(p: PurePath) -> str:
+    """A read-only SQLite URI for `p`. SQLite rejects a URI authority, so a UNC path (a share,
+    or a mapped drive after resolve()) keeps an empty one: file:////server/share/..."""
+    u = p.as_uri()
+    return ("file:////" + u[len("file://"):] if not u.startswith("file:///") else u) + "?mode=ro"
 
 
 class VaultError(Exception):
@@ -412,9 +419,10 @@ class Vault:
 
     def _parse(self, path: Path, kind: str) -> Note:
         st = path.stat()  # before the read: a change after it misses the cache next time
-        key = (st.st_mtime_ns, st.st_size)
+        key = (st.st_ino, st.st_mtime_ns, st.st_size)  # an atomic replace gets a new file id
         hit = _PARSED.get(path)
-        if hit is None or hit[0] != key:
+        # key[1:]: dashboard._snapshot_parses seeds from the index snapshot, which has no inode
+        if hit is None or hit[0] not in (key, key[1:]):
             text = path.read_bytes().decode("utf-8")
             parts = _split(text)
             fields = CommentedMap() if parts is None else _load_fm(parts[1])
@@ -565,16 +573,18 @@ class Vault:
                                      "lock; try again in a moment.") from None
                 time.sleep(0.05)
                 continue
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(token)
             return token
 
     def _steal_if_stale(self, path: Path) -> bool:
         try:
-            content = path.read_text()
+            content = path.read_text(encoding="utf-8", errors="replace")
             age = time.time() - path.stat().st_mtime
         except OSError:
             return False  # vanished or being written; retry the create
+        if content in _HELD:
+            return False  # this process holds it now, even if gethostname() changed since
         # a holder this host can see is stale when its pid is dead, or when the process with
         # that pid started after the lock was written (G4: a pid reused after a reboot); its
         # start time unknown, a lock under 10 x LOCK_STALE_S stays (R2-3: a long sites.write).
@@ -587,8 +597,7 @@ class Vault:
         except ValueError:
             local = False
         if local and pid == os.getpid():
-            if content in _HELD:
-                return False  # another Vault object or thread of this process holds it
+            pass  # this process's own leftover: not in _HELD (checked above), so stale
         elif local and _pid_alive(pid):
             started = _pid_started(pid)
             if (started <= ts + 5 if started is not None  # 5 s of clock slack
@@ -599,7 +608,7 @@ class Vault:
         # shortcut: a second stealer could race between this read and unlink; the window is
         # tiny and only opens after a crash. Upgrade to rename-then-verify if it ever bites.
         try:
-            if path.read_text() == content:
+            if path.read_text(encoding="utf-8", errors="replace") == content:
                 path.unlink()
                 log.warning("stole a stale vault lock (%s)", content)
         except OSError:
@@ -614,7 +623,7 @@ class Vault:
         _HELD.discard(token)  # a file left behind is now a leftover this process may steal
         for attempt in range(REPLACE_TRIES):
             try:
-                if path.read_text() == token:
+                if path.read_text(encoding="utf-8", errors="replace") == token:
                     path.unlink()
                 return
             except FileNotFoundError:

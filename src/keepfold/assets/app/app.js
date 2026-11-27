@@ -684,7 +684,9 @@
     const hr = Math.floor((Date.now() - d) / 36e5);
     if (hours && hr < 24) return hr < 1 ? 'less than an hour ago' : `${hr} hour${hr === 1 ? '' : 's'} ago`;
     const n = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
-    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 || hours ? `${n} days ago` : d.toISOString().slice(0, 10);
+    // the local date, as brain3d.js's isoDay: toISOString() alone gives the UTC one
+    const day = new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 || hours ? `${n} days ago` : day;
   }
   // each pill opens its passage (`open`); the pill of the open one is pressed
   function sourceRow(sources, searched, open, shown) {

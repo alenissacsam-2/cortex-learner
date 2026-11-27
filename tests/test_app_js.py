@@ -666,6 +666,29 @@ def test_the_job_line_is_hidden_when_idle_and_shown_when_a_job_runs(tmp_path):
     assert json.loads(r.stdout) == [True, "Nothing running.", "", False, True]
 
 
+def test_an_old_date_is_the_local_day_far_from_utc(tmp_path):
+    """Audit #11: daysAgo showed a week-old item's UTC date, a day off in the Americas or NZ."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    fn = re.search(r"\n  function daysAgo\(ts, hours\) \{.*?\n  \}\n",
+                   APP_JS.read_text(encoding="utf-8"), re.S)[0]
+    script = tmp_path / "days.cjs"
+    script.write_text(fn + (
+        "const out = [];\n"
+        "for (const [tz, h] of [['America/Los_Angeles', 3], ['Pacific/Auckland', 20]]) {\n"
+        "  process.env.TZ = tz;\n"
+        "  const d = new Date(); d.setUTCDate(d.getUTCDate() - 10); d.setUTCHours(h, 0, 0, 0);\n"
+        "  const local = [d.getFullYear(), d.getMonth() + 1, d.getDate()]"
+        ".map((x) => String(x).padStart(2, '0')).join('-');\n"
+        "  out.push([daysAgo(d.toISOString()), local, d.toISOString().slice(0, 10)]);\n"
+        "}\nconsole.log(JSON.stringify(out));\n"), encoding="utf-8")
+    r = subprocess.run([node, str(script)], capture_output=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    for shown, local, utc in json.loads(r.stdout):
+        assert local != utc and shown == local
+
+
 def test_the_sidebar_and_the_narrow_select_group_the_same_sections():
     """U1: three groups, each a heading (a plain <p>) and a role=group named by it; the
     select repeats them as optgroups; every data-s is kept."""

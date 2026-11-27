@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -447,3 +448,31 @@ def test_append_time_is_flat_in_a_big_month_file(ev):
     per = (time.perf_counter() - t) / 200
     print(f"{per * 1000:.1f} ms per append at 75k events")
     assert per < 0.1  # was ~0.5 s here when each append re-parsed the month file
+
+
+def test_parallel_readers_of_a_grown_file_list_each_event_once(ev):
+    """Audit #1: threads that both see the file grew must not extend one cached parse twice."""
+    for i in range(50):
+        grade(ev, key=f"k{i}", now=NOON + timedelta(seconds=i))
+    path = ev.vault.root / "events/2026/11/cli.jsonl"
+    base = len(list(EventLog(ev.vault).iter_events()))
+    for t in range(30):
+        list(EventLog(ev.vault).iter_events())  # warm the shared parse cache
+        last = json.loads(path.read_bytes().splitlines()[-1])
+        with open(path, "ab") as f:  # another process's append: past this process's cache
+            f.write((json.dumps(last | {"id": f"01ZZZZZZZZZZZZZZZZZZZZ{t:04d}"}) + "\n").encode())
+        barrier, seen = threading.Barrier(6), []
+
+        def read(barrier=barrier, seen=seen):
+            barrier.wait(30)
+            seen.append([e["id"] for e in EventLog(ev.vault).iter_events()])
+
+        threads = [threading.Thread(target=read, daemon=True) for _ in range(6)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(60)
+        assert not any(th.is_alive() for th in threads), f"trial {t}: a reader hung (deadlock?)"
+        seen.append([e["id"] for e in EventLog(ev.vault).iter_events()])
+        for ids in seen:
+            assert len(ids) == len(set(ids)) == base + t + 1, f"trial {t}: {len(ids)} events"

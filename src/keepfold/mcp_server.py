@@ -282,7 +282,7 @@ MOCK_BRIEF = (
     "(testing-own-code), explain (thinking-aloud): application.\n"
     "- Aptitude: one quiz batch. HR: each answer on its story (full STAR / no result / "
     "blank), the round on star-answers. Project: its applies concept, transfer.\n"
-    "- Keys use the start result's `stamp` (YYYYMMDDHHMM) as given: items [clarify, "
+    "- Keys use the start result's `stamp` (YYYYMMDDHHMMSS) as given: items [clarify, "
     "approach, complexity] key mock-<stamp>-plan; code alone, -code; [test, explain], "
     "-check; problem_status, -status; "
     "-aptitude, -hr, -project. How sure (1-4) on approach and code. Skill concepts go under "
@@ -1029,7 +1029,7 @@ class Keepfold:
         if mode == "mock":
             brief = MOCK_BRIEF + "\n\n" + brief
             # dogfood r4 #5: the model has no clock; one server stamp keys every phase
-            extra["stamp"] = s.started.astimezone().strftime("%Y%m%d%H%M")
+            extra["stamp"] = s.started.astimezone(UTC).strftime("%Y%m%d%H%M%S")
         return {"session": s.id, "mode": mode, "display": display, "brief": brief,
                 "contract": contract, "today": today, **extra, "next": nxt}
 

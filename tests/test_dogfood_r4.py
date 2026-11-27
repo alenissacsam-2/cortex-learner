@@ -2,7 +2,7 @@
 tools the way a literal model did and checks the result it should have got."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -55,9 +55,9 @@ def test_mock_grades_stay_in_role_and_the_start_gives_the_stamp(root):
     async def body(call):
         start = await call("keepfold_start", {"mode": "mock"})
         assert "no teaching or talk of grades" in start["next"]
-        assert re.fullmatch(r"\d{12}", start["stamp"])
-        at = datetime.strptime(start["stamp"], "%Y%m%d%H%M")
-        assert abs(datetime.now() - at) < timedelta(minutes=5)  # local time
+        assert re.fullmatch(r"\d{14}", start["stamp"])  # UTC to the second: no DST repeats
+        at = datetime.strptime(start["stamp"], "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+        assert abs(datetime.now(UTC) - at) < timedelta(minutes=5)
         assert "`stamp`" in start["brief"]
         key = f"mock-{start['stamp']}"
         plan = await call("keepfold_grade", {"concept": "two pointers", "key": f"{key}-plan",

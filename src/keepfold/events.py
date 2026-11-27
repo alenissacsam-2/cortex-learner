@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -170,6 +171,7 @@ class _Parsed:
 # read from where the last parse ended; anything else (undo's os.replace, a truncation, a
 # same-size rewrite) is parsed again whole. Bad lines are logged once, when first parsed.
 _PARSED: dict[Path, _Parsed] = {}
+_PARSE_LOCK = threading.Lock()  # app and MCP threads would otherwise extend one _Parsed twice
 
 
 def _stat_key(st: os.stat_result) -> tuple[int, int, int]:
@@ -300,10 +302,11 @@ class EventLog:
         out = []
         for path in sorted(self._dir().glob(pattern)):
             try:
-                key = _stat_key(path.stat())  # before the read: a later change shows next time
-                hit = _PARSED.get(path)
-                if hit is None or hit.key != key:
-                    hit = _PARSED[path] = _parse_file(path, key, hit)
+                with _PARSE_LOCK:
+                    key = _stat_key(path.stat())  # before the read: a later change shows next time
+                    hit = _PARSED.get(path)
+                    if hit is None or hit.key != key:
+                        hit = _PARSED[path] = _parse_file(path, key, hit)
             except OSError as e:
                 log.warning("skipping %s: %s", path, e)
                 continue
@@ -428,26 +431,27 @@ class EventLog:
         """Fold our own append into the parse cache, and the key map, so the next call reads
         nothing back. Only when the cache held the whole file just before the write; otherwise
         the next read catches up from the file."""
-        hit = _PARSED.get(path)
-        if before is None and size == 0:
-            hit = _Parsed()
-        elif hit is None or hit.key != before or hit.length != size:
-            return
-        try:
-            after = _stat_key(path.stat())
-        except OSError:
-            _PARSED.pop(path, None)
-            return
-        ev = json.loads(line)  # a copy of the returned event, exactly as a re-read gives it
-        hit.events.append(ev)
-        hit.lines += 1
-        hit.length += len(line)
-        hit.tail = (hit.tail + line)[-_TAIL:]
-        hit.key = after
-        _PARSED[path] = hit
-        if self._sig is not None and self._sig.get(path) == before:
-            self._sig[path] = after
-            self._add_key(ev)
+        with _PARSE_LOCK:  # the whole body, so a reader cannot extend the same hit meanwhile
+            hit = _PARSED.get(path)
+            if before is None and size == 0:
+                hit = _Parsed()
+            elif hit is None or hit.key != before or hit.length != size:
+                return
+            try:
+                after = _stat_key(path.stat())
+            except OSError:
+                _PARSED.pop(path, None)
+                return
+            ev = json.loads(line)  # a copy of the returned event, exactly as a re-read gives it
+            hit.events.append(ev)
+            hit.lines += 1
+            hit.length += len(line)
+            hit.tail = (hit.tail + line)[-_TAIL:]
+            hit.key = after
+            _PARSED[path] = hit
+            if self._sig is not None and self._sig.get(path) == before:
+                self._sig[path] = after
+                self._add_key(ev)
 
 
 def check_assessment_result(score, day) -> None:
