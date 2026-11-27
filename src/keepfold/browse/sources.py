@@ -30,8 +30,25 @@ CHROMIUM = {"chrome": ("Google", "Chrome"), "edge": ("Microsoft", "Edge"),
 MAC_CHROMIUM = {"chrome": ("Google", "Chrome"), "edge": ("Microsoft Edge",),
                 "brave": ("BraveSoftware", "Brave-Browser")}
 LINUX_CHROMIUM = {"chrome": ("google-chrome",), "edge": ("microsoft-edge",),
-                  "brave": ("BraveSoftware", "Brave-Browser")}
-BROWSERS = (*CHROMIUM, "firefox")
+                  "brave": ("BraveSoftware", "Brave-Browser"), "chromium": ("chromium",)}
+# Linux, after LINUX_CHROMIUM, in this order: (browser, folder under ~, file, key suffix). The
+# suffix keeps Source.key unique when a snap or Flatpak profile shares a name with another.
+LINUX_MORE = (
+    ("chromium", ("snap", "chromium", "common", "chromium"), "History", " (snap)"),
+    ("chrome", (".var", "app", "com.google.Chrome", "config", "google-chrome"), "History",
+     " (flatpak)"),
+    ("chromium", (".var", "app", "org.chromium.Chromium", "config", "chromium"), "History",
+     " (flatpak)"),
+    ("brave", (".var", "app", "com.brave.Browser", "config", "BraveSoftware", "Brave-Browser"),
+     "History", " (flatpak)"),
+    ("firefox", (".mozilla", "firefox"), "places.sqlite", ""),
+    ("firefox", (".config", "mozilla", "firefox"), "places.sqlite", ""),  # Firefox 147+ (XDG)
+    ("firefox", ("snap", "firefox", "common", ".mozilla", "firefox"), "places.sqlite",
+     " (snap)"),
+    ("firefox", (".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"), "places.sqlite",
+     " (flatpak)"),
+)
+BROWSERS = (*CHROMIUM, "chromium", "firefox")
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 CHROME_OFFSET_US = 11_644_473_600_000_000  # 1601-01-01 to 1970-01-01
 SUBFRAME = {3, 4}  # Chromium core transitions AUTO_SUBFRAME, MANUAL_SUBFRAME: not a page
@@ -98,13 +115,23 @@ def _profiles(browser: str, folder: Path, name: str) -> list[Source]:
 
 def _discover_unix(home: Path, mac: bool) -> list[Source]:
     """macOS and Linux (review C14): the same browsers under ~/Library/Application Support or
-    ~/.config, and Firefox under its own profile folder."""
+    ~/.config, and Firefox under its own profile folder; on Linux also the snap, Flatpak and
+    XDG folders (LINUX_MORE)."""
     base = home / "Library" / "Application Support" if mac else home / ".config"
     out = []
     for browser, parts in (MAC_CHROMIUM if mac else LINUX_CHROMIUM).items():
         out += _profiles(browser, base.joinpath(*parts), "History")
-    ff = base / "Firefox" / "Profiles" if mac else home / ".mozilla" / "firefox"
-    return out + _profiles("firefox", ff, "places.sqlite")
+    if mac:
+        return out + _profiles("firefox", base / "Firefox" / "Profiles", "places.sqlite")
+    keys = {s.key for s in out}
+    for browser, parts, name, tag in LINUX_MORE:
+        for s in _profiles(browser, home.joinpath(*parts), name):
+            s = Source(browser, s.profile + tag, s.path)
+            if s.key in keys:  # only ~/.config/mozilla can clash: the same name in ~/.mozilla
+                s = Source(browser, s.profile + " (xdg)", s.path)
+            keys.add(s.key)
+            out.append(s)
+    return out
 
 
 def discover(local: Path | None = None, roaming: Path | None = None, *,

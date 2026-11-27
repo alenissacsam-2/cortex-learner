@@ -319,3 +319,37 @@ def test_an_unchanged_reimport_keeps_the_owners_tags_and_lines(root_plain):
     r = sources.run(v, src("- first highlight\n- second highlight"), C)
     page = _page(v, "test-book")
     assert r["updated"] == 1 and "second highlight" in page and 'tags: ["mine"]' in page
+
+
+# ---- Linux browser folders: snap, Flatpak and XDG (keepfold.browse.sources) -------------------
+
+def _browser_file(path: Path, name: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / name).write_bytes(b"")
+
+
+def test_linux_finds_snap_chromium_and_xdg_firefox(tmp_path):
+    from keepfold.browse import sources as browse
+
+    _browser_file(tmp_path / "snap" / "chromium" / "common" / "chromium" / "Default", "History")
+    _browser_file(tmp_path / ".config" / "mozilla" / "firefox" / "ab.default", "places.sqlite")
+    assert {s.key for s in browse.discover(home=tmp_path, platform="linux")} == {
+        "chromium/Default (snap)", "firefox/ab.default"}
+    assert browse.discover(home=tmp_path, platform="darwin") == []  # Linux folders only
+
+
+def test_snap_and_deb_firefox_both_listed(tmp_path):
+    from keepfold.browse import sources as browse
+
+    for ff in (tmp_path / ".mozilla" / "firefox",
+               tmp_path / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+               tmp_path / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+               tmp_path / ".config" / "mozilla" / "firefox"):
+        _browser_file(ff / "x.default", "places.sqlite")
+    _browser_file(tmp_path / ".config" / "chromium" / "Default", "History")
+    _browser_file(tmp_path / ".var" / "app" / "com.brave.Browser" / "config" / "BraveSoftware"
+                  / "Brave-Browser" / "Default", "History")
+    keys = [s.key for s in browse.discover(home=tmp_path, platform="linux")]
+    assert keys == ["chromium/Default", "brave/Default (flatpak)", "firefox/x.default",
+                    "firefox/x.default (xdg)", "firefox/x.default (snap)",
+                    "firefox/x.default (flatpak)"]

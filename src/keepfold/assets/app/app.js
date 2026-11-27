@@ -1440,7 +1440,7 @@
   }
 
   /* Past history: one list for the Setup step and the Browsing section */
-  const BROWSERS = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', comet: 'Comet', firefox: 'Firefox' };
+  const BROWSERS = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', comet: 'Comet', chromium: 'Chromium', firefox: 'Firefox' };
   const untick = new Set(), seeded = new Set();
   function seedUntick(hist) {  // browse.skip_profiles starts unticked; the user's clicks win after
     for (const s of hist.sources) if (!seeded.has(s.key)) { seeded.add(s.key); if (s.skip) untick.add(s.key); }

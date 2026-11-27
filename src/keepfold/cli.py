@@ -2928,7 +2928,8 @@ NEXT_SCAN = ("next: `keepfold browse selftest` to see the import work on made-up
              "`keepfold browse import --dry-run`, then `keepfold browse import`")
 NO_BROWSERS = ("no browser history found (looked for Chrome, Edge, Brave and Comet under "
                "%LOCALAPPDATA% and Firefox under %APPDATA%; on macOS and Linux for Chrome, "
-               "Edge, Brave and Firefox in their usual folders)")
+               "Edge, Brave and Firefox in their usual folders, and on Linux also for Chromium "
+               "and the snap and Flatpak folders)")
 NO_MODEL = ("embedding model not downloaded: every page goes to the private page under "
             "\"Other\" sections, none under your topic hubs. To fix: keepfold model download")
 

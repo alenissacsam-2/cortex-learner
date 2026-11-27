@@ -1407,6 +1407,14 @@ def test_cli_scan_and_import_with_no_browsers(vault, monkeypatch, tmp_path):
     assert out.exit_code == 0 and "no browser history found" in out.output
 
 
+def test_cli_accepts_chromium_browser(vault, monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "none"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "none"))
+    out = cli("browse", "import", "--browser", "chromium", "--vault", str(vault))
+    assert "invalid_argument" not in out.output and "no browser history found" in out.output
+    assert "Chromium" in out.output and "snap" in out.output and "Flatpak" in out.output
+
+
 def test_cli_import_without_a_vault():
     out = cli("browse", "import")
     assert out.exit_code == 1 and "No vault set" in out.output
