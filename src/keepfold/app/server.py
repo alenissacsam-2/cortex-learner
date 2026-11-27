@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import webbrowser
 from contextlib import contextmanager
 from functools import partial
@@ -2778,8 +2779,8 @@ def _handler(app: App):
         def _upload(self, ctype: str):
             """Stream an export to ~/.keepfold/tmp/upload-<id>-<stem><ext>, owner-only (0600).
             Of the client's name (X-Keepfold-Name) only the extension and up to 40 letters,
-            digits, _ and - of its stem are kept: `importers.detect` reads names such as
-            MyActivity.json. The size is capped at MAX_UPLOAD."""
+            digits, combining marks, _ and - of its stem are kept: `importers.detect` reads
+            names such as MyActivity.json. The size is capped at MAX_UPLOAD."""
             self.close_connection = True  # a refused body is left unread
             if ctype != "application/octet-stream":
                 self._send(415, {"error": "Content-Type must be application/octet-stream"})
@@ -2792,7 +2793,11 @@ def _handler(app: App):
                                           ".txt, .ics, .mbox, .pdf, .docx, .apkg or .colpkg "
                                           "file."})
                 return
-            stem = re.sub(r"[^A-Za-z0-9_-]", "", name.stem)[:40]
+            # letters, digits and combining marks of any script (Devanagari vowel signs are
+            # marks), so takeout.activity_file still knows MeineAktivitäten or मेरीगतिविधि
+            stem = "".join(c for c in unicodedata.normalize("NFC", name.stem)
+                           if c.isalnum() or c in "_-"
+                           or unicodedata.category(c)[0] == "M")[:40]
             try:
                 n = int(self.headers.get("Content-Length", ""))
             except ValueError:

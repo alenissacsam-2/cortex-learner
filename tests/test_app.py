@@ -1565,6 +1565,24 @@ def test_upload_is_capped_named_by_the_app_and_typed(app, home):
     assert files[0].read_bytes() == data and app.uploads[body["upload"]] == files[0]
 
 
+def test_upload_keeps_localized_activity_names_and_nothing_hostile(app, home):
+    """Takeout's localized My Activity names stay ones activity_file knows; a path, a dot or a
+    device name can never reach the file name (the upload-<hex>- prefix comes first)."""
+    from keepfold.browse import takeout
+    names = {"MeineAktivitäten.json": "MeineAktivitäten.json",
+             "マイアクティビティ.json": "マイアクティビティ.json",
+             "मेरी गतिविधि.json": "मेरीगतिविधि.json",
+             "..\\..\\CON.json": "CON.json", "a:b.c/../NUL .json": "NUL.json"}
+    for raw, kept in names.items():
+        code, body = upload(app, b"[]", quote(raw))
+        assert code == 200, raw
+        p = app.uploads[body["upload"]]
+        assert p.parent == home / ".keepfold" / "tmp"
+        assert p.name == f"upload-{body['upload']}-{kept}", raw
+        if "CON" not in raw and "NUL" not in raw:
+            assert takeout.activity_file(p.name) == "json", raw
+
+
 def test_tidy_about_me_starts_no_index_build(app, monkeypatch):
     """Tidy reads me/ pages only, so its Keepfold builds no Index (one each pass otherwise)."""
     from keepfold.mcp_server import Keepfold
