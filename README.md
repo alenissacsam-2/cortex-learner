@@ -547,6 +547,8 @@ keepfold app
 
 `keepfold setup` asks where your vault goes and connects Claude; `keepfold app` opens the app in your browser, where **Connect** adds your other AI apps. Update later with `uv tool upgrade keepfold`. This also works on Windows if you'd rather skip the installer.
 
+Intel Macs are not supported, because the search engine (onnxruntime) has no Intel Mac build; on a Mac, Keepfold needs Apple silicon (M1 or later).
+
 ### From source
 
 This is the way for developers. You need uv and git. In a terminal:

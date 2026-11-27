@@ -2615,3 +2615,14 @@ def test_change_folder_opens_a_field_that_runs_the_setup_job(root_committed, tmp
     assert out["warn"] == ["Windows can empty it at any time. Use Change folder to pick your "
                            "real vault.", ["Change folder"]]
     assert out["warnOpens"]
+
+
+def test_copy_hint_uses_cmd_on_mac():
+    """Port T17: the blocked-copy hints say Cmd+C on a Mac; the API-key help has a Linux line;
+    the dead "Windows only" receiver text is gone; Linux's Git row shows its command."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "(navigator.platform || '').startsWith('Mac') ? 'Cmd+C' : 'Ctrl+C'" in js
+    assert "press Ctrl+C" not in js
+    assert "' to ~/.profile, then log out and in.'" in js
+    assert "Windows only" not in js
+    assert "!gi.install.run && gi.install.show" in js

@@ -54,11 +54,21 @@ def check_onedrive(root: Path) -> tuple[str, str, str, str]:
         base = os.environ.get(var)
         if base and root.is_relative_to(Path(base).resolve()):
             synced = "OneDrive"
+    if not synced and sys.platform == "darwin" and _in_icloud_documents(root):
+        synced = "iCloud (Desktop & Documents)"
     if synced:
         return ("WARN", name, f"{root} is inside {synced}",
                 f"Move the vault out of {synced}; sync can break the lock and atomic writes, "
                 "and silently copies private pages and voice samples to the cloud.")
     return "PASS", name, str(root), ""
+
+
+def _in_icloud_documents(root: Path) -> bool:
+    """macOS syncs ~/Documents and ~/Desktop to iCloud when Desktop & Documents is on (iCloud
+    Drive then has a Documents folder), though the vault's path never says iCloud."""
+    home = Path.home()
+    return ((home / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents").is_dir()
+            and any(root.is_relative_to((home / d).resolve()) for d in ("Documents", "Desktop")))
 
 
 def _old_repo(root: Path) -> bool:
@@ -209,9 +219,23 @@ def installer() -> bool:
     return update.mode() == "installer"
 
 
+def app_place() -> str | None:
+    """Where this user opens the app from, worded as server.reopen() words it: the Start menu
+    for an installer install, Applications or the app menu for the Mac or Linux app; None for
+    a terminal install."""
+    from keepfold import update
+
+    m = update.mode()
+    if m == "installer":
+        return "the Start menu"
+    if m == "app":
+        return "Applications or Launchpad" if sys.platform == "darwin" else "the app menu"
+    return None
+
+
 def app_hint() -> str:
-    """How this user opens the app: the Start menu for an installer install, else the command."""
-    return "open Keepfold from the Start menu" if installer() else "run `keepfold app`"
+    """How this user opens the app: from where app_place() says, else the command."""
+    return f"open Keepfold from {p}" if (p := app_place()) else "run `keepfold app`"
 
 
 def check_search_model() -> tuple[str, str, str, str]:
@@ -223,6 +247,8 @@ def check_search_model() -> tuple[str, str, str, str]:
     return ("WARN", "Search model", "not downloaded: recall uses keywords only and a history "
             "import files every page under Other",
             "In the Keepfold app (Start menu), Setup → Download search model." if installer() else
+            f"Open Keepfold from {p}, then Setup → Download search model."
+            if (p := app_place()) else
             "Run `keepfold model download` (about 150 MB, once) or use `keepfold app` → Setup.")
 
 
@@ -244,8 +270,8 @@ def check_ai_apps() -> tuple[str, str, str, str]:
     if on:
         return "PASS", name, ", ".join(on), ""
     return ("WARN", name, "no AI app runs Keepfold yet, so nothing reads or records anything",
-            "Open Keepfold from the Start menu and tick an app under Connect AI apps."
-            if installer() else
+            f"Open Keepfold from {p} and tick an app under Connect AI apps."
+            if (p := app_place()) else
             "Run `keepfold app` and tick an app under Connect, or `keepfold setup`.")
 
 

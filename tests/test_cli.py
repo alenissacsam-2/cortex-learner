@@ -831,3 +831,44 @@ def test_uninstall_on_windows_turns_off_the_apps_run_value(home, uninstall_fakes
     out = run("uninstall", "--yes").output
     assert calls == ["disconnect", ("login", False), ("autostart", False)]
     assert "Use Settings > Apps > Keepfold." in out
+
+
+def test_icloud_documents_warns(monkeypatch, tmp_path_factory):
+    """Port T17: on a Mac with iCloud Desktop & Documents on, a vault in ~/Documents or
+    ~/Desktop is synced though its path never says iCloud."""
+    import sys
+    home = tmp_path_factory.mktemp("h")  # tmp_path would hold this test's name, "icloud"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    vault = home / "Documents" / "v"
+    vault.mkdir(parents=True)
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert doctor.check_onedrive(vault)[0] == "PASS"
+    (home / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents").mkdir(
+        parents=True)
+    status, _, detail, _ = doctor.check_onedrive(vault)
+    assert status == "WARN" and "iCloud (Desktop & Documents)" in detail
+    assert doctor.check_onedrive(home / "Desktop" / "v")[0] == "WARN"
+    assert doctor.check_onedrive(home / "Keepfold")[0] == "PASS"
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert doctor.check_onedrive(vault)[0] == "PASS"
+
+
+def test_app_hint_mac_app_mode(monkeypatch):
+    """Port T17: the frozen app says where to open it per OS, never the Start menu off Windows."""
+    import sys
+
+    from keepfold import update
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert doctor.app_hint() == "open Keepfold from Applications or Launchpad"
+    assert "Applications or Launchpad" in doctor.check_ai_apps()[3]
+    assert "Applications or Launchpad" in doctor.check_search_model()[3]
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert doctor.app_hint() == "open Keepfold from the app menu"
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert doctor.app_hint() == "open Keepfold from the Start menu"
+    assert doctor.check_ai_apps()[3] == ("Open Keepfold from the Start menu and tick an app "
+                                         "under Connect AI apps.")

@@ -525,3 +525,15 @@ def test_unpack_real_tar_zst_refuses_paths_outside(tmp_path):
     junk.write_bytes(b"not zstd")
     with pytest.raises(ValueError, match="Could not unpack"):
         wizard._unpack(junk, tmp_path / "to3")
+
+
+def test_temp_refused_off_windows_never_says_windows(monkeypatch):
+    """Port T17: the temp-folder refusal and the example path follow the OS; Windows unchanged."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert wizard.temp_refused() == wizard.TEMP_REFUSED
+    for plat, example in (("darwin", "/Users/you/Keepfold"), ("linux", "/home/you/Keepfold")):
+        monkeypatch.setattr(sys, "platform", plat)
+        assert "Windows" not in wizard.temp_refused()
+        assert "system's temporary folder" in wizard.temp_refused()
+        with pytest.raises(ValueError, match=example):
+            wizard.vault_path("relative/folder")

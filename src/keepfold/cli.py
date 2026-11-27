@@ -437,7 +437,9 @@ def _init_pointer(root: Path, default: bool, did: list[str], skipped: list[str],
     if (default and current and Path(current).is_dir() and not in_temp_folder(current)
             and in_temp_folder(root)):  # a probe or a stray click must not take the vault over
         warned.append(f"Kept your vault {current}: {root} is a temporary folder, which Windows "
-                      "can empty. Pick a folder outside Temp.")
+                      "can empty. Pick a folder outside Temp." if sys.platform == "win32" else
+                      f"Kept your vault {current}: {root} is a temporary folder, which the "
+                      "system can empty. Pick a folder in your home folder.")
     elif default or not current:
         did.append(f"pointer {_write_config(vault=str(root))}")
     elif Path(current).resolve() == root:
@@ -499,8 +501,8 @@ def doctor(vault: VaultOpt = None, privacy: Annotated[bool, typer.Option(
                     doctor_mod.check_browse_legacy(root), *doctor_mod.check_clients(root),
                     *doctor_mod.check_import_shapes(root)]
     except VaultError as e:
-        results.append(("FAIL", "Vault", str(e), "Open Keepfold from the Start menu and set "
-                        "up a vault under Setup." if doctor_mod.installer() else
+        results.append(("FAIL", "Vault", str(e), f"Open Keepfold from {p} and set "
+                        "up a vault under Setup." if (p := doctor_mod.app_place()) else
                         "Run `keepfold app` (or `keepfold setup` in a terminal) to set "
                         "Keepfold up, or pass --vault."))
     # the vault's folder even when opening it failed (a move from Cortex it waits for)
@@ -2909,7 +2911,9 @@ def app_cmd(vault: VaultOpt = None,
                 help="Port on 127.0.0.1 (0: 47615 if free, else any free one).")] = 0,
             window: Annotated[bool, typer.Option(
                 "--window", help="Its own window and a tray icon (Windows), as the Start menu's "
-                "Keepfold opens it; runs until Quit in the tray.")] = False) -> None:
+                "Keepfold opens it; runs until Quit in the tray." if sys.platform == "win32" else
+                "Its own window and a tray icon, as the Keepfold app opens it; runs until Quit "
+                "in the tray.")] = False) -> None:
     """Open the Keepfold app in your browser: setup, AI apps, local model, browsing, vault.
     Runs on 127.0.0.1 only and stops after 30 minutes idle."""
     from keepfold.app import server

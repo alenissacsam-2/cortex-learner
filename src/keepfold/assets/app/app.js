@@ -112,6 +112,7 @@
   let dead = false;
   // how this user reopens the app: the server says (the Start menu for an installer install)
   const REOPEN = $('gone').getAttribute('data-reopen') || 'Run keepfold app again to reopen it.';
+  const COPY_KEY = (navigator.platform || '').startsWith('Mac') ? 'Cmd+C' : 'Ctrl+C';
   function gone(text) {
     dead = true;
     const g = $('gone');
@@ -538,7 +539,7 @@
       if (text == null) { toast.error('Copy failed: the details did not load. Try again.'); return; }
       const area = h('textarea', { class: 'mono', readonly: true, rows: 8, 'aria-label': 'Problem report details' });
       area.value = text;
-      shown.replaceChildren(h('p', { class: 'help', text: 'Select the text and press Ctrl+C.' }), area);
+      shown.replaceChildren(h('p', { class: 'help', text: `Select the text and press ${COPY_KEY}.` }), area);
       area.focus();
       area.select();
     };
@@ -1318,7 +1319,7 @@
       };
       show();
       const what = h('details', { class: 'what' }, h('summary', { text: 'Show the text' }), area);
-      const select = () => { what.open = true; area.focus(); area.select(); toast('Copy is blocked here; the text is selected, press Ctrl+C.'); };
+      const select = () => { what.open = true; area.focus(); area.select(); toast(`Copy is blocked here; the text is selected, press ${COPY_KEY}.`); };
       const copied = () => { const s = cur; post('/api/connect/copied', { pack: p.id, chars: s.chars, hash: s.hash }, () => { s.changed = false; show(); }); };
       return h('div', { class: 'brow' },
         h('div', { class: 't' },
@@ -1716,7 +1717,8 @@
         h('p', { class: 'help', text: `Keepfold never asks for the key itself and never stores it. Set the variable yourself as below, then click Quit (top right). ${REOPEN}` }),
         h('ol', { class: 'how' },
           h('li', {}, 'Windows: in PowerShell run ', h('code', { text: `setx ${name} "your-key"` }), ', then open a new terminal.'),
-          h('li', {}, 'macOS: add ', h('code', { text: `export ${name}="your-key"` }), ' to ~/.zshrc, then open a new terminal.')))),
+          h('li', {}, 'macOS: add ', h('code', { text: `export ${name}="your-key"` }), ' to ~/.zshrc, then open a new terminal.'),
+          h('li', {}, 'Linux: add ', h('code', { text: `export ${name}="your-key"` }), ' to ~/.profile, then log out and in.')))),
     board('Recent cloud runs', { note: 'counts only' }, runs)];
   }
   function renderBrowse(d) {
@@ -1758,7 +1760,7 @@
       d.login.supported
         ? row('Start at login', d.login.exists ? 'on' : 'off', 'The receiver imports new browser history in the background, with no window. This adds or removes its login entry (a Run entry on Windows, a LaunchAgent on macOS, a user service on Linux), only when you click. It runs:',
           [btn(d.login.exists ? 'Remove' : 'Add', () => job('/api/browse/login', { on: !d.login.exists }))])
-        : row('Start at login', 'not on this system', 'Windows only: start the receiver from your login items instead.'),
+        : null,
       d.login.command ? h('div', { class: 'pad' }, h('pre', { text: d.login.command })) : null);
     const past = board('Past history', { note: d.history && d.history.imported ? `last import ${d.history.imported}` : 'never imported' },
       ...autoImportRows(d.history, s, d.login), ...historyRows(d.history, 'browse'));
@@ -2390,7 +2392,9 @@
         h('div', { class: 'inline' }, path, btn('Use this folder', () => job('/api/setup/vault', { path: path.value }), 'btn lit')),
         h('p', { class: 'help', text: 'Keepfold adds its own folders and a history there, and never changes notes you already have. Obsidian can open it as a vault.' })),
       gi && !gi.found && gi.enabled !== false ? row('Git (history and undo)', 'not installed', 'Without git, Keepfold keeps no history of your vault, so undo does nothing. Free.',
-        gi.install.run ? [btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})), ext(gi.install.license, 'License')] : [ext(gi.install.page, 'Get Git')]) : null], first);
+        gi.install.run ? [btn(`Install Git (${gi.install.size}, via ${gi.install.source})`, () => job('/api/setup/git', {})), ext(gi.install.license, 'License')] : [ext(gi.install.page, 'Get Git')]) : null,
+      gi && !gi.found && gi.enabled !== false && !gi.install.run && gi.install.show ? h('div', { class: 'pad' }, h('span', { class: 'sub', text: 'Run this yourself:' }),
+        h('pre', { text: gi.install.show })) : null], first);
 
     const e = d.embed;
     const sEmbed = step('embed', 'Search model', e.done, [

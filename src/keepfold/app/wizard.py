@@ -334,6 +334,14 @@ TEMP_REFUSED = ("That folder is inside Windows' temporary folder, which Windows 
                 "time. Pick a folder outside it, such as one in Documents.")
 
 
+def temp_refused() -> str:
+    """The temp-folder refusal in this OS's words (TEMP_REFUSED on Windows)."""
+    if sys.platform == "win32":
+        return TEMP_REFUSED
+    return ("That folder is inside the system's temporary folder, which can be emptied at any "
+            "time. Pick a folder in your home folder instead.")
+
+
 def vault_path(path) -> Path:
     """The folder `make_vault` would set up, or ValueError in plain words. A temp folder is
     refused while a real vault exists; a first setup may use it (Status warns). The app checks
@@ -344,14 +352,16 @@ def vault_path(path) -> Path:
         raise ValueError("Choose a folder for the vault.")
     root = Path(path.strip().strip("\"'")).expanduser()
     if not root.is_absolute():
-        raise ValueError("Give the full path of the folder, such as C:\\Users\\you\\Keepfold.")
+        example = {"win32": "C:\\Users\\you\\Keepfold", "darwin": "/Users/you/Keepfold"}.get(
+            sys.platform, "/home/you/Keepfold")
+        raise ValueError(f"Give the full path of the folder, such as {example}.")
     root = root.resolve()
     if root.exists() and not root.is_dir():
         raise ValueError(f"{root} is a file; pick a folder.")
     current = taint.config().get("vault")
     if (current and Path(current).is_dir() and not in_temp_folder(current)
             and in_temp_folder(root)):
-        raise ValueError(TEMP_REFUSED)
+        raise ValueError(temp_refused())
     return root
 
 

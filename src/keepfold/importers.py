@@ -16,6 +16,7 @@ import codecs
 import json
 import os
 import re
+import sys
 import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -180,8 +181,11 @@ GUIDES = {
         "link": "https://docs.ankiweb.net/exporting.html",
         "steps": ["In Anki: File > Export, Anki Deck Package or Collection Package, tick Support "
                   "older Anki versions, then pick the file here.",
-                  "Or pick your Anki profile folder (%APPDATA%\\Anki2\\<profile>): Keepfold reads "
-                  "a copy and never changes Anki."],
+                  "Or pick your Anki profile folder ("
+                  + {"win32": "%APPDATA%\\Anki2\\<profile>",
+                     "darwin": "~/Library/Application Support/Anki2/<profile>"}.get(
+                      sys.platform, "~/.local/share/Anki2/<profile>")
+                  + "): Keepfold reads a copy and never changes Anki."],
         "wait": "instant",
         "pick": "the .apkg or .colpkg file, or paste the full path of your Anki profile folder"},
 }
