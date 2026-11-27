@@ -433,6 +433,7 @@ def test_a_live_holder_with_its_born_survives_a_clock_that_went_back(v, monkeypa
     lock.parent.mkdir(exist_ok=True)
     born = time.time() - 600
     ts = born - 3 * 3600  # written after the clock went back three hours
+    monkeypatch.setattr(vault_mod, "_FIXED_START", True)  # Windows: creation times never move
     monkeypatch.setattr(vault_mod, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: born + 1.4)  # etime's rounding
     lock.write_text(f"4242 {ts:.3f}000 {socket.gethostname()} {born:.0f}")
