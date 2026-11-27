@@ -3292,8 +3292,10 @@ class Keepfold:
             change.update(self._stamp_since(keep, since))
             done.add(claims.pair_key((r["page"], r["id"]), (keep["page"], keep["id"])))
         self.sessions.note("patched", change=change)
-        self.vault.write_text(self.vault.root / TIDY_FILE,
-                              json.dumps({**self._tidy_state(), "done": sorted(done)[-5000:]}))
+        with self.vault.lock():  # the app's sweep writes it too, from another process
+            done |= self._tidy_done()
+            self.vault.write_text(self.vault.root / TIDY_FILE,
+                                  json.dumps({**self._tidy_state(), "done": sorted(done)[-5000:]}))
         return True
 
     def _stamp_since(self, keep: dict, since: str | None) -> dict:
