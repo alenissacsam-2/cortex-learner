@@ -2600,7 +2600,7 @@ def _handler(app: App):
             pass
 
         def _send(self, code: int, body, ctype: str = "application/json", extra=None):
-            if self.command == "POST" and not getattr(self, "_drained", False):
+            if self.command not in ("GET", "HEAD") and not getattr(self, "_drained", False):
                 self._drained = True  # Windows resets a socket closed with unread data
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
