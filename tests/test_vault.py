@@ -416,11 +416,103 @@ def test_pid_started_reads_this_process():
         assert time.time() - 86400 * 30 < started <= time.time()
 
 
-def test_lock_records_pid_and_host(v):
+def test_lock_records_pid_host_and_born(v):
     import socket
+    vault_mod._born.cache_clear()  # another test may have filled it under a fake _pid_started
     with v.lock():
-        pid, _ts, host = (v.root / ".keepfold" / "lock").read_text().split(maxsplit=2)
+        pid, _ts, host, born = (v.root / ".keepfold" / "lock").read_text().split()
     assert int(pid) == os.getpid() and host == socket.gethostname()
+    assert float(born) == round(vault_mod._pid_started(os.getpid()) or 0)
+
+
+def test_a_live_holder_with_its_born_survives_a_clock_that_went_back(v, monkeypatch):
+    """Audit #2: after the clock jumps back past the holder's uptime its ts is older than its
+    start time, which looked like a reused pid; the born field says it is the same process."""
+    import socket
+    lock = v.root / ".keepfold" / "lock"
+    lock.parent.mkdir(exist_ok=True)
+    born = time.time() - 600
+    ts = born - 3 * 3600  # written after the clock went back three hours
+    monkeypatch.setattr(vault_mod, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: born + 1.4)  # etime's rounding
+    lock.write_text(f"4242 {ts:.3f}000 {socket.gethostname()} {born:.0f}")
+    with pytest.raises(VaultError):
+        with v.lock(timeout=0.3):
+            pass
+    assert lock.exists()
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: born + 600)  # a reused pid
+    with v.lock(timeout=0.3):
+        pass
+    assert not lock.exists()
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: born - 600)  # the clock maths
+    lock.write_text(f"4242 {time.time():.3f}000 {socket.gethostname()} {born:.0f}")  # keeps it,
+    with v.lock(timeout=0.3):  # but the start time is not the holder's: stolen
+        pass
+    assert not lock.exists()
+
+
+def test_a_born_mismatch_on_a_moving_clock_falls_back_to_the_ts_rule(v, monkeypatch):
+    """/proc's and ps's start times shift with a clock step, so there a mismatch is no proof."""
+    import socket
+    lock = v.root / ".keepfold" / "lock"
+    lock.parent.mkdir(exist_ok=True)
+    ts = time.time() - 3600
+    monkeypatch.setattr(vault_mod, "_FIXED_START", False)
+    monkeypatch.setattr(vault_mod, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: ts - 60)
+    lock.write_text(f"4242 {ts:.3f}000 {socket.gethostname()} {ts - 900:.0f}")
+    with pytest.raises(VaultError):
+        with v.lock(timeout=0.3):
+            pass
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: ts + 600)
+    with v.lock(timeout=0.3):
+        pass
+    assert not lock.exists()
+
+
+def test_an_unknown_born_keeps_the_ts_rule(v, monkeypatch):
+    import socket
+    lock = v.root / ".keepfold" / "lock"
+    lock.parent.mkdir(exist_ok=True)
+    ts = time.time() - 3600
+    monkeypatch.setattr(vault_mod, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: ts - 60)
+    for token in (f"4242 {ts:.3f} {socket.gethostname()}", f"4242 {ts:.3f} "
+                  f"{socket.gethostname()} 0"):
+        lock.write_text(token)
+        with pytest.raises(VaultError):
+            with v.lock(timeout=0.3):
+                pass
+    monkeypatch.setattr(vault_mod, "_pid_started", lambda pid: ts + 600)
+    with v.lock(timeout=0.3):
+        pass
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize("out, secs", [
+    ("05:07", 307), ("1:02:03", 3723), ("3-04:05:06", 273906), ("  12:34\n", 754),
+    ("", None), ("garbage", None), ("1-05:07", None), ("12", None), ("ps: no such pid", None),
+])
+def test_etime_parser(out, secs):
+    assert vault_mod._etime_s(out) == secs
+
+
+def test_pid_started_on_a_mac_reads_ps_and_survives_its_absence(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(vault_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(vault_mod.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout="  01:40\n"))
+    assert abs(vault_mod._pid_started(4242) - (time.time() - 100)) < 2
+
+    def missing(*a, **k):
+        raise FileNotFoundError("ps")
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], 2)
+
+    for run in (missing, slow, lambda *a, **k: subprocess.CompletedProcess(a[0], 1, stdout="")):
+        monkeypatch.setattr(vault_mod.subprocess, "run", run)
+        assert vault_mod._pid_started(4242) is None
 
 
 def test_replace_retries_permission_error(v, monkeypatch):
@@ -558,7 +650,7 @@ def test_a_non_ascii_hostname_takes_and_releases_the_lock(v, monkeypatch):
     monkeypatch.setattr(vault_mod.socket, "gethostname", lambda: "Иван-ПК")
     lock = v.root / ".keepfold" / "lock"
     with v.lock(timeout=0.3):
-        assert lock.read_bytes().decode("utf-8").endswith(" Иван-ПК")
+        assert lock.read_bytes().decode("utf-8").split()[2] == "Иван-ПК"
         with pytest.raises(VaultError):  # a live holder in this very process: wait, not steal
             with Vault(v.root).lock(timeout=0.3):
                 pass

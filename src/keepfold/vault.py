@@ -6,6 +6,7 @@ This is the only module that touches vault files (SPEC §4, CLAUDE.md).
 from __future__ import annotations
 
 import copy
+import functools
 import io
 import itertools
 import json
@@ -13,6 +14,8 @@ import logging
 import os
 import re
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -97,6 +100,11 @@ REPLACE_TRIES = 8
 # failed to delete (Windows refuses while another process reads it), so never a live holder
 _HELD: set[str] = set()
 _SEQ = itertools.count()
+# a token's "born" and the holder's start time read later may differ by this much: born is
+# written to the second, and ps's etime (macOS) counts whole seconds
+_BORN_TOL_S = 3
+# Windows creation times never move; /proc's and ps's are now-relative and shift with a clock step
+_FIXED_START = os.name == "nt"
 
 
 def in_temp_folder(p: Path | str) -> bool:
@@ -325,9 +333,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _etime_s(out: str) -> int | None:
+    """Seconds in ps's etime output, `[[dd-]hh:]mm:ss`, or None when it is not that."""
+    m = re.fullmatch(r"\s*(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)\s*", out)
+    if not m:
+        return None
+    d, h, mm, ss = (int(g or 0) for g in m.groups())
+    return ((d * 24 + h) * 60 + mm) * 60 + ss
+
+
 def _pid_started(pid: int) -> float | None:
     """When process `pid` started (epoch seconds), or None when that cannot be read."""
     try:
+        if sys.platform == "darwin":  # no /proc: ps's elapsed time is locale-free
+            from keepfold._proc import NO_WINDOW
+            secs = _etime_s(subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                                           capture_output=True, text=True, timeout=2,
+                                           creationflags=NO_WINDOW).stdout)
+            return None if secs is None else time.time() - secs
         if os.name == "nt":
             import ctypes
             from ctypes import wintypes
@@ -348,8 +371,16 @@ def _pid_started(pid: int) -> float | None:
         boot = next(float(line.split()[1]) for line in
                     Path("/proc/stat").read_text().splitlines() if line.startswith("btime "))
         return boot + ticks / os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError, IndexError, StopIteration, AttributeError):
+    except (OSError, ValueError, IndexError, StopIteration, AttributeError,
+            subprocess.SubprocessError):
         return None
+
+
+@functools.cache
+def _born(pid: int) -> float:
+    """This process's start time for its lock tokens (keyed by pid, so a fork reads its own); 0
+    when unknown."""
+    return _pid_started(pid) or 0
 
 
 class Vault:
@@ -559,8 +590,11 @@ class Vault:
             # 3 counter digits after the ms keep tokens unique: before Python 3.13 time.time() on
             # Windows ticks every 15.6 ms, so two takes in one tick shared a token, the loser's
             # discard unmarked the holder's, and its live lock looked like a leftover to steal
+            # the 4th field, born, is this process's start time (audit #2). An older Keepfold
+            # splits it into the host, sees another PC and applies the 120 s age rule: the same
+            # as a hostname change, accepted
             token = (f"{os.getpid()} {time.time():.3f}{next(_SEQ) % 1000:03d} "
-                     f"{socket.gethostname()}")
+                     f"{socket.gethostname()} {_born(os.getpid()):.0f}")
             _HELD.add(token)  # before the file shows it, so no reader takes it for a leftover
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -590,17 +624,23 @@ class Vault:
         # start time unknown, a lock under 10 x LOCK_STALE_S stays (R2-3: a long sites.write).
         # No readable pid, or another host's: the file's age decides
         try:
-            pid_s, ts_s, *host = content.split(maxsplit=2)
+            pid_s, ts_s, *rest = content.split()  # gethostname() never holds a space
             pid, ts = int(pid_s), float(ts_s)
+            born = float(rest[1]) if len(rest) > 1 else 0  # 0: a 0.6.4 token or unknown
             age = time.time() - ts
-            local = not host or host[0] == socket.gethostname()
+            local = not rest or rest[0] == socket.gethostname()
         except ValueError:
             local = False
         if local and pid == os.getpid():
             pass  # this process's own leftover: not in _HELD (checked above), so stale
         elif local and _pid_alive(pid):
             started = _pid_started(pid)
-            if (started <= ts + 5 if started is not None  # 5 s of clock slack
+            known = bool(born) and started is not None
+            if known and abs(started - born) <= _BORN_TOL_S:
+                return False  # the holder itself, whatever the clock did since the take
+            if known and _FIXED_START:
+                pass  # another start time on a fixed clock: a reused pid, so stale
+            elif (started <= ts + 5 if started is not None  # 5 s of clock slack
                     else age <= 10 * LOCK_STALE_S):
                 return False
         elif not local and age <= LOCK_STALE_S:
