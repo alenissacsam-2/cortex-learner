@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -182,6 +183,13 @@ WIKI_DEFAULTS = {
     "decision": {"status": "proposed", "related": []},
     "loop": {"loop_type": "commitment", "status": "open", "related": []},
 }
+
+
+def _same_file(a, b) -> bool:  # by file id: Path == is case-sensitive on macOS's APFS
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _same_company(a: dict, b: dict) -> bool:
@@ -1535,7 +1543,7 @@ class Keepfold:
     def _read_raw(self, rel: str) -> dict[str, Any]:
         p = self._raw_path(rel)
         private = any(is_private(n) and n.fields.get("source")
-                      and (self.vault.root / str(n.fields["source"])).resolve() == p
+                      and _same_file(self.vault.root / str(n.fields["source"]), p)
                       for n in self.vault.iter_notes("resource"))
         if private or not p.is_file():  # a private resource's raw text looks like no file
             raise VaultError("unknown_id", f"{rel} does not exist; check the resource's "
