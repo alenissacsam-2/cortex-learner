@@ -510,6 +510,15 @@ def test_repos_page_shape_no_code_and_update(root_plain, tmp_path):
     assert len(list((root_plain / "resources").glob("repo-*.md"))) == 1
 
 
+def test_a_repos_stack_does_not_follow_the_folder_listing(tmp_path, monkeypatch):
+    """Linux lists a folder in hash order, not sorted as Windows does: the page reads the
+    same on every computer."""
+    repo, real = _repo(tmp_path, "planner"), os.listdir
+    monkeypatch.setattr(more_sources.os, "listdir", lambda p: real(p)[::-1])
+    assert "Git repository planner (JavaScript, Python): 2 commits" in more_sources.repo_item(
+        repo).text
+
+
 def test_an_updated_page_stays_private(root_plain, tmp_path):
     """A page imported private, or marked private by hand, keeps `private: true` when a
     re-import at the normal tier rewrites it."""

@@ -495,7 +495,7 @@ def repo_item(repo: Path) -> sources.Item | str:
         if log.returncode == 0 else []
     if not rows:
         return "no commits by you"
-    names = os.listdir(repo)
+    names = sorted(os.listdir(repo), key=str.upper)  # NTFS's order; ext4 lists in hash order
     stack, readme = _stack(names), _readme(repo, names)
     first, last = rows[-1][0], rows[0][0]
     n = len(rows)

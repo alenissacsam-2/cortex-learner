@@ -98,7 +98,9 @@ LONG = ("# Garage log\n\nIntro line.\n\n## Week 1\n" + "Changed oil and filters 
 def test_top_recall_hits_carry_where_and_a_passage(vault, monkeypatch):
     """RR-12: `at` (an offset keepfold_read takes) and at most 300 characters, wrapped."""
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
-    note(vault, "notes/garage.md", "title: Garage log\n", LONG)
+    p = note(vault, "notes/garage.md", "title: Garage log\n", LONG)
+    # \n on every OS: Windows' \r\n happened to start the best chunk on the match
+    p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))
     c = Keepfold(Vault(vault))
     out = c.keepfold_recall("motor", limit=8)
     assert all("passage" in h and "at" in h for h in out["hits"][:3])

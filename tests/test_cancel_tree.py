@@ -54,7 +54,7 @@ def _wait(cond, seconds: float) -> bool:
 @pytest.mark.parametrize("job_object", [True, False], ids=["job-object", "fallback"])
 def test_cancel_ends_the_grandchild_and_the_job(tmp_path, monkeypatch, job_object):
     if not job_object:  # Windows refused the Job Object: taskkill /T (POSIX: same path)
-        monkeypatch.setattr(_proc, "_job_for", lambda p: None)
+        monkeypatch.setattr(_proc, "_job_for", lambda p: None, raising=False)  # Windows only
     script = tmp_path / "parent.py"
     script.write_text(PARENT, encoding="utf-8")
     jobs = server.Jobs()

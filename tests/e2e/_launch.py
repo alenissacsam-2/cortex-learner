@@ -1,10 +1,12 @@
 """`keepfold` for the E2E tests, run as `sys.executable -I _launch.py <args>`: FakeEmbed as the
-embedder (no model download), no browser opened, and Ollama's fixed port 11434 redirected to
-the one the test picked (KEEPFOLD_E2E_OLLAMA, else refused). No src/ change is needed."""
+embedder (no model download), no browser opened, browser history read from %LOCALAPPDATA% on
+every OS, and Ollama's fixed port 11434 redirected to the one the test picked
+(KEEPFOLD_E2E_OLLAMA, else refused). No src/ change is needed."""
 
 import os
 import sys
 import webbrowser
+from functools import partial
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for conftest.FakeEmbed
@@ -13,11 +15,14 @@ from conftest import FakeEmbed  # noqa: E402
 
 from keepfold import localllm, semantic  # noqa: E402
 from keepfold.app import server  # noqa: E402
+from keepfold.browse import sources  # noqa: E402
 from keepfold.cli import app  # noqa: E402
 
 OLLAMA = "http://127.0.0.1:11434"
 
 webbrowser.open = lambda *a, **k: True
+# history under the fake %LOCALAPPDATA% (conftest.windows_browsers), on every OS
+sources.discover = partial(sources.discover, platform="win32")
 server._open = lambda *a, **k: True  # a distinct object: _open_path would os.startfile otherwise
 semantic._embedder = FakeEmbed()
 _real_request = localllm._request

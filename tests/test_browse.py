@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
-from conftest import git, note
+from conftest import git, note, windows_browsers
 from typer.testing import CliRunner
 
 from keepfold import backup, dashboard, events, semantic
@@ -1305,6 +1305,7 @@ def cli(*args):
 def machine(browsers, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(browsers[0]))
     monkeypatch.setenv("APPDATA", str(browsers[1]))
+    windows_browsers(monkeypatch)
     return browsers
 
 

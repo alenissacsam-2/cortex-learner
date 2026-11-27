@@ -120,6 +120,7 @@ def test_a_scan_read_with_ocr_says_so_and_keeps_its_pages(tmp_path, in_process, 
     monkeypatch.setattr(more_sources, "OCR_PAGES", 1)  # the cap: read up to page 1 of 2
     assert askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a", "b"])), "h.pdf").cut == 1
     monkeypatch.setattr(more_sources, "_ocr", lambda engine, page: "")
+    monkeypatch.setattr(askfile.sys, "platform", "win32")  # Windows OCR ran and read nothing
     with pytest.raises(ValueError, match=r"^This file has no text to read\.$"):
         askfile.read(_write(tmp_path, "up.pdf", scan_pdf(["a"])), "blank.pdf")
 

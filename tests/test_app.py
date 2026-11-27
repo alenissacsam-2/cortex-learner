@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from conftest import windows_browsers
 
 from keepfold import clients, update
 from keepfold.app import actions, server, status, targets, wizard
@@ -528,7 +529,8 @@ def test_new_file_gets_no_backup(home):
 
 
 def test_claude_desktop_uses_its_config_folder(home):
-    folder = home / "APPDATA" / "Claude"
+    folder = home / {"win32": "APPDATA", "darwin": "Library/Application Support"}.get(
+        sys.platform, ".config") / "Claude"  # clients.claude_desktop_config_paths
     t = targets.by_id()["claude-desktop"]
     if not str(folder).startswith(str(home)):
         pytest.skip("APPDATA is not under the temp home")
@@ -698,8 +700,9 @@ def _browsing(home: Path, vault: Path) -> None:
     (d / f"inbox-{now:%Y-%m-%d}.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
 
-def test_browsing_answers_hold_counts_only(app, home, vault):
+def test_browsing_answers_hold_counts_only(app, home, vault, monkeypatch):
     _browsing(home, vault)
+    windows_browsers(monkeypatch)
     seen: list[bytes] = []
     for path in ("/api/status", "/api/browse", "/api/setup"):
         seen.append(call(app, "GET", path)[2])
@@ -1364,6 +1367,7 @@ def test_change_folder_leaves_another_installs_start_at_login_alone(
     or another vault) is never re-pointed by a vault move: a test copy once took over the
     owner's real entry this way."""
     monkeypatch.setattr(targets, "_which", lambda c: None)
+    monkeypatch.setattr(status, "login_file", lambda: None)  # the Run key, as on Windows
     logins = []
     monkeypatch.setattr(actions, "login", lambda job, root, on: logins.append((root, on)))
     theirs = r'"C:\Program Files\Other\keepfold-receiver.exe" --vault "D:\TheirVault"'
@@ -1384,6 +1388,7 @@ def test_change_folder_asks_to_move_connected_apps_and_moves_start_at_login(
     new vault (registration mocked). The same folder again changes nothing."""
     monkeypatch.setattr(targets, "_which", lambda c: None)
     monkeypatch.setattr(targets, "_run", lambda *a, **k: (False, "no runs in tests"))
+    monkeypatch.setattr(status, "login_file", lambda: None)  # the Run key, as on Windows
     logins = []
     monkeypatch.setattr(actions, "login", lambda job, root, on: logins.append((root, on)))
     (home / ".codeium" / "windsurf").mkdir(parents=True)
@@ -1436,7 +1441,8 @@ def test_no_target_writes_private_but_lm_studio_opt_in(home):
     for t in targets.targets():  # every app found on this (temp) computer
         for p in t.paths():
             p.parent.mkdir(parents=True, exist_ok=True)
-    for d in (".claude", ".gemini", ".codex", "APPDATA/Claude"):
+    for d in (".claude", ".gemini", ".codex", "APPDATA/Claude",  # Claude Desktop on Windows,
+              "Library/Application Support/Claude", ".config/Claude"):  # macOS, Linux
         (home / d).mkdir(parents=True, exist_ok=True)
     ids = [t.id for t in targets.targets()]
     assert all(targets.by_id()[i].detect() for i in ids)
@@ -2377,6 +2383,8 @@ def _install(home) -> Path:
     return d / "bin" / "keepfold.exe"
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="KeepfoldSetup.exe and the Store Claude Desktop's Claude-Data folder")
 def test_connect_points_claude_desktop_at_the_installed_keepfold_and_repairs_a_stale_copy(
         app, home, vault):
     """D7: one Keepfold version. A `uv tool` copy in the Claude Desktop config is reported on
@@ -2480,6 +2488,7 @@ def test_status_import_button_leaves_unticked_profiles_out(vault, home, monkeypa
 def test_status_history_row_through_the_app(app, vault, home, monkeypatch):
     """The /api/status row reads the vault's browse state, and the Run key for the hint."""
     _found(monkeypatch, home, "edge/Default")
+    monkeypatch.setattr(status, "login_file", lambda: None)  # the Run key, as on Windows
     f = vault / ".keepfold" / "browse" / "state.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({"last_run": "2026-01-01T00:00:00Z", "sources": {"edge/Default": {}}}),
@@ -2861,6 +2870,8 @@ def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
 
     from keepfold import cli, doctor, session
     monkeypatch.setattr(sys, "platform", "win32")
+    # no git, and the real which() would ask Windows (_winapi) now, which Linux has not
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     monkeypatch.setattr(targets, "_which", lambda c: "winget" if c == "winget" else None)
     monkeypatch.setattr(session, "git_exe", lambda: None)
     monkeypatch.setattr(wizard, "free_space_ok", lambda p, n: (True, ""))
@@ -2889,7 +2900,6 @@ def test_git_is_offered_and_doctor_warns_without_it(app, vault, monkeypatch):
     nogit = vault.parent / "nogit"
     nogit.mkdir()
     monkeypatch.setattr(session, "git_exe", lambda: None)
-    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)
     st, _, detail, fix = doctor.check_git(nogit)
     assert st == "WARN" and "not installed" in detail and "Git.Git" in fix
     assert "Status → Git → Install Git" in fix and "restart Keepfold" not in fix

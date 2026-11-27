@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 import sqlite3
 import time
 from contextlib import closing
@@ -302,6 +303,8 @@ def search(vault: Vault, query: str, k: int = 8) -> list[dict]:
     q = semantic._embed(embed, [semantic.QUERY_PREFIX + query.strip()])[0]
     ids, page, start, m = stack
     best, where = semantic.best_chunks(page, start, m @ q, len(ids))
+    words = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 2
+             and t not in semantic.STOPWORDS]
     out = []
     for j in np.argsort(-best, kind="stable")[:max(1, min(int(k), MAX_K))]:
         score, p, at = float(best[j]), ids[j], int(where[j])
@@ -311,7 +314,11 @@ def search(vault: Vault, query: str, k: int = 8) -> list[dict]:
             title, body = _body((vault.root / p).read_bytes().decode("utf-8", errors="replace"))
         except OSError:
             continue
-        snippet = " ".join(body[at:at + SNIPPET * 2].split())[:SNIPPET]
+        # from the chunk's first line holding a query word (semantic.passage), else its start
+        low = body.lower()
+        hit = min((i for w in words if (i := low.find(w, at, at + CHUNK_CHARS)) >= 0), default=at)
+        s = max(body.rfind("\n", at, hit) + 1, at)
+        snippet = " ".join(body[s:s + SNIPPET * 2].split())[:SNIPPET]
         text = body[at:at + CHUNK_CHARS]
         out.append({"path": p, "title": title or p.rsplit("/", 1)[-1][:-3],
                     "score": round(score, 3), "snippet": snippet, "text": text.strip(),

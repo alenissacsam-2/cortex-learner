@@ -12,6 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
+if sys.platform != "win32":  # installer/app_exe.py needs Windows' ctypes (HRESULT) to import
+    pytest.skip("KeepfoldSetup.exe (installer/) is Windows only", allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "installer"))  # setup_app imports app_exe from beside it
 _spec = importlib.util.spec_from_file_location("setup_app", ROOT / "installer" / "setup_app.py")

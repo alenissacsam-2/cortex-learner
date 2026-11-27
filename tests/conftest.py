@@ -247,6 +247,15 @@ def home(tmp_path, monkeypatch):
     return h
 
 
+def windows_browsers(monkeypatch) -> None:
+    """Browser history found where these tests plant it, under %LOCALAPPDATA% and %APPDATA% as
+    on Windows, on every OS (macOS and Linux look in ~ otherwise: test_browse_v7 covers that)."""
+    from functools import partial
+
+    from keepfold.browse import sources
+    monkeypatch.setattr(sources, "discover", partial(sources.discover, platform="win32"))
+
+
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
                           check=True).stdout

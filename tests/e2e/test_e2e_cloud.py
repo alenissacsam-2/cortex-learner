@@ -12,6 +12,7 @@ import urllib.request
 from datetime import timedelta
 
 import pytest
+from conftest import windows_browsers
 from integration.builders import fake_profile_root
 from integration.test_i3_browse_privacy import D0, DROPPED, MARKERS, history_rows
 from ruamel.yaml import YAML
@@ -94,6 +95,7 @@ class World:
 @pytest.fixture
 def world(root, home, monkeypatch):
     fake_profile_root(home / "LOCALAPPDATA", {"chrome": [*history_rows(), MAYBE, *VISIBLE]})
+    windows_browsers(monkeypatch)
     hubbed(root)
     monkeypatch.setattr(semantic, "_embedder", Embed())
     monkeypatch.setenv(KEY_ENV, KEY)

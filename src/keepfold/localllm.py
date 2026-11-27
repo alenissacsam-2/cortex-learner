@@ -65,7 +65,9 @@ def _check_url(url: str) -> str:
     if host != "localhost":
         # shortcut: decimal/hex/octal IPv4 forms are refused outright, even loopback ones
         try:
-            if not ipaddress.ip_address(host).is_loopback:
+            ip = ipaddress.ip_address(host)
+            # ::ffff:127.0.0.1 is 127.0.0.1 (Python before 3.12.4, e.g. Ubuntu 24.04's, says not)
+            if not (getattr(ip, "ipv4_mapped", None) or ip).is_loopback:
                 raise ValueError(_REFUSED)
         except ValueError:
             raise ValueError(_REFUSED) from None

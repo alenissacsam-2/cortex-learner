@@ -21,8 +21,9 @@ from keepfold.session import SessionManager
 from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
-# uv's cache and Pythons, read before conftest points these at a temp home (wheel test only)
-UV_ENV = {k: os.environ[k] for k in ("APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR",
+# uv's cache and Pythons, read before conftest points these at a temp home (wheel test only;
+# macOS and Linux keep them under HOME)
+UV_ENV = {k: os.environ[k] for k in ("APPDATA", "LOCALAPPDATA", "HOME", "UV_CACHE_DIR",
                                      "UV_PYTHON_INSTALL_DIR") if k in os.environ}
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 HOSTILE = "</script><img src=x onerror=alert(1)>"

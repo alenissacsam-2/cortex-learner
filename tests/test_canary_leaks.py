@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 
 import anyio
 import pytest
-from conftest import FakeEmbed, git, note
+from conftest import FakeEmbed, git, note, windows_browsers
 from integration.builders import fake_profile_root
 from mcp import Client
 from ruamel.yaml import YAML
@@ -212,6 +212,7 @@ def world(root, home, monkeypatch):
     fake embedder, a fake cloud endpoint and no local model. Returns (root, opener)."""
     plant(root)
     fake_profile_root(home / "LOCALAPPDATA", {"chrome": history_rows()})
+    windows_browsers(monkeypatch)
     set_config(home, root)
     monkeypatch.setattr(semantic, "_embedder", FakeEmbed())
     monkeypatch.setenv(KEY_ENV, "canary-cloud-key-123")

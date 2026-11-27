@@ -71,8 +71,10 @@ def test_vector_search_reaches_private_pages(root, fake):
 
 
 def test_vector_chunks_long_pages(root, fake):
-    note(root, PRIV, "private: true\n", "# Day\n" + "- filler line here\n" * 200
-         + "- pasta at the end\n")
+    p = note(root, PRIV, "private: true\n", "# Day\n" + "- filler line here\n" * 200
+             + "- pasta at the end\n")
+    # \n on every OS: Windows' \r\n happened to start the last chunk on the match
+    p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n"))
     vectors.update(Vault(root))
     starts = vectors._read(Vault(root))[PRIV][1]
     assert len(starts) > 2

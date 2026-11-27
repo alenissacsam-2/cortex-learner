@@ -121,6 +121,8 @@ def test_fix_puts_keepfold_first_keeping_the_rest_and_the_type(setup, app, vault
     assert sent == [1] and os.environ["PATH"].startswith(f"{exe.parent};")
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="the Windows user PATH: folder names ignore case, \\ separators")
 def test_first_and_a_missing_user_path(monkeypatch):
     assert winpath.first("a;;B\\;c", "b") == "b;a;c"
     assert winpath.first("", "b") == "b"

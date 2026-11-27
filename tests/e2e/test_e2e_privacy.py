@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import anyio
 import pytest
-from conftest import FakeEmbed, events
+from conftest import FakeEmbed, events, windows_browsers
 from integration.builders import fake_profile_root
 from integration.test_i3_browse_privacy import DROPPED, MARKERS, history_rows
 from mcp import Client
@@ -159,6 +159,7 @@ def world(root, home, monkeypatch):
     """The I3 History under the fake %LOCALAPPDATA%, the hubbed vault with step 6's private
     pages, the fake embedder, the fake cloud endpoint, and no local model."""
     fake_profile_root(home / "LOCALAPPDATA", {"chrome": history_rows()})
+    windows_browsers(monkeypatch)
     hubbed(root)
     private_pages(root)
     monkeypatch.setattr(semantic, "_embedder", Embed())
