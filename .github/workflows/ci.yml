@@ -27,12 +27,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      # GitHub's Windows VM scans every file the checkout and the tests write, which made the
-      # quick suite about 18 min there against 2.5 on Ubuntu. The VM is thrown away after the run.
-      - if: runner.os == 'Windows'
-        run: Set-MpPreference -DisableRealtimeMonitoring $true
-        shell: pwsh
-        continue-on-error: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
