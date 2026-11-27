@@ -16,6 +16,7 @@ import html
 import json
 import os
 import re
+import sys
 import time
 import zipfile
 from collections.abc import Iterator
@@ -547,11 +548,21 @@ def log_live(cid: str, turns: list[tuple[str, str]], now: datetime) -> None:
 
 def cowork_files() -> Iterator[Path]:
     """Claude Code transcripts of Claude Desktop's Cowork sessions, in the app's own data
-    folders (Windows; shortcut: no macOS path yet, add it when someone runs Cowork there)."""
+    folders: %LOCALAPPDATA%/Claude-Data/* and %APPDATA%/Claude on Windows,
+    ~/Library/Application Support/Claude on macOS, $XDG_CONFIG_HOME/Claude (default
+    ~/.config/Claude) on Linux."""
     for var, sub in (("LOCALAPPDATA", "Claude-Data/*"), ("APPDATA", "Claude")):
         if base := os.environ.get(var):
             for d in Path(base).glob(f"{sub}/local-agent-mode-sessions"):
                 yield from d.glob("**/.claude/projects/*/*.jsonl")
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "Claude"
+    elif sys.platform.startswith("linux"):
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "Claude"
+    else:
+        return
+    for sub in ("local-agent-mode-sessions", "claude-code-sessions"):
+        yield from (base / sub).glob("**/.claude/projects/*/*.jsonl")
 
 
 def codex_files() -> Iterator[Path]:

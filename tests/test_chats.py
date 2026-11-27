@@ -96,3 +96,16 @@ def test_import_claude_chat_export(chats_dir, tmp_path):
         "User: Help me plan my week\nUser: I study late at night"]
     assert chats.import_export(z) == ("claude", 1)  # re-import overwrites, no duplicate
     assert sum(c["id"] == cid for c in chats.list_chats(set(), limit=50)) == 1
+
+
+def test_cowork_files_mac_both_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(chats.sys, "platform", "darwin")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    base = tmp_path / "Library/Application Support/Claude"
+    want = []
+    for sub in ("local-agent-mode-sessions", "claude-code-sessions"):
+        f = base / sub / "s1/.claude/projects/p/chat.jsonl"
+        f.parent.mkdir(parents=True)
+        f.write_text("{}\n", encoding="utf-8")
+        want.append(f)
+    assert sorted(chats.cowork_files()) == sorted(want)
