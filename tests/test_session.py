@@ -379,9 +379,12 @@ def test_a_same_size_replace_within_one_mtime_tick_is_still_caught(root, monkeyp
     p = root / "inbox.md"
 
     def scan(top, paths, withheld):
-        st = p.stat()
-        Vault(root).write_text(p, "BBBB\n")  # an atomic replace, same size as AAAA
-        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))  # and the same mtime
+        # once: the scan also runs for the empty `other` list, and a second replace could get
+        # back the first file's freed inode number (ext4 reuses them), undoing the change
+        if paths:
+            st = p.stat()
+            Vault(root).write_text(p, "BBBB\n")  # an atomic replace, same size as AAAA
+            os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))  # and the same mtime
         return real(top, paths, withheld)
 
     monkeypatch.setattr(sm_mod, "_withhold_secrets", scan)
