@@ -3,8 +3,8 @@
     "items": [
       "Two saves made at almost the same moment (within about 16 ms on a default Windows PC) no longer both go ahead at once, and saves still take turns after the PC's clock is set back (as on some dual-boot PCs right after login).",
       "Levels, counts and Review no longer count your newest results twice when two requests read them at the same moment, such as two of the app's pages or two of an AI app's tool calls. Before, this lasted until Keepfold restarted.",
-      "Keepfold saves on a PC whose name has non-Latin letters, such as Cyrillic or Chinese. Before, it could not save at all.",
-      "Backup works for a vault on a network share or a mapped network drive, and a note changed twice within a second on a USB stick, an older Mac disk or some Linux disks is no longer shown out of date.",
+      "Pages titled only in another script (Hindi, Malayalam, Chinese, Russian...) can be saved, and so can everything on a PC whose name has non-Latin letters. Before, both were refused.",
+      "Backup works for a vault on a network share or a mapped network drive, and a note changed twice within a second on a USB stick, an older Mac disk or some Linux disks is no longer shown out of date. A page about you saved in another encoding (such as Notepad's ANSI) is skipped instead of breaking every chat's first Keepfold call and the app's Home.",
       "Older items in the app show your own local date, not the UTC one. Two mock interviews can no longer file results under the same name: a mock's time stamp now has seconds and is in UTC.",
       "Google Takeout times marked IST, CST or BST follow your own time zone when it is one of the zones with that name. On Linux, a local AI model at the IPv6 form of 127.0.0.1 is accepted. Recall's passage and the browsing search snippet show the line that matched."
     ],
