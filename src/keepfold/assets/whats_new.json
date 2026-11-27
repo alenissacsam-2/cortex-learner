@@ -1,4 +1,15 @@
 {
+  "0.6.4": {
+    "items": [
+      "Two saves made at almost the same moment (within about 16 ms on a default Windows PC) no longer both go ahead at once; the second now waits its turn.",
+      "Levels, counts and Review no longer count your newest results twice when two requests read them at the same moment, such as two of the app's pages or two of an AI app's tool calls. Before, this lasted until Keepfold restarted.",
+      "Keepfold saves on a PC whose name has non-Latin letters, such as Cyrillic or Chinese. Before, it could not save at all.",
+      "Backup works for a vault on a network share or a mapped network drive, and a note changed twice within a second on a USB stick, an older Mac disk or some Linux disks is no longer shown out of date.",
+      "Older items in the app show your own local date, not the UTC one. Two mock interviews can no longer file results under the same name: a mock's time stamp now has seconds and is in UTC.",
+      "On Linux, a local AI model at the IPv6 form of 127.0.0.1 is accepted. Recall's passage and the browsing search snippet show the line that matched, not the first line of the passage."
+    ],
+    "do": []
+  },
   "0.6.3": {
     "items": [
       "keepfold doctor and the app now agree about Claude Code: a claude command on your PATH counts as installed.",

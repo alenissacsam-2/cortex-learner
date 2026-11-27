@@ -12,7 +12,7 @@
       "name": "keepfold",
       "source": "./plugin",
       "description": "Keepfold for Claude Code: one local memory shared with your other AI apps. Adds the Keepfold MCP server, the /keepfold skill and a hook that gives each new chat your related notes. Needs Keepfold installed (Windows installer or uv).",
-      "version": "0.6.3",
+      "version": "0.6.4",
       "author": {
         "name": "alenissacsam-2"
       },

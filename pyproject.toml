@@ -1,6 +1,6 @@
 [project]
 name = "keepfold"
-version = "0.6.3"
+version = "0.6.4"
 description = "One memory for all your AI apps, kept as plain Markdown files on your own computer."
 dynamic = ["readme"]  # README.md with absolute links (tool.hatch.metadata.hooks.fancy-pypi-readme)
 requires-python = ">=3.12"
