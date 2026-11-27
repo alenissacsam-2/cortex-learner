@@ -765,3 +765,69 @@ def test_tier_on_a_chat_export_names_every_source_that_takes_one(vault):
     assert r.exit_code == 1 and "--tier applies to notes, calendars" in r.output
     for kind in actions.TIERED:
         assert kind in r.output, kind
+
+
+# ---- uninstall ---------------------------------------------------------------------------
+
+@pytest.fixture
+def uninstall_fakes(home, monkeypatch):
+    """Recorders for every step `uninstall` takes, so no test reaches the real AI-app configs, login
+    entry or Run key: the disconnect step, the receiver's login switch and the app's autostart."""
+    from keepfold import cli
+    from keepfold.app import actions, desktop
+
+    calls = []
+    monkeypatch.setattr(cli, "disconnect", lambda: calls.append("disconnect"))
+    monkeypatch.setattr(actions, "login", lambda job, root, on: calls.append(("login", on)))
+    monkeypatch.setattr(desktop, "set_autostart", lambda on: calls.append(("autostart", on)))
+    auto = home / "autostart" / "io.github.alenissacsam_2.keepfold.desktop"
+    auto.parent.mkdir()
+    auto.write_text("[Desktop Entry]\n")
+    monkeypatch.setattr(desktop, "autostart_file", lambda: auto)
+    return calls, auto
+
+
+def _bin(home):
+    b = home / ".local" / "bin"
+    b.mkdir(parents=True)
+    return b / "keepfold"
+
+
+def test_uninstall_lists_then_does(home, uninstall_fakes):
+    calls, auto = uninstall_fakes
+    link = _bin(home)
+    try:
+        link.symlink_to(home / "elsewhere-keepfold")
+    except OSError:
+        pytest.skip("this system cannot make symlinks")
+    out = run("uninstall", "--yes").output
+    assert calls == ["disconnect", ("login", False)]
+    assert not auto.exists() and not link.is_symlink()
+    assert "kept" in out and "vault" in out and "~/.keepfold" in out
+
+
+def test_uninstall_keeps_real_file(home, uninstall_fakes):
+    real = _bin(home)
+    real.write_text("not ours")
+    run("uninstall", "--yes")
+    assert real.read_text() == "not ours"
+
+
+def test_uninstall_without_yes_asks_and_no_does_nothing(home, uninstall_fakes):
+    calls, auto = uninstall_fakes
+    r = runner.invoke(app, ["uninstall"], input="n\n")
+    assert r.exit_code == 0, r.output
+    assert "Remove Keepfold from every AI app" in r.output and "Nothing changed." in r.output
+    assert calls == [] and auto.exists()
+
+
+def test_uninstall_on_windows_turns_off_the_apps_run_value(home, uninstall_fakes, monkeypatch):
+    from keepfold import update
+    from keepfold.app import desktop
+    calls, _ = uninstall_fakes
+    monkeypatch.setattr(desktop, "autostart_file", lambda: None)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(update, "mode", lambda: "installer")
+    out = run("uninstall", "--yes").output
+    assert calls == ["disconnect", ("login", False), ("autostart", False)]
+    assert "Use Settings > Apps > Keepfold." in out

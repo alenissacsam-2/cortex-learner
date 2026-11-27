@@ -816,6 +816,52 @@ def disconnect() -> None:
         raise typer.Exit(1)
 
 
+@app.command()
+def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask first.")] = False,
+              ) -> None:
+    """Take Keepfold out of your AI apps and stop it starting at login. Your vault and
+    ~/.keepfold are kept; the last line says how to remove the program itself."""
+    import types
+
+    from keepfold import update
+    from keepfold.app import actions, desktop
+
+    link = Path.home() / ".local" / "bin" / "keepfold"
+    if not yes:
+        typer.echo("This will:\n  1. Remove Keepfold from every AI app it is connected to "
+                   "(backups beside each file).\n  2. Stop the browsing receiver starting at "
+                   "login.\n  3. Stop the Keepfold app starting at login.\n  4. Delete the "
+                   f"{link} link, if it is one.\nYour vault and ~/.keepfold are kept.")
+        if not typer.confirm("Go ahead?"):
+            typer.echo("Nothing changed.")
+            return
+    failed = False
+    try:
+        disconnect()
+    except typer.Exit:  # an AI app's file could not be changed: the rest still runs
+        failed = True
+    actions.login(types.SimpleNamespace(say=typer.echo), None, False)  # the page's switch, off
+    if (f := desktop.autostart_file()) is not None:
+        if f.exists():
+            f.unlink()
+            typer.echo(f"removed {f}")
+    elif sys.platform == "win32":
+        desktop.set_autostart(False)
+        typer.echo("The Keepfold app no longer starts with Windows.")
+    if link.is_symlink():  # a real file there is not ours to delete
+        link.unlink()
+        typer.echo(f"removed {link}")
+    mode = update.mode()
+    typer.echo("Move Keepfold to the Trash from Applications." if mode == "app"
+               and sys.platform == "darwin"
+               else "Remove the app: sudo apt remove keepfold" if mode == "app"
+               else "Use Settings > Apps > Keepfold." if mode == "installer"
+               else "Remove the program: uv tool uninstall keepfold")
+    typer.echo("Your vault and ~/.keepfold are kept; delete them yourself if you want them gone.")
+    if failed:
+        raise typer.Exit(1)
+
+
 sample_app = typer.Typer(no_args_is_help=True, help="The sample vault (a made-up learner).")
 app.add_typer(sample_app, name="sample")
 
