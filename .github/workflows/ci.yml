@@ -1,8 +1,9 @@
 name: CI
 
-# ruff and the quick test loop (`-m "not slow"`) on Windows, the platform Keepfold ships for,
-# on every push to main and every pull request. The full suite stays a local step before a
-# commit (CLAUDE.md). No secrets: tests use only tests/fixtures/ and temp folders.
+# ruff and the quick test loop (`-m "not slow"`) on Windows (the platform Keepfold ships for),
+# Linux and macOS (run from source), on every push to main and every pull request. The full
+# suite stays a local step before a commit (CLAUDE.md). No secrets: tests use only
+# tests/fixtures/ and temp folders.
 on:
   push:
     branches: [main]
@@ -18,7 +19,12 @@ concurrency:
 
 jobs:
   test:
-    runs-on: windows-latest
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
