@@ -1583,6 +1583,11 @@ def test_upload_keeps_localized_activity_names_and_nothing_hostile(app, home):
             assert takeout.activity_file(p.name) == "json", raw
 
 
+def test_port_reuse_only_where_it_skips_time_wait():
+    """POSIX reuses an address in TIME_WAIT; Windows' SO_REUSEADDR would share a live port."""
+    assert server._Server.allow_reuse_address is (os.name != "nt")
+
+
 def test_tidy_about_me_starts_no_index_build(app, monkeypatch):
     """Tidy reads me/ pages only, so its Keepfold builds no Index (one each pass otherwise)."""
     from keepfold.mcp_server import Keepfold

@@ -2857,7 +2857,9 @@ class _Server(ThreadingHTTPServer):
     would go to its owner. At most MAX_CONNECTIONS connections at once: a local program opening
     thousands of idle ones would otherwise start a thread for each; one over the cap is closed
     at once. Each handler's `timeout` bounds how long an idle one keeps its slot."""
-    allow_reuse_address = False
+    # POSIX SO_REUSEADDR only skips TIME_WAIT (a quick reopen keeps port 47615); on Windows
+    # it would let a second listener take the live port
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, *a, **kw):
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
