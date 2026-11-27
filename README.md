@@ -77,7 +77,7 @@ OpenMemory: https://mem0.ai/blog/introducing-openmemory-mcp (2025 announcement: 
   - [How Keepfold differs](#how-keepfold-differs)
   - [How it works](#how-it-works)
   - [Local models](#local-models)
-  - [Install from source (macOS, Linux)](#install-from-source-macos-linux)
+  - [Install on macOS and Linux](#install-on-macos-and-linux)
   - [Development](#development)
 - [Found a problem?](#found-a-problem)
 - [License](#license)
@@ -185,7 +185,7 @@ Later, open Keepfold from the **Keepfold** shortcut on the desktop or in the Sta
 
 **Updating:** click **Restart to update** when it appears, or **Check for updates** under **Status** → **Updates** (0.1.0 has no such button: run a newer `KeepfoldSetup.exe` once). On 0.6.1 or older, the update check can't find new releases, because the GitHub repo was renamed: download `KeepfoldSetup.exe` from the [releases page](https://github.com/alenissacsam-2/keepfold/releases/latest) once and run it. **Uninstalling:** click **Quit** in the app, then remove **Keepfold** under **Settings > Apps > Installed apps**. Your vault and `~/.keepfold` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
 
-On macOS or Linux, or as a developer: see [Install from source](#install-from-source-macos-linux).
+On macOS or Linux, or as a developer: see [Install on macOS and Linux](#install-on-macos-and-linux).
 
 ## FAQ
 
@@ -199,7 +199,7 @@ On macOS or Linux, or as a developer: see [Install from source](#install-from-so
 
 **Will it slow my PC?** In our measurement on a vault of 1,000 made-up pages, a long-running Keepfold process used about 510 MB of memory with its search models loaded, and about 190 MB after 10 idle minutes, when it lets the models go ([how we measured](docs/benchmarks/memory.md)). An optional local model needs more while it runs.
 
-**Mac or Linux?** The installer is for Windows only, and Keepfold is tested most on Windows. On macOS and Linux it runs from source: see [Install from source](#install-from-source-macos-linux).
+**Mac or Linux?** The installer is for Windows only, and Keepfold is tested most on Windows; its tests also run on macOS and Linux on every change. On macOS and Linux, install it with one `uv` command: see [Install on macOS and Linux](#install-on-macos-and-linux).
 
 **How do I report a problem?** In the app, open **Status**, then **Something not working?**, press **Copy details** and paste them into a new issue ([how](#found-a-problem)). For a security or privacy problem, report it privately as [SECURITY.md](SECURITY.md) explains, never in a public issue.
 
@@ -535,9 +535,21 @@ Model sizes the app suggests (Qwen 3.5):
 
 Without an NVIDIA card the app recommends at most the 4B model; the 9B one stays selectable. Without the app: install Ollama, run `ollama pull qwen3.5:4b`, add `localllm: {enabled: true}` to `~/.keepfold/config.yaml`, and check with `keepfold llm status`.
 
-## Install from source (macOS, Linux)
+## Install on macOS and Linux
 
-This is also the way for developers. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and git. In a terminal:
+Keepfold is on [PyPI](https://pypi.org/project/keepfold/). With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, in a terminal:
+
+```
+uv tool install keepfold
+keepfold setup
+keepfold app
+```
+
+`keepfold setup` asks where your vault goes and connects Claude; `keepfold app` opens the app in your browser, where **Connect** adds your other AI apps. Update later with `uv tool upgrade keepfold`. This also works on Windows if you'd rather skip the installer.
+
+### From source
+
+This is the way for developers. You need uv and git. In a terminal:
 
 ```
 git clone https://github.com/alenissacsam-2/keepfold ~/Keepfold-app
