@@ -69,7 +69,7 @@ def test_git_exe_finds_git_where_the_installer_put_it(tmp_path, monkeypatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     (reg / "git.exe").write_bytes(b"")
-    monkeypatch.setattr(session, "_registry_path", lambda: f";{reg};")
+    monkeypatch.setattr(session, "extra_path", lambda: f";{reg};")
     assert session.git_exe().lower() == str(reg / "git.exe").lower()
     ran = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **k: (
@@ -77,3 +77,29 @@ def test_git_exe_finds_git_where_the_installer_put_it(tmp_path, monkeypatch):
     session._git(tmp_path, "status")
     assert ran[0][0].lower() == str(reg / "git.exe").lower()
     assert ran[0][1:] == ["-C", str(tmp_path), "status"]
+
+
+def test_mac_git_plan_is_xcode_select(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert wizard.git_plan() == {
+        "run": ["xcode-select", "--install"], "source": "Apple's Command Line Tools",
+        "size": "about 1 GB", "page": wizard.GIT_PAGE, "license": wizard.GIT_LICENSE}
+
+
+def test_mac_install_git_opens_the_os_dialog(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ran = []
+    monkeypatch.setattr(targets, "_run", lambda args, timeout=300: (ran.append(args),
+                                                                    (True, ""))[1])
+    out = wizard.install_git(None)
+    assert ran == [["xcode-select", "--install"]]
+    assert out == {"ok": True, "lines": [
+        "macOS is asking to install the Command Line Tools; click Install, then come back "
+        "and click Check again."]}
+
+
+def test_linux_git_plan_shows_apt(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    plan = wizard.git_plan()
+    assert plan["run"] is None and plan["show"] == "sudo apt install git"
+    assert plan["page"] == wizard.GIT_PAGE and plan["license"] == wizard.GIT_LICENSE

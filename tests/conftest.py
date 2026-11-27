@@ -80,6 +80,7 @@ def _no_real_installs(tmp_path_factory, monkeypatch):
 
     monkeypatch.setenv("ProgramFiles", str(tmp_path_factory.mktemp("programfiles")))
     monkeypatch.setattr(session, "_registry_path", lambda: "")
+    monkeypatch.setattr(session, "extra_path", lambda: "")  # never real Homebrew, ~/.local/bin
     from keepfold import clients
     monkeypatch.setattr(clients, "_registry_install", lambda: None)  # never the real install
     real = shutil.which

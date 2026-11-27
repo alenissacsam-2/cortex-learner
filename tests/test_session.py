@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,10 +10,13 @@ from typer.testing import CliRunner
 
 from keepfold import cli as cli_mod
 from keepfold import session as sm_mod
+from keepfold.app import targets
 from keepfold.cli import app
 from keepfold.events import EventLog
 from keepfold.session import SessionManager, sweep
 from keepfold.vault import SECRET_RES, Vault, VaultError
+
+real_extra_path = sm_mod.extra_path  # conftest replaces it with "" in every test
 
 pytestmark = pytest.mark.usefixtures("home")
 
@@ -688,3 +692,75 @@ def test_a_new_file_deleted_before_the_commit_does_not_fail_it(tmp_path):
     files = subprocess.run(["git", "ls-files"], cwd=top, capture_output=True, text=True).stdout
     assert files.split() == ["keep.md"]
     assert not s._commit_paths(str(top), ["gone.md"], "nothing")
+
+
+def test_extra_path_mac(home, monkeypatch):
+    """A Dock-launched app gets a bare PATH: Homebrew, ~/.local/bin, npm-global and the
+    Command Line Tools are added."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert real_extra_path().split(os.pathsep) == [
+        "/opt/homebrew/bin", "/usr/local/bin", str(home / ".local/bin"),
+        str(home / ".npm-global/bin"), "/Library/Developer/CommandLineTools/usr/bin"]
+
+
+def test_extra_path_linux(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert real_extra_path().split(os.pathsep) == [str(home / ".local/bin")]
+
+
+def test_extra_path_windows_is_registry(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sm_mod, "_registry_path", lambda: "X")
+    assert real_extra_path() == "X"
+
+
+def test_git_exe_found_in_extra_path_off_windows(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sm_mod, "extra_path", real_extra_path)
+    monkeypatch.setenv("PATH", "")
+    exe = home / ".local" / "bin" / "git"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    exe.chmod(0o755)
+    assert sm_mod.git_exe() == str(exe)
+
+
+def test_git_stub_is_not_git(monkeypatch):
+    """macOS ships /usr/bin/git as a stub that only offers the Command Line Tools."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sm_mod.shutil, "which", lambda cmd, path=None, **k: (
+        "/usr/bin/git" if path is None else None))  # nothing in extra_path
+    monkeypatch.setattr(sm_mod, "_clt_ok", lambda: False)
+    assert sm_mod.git_exe() is None
+    monkeypatch.setattr(sm_mod, "_clt_ok", lambda: True)
+    assert sm_mod.git_exe() == "/usr/bin/git"
+
+
+def test_git_missing_tool(monkeypatch):
+    """No xcode-select at all: the Command Line Tools count as absent, nothing raises."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ran = []
+
+    def missing(args, **k):
+        ran.append(args)
+        raise FileNotFoundError(args[0])
+    monkeypatch.setattr(targets.subprocess, "run", missing)
+    assert sm_mod._clt_ok() is False
+    assert ran == [["xcode-select", "-p"]]
+
+
+def test_homebrew_git_wins_over_the_stub(tmp_path, monkeypatch):
+    """A Dock-launched app's PATH finds the /usr/bin/git stub first; without the Command Line
+    Tools, Homebrew's git in extra_path is used instead."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    brew = tmp_path / "homebrew-bin"
+    brew.mkdir()
+    exe = brew / "git"
+    exe.write_bytes(b"")
+    exe.chmod(0o755)
+    real_which = shutil.which
+    monkeypatch.setattr(sm_mod.shutil, "which", lambda cmd, *a, path=None, **k: (
+        "/usr/bin/git" if path is None else real_which(cmd, *a, path=path, **k)))
+    monkeypatch.setattr(sm_mod, "_clt_ok", lambda: False)
+    monkeypatch.setattr(sm_mod, "extra_path", lambda: str(brew))
+    assert sm_mod.git_exe() == str(exe)

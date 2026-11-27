@@ -33,7 +33,7 @@ def test_an_app_installed_after_keepfold_started_is_found(home, tmp_path, monkey
     claude = _exe(late, "claude")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert targets._which("claude") is None
-    monkeypatch.setattr(session, "_registry_path", lambda: str(late))
+    monkeypatch.setattr(session, "extra_path", lambda: str(late))
     assert targets._which("claude").lower() == str(claude).lower()
     ok, out = targets._run([sys.executable, "-c", "import os; print(os.environ['PATH'])"])
     assert ok and str(late) in out
@@ -104,13 +104,13 @@ def test_the_pasted_text_shares_its_lines_with_the_server_and_the_rule_block():
 def test_git_counts_only_on_the_path_claude_runs_with(home, tmp_path, monkeypatch):
     """A Program Files git that `claude`'s PATH misses cannot clone: NO_GIT, not a failed clone."""
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setattr(session, "_registry_path", lambda: "")
+    monkeypatch.setattr(session, "extra_path", lambda: "")
     monkeypatch.setattr(session, "git_exe", lambda: r"C:\Program Files\Git\cmd\git.exe")
     monkeypatch.setattr(targets.ClaudeCode, "_source", lambda self: "owner/repo")
     t = targets.by_id()["claude-code"]
     assert t._no_git()
     git_dir = _exe(tmp_path / "git", "git").parent
-    monkeypatch.setattr(session, "_registry_path", lambda: str(git_dir))
+    monkeypatch.setattr(session, "extra_path", lambda: str(git_dir))
     assert not t._no_git()
 
 
@@ -118,7 +118,7 @@ def test_registry_path_adds_only_new_entries(monkeypatch, tmp_path):
     a, b, c = (str(tmp_path / n) for n in "abc")
     monkeypatch.setenv("PATH", os.pathsep.join((a, b)))
     same_b = (b.upper() if sys.platform == "win32" else b) + "\\"
-    monkeypatch.setattr(session, "_registry_path", lambda: os.pathsep.join((a, same_b, c, c, "")))
+    monkeypatch.setattr(session, "extra_path", lambda: os.pathsep.join((a, same_b, c, c, "")))
     assert targets._env()["PATH"].split(os.pathsep) == [a, b, c]
 
 

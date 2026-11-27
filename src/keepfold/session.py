@@ -339,17 +339,48 @@ def _registry_path() -> str:
     return os.pathsep.join(out)
 
 
+def extra_path() -> str:
+    """Folders to append to PATH: on Windows the registry's PATH now; on macOS and Linux the
+    folders a Dock- or app-menu-launched app's bare PATH misses (Homebrew, ~/.local/bin, ...)."""
+    if sys.platform == "win32":
+        return _registry_path()
+    home = Path.home()
+    if sys.platform == "darwin":
+        dirs = ["/opt/homebrew/bin", "/usr/local/bin", str(home / ".local/bin"),
+                str(home / ".npm-global/bin"), "/Library/Developer/CommandLineTools/usr/bin"]
+    else:
+        dirs = [str(home / ".local/bin")]
+    return os.pathsep.join(dirs)
+
+
+_clt_found = False  # only True is kept: a missing install is checked again, so one is noticed
+
+
+def _clt_ok() -> bool:  # tests replace this: never the real xcode-select
+    """macOS: the Command Line Tools are installed (else /usr/bin/git is only Apple's stub)."""
+    global _clt_found
+    if not _clt_found:
+        from keepfold.app import targets
+        _clt_found = targets._run(["xcode-select", "-p"], timeout=5)[0]
+    return _clt_found
+
+
 def git_exe() -> str | None:
     """git on PATH, else where Git for Windows installs it (machine or user scope), else on
-    PATH as the registry has it now: a git installed while Keepfold runs is found at once."""
+    PATH as the registry has it now: a git installed while Keepfold runs is found at once.
+    Off Windows, else in `extra_path`; macOS's /usr/bin/git stub without the Command Line
+    Tools is no git."""
+    if sys.platform != "win32":
+        found = shutil.which("git")
+        if sys.platform == "darwin" and found == "/usr/bin/git" and not _clt_ok():
+            found = None  # the stub comes first on a Dock-launched app's PATH
+        return found or shutil.which("git", path=extra_path())
     if found := shutil.which("git"):
         return found
-    if sys.platform != "win32":
-        return None
     dirs = [str(Path(base, *sub, "Git", "cmd")) for base, sub in (
         (os.environ.get("ProgramFiles"), ()), (os.environ.get("LOCALAPPDATA"), ("Programs",)))
         if base]
-    dirs += _registry_path().split(os.pathsep)
+    dirs += extra_path().split(os.pathsep)
     return shutil.which("git", path=os.pathsep.join(d for d in dirs if d.strip()))
 
 

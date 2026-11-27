@@ -323,9 +323,16 @@ def index(job, root: Path) -> dict:
 def git_plan(scope: str = "user") -> dict:
     """How to get git (the vault's history and undo): winget on Windows, else its page.
     `scope` "user" needs no admin; "machine" is offered only after that failed, and Windows
-    then asks for admin permission itself (Keepfold never elevates)."""
+    then asks for admin permission itself (Keepfold never elevates). macOS: the OS's own
+    Command Line Tools dialog. Linux: the apt command to show (Keepfold never runs root)."""
     if scope not in ("user", "machine"):
         raise ValueError("scope must be user or machine")
+    if sys.platform == "darwin":
+        return {"run": ["xcode-select", "--install"], "source": "Apple's Command Line Tools",
+                "size": "about 1 GB", "page": GIT_PAGE, "license": GIT_LICENSE}
+    if sys.platform.startswith("linux"):
+        return {"run": None, "show": "sudo apt install git", "source": "Ubuntu's apt",
+                "size": GIT_SIZE, "page": GIT_PAGE, "license": GIT_LICENSE}
     run = (["winget", "install", "--id", "Git.Git", "-e", "--scope", scope, *WINGET]
            if sys.platform == "win32" and targets._which("winget") else None)
     return {"run": run, "source": "winget package Git.Git, from git-scm.com", "size": GIT_SIZE,
@@ -343,6 +350,10 @@ def install_git(job, scope: str = "user", root: Path | None = None) -> dict:
     plan = git_plan(scope)
     if not plan["run"]:
         raise ValueError(f"Install git yourself from {plan['page']}")
+    if sys.platform == "darwin":  # xcode-select only opens the OS dialog and returns at once
+        targets._run(plan["run"])
+        return {"ok": True, "lines": ["macOS is asking to install the Command Line Tools; "
+                                      "click Install, then come back and click Check again."]}
     out = actions.run_proc(job, plan["run"])
     if out["cancelled"]:
         return out

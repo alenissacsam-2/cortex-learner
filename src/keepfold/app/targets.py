@@ -31,15 +31,16 @@ NAME = "keepfold"
 
 
 def _env() -> dict:
-    """This process's environment with PATH as the registry holds it now appended
-    (session._registry_path): an app installed after Keepfold started, such as Claude Code or
-    Git, is found by Keepfold and by the commands it runs, without restarting Keepfold."""
+    """This process's environment with `session.extra_path()` appended (on Windows PATH as the
+    registry holds it now; on macOS and Linux the folders a Dock- or menu-launched app misses):
+    an app installed after Keepfold started, such as Claude Code or Git, is found by Keepfold
+    and by the commands it runs, without restarting Keepfold."""
     from keepfold import session
     env = dict(os.environ)
     path = env.get("PATH", "")
     # only the entries not on PATH yet: appending all of them would roughly double it
     seen = {_path_key(p) for p in path.split(os.pathsep)}
-    for p in session._registry_path().split(os.pathsep):
+    for p in session.extra_path().split(os.pathsep):
         if p.strip() and _path_key(p) not in seen:
             seen.add(_path_key(p))
             path = os.pathsep.join(x for x in (path, p) if x)
