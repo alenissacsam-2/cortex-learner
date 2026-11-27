@@ -164,3 +164,34 @@ def test_not_this_one_and_later_over_http(app, dl, monkeypatch):
     assert call(app, "GET", "/api/import/pickup")[1] == {"found": None, "remind": True}
     assert call(app, "POST", "/api/import/pickup/later", {})[0] == 200
     assert call(app, "GET", "/api/import/pickup")[1]["remind"] is False
+
+
+@pytest.mark.parametrize("line, want", [
+    ('XDG_DOWNLOAD_DIR="$HOME/Загрузки"', "HOME/Загрузки"),
+    ('XDG_DOWNLOAD_DIR="/data/dl"', "/data/dl"),
+    ('XDG_DOWNLOAD_DIR="Загрузки"', None),  # neither form the spec allows: ~/Downloads
+    ("# no line", None),
+])
+def test_linux_downloads_follows_user_dirs(tmp_path, monkeypatch, line, want):
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    (home / ".config" / "user-dirs.dirs").write_text(f"# written by xdg-user-dirs-update\n{line}\n",
+                                                    encoding="utf-8")
+    monkeypatch.delenv("KEEPFOLD_DOWNLOADS_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(exports.sys, "platform", "linux")
+    monkeypatch.setattr(exports.Path, "home", staticmethod(lambda: home))
+    got = exports.downloads()
+    if want is None:
+        assert got == home / "Downloads"
+    elif want.startswith("HOME/"):
+        assert got == home / want[5:]
+    else:
+        assert got == exports.Path(want)
+
+
+def test_macos_downloads_ignores_user_dirs(tmp_path, monkeypatch):
+    monkeypatch.delenv("KEEPFOLD_DOWNLOADS_DIR", raising=False)
+    monkeypatch.setattr(exports.sys, "platform", "darwin")
+    monkeypatch.setattr(exports.Path, "home", staticmethod(lambda: tmp_path))
+    assert exports.downloads() == tmp_path / "Downloads"

@@ -11,6 +11,7 @@ downloaded again under the same name counts as new.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -34,7 +35,8 @@ _kinds: dict = {}  # (path, mtime, size) -> source or None: a zip's names are re
 
 def downloads() -> Path:
     """The Downloads folder: KEEPFOLD_DOWNLOADS_DIR (tests), else the Windows known folder (it
-    may have been moved), else ~/Downloads."""
+    may have been moved), else on Linux XDG_DOWNLOAD_DIR (a localized name such as ~/Загрузки),
+    else ~/Downloads."""
     if env := os.environ.get("KEEPFOLD_DOWNLOADS_DIR"):
         return Path(env)
     if sys.platform == "win32":
@@ -42,7 +44,25 @@ def downloads() -> Path:
             return Path(_known_downloads())
         except (OSError, AttributeError, ValueError):
             pass
+    elif sys.platform != "darwin" and (xdg := _xdg_downloads()) is not None:
+        return xdg
     return Path.home() / "Downloads"
+
+
+def _xdg_downloads() -> Path | None:
+    """XDG_DOWNLOAD_DIR from user-dirs.dirs (`XDG_DOWNLOAD_DIR="$HOME/Загрузки"`), or None."""
+    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "user-dirs.dirs"
+    try:
+        text = cfg.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r'^\s*XDG_DOWNLOAD_DIR\s*=\s*"([^"]*)"', text, re.M)
+    if not m:
+        return None
+    v = m[1]
+    if v == "$HOME" or v.startswith("$HOME/"):
+        return Path.home() / v[6:]
+    return Path(v) if v.startswith("/") else None  # the spec allows only these two forms
 
 
 def _known_downloads() -> str:
