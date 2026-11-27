@@ -71,11 +71,14 @@ setTimeout(() => {
   process.stdout.write(J({ fatal: `watchdog: no finish in ${cfg.limit || 300} s (at ${cur})` }) + '\n', () => process.exit(3));
 }, (cfg.limit || 300) * 1000).unref();
 (async () => {
+  // a cold CI runner can take well over 20 s to start the browser; an empty file means "not yet"
   let port = null;
-  for (let i = 0; i < 400 && !port; i++) {
+  for (let i = 0; i < 1200 && !port; i++) {
     try { port = fs.readFileSync(path.join(cfg.profile, 'DevToolsActivePort'), 'utf8').split('\n')[0].trim() || null; }
-    catch (e) { await sleep(50); }
+    catch (e) { /* not written yet */ }
+    if (!port) await sleep(50);
   }
+  if (!port) throw new Error('the browser wrote no DevToolsActivePort in 60 s');
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const ws = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener('open', r));
