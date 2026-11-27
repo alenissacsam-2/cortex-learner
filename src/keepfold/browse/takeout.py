@@ -215,7 +215,7 @@ def when(text: str) -> datetime | None:
         return None
     try:
         local = datetime(y, mo, d, hour, int(t[2]), int(t[3]))
-        if not m and (sys_mins := _system_offset(local)) in _AMBIGUOUS.get(tz, ()):
+        if not m and tz in _AMBIGUOUS and (sys_mins := _system_offset(local)) in _AMBIGUOUS[tz]:
             mins = sys_mins
         return local.replace(tzinfo=timezone(timedelta(minutes=mins))).astimezone(UTC)
     except (ValueError, OverflowError, OSError):  # astimezone can raise these for far years
