@@ -1584,6 +1584,14 @@ def test_upload_keeps_localized_activity_names_and_nothing_hostile(app, home):
             assert takeout.activity_file(p.name) == "json", raw
 
 
+def test_job_times_ignore_a_wall_clock_change(monkeypatch):
+    job = server.Job("Import", "import", False)
+    job.progress(1, 2, 1, 2, "Reading")
+    monkeypatch.setattr(time, "time", lambda: 0.0)  # the clock set back to 1970 mid-job
+    v = job.view()
+    assert 0 <= v["seconds"] < 5 and v["progress"]["overall"] == 25
+
+
 def test_port_reuse_only_where_it_skips_time_wait():
     """POSIX reuses an address in TIME_WAIT; Windows' SO_REUSEADDR would share a live port."""
     assert server._Server.allow_reuse_address is (os.name != "nt")

@@ -163,7 +163,8 @@ class Job:
         self.name, self.section, self.cancellable = name, section, cancellable
         self.lines: list[str] = []
         self.result = self.error = None
-        self.running, self.started, self.ended = True, time.time(), None
+        # monotonic: durations only, so a clock change mid-import never shows negative seconds
+        self.running, self.started, self.ended = True, time.monotonic(), None
         self.cancelled = threading.Event()
         self.proc = None
         self.steps: dict | None = None  # a stepped job's place (`progress`)
@@ -177,7 +178,7 @@ class Job:
             overall = max(overall, self.steps["overall"])
         self.steps = {"step": step, "steps": steps, "label": label, "done": done,
                       "total": total, "pct": round(frac * 100), "overall": overall,
-                      "at": time.time()}
+                      "at": time.monotonic()}
 
     def say(self, line) -> None:
         self.lines.append(str(line)[:400])
@@ -194,7 +195,7 @@ class Job:
     def view(self) -> dict:
         out = {"name": self.name, "section": self.section, "running": self.running,
                "cancellable": self.cancellable, "line": self.lines[-1] if self.lines else "",
-               "seconds": round((self.ended or time.time()) - self.started, 1),
+               "seconds": round((self.ended or time.monotonic()) - self.started, 1),
                "result": self.result, "error": self.error}
         if (s := self.steps) is not None:
             took, overall = s["at"] - self.started, s["overall"]
@@ -235,7 +236,7 @@ class Jobs:
                 if not quiet_errors and not isinstance(e, ValueError | VaultError):  # refusals
                     traceback.print_exc(limit=3)
             finally:
-                job.running, job.ended = False, time.time()
+                job.running, job.ended = False, time.monotonic()
                 status.forget()  # a job may have changed what Status shows
                 if self.on_end is not None:
                     try:
