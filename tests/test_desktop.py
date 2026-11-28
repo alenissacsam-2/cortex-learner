@@ -217,7 +217,7 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     lines = []
     desktop.run(vault, echo=lines.append)
     assert seen["url"] and seen["kw"]["url"] == seen["url"] and seen["kw"]["title"] == "Keepfold"
-    assert sys.modules["webview"].start_kw == {"icon": str(desktop.ICON)}  # the window's icon
+    assert sys.modules["webview"].start_kw == {"icon": str(desktop._window_icon())}
     assert seen["kw"]["hidden"] is False and seen["kw"]["width"] == desktop.SIZE[0]
     assert seen["alive"] is True
     assert seen["calls"] == ["hide", "show"]
@@ -562,6 +562,7 @@ def test_no_tray_host_on_linux_closing_quits_and_the_menu_has_the_tray_items(
 
     def start(wv):
         w, box = wv.windows
+        seen["icon"] = wv.start_kw["icon"]  # GTK can't read the .ico's compressed sizes: no window
         (menu,) = wv.start_kw["menu"]
         seen["menu"] = (menu.title, [i.title for i in menu.items])
         d = w.events.closing.fns[0].__self__  # the Desktop: its closing handler's owner
@@ -576,6 +577,7 @@ def test_no_tray_host_on_linux_closing_quits_and_the_menu_has_the_tray_items(
     assert seen["menu"] == ("Keepfold", ["Open Keepfold", "Quick capture", "Start at login",
                                          None, "Quit"])
     assert seen["closing"] == [True] and seen["quit"] is True
+    assert seen["icon"] == str(desktop.ICON_PNG)
     assert not server.state_file().exists()  # the app ended: app.json removed
 
 
@@ -1257,6 +1259,8 @@ def test_the_mark_is_crisp_when_small_and_the_ico_is_drawn_from_it():
     for size in (16, 24, 32, 48, 64, 128, 256):
         got = ico.ico.getimage((size, size)).convert("RGBA")
         assert got.tobytes() == desktop.mark(size).tobytes(), size
+    png = Image.open(desktop.ICON_PNG)  # Linux's window icon, a plain PNG GTK can read
+    assert png.format == "PNG" and png.convert("RGBA").tobytes() == desktop.mark(256).tobytes()
     assert desktop._icon_image().tobytes() == desktop.mark(64).tobytes()
 
 

@@ -49,6 +49,9 @@ AE_PROP, AE_LOGIN = int.from_bytes(b"prop", "big"), int.from_bytes(b"lgit", "big
 # the AppUserModelID, also on the shortcuts: pins and groups as Keepfold
 APP_ID = "Keepfold.Learner"
 ICON = Path(__file__).resolve().parent.parent / "assets" / "keepfold.ico"  # scripts/make_icon.py
+# Linux's window icon: GTK's gdk-pixbuf cannot read the .ico's PNG-compressed sizes, and a
+# window whose icon fails to load is never made (trial build 2's blank, hung GUI smoke test)
+ICON_PNG = ICON.with_suffix(".png")
 SIZE, MIN_SIZE = (1200, 800), (640, 480)
 AMBER, GROUND = "#ffb000", "#0b0b0a"  # app.css's night --lit and --ground
 NOTIFY = ("reviews", "exams", "jobs", "updates")  # app.notify in config.yaml, all on by default
@@ -1095,6 +1098,10 @@ def _icon_image():
     return mark(64)
 
 
+def _window_icon() -> Path:
+    return ICON_PNG if sys.platform.startswith("linux") else ICON
+
+
 def _tray(d: Desktop):
     """The tray icon (a left click is Open Keepfold): on Windows on its own thread; on a Mac
     and Linux made on the main thread before `webview.start()`, whose loop then runs it."""
@@ -1235,7 +1242,7 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print,
             threading.Thread(target=d.smoke, args=(echo,), daemon=True,
                              name="keepfold-smoke").start()
         # blocks this (main) thread until the window is destroyed
-        webview.start(icon=str(ICON), **menu)
+        webview.start(icon=str(_window_icon()), **menu)
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)
         echo(f"Keepfold app: the window failed ({type(e).__name__}: {e}); using the browser")
         d.win = None

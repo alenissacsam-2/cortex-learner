@@ -1,6 +1,7 @@
-"""Write src/keepfold/assets/keepfold.ico, the app icon, from `keepfold.app.desktop.mark`:
+"""Write src/keepfold/assets/keepfold.ico, the app icon, and keepfold.png (256 px, the Linux window
+icon: GTK cannot read the .ico's PNG-compressed sizes) from `keepfold.app.desktop.mark`:
 `uv run python scripts/make_icon.py [preview-folder]`. Each size is drawn on its own; with a
-folder, it also saves keepfold-<size>.png there to look at. The .ico is committed.
+folder, it also saves keepfold-<size>.png there to look at. Both are committed.
 `--iconset <folder>` instead writes the macOS .iconset that `iconutil -c icns` turns into
 Keepfold.icns (packaging/macos/build.sh), and leaves the .ico alone."""
 
@@ -29,7 +30,8 @@ def main() -> None:
     imgs = [mark(s) for s in SIZES]
     # Pillow uses an appended image of the exact size instead of scaling the first one down
     imgs[-1].save(ICO, format="ICO", sizes=[(s, s) for s in SIZES], append_images=imgs[:-1])
-    print(f"wrote {ICO}")
+    imgs[-1].save(ICO.with_suffix(".png"))
+    print(f"wrote {ICO} and its .png")
     if len(sys.argv) > 1:
         out = Path(sys.argv[1])
         out.mkdir(parents=True, exist_ok=True)
