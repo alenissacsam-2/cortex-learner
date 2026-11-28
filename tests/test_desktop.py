@@ -325,6 +325,27 @@ def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypa
     assert d.win.calls == ["show", "restore"]
 
 
+def test_mac_cmd_q_quits_where_the_red_button_hides(monkeypatch):
+    """Owner, 28 Nov: Cmd+Q, or Quit in the app or Dock menu, quits as Mac users expect; the red
+    button still hides to the menu bar. Off a Mac the same stack only hides."""
+    quits = []
+    d = desktop.Desktop(types.SimpleNamespace(quit=quits.append, lock=lambda: None), "http://x")
+    d.win, d.tray = FakeWindow(), FakeIcon("keepfold", None, "Keepfold", FakeMenu())
+    monkeypatch.setattr(desktop, "_shutting_down", lambda: False)
+    monkeypatch.setattr(desktop.Desktop, "hide", lambda self: None)
+    monkeypatch.setattr(desktop.Desktop, "hide_box", lambda self: None)
+
+    def applicationShouldTerminate_():  # pywebview's AppDelegate asks every window, box first
+        return d.box_closing(), d.closing()
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    assert applicationShouldTerminate_() == (False, False) and quits == []
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    assert d.closing() is False and quits == []  # the red button: hidden, still running
+    assert applicationShouldTerminate_() == (False, True)  # the OS's terminate is cancelled
+    assert quits == [{}] and d.quitting  # once; the menu-bar Quit's clean stop ends the app
+
+
 def test_the_tray_tells_the_page_it_is_hidden_and_it_sleeps_until_shown(monkeypatch):
     """M2: WinForms' Hide left the WebView2 page visible (its 3D brain and polls ran on); the
     control is hidden first, while the form still shows, so WebView2 hides the page. SLEEP_S

@@ -69,11 +69,12 @@ HOTKEYS = {"ctrl+alt+space": (MOD_CONTROL | MOD_ALT, VK_SPACE, "Ctrl+Alt+Space")
 HOTKEY_DEFAULT = "ctrl+alt+space"
 # the same choices on a Mac (Carbon: modifiers, virtual key code, label) and on GNOME (an
 # accelerator for its custom keybinding, label)
-MAC_CMD, MAC_OPTION, MAC_CONTROL = 0x100, 0x800, 0x1000
+MAC_CMD, MAC_SHIFT, MAC_OPTION, MAC_CONTROL = 0x100, 0x200, 0x800, 0x1000
 KVK_SPACE, KVK_K = 0x31, 0x28
 KEYB, HOTKEY_PRESSED = int.from_bytes(b"keyb", "big"), 5  # kEventClassKeyboard, ...HotKeyPressed
 MAC_HOTKEYS = {"ctrl+alt+space": (MAC_CONTROL | MAC_OPTION, KVK_SPACE, "Ctrl+Option+Space"),
-               "win+alt+space": (MAC_CMD | MAC_OPTION, KVK_SPACE, "Cmd+Option+Space"),
+               # not Cmd+Option+Space: a stock Mac opens a Finder search window with it
+               "win+alt+space": (MAC_CMD | MAC_SHIFT, KVK_SPACE, "Cmd+Shift+Space"),
                "ctrl+alt+k": (MAC_CONTROL | MAC_OPTION, KVK_K, "Ctrl+Option+K"),
                "off": None}
 GNOME_HOTKEYS = {"ctrl+alt+space": ("<Control><Alt>space", "Ctrl+Alt+Space"),
@@ -775,6 +776,17 @@ def _when_launched(fn):  # tests replace this
         ak.NSApplicationDidFinishLaunchingNotification, None, None, lambda _note: fn())
 
 
+def _app_terminating() -> bool:
+    """True when called from inside pywebview's applicationShouldTerminate_ (Cocoa runs the
+    closing handlers synchronously, on its own stack)."""
+    f = sys._getframe(1)
+    while f is not None:
+        if f.f_code.co_name == "applicationShouldTerminate_":
+            return True
+        f = f.f_back
+    return False
+
+
 def _login_launch() -> bool:  # tests replace this
     """Mac: this start is a login item's, its launch Apple Event marked 'lgit'. False when that
     cannot be told, so the window shows. Not yet seen across a real login (port P3)."""
@@ -901,6 +913,8 @@ class Desktop:
                 traceback.print_exc(limit=1)
         if self.quitting or self.tray is None or _shutting_down():
             return True
+        if self._mac_quit():
+            return False
         self.app.lock()  # the Private switch relocks when the window goes to the tray
         # hidden from another thread: this handler runs on the GUI thread inside FormClosing
         threading.Thread(target=self.hide, daemon=True, name="keepfold-hide").start()
@@ -943,8 +957,19 @@ class Desktop:
         """Alt+F4 on the box hides it; only Quit closes it."""
         if self.quitting:
             return True
-        threading.Thread(target=self.hide_box, daemon=True, name="keepfold-hide").start()
+        if not self._mac_quit():
+            threading.Thread(target=self.hide_box, daemon=True, name="keepfold-hide").start()
         return False
+
+    def _mac_quit(self) -> bool:
+        """Mac (owner, 28 Nov): Cmd+Q, or Quit in the app or Dock menu, quits as Mac users
+        expect; only the red button hides. pywebview asks every window's closing handler inside
+        its AppDelegate's applicationShouldTerminate_, the red button only that window's. The
+        OS's terminate is cancelled and the menu-bar Quit's clean stop runs instead."""
+        if sys.platform != "darwin" or not _app_terminating():
+            return False
+        self.quit()
+        return True
 
     def capture_label(self) -> str:
         key = self.hotkey.label() if self.hotkey is not None else None

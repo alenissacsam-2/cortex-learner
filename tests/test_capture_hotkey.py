@@ -171,7 +171,8 @@ def test_the_mac_hotkey_installs_its_handler_then_registers(mac):
     assert mac.calls[-1] == ("unregister",) and h.label() is None and not mac.registered
     desktop.save_hotkey({"hotkey": "win+alt+space"})
     h.change()
-    assert h.label() == "Cmd+Option+Space"
+    assert mac.calls[-1] == ("register", desktop.MAC_CMD | desktop.MAC_SHIFT, desktop.KVK_SPACE, 7)
+    assert h.label() == "Cmd+Shift+Space"  # Cmd+Option+Space is a stock Mac's Finder search
     h.stop()
     assert mac.calls[-1] == ("unregister",) and not mac.registered
 

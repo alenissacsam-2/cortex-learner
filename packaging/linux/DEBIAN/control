@@ -1,7 +1,7 @@
 Package: keepfold
 Version: @VERSION@
 Architecture: amd64
-Maintainer: Keepfold <alenissacsam-2@users.noreply.github.com>
+Maintainer: Keepfold <244016305+alenissacsam-2@users.noreply.github.com>
 Installed-Size: @SIZE@
 Depends: gir1.2-gtk-3.0, gir1.2-webkit2-4.1, libgirepository-2.0-0, gir1.2-ayatanaappindicator3-0.1
 Recommends: tesseract-ocr

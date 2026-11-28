@@ -2434,6 +2434,17 @@ def _install(home) -> Path:
     return d / "bin" / "keepfold.exe"
 
 
+def test_status_says_when_a_mac_has_keepfolds_notifications_off(vault):
+    """Owner, 28 Nov: a row on Status only while macOS has Keepfold's notifications turned off."""
+    from keepfold.app import desktop
+    assert "notify" not in [r["id"] for r in status.rows(vault)]
+    desktop.save_state("notify_denied", True)
+    row = next(r for r in status.rows(vault) if r["id"] == "notify")
+    assert (row["state"], row["value"]) == ("warn", "off in System Settings")
+    desktop.save_state("notify_denied", False)
+    assert "notify" not in [r["id"] for r in status.rows(vault)]
+
+
 @pytest.mark.skipif(sys.platform != "win32",
                     reason="KeepfoldSetup.exe and the Store Claude Desktop's Claude-Data folder")
 def test_connect_points_claude_desktop_at_the_installed_keepfold_and_repairs_a_stale_copy(

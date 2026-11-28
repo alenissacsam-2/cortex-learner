@@ -592,6 +592,12 @@ def rows(root: Path | None) -> list[dict]:
     out.append(history_row(root if v["ok"] else None, b))
     if (m := moved_row(root))["value"] != "nothing to move":  # only for people who had Cortex
         out.append(m)
+    from keepfold.app import desktop
+    if desktop.load_state().get("notify_denied") is True:  # a Mac said no at its first ask
+        out.append({"id": "notify", "label": "Notifications", "state": "warn",
+                    "value": "off in System Settings", "action": None,
+                    "detail": "Keepfold's reminders and update notices don't pop up. Turn them "
+                              "on in System Settings, Notifications, Keepfold."})
     return out
 
 

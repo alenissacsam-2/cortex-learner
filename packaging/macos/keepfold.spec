@@ -52,7 +52,7 @@ app = BUNDLE(
         "NSHighResolutionCapable": True,
         # keepfold.app.exports: the chat-export zips the owner downloads, offered on Home
         "NSDownloadsFolderUsageDescription":
-            "Keepfold looks in Downloads for the chat exports you download, so it can offer to "
-            "add them.",
+            "Keepfold looks in Downloads for chat exports from your AI apps, so it can offer to "
+            "add them. Nothing leaves your Mac.",
     },
 )
