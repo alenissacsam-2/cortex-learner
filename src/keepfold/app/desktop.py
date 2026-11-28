@@ -1,18 +1,23 @@
 """The desktop app (`keepfold-app`): the app page in its own window, with a tray icon.
 
-Threads. pywebview's Windows GUI (WinForms with Edge WebView2) must own the main thread;
+Threads. pywebview's GUI (WinForms with Edge WebView2, Cocoa, GTK) must own the main thread;
 pystray's Windows icon runs its own message loop on any thread:
-- main: `webview.start()`, the window's GUI loop, until the window is destroyed;
+- main: `webview.start()`, the window's GUI loop, until the window is destroyed; on a Mac (the
+  menu-bar icon) and Linux (AppIndicator) it also drives the tray icon (`run_detached`);
 - keepfold-app-http: the app server (`server.start` adds its auto-import and watch threads; the
   desktop app has no idle stop);
-- keepfold-tray: the tray icon (Open Keepfold, Start with Windows, Quit) and its notifications;
+- keepfold-tray: the tray icon (Open Keepfold, Start with Windows, Quit) and its notifications,
+  Windows only;
 - keepfold-notify: the once-a-day notifications (reviews due, an exam in 3 days or tomorrow);
 - keepfold-hotkey: quick capture's global hotkey (`Hotkey`, Windows only), a GetMessageW loop that
   shows the capture box (a second, hidden window) on each press; Quit posts it WM_QUIT;
 - keepfold-end: waits for `app.stop` (Quit in the tray or on the page, an update) and destroys
   the window, which ends the main thread's GUI loop; `run` then stops the rest.
-Closing the window only hides it, and its page sleeps a minute later (`Desktop.hide`). Without
-pywebview or the WebView2 runtime the app opens in the browser, as `keepfold app` does.
+Closing the window only hides it, and its page sleeps a minute later (`Desktop.hide`). With no
+tray (Linux without a StatusNotifierWatcher) the tray's items are in the window's menu and
+closing it quits. Logging out or shutting down quits (`_shutting_down` on Windows,
+`_watch_logout` on Mac and Linux). Without pywebview or the WebView2 runtime the app opens in
+the browser, as `keepfold app` does.
 """
 
 from __future__ import annotations
@@ -385,6 +390,57 @@ def _shutting_down() -> bool:  # tests replace this
     return bool(ctypes.windll.user32.GetSystemMetrics(SM_SHUTTINGDOWN))
 
 
+def _appkit():  # tests replace this
+    """pyobjc's AppKit, on a Mac only (pywebview's Cocoa window brings it)."""
+    import AppKit
+    return AppKit
+
+
+def _gio():  # tests replace this
+    """PyGObject's Gio, on Linux only (pywebview's GTK window brings it)."""
+    from gi.repository import Gio
+    return Gio
+
+
+def _tray_host() -> bool:  # tests replace this
+    """Linux: something shows tray icons, a StatusNotifierWatcher on the session bus (Ubuntu's
+    AppIndicator extension, KDE); False without one or without D-Bus."""
+    try:
+        gio = _gio()
+        f = gio.DBusProxyFlags
+        return gio.DBusProxy.new_for_bus_sync(
+            gio.BusType.SESSION,
+            f.DO_NOT_LOAD_PROPERTIES | f.DO_NOT_CONNECT_SIGNALS | f.DO_NOT_AUTO_START, None,
+            "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+            "org.kde.StatusNotifierWatcher", None).get_name_owner() is not None
+    except Exception:  # noqa: BLE001  (no gi, no session bus: no tray)
+        return False
+
+
+def _watch_logout(quit):  # tests replace this
+    """Mac and Linux: logging out or shutting down calls `quit` (the tray's Quit), so the app
+    ends cleanly. It only listens, never inhibits, so it never holds either up. Returns what
+    keeps the watch alive; None on Windows, where `_shutting_down` does this."""
+    if sys.platform == "darwin":  # posted on the main thread before the OS asks apps to quit
+        ak = _appkit()
+        return ak.NSWorkspace.sharedWorkspace().notificationCenter() \
+            .addObserverForName_object_queue_usingBlock_(
+                ak.NSWorkspaceWillPowerOffNotification, None, None, lambda _note: quit())
+    if not sys.platform.startswith("linux"):
+        return None
+    gio, me = _gio(), os.environ.get("XDG_SESSION_ID")
+
+    def on_signal(_bus, _sender, _path, _iface, name, params):
+        args = params.unpack()
+        if (name == "PrepareForShutdown" and args[0]) or (
+                name == "SessionRemoved" and me and args[0] == me):
+            quit()
+    bus = gio.bus_get_sync(gio.BusType.SYSTEM, None)  # logind; signals reach the GTK loop
+    bus.signal_subscribe("org.freedesktop.login1", "org.freedesktop.login1.Manager", None,
+                         "/org/freedesktop/login1", None, gio.DBusSignalFlags.NONE, on_signal)
+    return bus
+
+
 def _native(win, fn) -> bool:
     """fn(form, control) on the GUI thread, given pywebview's WinForms form and its Edge WebView2
     control; False, with nothing run, for another backend or a window already gone."""
@@ -555,6 +611,8 @@ class Desktop:
                 traceback.print_exc(limit=1)
 
     def quit(self) -> None:
+        """Quit in the tray or the window's menu, and logging out on Mac and Linux."""
+        self.quitting = True  # from now on a close closes: the OS's quit at logout never waits
         self.app.quit({})  # cancels a running job and sets app.stop
 
     def notify(self, text: str) -> None:
@@ -615,7 +673,13 @@ def _icon_image():
 
 
 def _tray(d: Desktop):
-    """The tray icon on its own thread; a left click is Open Keepfold."""
+    """The tray icon (a left click is Open Keepfold): on Windows on its own thread; on a Mac
+    and Linux made on the main thread before `webview.start()`, whose loop then runs it."""
+    linux = sys.platform.startswith("linux")
+    if linux:
+        if not _tray_host():
+            raise RuntimeError("nothing on this desktop shows tray icons")
+        os.environ.setdefault("PYSTRAY_BACKEND", "appindicator")  # read when pystray loads
     import pystray
     item = pystray.MenuItem
     icon = pystray.Icon("keepfold", _icon_image(), "Keepfold", pystray.Menu(
@@ -625,8 +689,21 @@ def _tray(d: Desktop):
              checked=lambda _: autostart_state()["enabled"]),
         pystray.Menu.SEPARATOR,
         item("Quit", lambda: d.quit())))
-    threading.Thread(target=icon.run, daemon=True, name="keepfold-tray").start()
+    if linux or sys.platform == "darwin":
+        icon.run_detached()
+    else:
+        threading.Thread(target=icon.run, daemon=True, name="keepfold-tray").start()
     return icon
+
+
+def _window_menu(d: Desktop, menu) -> list:
+    """With no tray, its items in the window's own menu (pywebview's `webview.menu`)."""
+    return [menu.Menu("Keepfold", [
+        menu.MenuAction("Open Keepfold", d.show),
+        menu.MenuAction(d.capture_label(), d.capture),
+        menu.MenuAction(autostart_label(), d.toggle_autostart),
+        menu.MenuSeparator(),
+        menu.MenuAction("Quit", d.quit)])]
 
 
 def _webview():
@@ -677,6 +754,10 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         d.tray = _tray(d)
     except Exception as e:  # noqa: BLE001  (no tray: closing the window quits)
         echo(f"Keepfold app: no tray icon ({type(e).__name__}: {e})")
+    try:
+        d.logout_watch = _watch_logout(d.quit)
+    except Exception as e:  # noqa: BLE001  (no pyobjc or gi: the OS ends the app as before)
+        echo(f"Keepfold app: logout is not watched ({type(e).__name__}: {e})")
     notes = Notifier(app, d.notify)
     app.jobs.on_end = notes.job_ended
     threading.Thread(target=notes.loop, args=(echo,), daemon=True, name="keepfold-notify").start()
@@ -704,8 +785,13 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
             d.refresh_tray()  # its Quick capture text names the key
         if hidden:  # Start with Windows: the page sleeps until the window is first opened
             d.sleep_later()
+        menu = {}
+        if d.tray is None and sys.platform != "win32":
+            menu = {"menu": _window_menu(d, webview.menu)}
+            ev.closed += d.quit  # the hidden box would keep webview.start running
         threading.Thread(target=d.end, daemon=True, name="keepfold-end").start()
-        webview.start(icon=str(ICON))  # blocks this (main) thread until the window is destroyed
+        # blocks this (main) thread until the window is destroyed
+        webview.start(icon=str(ICON), **menu)
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)
         echo(f"Keepfold app: the window failed ({type(e).__name__}: {e}); using the browser")
         d.win = None

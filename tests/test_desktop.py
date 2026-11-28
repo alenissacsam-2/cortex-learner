@@ -4,6 +4,7 @@ the window, no idle stop, the browser fallback, Start with Windows (the first-ru
 notifications (once a day, private left out, job ends) and their settings API."""
 
 import json
+import os
 import plistlib
 import shlex
 import sys
@@ -47,7 +48,7 @@ class FakeWindow:
     def __init__(self, **kw):
         self.kw, self.calls, self.destroyed = kw, [], threading.Event()
         self.events = types.SimpleNamespace(**{k: FakeEvent() for k in (
-            "closing", "minimized", "maximized", "restored", "shown")})
+            "closing", "closed", "minimized", "maximized", "restored", "shown")})
         self.width, self.height, self.x, self.y = 1000, 700, 50, 60
 
     def show(self):
@@ -73,6 +74,10 @@ def fake_webview(start, renderer="edgechromium"):
     wv.screens = [types.SimpleNamespace(x=0, y=0, width=1920, height=1080)]
     wv.guilib = None  # as in pywebview: the module attribute is None until start()
     wv.initialize = lambda: types.SimpleNamespace(renderer=renderer)
+    wv.menu = types.SimpleNamespace(  # webview.menu: Menu(title, items), MenuAction(title, fn)
+        Menu=lambda title, items: types.SimpleNamespace(title=title, items=items),
+        MenuAction=lambda title, fn: types.SimpleNamespace(title=title, fn=fn),
+        MenuSeparator=lambda: types.SimpleNamespace(title=None))
 
     def create_window(title, url, **kw):
         w = FakeWindow(title=title, url=url, **kw)
@@ -109,10 +114,15 @@ class FakeIcon:
     def __init__(self, name, image, title, menu):
         self.image, self.title, self.menu = image, title, menu
         self.notes, self.updates, self.stopped = [], 0, threading.Event()
+        self.ran_on = None  # the thread that ran run() or run_detached()
         FakeIcon.made.append(self)
 
     def run(self):
+        self.ran_on = ("run", threading.current_thread().name)
         self.stopped.wait()
+
+    def run_detached(self):  # Mac and Linux: the GUI loop that webview.start runs drives it
+        self.ran_on = ("run_detached", threading.current_thread().name)
 
     def stop(self):
         self.stopped.set()
@@ -133,12 +143,16 @@ class FakeIcon:
 
 @pytest.fixture
 def gui(monkeypatch):
-    """Fake pystray; `install(start)` puts a fake webview whose start() runs `start(wv)`."""
+    """Fake pystray; `install(start)` puts a fake webview whose start() runs `start(wv)`. A tray
+    host is there (Linux) and logout is not watched (Mac and Linux)."""
     tray = types.ModuleType("pystray")
     tray.Icon, tray.Menu, tray.MenuItem = FakeIcon, FakeMenu, FakeItem
     monkeypatch.setitem(sys.modules, "pystray", tray)
     FakeIcon.made = []
     monkeypatch.setattr(desktop, "_shutting_down", lambda: False)
+    monkeypatch.setattr(desktop, "_tray_host", lambda: True)
+    monkeypatch.setattr(desktop, "_watch_logout", lambda quit: None)
+    monkeypatch.delenv("PYSTRAY_BACKEND", raising=False)  # Linux sets it: restored afterwards
 
     def install(start, renderer="edgechromium"):
         wv = fake_webview(start, renderer)
@@ -453,6 +467,154 @@ def test_a_window_that_fails_to_start_opens_the_browser(gui, vault, fakes, monke
     opened = [c[1] for c in fakes if c[0] == "open"]
     assert len(opened) == 2 and "?t=" in opened[0] and any("window failed" in s for s in lines)
     assert not server.state_file().exists()
+
+
+@pytest.mark.parametrize("platform", [
+    "darwin", "linux",
+    pytest.param("win32", marks=pytest.mark.skipif(sys.platform != "win32",
+                                                    reason="the real Windows run path")),
+])
+def test_the_tray_starts_per_os_before_the_window(gui, vault, monkeypatch, platform):
+    """Mac and Linux: pystray's run_detached() on the main thread before webview.start(), whose
+    GUI loop then drives the icon (spike S1, S2); Linux asks for the AppIndicator backend.
+    Windows: icon.run() on its own keepfold-tray thread, as before."""
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    main, seen = threading.current_thread().name, {}
+
+    def start(wv):
+        icon = FakeIcon.made[-1]
+        if platform == "win32":
+            _until(lambda: icon.ran_on is not None)
+        seen["tray"], seen["start"] = icon.ran_on, threading.current_thread().name
+        seen["backend"] = os.environ.get("PYSTRAY_BACKEND")
+        icon.item("Quit").action()
+        assert wv.windows[0].destroyed.wait(10)
+    gui(start)
+    desktop.run(vault, echo=lambda s: None)
+    want = ("run", "keepfold-tray") if platform == "win32" else ("run_detached", main)
+    assert seen == {"tray": want, "start": main,
+                    "backend": "appindicator" if platform == "linux" else None}
+
+
+def test_no_tray_host_on_linux_closing_quits_and_the_menu_has_the_tray_items(
+        gui, vault, monkeypatch):
+    """No StatusNotifierWatcher on D-Bus (GNOME without the AppIndicator extension): no icon,
+    the tray's items are in the window's own menu, and closing the window ends the app."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_tray_host", lambda: False)
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    seen = {}
+
+    def start(wv):
+        w, box = wv.windows
+        (menu,) = wv.start_kw["menu"]
+        seen["menu"] = (menu.title, [i.title for i in menu.items])
+        d = w.events.closing.fns[0].__self__  # the Desktop: its closing handler's owner
+        seen["quit"] = next(i.fn for i in menu.items if i.title == "Quit") == d.quit
+        seen["closing"] = w.events.closing.set()  # the X: really closes, nothing to hide to
+        w.events.closed.set()  # pywebview: the window is gone, the hidden box is not
+        assert box.destroyed.wait(10)
+    gui(start)
+    lines = []
+    desktop.run(vault, echo=lines.append)
+    assert FakeIcon.made == [] and any("no tray icon" in s for s in lines)
+    assert seen["menu"] == ("Keepfold", ["Open Keepfold", "Quick capture", "Start at login",
+                                         None, "Quit"])
+    assert seen["closing"] == [True] and seen["quit"] is True
+    assert not server.state_file().exists()  # the app ended: app.json removed
+
+
+def test_logout_quits_as_the_tray_quit_does(gui, vault, monkeypatch):
+    """Mac and Linux: the logout watch gets the tray's own Quit (Desktop.quit). Once it fires
+    the window closes when asked instead of hiding, so the OS's quit at logout never waits."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    quits, watched, orig = [], [], desktop.Desktop.quit
+    monkeypatch.setattr(desktop.Desktop, "quit", lambda self: (quits.append(1), orig(self)))
+    monkeypatch.setattr(desktop, "_watch_logout", watched.append)
+    seen = {}
+
+    def start(wv):
+        d = wv.windows[0].events.closing.fns[0].__self__  # the Desktop
+        seen["same"] = watched == [d.quit]
+        watched[0]()  # the user logs out
+        seen["closing"] = d.closing()  # the OS asks the window to close: yes, not hidden
+        assert wv.windows[0].destroyed.wait(10)
+    gui(start)
+    desktop.run(vault, echo=lambda s: None)
+    assert seen == {"same": True, "closing": True} and quits == [1]
+    assert not server.state_file().exists()
+    FakeIcon.made[-1].item("Quit").action()  # the tray's Quit: the same Desktop.quit
+    assert quits == [1, 1]
+
+
+def test_the_logout_watch_mac_and_linux_never_holds_logout_up(monkeypatch):
+    """The OS hooks behind the replaceable `_appkit` and `_gio`: a Mac observes
+    NSWorkspaceWillPowerOffNotification; Linux listens to logind for PrepareForShutdown(true)
+    and its own session's removal. Each only calls quit. `_tray_host` asks D-Bus for a
+    StatusNotifierWatcher; no D-Bus at all is no tray."""
+    quits = []
+    center = types.SimpleNamespace(added=[])
+
+    def observe(name, obj, queue, block):
+        center.added.append((name, obj, queue))
+        center.block = block
+        return "token"
+    center.addObserverForName_object_queue_usingBlock_ = observe
+    appkit = types.SimpleNamespace(
+        NSWorkspaceWillPowerOffNotification="NSWorkspaceWillPowerOffNotification",
+        NSWorkspace=types.SimpleNamespace(sharedWorkspace=lambda: types.SimpleNamespace(
+            notificationCenter=lambda: center)))
+    monkeypatch.setattr(desktop, "_appkit", lambda: appkit)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert desktop._watch_logout(lambda: quits.append("mac")) == "token"
+    assert center.added == [("NSWorkspaceWillPowerOffNotification", None, None)]
+    center.block(object())
+    assert quits == ["mac"]
+
+    subs, owner = [], [":1.42"]
+
+    def proxy(*a):
+        if owner[0] == "boom":
+            raise OSError("no session bus")
+        return types.SimpleNamespace(args=a, get_name_owner=lambda: owner[0])
+    bus = types.SimpleNamespace(signal_subscribe=lambda *a: subs.append(a) or 7)
+    gio = types.SimpleNamespace(
+        BusType=types.SimpleNamespace(SYSTEM="system", SESSION="session"),
+        DBusSignalFlags=types.SimpleNamespace(NONE=0),
+        DBusProxyFlags=types.SimpleNamespace(DO_NOT_LOAD_PROPERTIES=1, DO_NOT_CONNECT_SIGNALS=2,
+                                             DO_NOT_AUTO_START=4),
+        bus_get_sync=lambda kind, cancellable: bus if kind == "system" else None,
+        DBusProxy=types.SimpleNamespace(new_for_bus_sync=proxy))
+    monkeypatch.setattr(desktop, "_gio", lambda: gio)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_SESSION_ID", "3")
+    del quits[:]
+    assert desktop._watch_logout(lambda: quits.append("linux")) is bus
+    (sub,) = subs
+    assert sub[:6] == ("org.freedesktop.login1", "org.freedesktop.login1.Manager", None,
+                       "/org/freedesktop/login1", None, 0)
+
+    def signal(name, *args):
+        sub[6](bus, ":1.1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", name,
+               types.SimpleNamespace(unpack=lambda: args))
+    signal("PrepareForShutdown", False)  # a shutdown cancelled: nothing
+    signal("SessionRemoved", "4", "/org/freedesktop/login1/session/_34")  # someone else
+    signal("SessionNew", "3", "/org/freedesktop/login1/session/_33")
+    assert quits == []
+    signal("PrepareForShutdown", True)
+    signal("SessionRemoved", "3", "/org/freedesktop/login1/session/_33")
+    assert quits == ["linux", "linux"]
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert desktop._watch_logout(lambda: quits.append("win")) is None  # _shutting_down there
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert desktop._tray_host() is True
+    owner[0] = None
+    assert desktop._tray_host() is False
+    owner[0] = "boom"
+    assert desktop._tray_host() is False
 
 
 def test_start_with_windows_on_off_and_the_first_run_rule(win32, _no_real_run_key):
