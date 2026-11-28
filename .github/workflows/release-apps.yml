@@ -46,7 +46,8 @@ jobs:
       - name: The tag names this version
         run: |
           echo "V=$(uv version --short)" >> "$GITHUB_ENV"
-          test "${TAG#v}" = "$(uv version --short)"
+          T="${TAG#v}"  # a v<version>-dryrun tag: a trial run against a throwaway draft release
+          test "${T%-dryrun*}" = "$(uv version --short)"
       - name: Build Keepfold.app, the DMG and the update zip
         run: bash packaging/macos/build.sh
       - name: Unpack the update zip (the smoke tests run what people get)
@@ -88,7 +89,8 @@ jobs:
       - name: The tag names this version
         run: |
           echo "V=$(uv version --short)" >> "$GITHUB_ENV"
-          test "${TAG#v}" = "$(uv version --short)"
+          T="${TAG#v}"  # a v<version>-dryrun tag: a trial run against a throwaway draft release
+          test "${T%-dryrun*}" = "$(uv version --short)"
       - name: apt (build headers; the .deb's runtime and Xvfb for the GUI smoke test)
         run: |
           sudo apt-get update -qq
