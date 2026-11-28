@@ -13,7 +13,7 @@ from keepfold import planner
 from keepfold.access import Audience, audience_of_note
 from keepfold.browse.forget import PRIVATE_IGNORE
 from keepfold.catalog import Catalog
-from keepfold.events import DAY_ROLLOVER, local_day, parse_ts
+from keepfold.events import DAY_ROLLOVER, KINDS, local_day, parse_ts
 from keepfold.render import plain
 from keepfold.review import _payload, _private
 
@@ -137,7 +137,7 @@ def view(vault, events: list[dict], now: datetime, tz: tzinfo | None = None) -> 
     turns = chat_turns(day, tz)
     counts, hours, sources = Counter(), [0] * 24, Counter()
     for e in todays:
-        if e.get("session") in apps and e.get("kind") not in ("open", "close", "resume"):
+        if e.get("session") in apps and e.get("kind") in KINDS - {"open", "close", "resume"}:
             counts["recorded"] += 1
         if (w := _what(e)) is None:
             continue
