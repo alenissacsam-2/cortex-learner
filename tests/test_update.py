@@ -7,8 +7,11 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import threading
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -145,6 +148,7 @@ def test_latest_errors_say_what_happened(route, match):
 PAGE = f"https://github.com/{REPO}/releases/latest"
 
 
+@pytest.mark.usefixtures("windows")
 def test_a_rate_limited_api_falls_back_to_the_latest_page(tmp_path):
     """A campus network shares 60 API calls an hour; the page's redirect names the tag."""
     for code in (403, 429):
@@ -403,3 +407,258 @@ def test_launch_starts_the_installer_detached(tmp_path, monkeypatch):
     if sys.platform == "win32":
         assert seen["creationflags"] == subprocess.DETACHED_PROCESS | \
             subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+# ---- Mac and Linux: Update now swaps in the new version (port DESIGN.md 5.1, 5.2) ------------
+
+
+def test_page_fallback_names_platform_asset(monkeypatch):
+    """The rate-limited fallback builds this computer's file, not KeepfoldSetup.exe."""
+    routes = {API: 403, PAGE: (302, f"/{REPO}/releases/tag/v0.2.0")}
+    _on(monkeypatch, "darwin", True)
+    got = update.latest(opener=fake(routes))
+    assert (got["exe_url"], got["sha_url"]) == (DL + MAC, DL + MAC + ".sha256")
+    with pytest.raises(update.UpdateError) as e:  # both refused: no Windows file named
+        update.latest(opener=fake({API: 403}))
+    assert "KeepfoldSetup.exe" not in str(e.value) and PAGE in str(e.value)
+    _on(monkeypatch, "linux", True, "x86_64")
+    tgz = "keepfold-0.2.0-linux-x86_64.tar.gz"
+    assert update.latest(opener=fake(routes))["exe_url"] == DL + tgz
+    _on(monkeypatch, "darwin", False, "x86_64")  # no file is built for it: nothing to fetch
+    assert update.latest(opener=fake(routes))["exe_url"] is None
+    _on(monkeypatch, "win32", True, "AMD64")
+    assert update.latest(opener=fake(routes))["exe_url"] == DL + update.EXE
+
+
+def test_download_asset_fetches_this_platforms_file_under_its_cap(tmp_path, monkeypatch):
+    _on(monkeypatch, "darwin", True)
+    body = b"PK update zip " * 1000
+    sha = hashlib.sha256(body).hexdigest()
+    routes = {DL + MAC: body, DL + MAC + ".sha256": f"{sha}  {MAC}\n".encode()}
+    i = info(exe_url=DL + MAC, sha_url=DL + MAC + ".sha256", exe_size=300 * 2**20)
+    out = update.download_asset(i, tmp_path, opener=fake(routes))  # over Windows' 200 MB cap
+    assert out == tmp_path / MAC and out.read_bytes() == body
+    assert (tmp_path / (MAC + ".sha256")).read_text() == sha  # what install() verifies
+    with pytest.raises(update.UpdateError, match="larger than 400 MB"):
+        update.download_asset({**i, "exe_size": 401 * 2**20}, tmp_path, opener=fake(routes))
+
+
+def test_verify_is_the_one_check_before_a_swap(tmp_path):
+    f = tmp_path / "a.zip"
+    f.write_bytes(EXE)
+    update.verify(f, SHA.upper() + "\n")
+    for path, sha in ((f, "0" * 64), (f, ""), (tmp_path / "gone.zip", SHA)):
+        with pytest.raises(update.UpdateError, match="checksum"):
+            update.verify(path, sha)
+
+
+def _tree(app: Path) -> str:
+    """Which copy a .app holds ("old" or "new"), from its executable."""
+    return (app / "Contents" / "MacOS" / "Keepfold").read_text()
+
+
+@pytest.fixture
+def mac(tmp_path, monkeypatch):
+    """The frozen Mac app at tmp/Applications/Keepfold.app and its downloaded update zip, with
+    fakes for ditto, codesign, ps, ending processes, the exchange and the reopen: never the real
+    /Applications, processes or home."""
+    from keepfold.app import bundle
+    _on(monkeypatch, "darwin", True)
+    monkeypatch.setattr(update, "current", lambda: "0.1.0")
+    app = tmp_path / "Applications" / "Keepfold.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    (app / "Contents" / "MacOS" / "Keepfold").write_text("old")
+    monkeypatch.setattr(bundle, "app_path", lambda: app)
+    monkeypatch.setattr(update, "_writable", lambda p: True)
+    archive = tmp_path / "dl" / MAC
+    archive.parent.mkdir()
+    archive.write_bytes(b"zip")
+    (archive.parent / (MAC + ".sha256")).write_text(hashlib.sha256(b"zip").hexdigest())
+    s = SimpleNamespace(app=app, stage=app.parent / ".Keepfold-update", archive=archive, ran=[],
+                        ps=[], ended=[], relaunched=[], codesign=(True, ""), end_works=True)
+
+    def run(args, *a, **k):
+        s.ran.append(args)
+        if args[0] == "ditto":  # the zip holds Keepfold.app (ditto -c -k --keepParent)
+            new = Path(args[-1]) / "Keepfold.app" / "Contents" / "MacOS"
+            new.mkdir(parents=True)
+            (new / "Keepfold").write_text("new")
+            return True, ""
+        if args[0] == "codesign":
+            return s.codesign
+        if args[0] == "ps":  # pid= right-aligned, then the full program path
+            return True, "\n".join(f"{pid:>6} {path}" for pid, path in s.ps)
+        pytest.fail(f"ran {args}")
+
+    def end(pids):
+        s.ended.append(pids)
+        if s.end_works:
+            s.ps[:] = [(p, path) for p, path in s.ps if p not in pids]
+
+    def exchange(a, b):
+        t = a.with_name("swap-tmp")
+        os.rename(a, t)
+        os.rename(b, a)
+        os.rename(t, b)
+    s.exchange = exchange
+    monkeypatch.setattr(update, "_run", run)
+    monkeypatch.setattr(update, "_end", end)
+    monkeypatch.setattr(update, "_exchange", exchange)
+    monkeypatch.setattr(update, "_relaunch", lambda cmd, pid: s.relaunched.append((cmd, pid)))
+    return s
+
+
+PREVIOUS = ("Library", "Application Support", "Keepfold", "previous")
+
+
+def test_mac_update_swaps_keeps_the_previous_copy_and_reopens(mac):
+    prev = Path.home().joinpath(*PREVIOUS)
+    (prev / "Keepfold.app").mkdir(parents=True)  # the go-back copy of the update before
+    assert update.install(mac.archive, info(), ()) == {}
+    assert _tree(mac.app) == "new" and _tree(prev / "Keepfold.app") == "old"
+    assert os.listdir(prev) == ["Keepfold.app"] and not mac.stage.exists()
+    assert [a[0] for a in mac.ran] == ["ditto", "codesign", "ps"]
+    assert mac.ran[0] == ["ditto", "-x", "-k", str(mac.archive), str(mac.stage)]  # keeps symlinks
+    assert mac.ran[1] == ["codesign", "--verify", "--deep", "--strict",
+                          str(mac.stage / "Keepfold.app")]
+    assert mac.relaunched == [(["open", str(mac.app)], os.getpid())]
+
+
+def test_swap_failure_restores_previous(mac, monkeypatch):
+    """Review Focus 2: a swap that fails leaves one complete copy, the old one, in place."""
+    def unsupported(a, b):  # a volume without APFS's one-step exchange
+        raise OSError(45, "Operation not supported")
+    monkeypatch.setattr(update, "_exchange", unsupported)
+    with pytest.raises(update.UpdateError, match="nothing was changed"):
+        update.install(mac.archive, info(), ())
+    assert _tree(mac.app) == "old" and not mac.stage.exists() and mac.relaunched == []
+
+    def no_start(cmd, pid):  # swapped, but the new copy cannot be started: the old one goes back
+        raise OSError("no /bin/sh")
+    monkeypatch.setattr(update, "_exchange", mac.exchange)
+    monkeypatch.setattr(update, "_relaunch", no_start)
+    with pytest.raises(update.UpdateError, match="nothing was changed"):
+        update.install(mac.archive, info(), ())
+    assert _tree(mac.app) == "old" and not mac.stage.exists()
+    assert not Path.home().joinpath(*PREVIOUS).exists()
+
+    mac.codesign = (False, "a sealed resource is missing or invalid")
+    with pytest.raises(update.UpdateError, match="signature"):
+        update.install(mac.archive, info(), ())
+    assert _tree(mac.app) == "old" and not mac.stage.exists()
+    mac.archive.write_bytes(b"changed on disk")  # verify runs before anything is unpacked
+    n = len(mac.ran)
+    with pytest.raises(update.UpdateError, match="checksum"):
+        update.install(mac.archive, info(), ())
+    assert len(mac.ran) == n and _tree(mac.app) == "old"
+
+
+def test_swap_waits_for_running_programs(mac):
+    """Review Focus 5: Keepfold programs still running from the bundle (an AI app's MCP server,
+    the receiver) would load files from the new copy. They are listed, and ended only once the
+    user agreed to exactly those; until then nothing is swapped."""
+    cli = str(mac.app / "Contents" / "MacOS" / "keepfold-cli")
+    mac.ps[:] = [(os.getpid(), str(mac.app / "Contents" / "MacOS" / "Keepfold")),  # this app
+                 (501, cli), (502, cli), (77, "/usr/sbin/cfprefsd"),
+                 (78, str(mac.app) + " 2.app/Contents/MacOS/Keepfold")]  # another app, a prefix
+    got = update.install(mac.archive, info(), ())
+    assert got["busy"] == [(501, cli), (502, cli)]
+    assert got["note"].startswith("Keepfold is in use by 2 programs")
+    assert _tree(mac.app) == "old" and not mac.stage.exists()
+    assert mac.ended == [] and mac.relaunched == []
+    assert update.install(mac.archive, info(), [501])["busy"] == got["busy"]  # agreed to one
+    assert mac.ended == [] and _tree(mac.app) == "old"
+    mac.end_works = False  # one ignores the end: listed again, nothing swapped
+    assert update.install(mac.archive, info(), [501, 502])["busy"] == got["busy"]
+    assert mac.ended == [[501, 502]] and _tree(mac.app) == "old"
+    mac.end_works = True
+    assert update.install(mac.archive, info(), [502, 501, 9]) == {}
+    assert mac.ended[-1] == [501, 502]  # exactly those still running from the bundle
+    assert _tree(mac.app) == "new" and mac.relaunched
+
+
+def test_mac_without_write_access_cannot_replace(mac, monkeypatch):
+    assert update.can_replace()
+    monkeypatch.setattr(update, "_writable", lambda p: p != mac.app.parent)  # /Applications
+    assert not update.can_replace()
+    monkeypatch.setattr(update, "_writable", lambda p: p != mac.app)  # an admin's copy
+    assert not update.can_replace()
+
+
+def test_refuses_lower_version(mac):
+    for v in ((0, 0, 9), (0, 1, 0), (0, 1)):  # lower, the same, the same written shorter
+        with pytest.raises(update.UpdateError, match="not newer"):
+            update.install(mac.archive, info(version=v), ())
+    assert mac.ran == [] and _tree(mac.app) == "old" and mac.relaunched == []
+
+
+def _tarball(tmp_path, ver, members=("keepfold-app", "keepfold")) -> Path:
+    """keepfold-<ver>-linux-x86_64.tar.gz with one top folder, <ver>/, as build.sh makes it,
+    and the .sha256 download_asset saves beside it."""
+    src = tmp_path / "build" / ver
+    src.mkdir(parents=True)
+    for m in members:
+        (src / m).write_text(ver)
+    tgz = tmp_path / f"keepfold-{ver}-linux-x86_64.tar.gz"
+    with tarfile.open(tgz, "w:gz") as t:
+        t.add(src, arcname=ver)
+    (tmp_path / (tgz.name + ".sha256")).write_text(hashlib.sha256(tgz.read_bytes()).hexdigest())
+    return tgz
+
+
+def test_linux_update_keeps_one_previous(tmp_path, monkeypatch):
+    """The new version unpacks beside the old ones (through a dot-folder the launcher ignores);
+    the one before stays for going back, older ones go unless a process still runs from one."""
+    _on(monkeypatch, "linux", True, "x86_64")
+    monkeypatch.setattr(update, "current", lambda: "0.9.0")
+    root = Path.home() / ".local" / "share" / "keepfold" / "app"  # $HOME's, as the launcher's
+    for v in ("0.6.0", "0.7.0", "0.9.0", "0.7.0rc1"):  # rc1: not a version, never deleted
+        (root / v).mkdir(parents=True)
+        (root / v / "keepfold-app").write_text(v)
+    launcher = tmp_path / "keepfold-app-launcher"
+    monkeypatch.setattr(update, "LAUNCHER", launcher)
+    assert not update.can_replace()  # not the .deb's app: no launcher to run the new copy
+    launcher.write_text("#!/bin/bash\n")
+    assert update.can_replace()
+    monkeypatch.setattr(update, "_proc_exes", lambda: [str(root / "0.9.0" / "keepfold-app"),
+                                                        str(root / "0.6.0" / "keepfold"),
+                                                        "/usr/bin/bash"])
+    relaunched = []
+    monkeypatch.setattr(update, "_relaunch", lambda cmd, pid: relaunched.append((cmd, pid)))
+    tgz = _tarball(tmp_path, "0.10.0")
+    assert update.install(tgz, info(tag="v0.10.0", version=(0, 10, 0)), ()) == {}
+    # 0.10.0 sorts after 0.9.0 (a version, not a string); 0.7.0 is unused and older than the
+    # one before; 0.6.0 still runs an AI app's Keepfold connection
+    assert sorted(os.listdir(root)) == ["0.10.0", "0.6.0", "0.7.0rc1", "0.9.0"]
+    assert (root / "0.10.0" / "keepfold-app").read_text() == "0.10.0"
+    assert relaunched == [([str(launcher)], os.getpid())]
+
+
+def test_linux_update_refuses_a_tarball_that_is_not_the_version(tmp_path, monkeypatch):
+    _on(monkeypatch, "linux", True, "x86_64")
+    monkeypatch.setattr(update, "current", lambda: "0.9.0")
+    monkeypatch.setattr(update, "_proc_exes", lambda: [])
+    monkeypatch.setattr(update, "_relaunch", lambda *a: pytest.fail("restarted"))
+    root = Path.home() / ".local" / "share" / "keepfold" / "app"
+    tgz = _tarball(tmp_path, "0.10.0", members=("README",))  # no keepfold-app inside
+    with pytest.raises(update.UpdateError, match="nothing was changed"):
+        update.install(tgz, info(tag="v0.10.0", version=(0, 10, 0)), ())
+    evil = tmp_path / "evil" / "x.tar.gz"  # a member outside the folder: never written
+    evil.parent.mkdir()
+    with tarfile.open(evil, "w:gz") as t:
+        t.add(tgz, arcname="../../escaped")
+    (evil.parent / "x.tar.gz.sha256").write_text(hashlib.sha256(evil.read_bytes()).hexdigest())
+    with pytest.raises(update.UpdateError, match="nothing was changed"):
+        update.install(evil, info(tag="v0.10.0", version=(0, 10, 0)), ())
+    assert os.listdir(root) == [] and not (root.parent / "escaped").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="APFS's renamex_np is macOS only")
+def test_exchange_swaps_two_folders_in_one_step(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "x").write_text("a")
+    (b / "x").write_text("b")
+    update._exchange(a, b)
+    assert (a / "x").read_text() == "b" and (b / "x").read_text() == "a"

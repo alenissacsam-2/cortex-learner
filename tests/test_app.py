@@ -2691,13 +2691,67 @@ def test_update_quietly_app_mode_never_downloads(app, github, monkeypatch):
     assert app.update_ready is None and github == []
 
 
-def test_update_apply_app_mode_points_to_the_release(app, github, monkeypatch):
+def test_update_apply_app_mode_swaps_and_quits(app, github, monkeypatch, tmp_path):
+    """Mac/Linux Update now: the click downloads this computer's file and swaps it in
+    (update.install), then the app quits; Programs in use come back for the user's consent, and
+    a lower or equal version is never downloaded."""
     monkeypatch.setattr(update, "mode", lambda: "app")
-    code, js, _, _ = call(app, "POST", "/api/update/apply", {})
-    assert code == 400 and js["error"] == (
-        "Update now arrives in the next version of the app; download the new version from "
-        "https://github.com/o/r/releases/tag/v9.0.0.")
-    assert github == [] and app.jobs.cur is None
+    monkeypatch.setattr(update, "can_replace", lambda: True)
+    got, installs = [], []
+
+    def download_asset(info, dest, on_progress, cancel):
+        got.append((dest, cancel))
+        on_progress(12 * 2**20, 32 * 2**20)
+        return tmp_path / "Keepfold-9.0.0-macos-arm64.zip"
+    busy = {"busy": [[501, "/Applications/Keepfold.app/Contents/MacOS/keepfold-cli"]],
+            "note": "Keepfold is in use by 1 program (...)."}
+    monkeypatch.setattr(update, "download_asset", download_asset)
+    monkeypatch.setattr(update, "install", lambda a, i, close: installs.append(
+        (a, i["version"], close)) or ({} if close else busy))
+    call(app, "POST", "/api/update/apply", {})
+    r = wait_job(app)["result"]
+    assert r["launched"] is False and r["busy"] == busy["busy"] and r["note"] == busy["note"]
+    assert not app.stop.is_set()
+    assert got[0][0] == Path.home() / ".keepfold" / "tmp" / "update-9.0.0"
+    for bad in ("all", [501, "502"], [True]):
+        assert call(app, "POST", "/api/update/apply", {"close": bad})[0] == 400
+    call(app, "POST", "/api/update/apply", {"close": [501]})
+    j = wait_job(app)
+    assert j["result"]["launched"] is True and j["cancellable"]
+    assert installs == [(tmp_path / "Keepfold-9.0.0-macos-arm64.zip", (9, 0, 0), []),
+                        (tmp_path / "Keepfold-9.0.0-macos-arm64.zip", (9, 0, 0), [501])]
+    assert app.stop.wait(5) and github == []  # never the Windows installer
+
+
+def test_update_apply_app_mode_refuses_a_lower_or_equal_version(app, github, monkeypatch):
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(update, "can_replace", lambda: True)
+    monkeypatch.setattr(update, "download_asset", lambda *a: pytest.fail("downloaded"))
+    monkeypatch.setattr(update, "install", lambda *a: pytest.fail("installed"))
+    for v in ((0, 0, 9), (0, 1, 0)):
+        monkeypatch.setattr(update, "latest", lambda v=v: _release(v))
+        call(app, "POST", "/api/update/apply", {})
+        assert wait_job(app)["result"]["launched"] is False
+    assert not app.stop.is_set()
+
+
+def test_no_write_access_offers_download(app, github, monkeypatch, tmp_path):
+    """Review Focus 3: a standard Mac user cannot change /Applications. Update now offers the
+    release page instead of failing, and downloads nothing."""
+    from keepfold.app import bundle
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    mac_app = tmp_path / "Applications" / "Keepfold.app"
+    monkeypatch.setattr(bundle, "app_path", lambda: mac_app)
+    monkeypatch.setattr(update, "_writable", lambda p: p != mac_app.parent)
+    monkeypatch.setattr(update, "download_asset", lambda *a: pytest.fail("downloaded"))
+    call(app, "POST", "/api/update/apply", {})
+    j = wait_job(app)
+    r = j["result"]
+    assert j["error"] is None and r["launched"] is False
+    assert r["download_url"] == "https://github.com/o/r/releases/tag/v9.0.0"
+    assert "Download the new version" in r["note"]
+    assert not app.stop.is_set() and github == []
 
 
 @pytest.mark.parametrize("plat,want", [

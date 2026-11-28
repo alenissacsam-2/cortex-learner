@@ -2549,22 +2549,26 @@ class App:
 
     def update_apply(self, body: dict) -> dict:
         """Download the new installer (unless the quiet check already did), check it, start it
-        and quit; it reopens the app. Restart to update and Update now both come here."""
-        if (m := update.mode()) != "installer":
+        and quit; it reopens the app. Restart to update and Update now both come here. The Mac
+        and Linux app swaps the new version in instead (`_swap`); `close` lists the Keepfold
+        programs the user agreed to end (Programs in use)."""
+        if (m := update.mode()) == "dev":
             info = update.latest()
-            if m == "app":  # part 2 brings the in-app update
-                raise ValueError("Update now arrives in the next version of the app; download the "
-                                 f"new version from {info['notes_url']}.")
             raise ValueError("This copy of Keepfold was not installed with KeepfoldSetup.exe. "
                              f"Update it with: {update.command(info['tag'])}")
+        close = body.get("close") or []
+        if not isinstance(close, list) or any(type(p) is not int for p in close):
+            raise ValueError("close must be a list of process ids.")
 
         def run(job):
             info, out = self._check(job)
-            if not out["newer"]:
+            if not out["newer"]:  # the same or a lower version is never installed
                 return {**out, "launched": False}
 
             def said(got, total):
                 job.say(f"downloaded {got >> 20} of {total >> 20} MB")
+            if m == "app":
+                return self._swap(job, info, out, said, close)
             ready = self.update_ready
             exe = update.dest_dir(info) / update.EXE  # checked when the quiet check fetched it
             if not (ready and ready["version"] == out["latest"] and exe.is_file()):
@@ -2576,6 +2580,24 @@ class App:
             threading.Timer(2, self.stop.set).start()  # the page reads the result first
             return {**out, "launched": True}
         return self.jobs.start("Updating Keepfold", "update", run, cancellable=True)
+
+    def _swap(self, job, info: dict, out: dict, said, close: list[int]) -> dict:
+        """Mac/Linux Update now (D22: only on this click): download this computer's file, swap
+        it in and quit; the new copy starts once this app has exited."""
+        if not update.can_replace():  # a standard Mac user cannot change /Applications
+            return {**out, "launched": False, "download_url": out["notes_url"],
+                    "note": "Keepfold cannot replace itself where it is installed (this account "
+                            "may not change that folder). Download the new version from the "
+                            "release page and install it as you installed this one."}
+        archive = update.download_asset(info, update.dest_dir(info), said, job.cancelled)
+        if archive is None:
+            return {"cancelled": True}
+        job.say("checked; installing")
+        r = update.install(archive, info, close)
+        if r.get("busy"):  # Programs in use: the page asks, then sends their pids as `close`
+            return {**out, "launched": False, **r}
+        threading.Timer(2, self.stop.set).start()  # the page reads the result first
+        return {**out, "launched": True}
 
     def quit(self, body: dict) -> dict:
         if self.jobs.running():  # "Running jobs are cancelled": a download's process too

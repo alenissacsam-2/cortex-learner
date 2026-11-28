@@ -8,17 +8,25 @@ Stdlib only. `latest` asks GitHub for the latest release of `REPO` and sends not
 the user (a generic User-Agent). `download` takes only that repo's release assets, follows
 redirects only to GitHub's download hosts, caps the size and checks the SHA-256 that the release
 publishes. `launch` starts the new KeepfoldSetup.exe with `--update`; it waits for the app to exit.
+
+The frozen Mac and Linux app downloads only on the Update now click (`download_asset`), then
+`install` swaps the new version in and restarts it (port DESIGN.md 5.1, 5.2).
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import platform as _platform
 import re
+import shutil
+import signal
 import subprocess
 import sys
+import tarfile
+import time
 import tomllib
 import urllib.request
 from datetime import datetime
@@ -27,7 +35,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlsplit
 
-from keepfold._proc import proxy_env
+from keepfold._proc import NO_WINDOW, proxy_env
 
 REPO = "alenissacsam-2/keepfold"  # the GitHub repo that holds the plugin marketplace
 HERE = Path(__file__).resolve()
@@ -189,9 +197,10 @@ def _latest_from_page(opener, reset=None) -> dict:
         when = "after " + datetime.fromtimestamp(int(reset)).strftime("%H:%M")
     except (TypeError, ValueError, OverflowError, OSError):
         when = "in an hour"
+    what = EXE if sys.platform == "win32" else "the new version"
     limited = UpdateError("GitHub is refusing update checks from this network for now (it "
                           "limits how often one network may ask, and a VPN or a campus network "
-                          f"is shared by many). Try again {when}, or download KeepfoldSetup.exe "
+                          f"is shared by many). Try again {when}, or download {what} "
                           f"from the release page: {page}")
     try:
         with _get(page, opener, "text/html"):
@@ -205,8 +214,9 @@ def _latest_from_page(opener, reset=None) -> dict:
         raise limited
     tag = unquote(m[1])
     ver = parse_version(tag)
-    want = f"{DOWNLOADS}{tag}/{EXE}"
-    return {"tag": tag, "version": ver, "exe_url": want, "sha_url": want + ".sha256",
+    name = asset_name(ver)  # this computer's file; None where none is built
+    want = f"{DOWNLOADS}{tag}/{name}" if name else None
+    return {"tag": tag, "version": ver, "exe_url": want, "sha_url": want and want + ".sha256",
             "notes_url": f"https://github.com/{REPO}/releases/tag/{tag}", "exe_size": 0}
 
 
@@ -236,34 +246,38 @@ def _fetch(url: str, opener):
     raise UpdateError("The download was redirected too many times; stopped.")
 
 
-def download(info: dict, dest: Path, on_progress=None, cancel=None, opener=None) -> Path | None:
-    """`dest`/KeepfoldSetup.exe, checked against the release's .sha256; None when `cancel` (an
-    Event) is set. A partial or mismatched file is deleted."""
-    if info["exe_size"] > MAX_BYTES:
-        raise UpdateError(f"The update is larger than {MAX_BYTES // 2**20} MB; stopped.")
+def download(info: dict, dest: Path, on_progress=None, cancel=None, opener=None,
+             cap: int | None = None) -> Path | None:
+    """`dest`/KeepfoldSetup.exe (or the file `exe_url` names), checked against the release's
+    .sha256 and at most `cap` bytes (MAX_BYTES); None when `cancel` (an Event) is set. A partial
+    or mismatched file is deleted."""
+    cap = cap or MAX_BYTES
+    if info["exe_size"] > cap:
+        raise UpdateError(f"The update is larger than {cap // 2**20} MB; stopped.")
     with _fetch(info["sha_url"], opener) as r:
         m = re.match(rb"\s*([0-9a-fA-F]{64})\b", r.read(4096))
     if not m:
         raise UpdateError("The release's checksum file is not readable; stopped.")
     want = m[1].decode().lower()
     dest.mkdir(parents=True, exist_ok=True)
-    out = dest / EXE
+    name = str(info["exe_url"]).rsplit("/", 1)[-1]  # _fetch refuses any url not this release's
+    out = dest / name
     if out.is_file() and _sha256(out) == want:  # prepared before a restart: not fetched again
-        (dest / SHA).write_text(want, encoding="ascii")
+        (dest / (name + ".sha256")).write_text(want, encoding="ascii")
         return out
-    part = out.with_name(EXE + ".part")
+    part = out.with_name(name + ".part")
     h, got, said = hashlib.sha256(), 0, -1
     try:
         with _fetch(info["exe_url"], opener) as r, open(part, "wb") as f:
             total = int(r.headers.get("Content-Length") or info["exe_size"] or 0)
-            if total > MAX_BYTES:
-                raise UpdateError(f"The update is larger than {MAX_BYTES // 2**20} MB; stopped.")
+            if total > cap:
+                raise UpdateError(f"The update is larger than {cap // 2**20} MB; stopped.")
             while chunk := r.read(1 << 16):
                 if cancel is not None and cancel.is_set():
                     break
                 got += len(chunk)
-                if got > MAX_BYTES:
-                    raise UpdateError(f"The update is larger than {MAX_BYTES // 2**20} MB; "
+                if got > cap:
+                    raise UpdateError(f"The update is larger than {cap // 2**20} MB; "
                                       "stopped.")
                 h.update(chunk)
                 f.write(chunk)
@@ -281,8 +295,29 @@ def download(info: dict, dest: Path, on_progress=None, cancel=None, opener=None)
         raise UpdateError("The download does not match the release's checksum, so it was "
                           "deleted. Try again later.")
     os.replace(part, out)
-    (dest / SHA).write_text(want, encoding="ascii")  # what `prepared` checks at the next launch
+    # what `prepared` (Windows) or `install` (Mac, Linux) checks before using it
+    (dest / (name + ".sha256")).write_text(want, encoding="ascii")
     return out
+
+
+def download_asset(info: dict, dest_dir: Path, on_progress=None, cancel=None,
+                   opener=None) -> Path | None:
+    """This computer's update file (the Mac zip, the Linux tarball), fetched and checked as
+    `download` fetches the installer, under this OS's size cap."""
+    return download(info, dest_dir, on_progress, cancel, opener,
+                    MAX_BYTES_BY_OS.get(sys.platform, MAX_BYTES))
+
+
+def verify(path: Path, sha: str) -> None:
+    """The one check right before a swap: the file is the release's (SHA-256 now; PLAN-1.0 G7's
+    Ed25519 signature goes here too)."""
+    try:
+        ok = bool(sha.strip()) and _sha256(path) == sha.strip().lower()
+    except OSError:
+        ok = False
+    if not ok:
+        raise UpdateError("The update does not match the release's checksum; nothing was "
+                          "changed. Try again later.")
 
 
 def _sha256(p: Path) -> str:
@@ -325,3 +360,216 @@ def launch(exe: Path, app_pid: int, install: Path | None = None) -> None:
     # the system proxy does, for its uv (which reads only HTTPS_PROXY)
     subprocess.Popen(args, creationflags=flags, close_fds=True,
                      env={**proxy_env(), "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
+# ---- Mac and Linux: Update now swaps in the new version (port DESIGN.md 5.1, 5.2) ------------
+
+LAUNCHER = Path("/usr/bin/keepfold-app")  # the .deb's: runs the newest copy (tests replace this)
+_BUSY = ("Keepfold is in use by {n} program{s} (the Keepfold connection of AI apps such as "
+         "Claude, or the browsing receiver). Nothing is closed until you choose.")
+
+
+def can_replace() -> bool:
+    """Update now can install here. Mac: write access to the app and its folder (a standard user
+    cannot change /Applications); Linux: the .deb's launcher, which runs the per-user copy."""
+    if sys.platform != "darwin":
+        return LAUNCHER.is_file()
+    from keepfold.app import bundle
+    app = bundle.app_path()
+    return app is not None and _writable(app.parent) and _writable(app)
+
+
+def install(archive: Path, info: dict, close=()) -> dict:
+    """Swap in the version `download_asset` fetched, once `verify` passes, and start it after
+    this app exits (the caller then quits): {} when done. Mac: Keepfold programs still running
+    from the bundle are ended only once the user agreed to each (`close`, their pids); until
+    then {"busy": [(pid, path), ...], "note"} and nothing changes. Never a version that is not
+    newer than this one."""
+    v = ".".join(map(str, info["version"]))
+    if not newer(info["version"], parse_version(current())):
+        raise UpdateError(f"Keepfold {v} is not newer than this copy ({current()}); not "
+                          "installed.")
+    try:
+        sha = archive.with_name(archive.name + ".sha256").read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError):
+        sha = ""
+    verify(archive, sha)
+    if sys.platform == "darwin":
+        return _install_mac(archive, info, set(close))
+    return _install_linux(archive, v)
+
+
+def _install_mac(archive: Path, info: dict, close: set[int]) -> dict:
+    """DESIGN.md 5.1: unpack beside the app (the same volume), check the signature, wait for the
+    Programs in use consent, swap the two in one step, keep the old copy for going back."""
+    from keepfold.app import bundle
+    app = bundle.app_path()
+    if app is None:
+        raise UpdateError("Only the Mac app can update itself.")
+    stage = app.parent / ".Keepfold-update"
+    new = stage / "Keepfold.app"  # the zip's top folder (ditto -c -k --keepParent)
+    unchanged = f"nothing was changed. You can download the new version from {info['notes_url']}"
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        ok, out = _run(["ditto", "-x", "-k", str(archive), str(stage)])  # zipfile drops symlinks
+        if not ok or not new.is_dir():
+            raise UpdateError(f"Could not unpack the update ({out.strip()}); {unchanged}")
+        ok, out = _run(["codesign", "--verify", "--deep", "--strict", str(new)])
+        if not ok:
+            raise UpdateError(f"The new version's signature does not check out ({out}); "
+                              f"{unchanged}")
+        busy = _in_use(app)
+        if busy and {pid for pid, _ in busy} <= close:  # the user agreed to end exactly these
+            _end([pid for pid, _ in busy])
+            busy = _in_use(app)
+        if busy:  # old processes would load files from the new copy at the same path
+            return {"busy": busy, "note": _BUSY.format(n=len(busy), s="s" * (len(busy) != 1))}
+        try:
+            _exchange(new, app)  # a power cut leaves the old copy or the new one, never neither
+        except OSError as e:
+            raise UpdateError(f"Could not swap in the new version ({e}); {unchanged}") from None
+        try:
+            _relaunch(["open", str(app)], os.getpid())
+        except (OSError, subprocess.SubprocessError) as e:
+            _exchange(new, app)  # the old copy goes back
+            raise UpdateError(f"Could not start the new version ({e}); {unchanged}") from None
+        prev = Path.home() / "Library" / "Application Support" / "Keepfold" / "previous"
+        shutil.rmtree(prev, ignore_errors=True)  # one go-back copy, outside Launchpad's view
+        with contextlib.suppress(OSError, shutil.Error):
+            prev.mkdir(parents=True)
+            shutil.move(new, prev / app.name)
+        return {}
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def _install_linux(archive: Path, v: str) -> dict:
+    """DESIGN.md 5.2: unpack into ~/.local/share/keepfold/app/<v>/ (the launcher reads $HOME,
+    not XDG_DATA_HOME) through a dot-folder it ignores, keep the version before, restart through
+    the launcher. Old processes run on from their own folders, so none is ended."""
+    root = Path.home() / ".local" / "share" / "keepfold" / "app"
+    target = root / v
+    if not target.exists():  # one unpacked before is complete: it was renamed in whole
+        stage = root / f".{v}.staging"
+        shutil.rmtree(stage, ignore_errors=True)
+        try:
+            stage.mkdir(parents=True)
+            with tarfile.open(archive) as t:  # one top folder, <v>/ (packaging/linux/build.sh)
+                t.extractall(stage, filter="data")  # nothing outside the folder, no devices
+            if not (stage / v / "keepfold-app").is_file():
+                raise UpdateError(f"The download does not hold Keepfold {v}; nothing was "
+                                  "changed.")
+            os.replace(stage / v, target)
+        except (OSError, tarfile.TarError) as e:
+            raise UpdateError(f"Could not unpack Keepfold {v} ({e}); nothing was changed.") \
+                from None
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+    _prune(root)
+    _relaunch([str(LAUNCHER)], os.getpid())
+    return {}
+
+
+def _prune(root: Path) -> None:
+    """Keep the newest per-user version and the one before it (to go back); delete older ones
+    that no running program uses (an AI app's Keepfold connection may still run from one)."""
+    found = []
+    for d in root.iterdir():
+        with contextlib.suppress(UpdateError):  # not a version folder: never ours to delete
+            if d.is_dir():
+                found.append((parse_version(d.name), d))
+    used = _proc_exes()
+    for _, d in sorted(found)[:-2]:
+        if not any(e.startswith(os.path.join(str(d), "")) for e in used):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _in_use(app: Path) -> list[tuple[int, str]]:
+    """Keepfold programs running from inside `app`, never this app itself. An AI app may start
+    one through the ~/.local/bin/keepfold link, so each path is also resolved."""
+    roots = tuple({os.path.join(str(app), ""), os.path.join(os.path.realpath(app), "")})
+    return [(pid, path) for pid, path in _ps() if pid != os.getpid() and (
+        path.startswith(roots) or (os.path.isabs(path)
+                                   and os.path.realpath(path).startswith(roots)))]
+
+
+# The OS calls below are replaced in tests: no real ditto, codesign, ps, process, /proc or open.
+
+def _run(args: list[str], timeout: float = 300) -> tuple[bool, str]:
+    """(ok, output): stdout when it succeeded, else the error text, trimmed."""
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
+                           creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    if r.returncode == 0:
+        return True, r.stdout
+    return False, (r.stderr or r.stdout).strip()[-2000:]
+
+
+def _ps() -> list[tuple[int, str]]:
+    """(pid, program path) of every process: on a Mac, ps's comm is the path it was started by."""
+    ok, out = _run(["ps", "-axo", "pid=,comm="])
+    if not ok:
+        raise UpdateError(f"Could not list the running programs ({out}); nothing was changed.")
+    procs = []
+    for line in out.splitlines():
+        pid, _, path = line.strip().partition(" ")
+        if pid.isdigit():
+            procs.append((int(pid), path.strip()))
+    return procs
+
+
+def _end(pids: list[int]) -> None:
+    """End programs the user agreed to close: SIGTERM, then SIGKILL after 5 s for any left."""
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        for pid in pids:
+            with contextlib.suppress(OSError):
+                os.kill(pid, sig)
+        for _ in range(25):
+            if not any(_alive(pid) for pid in pids):
+                return
+            time.sleep(0.2)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # PermissionError: it runs, as another user
+        pass
+    return True
+
+
+def _exchange(a: Path, b: Path) -> None:
+    """Swap two folders in one step: macOS's renamex_np with RENAME_SWAP (APFS)."""
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.renamex_np(os.fsencode(a), os.fsencode(b), 0x2) != 0:  # 0x2: RENAME_SWAP
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), str(a))
+
+
+def _writable(p: Path) -> bool:
+    return os.access(p, os.W_OK)
+
+
+def _proc_exes() -> list[str]:
+    """The program path of every process this user may read (Linux: /proc/<pid>/exe)."""
+    out = []
+    for p in Path("/proc").glob("[0-9]*/exe"):
+        with contextlib.suppress(OSError):
+            out.append(os.readlink(p))
+    return out
+
+
+def _relaunch(cmd: list[str], pid: int) -> None:
+    """Run `cmd` once process `pid` (this app) has ended: while it runs, its local server would
+    answer the new copy's start and only show this window."""
+    subprocess.Popen(["/bin/sh", "-c", 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
+                      'shift; exec "$@"', "sh", str(pid), *cmd],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, creationflags=NO_WINDOW,
+                     env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
