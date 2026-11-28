@@ -458,7 +458,7 @@ def test_launcher_logs_without_a_console(monkeypatch):
     monkeypatch.setenv("KEEPFOLD_VAULT", "V")
     monkeypatch.setattr(server, "running_url", lambda: None)
 
-    def fake_run(root, hidden, echo):
+    def fake_run(root, hidden, echo, smoke):
         seen.update(root=root, hidden=hidden)
         echo("Keepfold app: http://127.0.0.1:1/")
 
@@ -487,7 +487,7 @@ def test_launcher_puts_the_install_bin_on_path(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [str(ROOT / "src" / "keepfold" / "app" / "launch.py")])
     monkeypatch.setenv("PATH", "orig")
     monkeypatch.setattr(server, "running_url", lambda: None)
-    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo: None)
+    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo, smoke: None)
     launch.main()
     assert os.environ["PATH"] == str((d / "bin").resolve()) + os.pathsep + "orig"
 

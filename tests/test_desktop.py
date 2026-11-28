@@ -47,7 +47,7 @@ class FakeWindow:
     def __init__(self, **kw):
         self.kw, self.calls, self.destroyed = kw, [], threading.Event()
         self.events = types.SimpleNamespace(**{k: FakeEvent() for k in (
-            "closing", "closed", "minimized", "maximized", "restored", "shown")})
+            "closing", "closed", "minimized", "maximized", "restored", "shown", "loaded")})
         self.width, self.height, self.x, self.y = 1000, 700, 50, 60
 
     def show(self):
@@ -285,6 +285,31 @@ def test_a_hidden_start_opens_on_the_page_for_the_time_it_is_shown(gui, vault, m
     assert "#tonight" not in seen["first"]
     (load, url), *rest = seen["calls"]
     assert load == "load" and url.endswith("#tonight") and rest == ["show", "show"]
+
+
+@pytest.mark.parametrize("loads", [True, False])
+def test_smoke_checks_the_page_and_the_address_then_quits(gui, vault, monkeypatch, loads):
+    """`--smoke` (release-apps.yml): the page loaded and the app answers on its address, so it
+    says ok and quits by itself; a page that never loads exits 1. Never Start at login."""
+    monkeypatch.setattr(desktop, "SMOKE_LOAD_S", 0.2)
+    monkeypatch.setattr(desktop, "SMOKE_SHOW_S", 0)
+    monkeypatch.setattr(desktop, "first_run", lambda echo: pytest.fail("turned autostart on"))
+
+    def start(wv):
+        if loads:
+            wv.windows[0].events.loaded.set()
+        assert wv.windows[0].destroyed.wait(10)  # nobody clicks Quit
+    gui(start)
+    lines = []
+    if loads:
+        desktop.run(vault, echo=lines.append, smoke=True)
+    else:
+        with pytest.raises(SystemExit) as e:
+            desktop.run(vault, echo=lines.append, smoke=True)
+        assert e.value.code == 1
+    assert ("Keepfold app: smoke ok" in lines) is loads
+    assert ("Keepfold app: smoke FAILED" in lines) is not loads
+    assert server.running_url() is None
 
 
 def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypatch):

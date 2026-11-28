@@ -120,7 +120,8 @@ def main() -> None:
         os.environ["PATH"] = here + os.pathsep + os.environ.get("PATH", "")
         from keepfold.app import desktop
         # the log keeps the address, never the key (?t=): the page holds it, the log may be shared
-        desktop.run(taint._vault_root(), hidden=hidden, echo=lambda s: print(_KEY.sub("", s)))
+        desktop.run(taint._vault_root(), hidden=hidden, echo=lambda s: print(_KEY.sub("", s)),
+                    smoke="--smoke" in sys.argv[1:])  # hidden: release-apps.yml's GUI check
     except Exception:  # noqa: BLE001  (a double-click must never fail silently)
         traceback.print_exc()
         _alert("Keepfold could not start.\n\nWhat went wrong is written in "

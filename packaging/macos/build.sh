@@ -15,7 +15,7 @@ APP=$STAGE/Keepfold.app
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
-uv sync --group app
+uv sync --locked --no-dev --group app
 VERSION=$(uv run --no-sync python -c 'from importlib.metadata import version; print(version("keepfold"))')
 NAME=Keepfold-$VERSION-macos-$(uname -m)
 

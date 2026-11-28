@@ -1,0 +1,143 @@
+name: Release the Mac and Ubuntu apps
+
+# Builds Keepfold.app (DMG + update zip) and the Ubuntu .deb (+ update tarball) from a release's
+# tag, smoke-tests what was built (DESIGN §7: --version, doctor, the MCP handshake, selftest, the
+# GUI's --smoke with a screenshot, codesign / clean-container installs, the size budget in
+# packaging/sizes.json), then attaches the files and their .sha256 to that release. Runs when a
+# release is published, or by hand for an existing tag: Actions tab -> this workflow -> Run
+# workflow, or `gh workflow run release-apps.yml -f tag=v0.7.0`. No secrets beyond the job's own
+# token, which may only write release files.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing release tag to build and attach the apps to (e.g. v0.7.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write # gh release upload
+
+concurrency:
+  group: release-apps-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  # read through the environment, never pasted into a script: a dispatch input is user text
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  macos-26:
+    name: macos-26
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          persist-credentials: false
+      # build.sh freezes with a python.org Python (UV_PYTHON_PREFERENCE=only-system)
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: The tag names this version
+        run: |
+          echo "V=$(uv version --short)" >> "$GITHUB_ENV"
+          test "${TAG#v}" = "$(uv version --short)"
+      - name: Build Keepfold.app, the DMG and the update zip
+        run: bash packaging/macos/build.sh
+      - name: Unpack the update zip (the smoke tests run what people get)
+        run: ditto -x -k "dist/Keepfold-$V-macos-arm64.zip" "$RUNNER_TEMP/app"
+      - name: codesign
+        run: codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/app/Keepfold.app"
+      - name: CLI smoke test (--version, doctor, MCP handshake, selftest)
+        run: |
+          SOURCE_SELFTEST=$(uv run --no-sync keepfold selftest)  # its own line: a failure stops here
+          export SOURCE_SELFTEST
+          bash packaging/smoke_cli.sh "$RUNNER_TEMP/app/Keepfold.app/Contents/MacOS/keepfold-cli" python3
+      - name: GUI smoke test (--smoke and a screenshot)
+        run: bash packaging/smoke_gui.sh "$RUNNER_TEMP/app/Keepfold.app/Contents/MacOS/Keepfold" shots/macos.png
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: screenshot-macos
+          path: shots/
+          if-no-files-found: warn
+      - name: Size budget
+        run: python3 packaging/check_sizes.py "$V" dist/Keepfold-"$V"-macos-arm64.{dmg,zip}
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }} # only this step: the build runs third-party code
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/Keepfold-"$V"-macos-arm64.{dmg,dmg.sha256,zip,zip.sha256}
+
+  ubuntu-24-04: # a job id may not hold a dot
+    name: ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: The tag names this version
+        run: |
+          echo "V=$(uv version --short)" >> "$GITHUB_ENV"
+          test "${TAG#v}" = "$(uv version --short)"
+      - name: apt (build headers; the .deb's runtime and Xvfb for the GUI smoke test)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -q --no-install-recommends libgirepository-2.0-dev \
+            libcairo2-dev libffi-dev pkg-config gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
+            libgirepository-2.0-0 gir1.2-ayatanaappindicator3-0.1 xvfb xauth dbus-x11
+      - name: Build the .deb and the update tarball
+        run: bash packaging/linux/build.sh
+      - name: Unpack the update tarball (the smoke tests run what people get)
+        run: |
+          mkdir -p "$RUNNER_TEMP/app"
+          tar -C "$RUNNER_TEMP/app" -xzf "dist/keepfold-$V-linux-x86_64.tar.gz"
+          dpkg-deb --info "dist/keepfold_${V}_amd64.deb"
+      - name: CLI smoke test (--version, doctor, MCP handshake, selftest)
+        run: |
+          SOURCE_SELFTEST=$(uv run --no-sync keepfold selftest)  # its own line: a failure stops here
+          export SOURCE_SELFTEST
+          bash packaging/smoke_cli.sh "$RUNNER_TEMP/app/$V/keepfold" python3
+      - name: GUI smoke test (--smoke, a screenshot and its pixels, under Xvfb)
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- \
+            bash packaging/smoke_gui.sh "$RUNNER_TEMP/app/$V/keepfold-app" shots/ubuntu.png
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: screenshot-ubuntu
+          path: shots/
+          if-no-files-found: warn
+      - name: Install the .deb in clean Ubuntu 24.04 and 26.04 (no recommends), CLI smoke test
+        run: |
+          for img in ubuntu:24.04 ubuntu:26.04; do
+            echo "::group::$img"
+            # python3 is the MCP check's own harness, installed after the .deb; the app needs none
+            docker run --rm -v "$PWD:/w" -w /w -e V -e DEBIAN_FRONTEND=noninteractive "$img" \
+              bash -euc '
+                apt-get update -qq
+                apt-get install -y -q --no-install-recommends "./dist/keepfold_${V}_amd64.deb"
+                apt-get install -y -q --no-install-recommends python3
+                bash packaging/smoke_cli.sh /usr/bin/keepfold python3'
+            echo "::endgroup::"
+          done
+      - name: Size budget
+        run: |
+          python3 packaging/check_sizes.py "$V" "dist/keepfold_${V}_amd64.deb" \
+            "dist/keepfold-$V-linux-x86_64.tar.gz"
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }} # only this step: the build runs third-party code
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/keepfold_${V}_amd64.deb" "dist/keepfold_${V}_amd64.deb.sha256" \
+            "dist/keepfold-$V-linux-x86_64.tar.gz" "dist/keepfold-$V-linux-x86_64.tar.gz.sha256"

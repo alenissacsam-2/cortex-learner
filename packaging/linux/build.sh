@@ -19,7 +19,7 @@ uvx --python 3.12 pip wheel --no-deps PyGObject==3.58.1 pycairo==1.29.2 -w "$WOR
 
 # 2. Keepfold with the app group (PyInstaller, pywebview, pystray), then the two wheels. From
 #    here on `uv run --no-sync`, so no sync removes them again.
-uv sync --group app
+uv sync --locked --no-dev --group app
 uv pip install "$WORK"/wheels/*.whl
 
 # 3. Freeze: $WORK/dist/keepfold/ holds keepfold-app, keepfold and _internal/

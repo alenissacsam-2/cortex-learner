@@ -46,7 +46,8 @@ EXE = "KeepfoldSetup.exe"
 SHA = EXE + ".sha256"  # the release checksum, saved beside a downloaded installer
 MARKER = "keepfold-install.txt"  # installer/setup_app.py drops it in the install folder
 MAX_BYTES = 200 * 2**20
-# shortcut: Mac/Linux caps are guesses; part 2 sets them from the real archive sizes in CI
+# shortcut: Mac/Linux caps are guesses; once packaging/sizes.json holds the update zip's and
+# tarball's baselines (the first release-apps.yml run), each cap is twice its baseline
 MAX_BYTES_BY_OS = {"win32": MAX_BYTES, "darwin": 400 * 2**20, "linux": 400 * 2**20}
 TIMEOUT = 10
 DOWNLOADS = f"https://github.com/{REPO}/releases/download/"

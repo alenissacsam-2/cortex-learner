@@ -14,7 +14,8 @@ pystray's Windows icon runs its own message loop on any thread:
   `MacHotkey` (Carbon) runs on the main thread's loop instead; GNOME's (`GnomeHotkey`) is a
   system shortcut running `keepfold capture`;
 - keepfold-end: waits for `app.stop` (Quit in the tray or on the page, an update) and destroys
-  the window, which ends the main thread's GUI loop; `run` then stops the rest.
+  the window, which ends the main thread's GUI loop; `run` then stops the rest;
+- keepfold-smoke: only with `--smoke` (the release build's check, `Desktop.smoke`).
 Closing the window only hides it, and its page sleeps a minute later (`Desktop.hide`). With no
 tray (Linux without a StatusNotifierWatcher) the tray's items are in the window's menu and
 closing it quits. Logging out or shutting down quits (`_shutting_down` on Windows,
@@ -84,6 +85,9 @@ GNOME_KB = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kee
 HOTKEY_NOTE = ("The quick capture key works on GNOME. On this desktop, add a keyboard shortcut "
                "in its settings that runs: keepfold capture")
 BOX = (560, 120)  # the quick-capture box, CSS px
+# `--smoke` (release-apps.yml): wait this long for the page to load, then keep the window up this
+# long for CI's screenshot
+SMOKE_LOAD_S, SMOKE_SHOW_S = 60, 15
 
 _lock = threading.Lock()
 
@@ -868,6 +872,7 @@ class Desktop:
         self.hotkey: Hotkey | None = None
         self.quitting, self.state = False, "normal"  # normal | minimized | maximized
         self.fresh = False  # started hidden and never shown: the first show loads start_url
+        self.smoke_ok = False
 
     def show(self) -> bool:
         """Bring the window up (Open Keepfold, a second launch); with no window, the browser.
@@ -1010,6 +1015,18 @@ class Desktop:
         if self.tray is not None:
             self.tray.update_menu()
 
+    def smoke(self, echo=print) -> None:
+        """keepfold-smoke (`--smoke`, the release build's check): the window's page loaded and
+        the app answers on its own address with its key (running_url, as a second launch
+        checks); then the window stays up SMOKE_SHOW_S for a screenshot, and the app quits."""
+        w = self.win  # None once the window failed
+        self.smoke_ok = (w is not None and bool(w.events.loaded.wait(SMOKE_LOAD_S))
+                         and server.running_url() is not None)
+        echo(f"Keepfold app: smoke {'ok' if self.smoke_ok else 'FAILED'}")
+        if self.smoke_ok:
+            self.app.stop.wait(SMOKE_SHOW_S)
+        self.quit()
+
 
 LETTER_K = ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#")
 SMALL = 32  # up to this size the dots are whole-pixel squares, so the K stays crisp
@@ -1111,13 +1128,17 @@ def _geometry(webview) -> dict:
     return out
 
 
-def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -> None:
+def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print,
+        smoke: bool = False) -> None:
     """The desktop app until Quit; `hidden` starts it in the tray (Start with Windows). With no
-    window possible, the browser app as `keepfold app` runs it (nothing when hidden)."""
+    window possible, the browser app as `keepfold app` runs it (nothing when hidden). `smoke`:
+    Desktop.smoke, then exit 1 unless it passed; no first-run Start at login."""
     try:
         webview = _webview()
     except Exception as e:  # noqa: BLE001  (ImportError, pythonnet's errors, no WebView2)
         echo(f"Keepfold app: no app window ({type(e).__name__}: {e}); using the browser")
+        if smoke:
+            raise SystemExit(1) from None
         if not hidden:  # at login: no browser tab nobody asked for
             server.run(root, port=port, echo=echo)
         return
@@ -1141,7 +1162,8 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
     notes = Notifier(app, d.notify)
     app.jobs.on_end = notes.job_ended
     threading.Thread(target=notes.loop, args=(echo,), daemon=True, name="keepfold-notify").start()
-    first_run(echo)
+    if not smoke:  # a CI check never turns Start at login on
+        first_run(echo)
     echo(f"Keepfold app: {url.split('?')[0]}")  # never the key (?t=): stdout may be a shared log
     echo("Closing the window keeps Keepfold in the tray; Quit there stops it.")
     try:
@@ -1181,12 +1203,15 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
             menu = {"menu": _window_menu(d, webview.menu)}
             ev.closed += d.quit  # the hidden box would keep webview.start running
         threading.Thread(target=d.end, daemon=True, name="keepfold-end").start()
+        if smoke:
+            threading.Thread(target=d.smoke, args=(echo,), daemon=True,
+                             name="keepfold-smoke").start()
         # blocks this (main) thread until the window is destroyed
         webview.start(icon=str(ICON), **menu)
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)
         echo(f"Keepfold app: the window failed ({type(e).__name__}: {e}); using the browser")
         d.win = None
-        if not hidden:
+        if not hidden and not smoke:
             d.show()
         app.stop.wait()  # the tray's Open Keepfold now opens the browser
     finally:
@@ -1197,3 +1222,5 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
         if d.tray is not None:
             d.tray.stop()
         server.finish(srv, app)
+    if smoke and not d.smoke_ok:
+        raise SystemExit(1)

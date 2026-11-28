@@ -3334,7 +3334,7 @@ def test_the_launcher_log_never_holds_the_key(monkeypatch, capsys):
     from keepfold.app import desktop, launch
     seen = {}
     monkeypatch.setattr(server, "running_url", lambda: None)
-    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo: (
+    monkeypatch.setattr(desktop, "run", lambda root, hidden, echo, smoke: (
         echo("Keepfold app: http://127.0.0.1:8790/?t=Abc-_123"), seen.setdefault("ok", 1)))
     launch.main()
     out = capsys.readouterr().out
