@@ -18,6 +18,8 @@ ALLOWED = {
     "events.py": "the append-only event log: one O_APPEND line per event under the vault lock",
     "app/actions.py": "the Start-at-login file in the user's Startup folder, outside the vault",
     "app/desktop.py": "~/.keepfold/desktop.json, the desktop app's window state",
+    "app/wizard.py": "the Ollama download and its unpacked app under ~/.keepfold (staging + "
+                     "os.replace), not the vault",
     "app/launch.py": "~/.keepfold/logs, the windowless app's stdout log",
     "app/server.py": "the owner's chosen snapshot file and ~/.keepfold app state, outside "
                      "the vault",

@@ -40,7 +40,8 @@ def _la():
 def _pkcheck(args: list[str]) -> int:
     """pkcheck's exit code, 127 when it is missing (tests replace this)."""
     try:
-        return subprocess.run(["pkcheck", *args], stdin=subprocess.DEVNULL,
+        from keepfold._proc import NO_WINDOW
+        return subprocess.run(["pkcheck", *args], stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
                               capture_output=True, timeout=120).returncode
     except subprocess.TimeoutExpired:
         return 1

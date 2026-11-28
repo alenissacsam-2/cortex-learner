@@ -37,8 +37,9 @@ SCREENSAVER = ["gdbus", "call", "--session", "--dest", "org.freedesktop.ScreenSa
 def _query(args: list[str]) -> str | None:  # tests replace this: never a real ioreg or gdbus
     """The command's stdout, or None on any error, a timeout or a missing program."""
     try:
+        from keepfold._proc import NO_WINDOW
         return subprocess.run(args, capture_output=True, text=True, timeout=5,
-                              check=True).stdout
+                              creationflags=NO_WINDOW, check=True).stdout
     except (OSError, subprocess.SubprocessError):
         return None
 

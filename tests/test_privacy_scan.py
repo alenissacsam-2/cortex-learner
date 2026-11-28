@@ -22,7 +22,10 @@ PATTERNS = {
 # so the public repo never spells them out
 LOCAL = ROOT / "tests" / ".private_patterns"
 # public by design: the MCP Registry name, which the README's `mcp-name:` line must spell exactly
-PUBLIC_IDS = ("io.github.alenissacsam-2/keepfold",)
+PUBLIC_IDS = ("io.github.alenissacsam-2/keepfold",
+              # the Mac bundle id, the Linux desktop-file id and the polkit action: public app ids
+              "io.github.alenissacsam-2.keepfold", "io.github.alenissacsam_2.keepfold",
+              "io.github.alenissacsam2.keepfold")
 if LOCAL.is_file():
     PATTERNS |= {f"local pattern {i}": re.compile(line.strip())
                  for i, line in enumerate(LOCAL.read_text(encoding="utf-8").splitlines(), 1)

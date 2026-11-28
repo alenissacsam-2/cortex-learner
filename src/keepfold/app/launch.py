@@ -55,7 +55,8 @@ def _quote_applescript(s: str) -> str:
 
 
 def _run_alert(argv: list[str]) -> None:  # tests replace this
-    subprocess.run(argv, check=False)  # an argv list: the text never meets a shell
+    from keepfold._proc import NO_WINDOW
+    subprocess.run(argv, check=False, creationflags=NO_WINDOW)  # an argv list: no shell
 
 
 def _alert(text: str) -> None:  # tests replace this

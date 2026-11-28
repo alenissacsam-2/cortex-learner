@@ -78,6 +78,6 @@ In every chat Keepfold already knows you from your first message, saves what's d
 | `watch add\|list\|remove` | Folders (or Zotero) the app imports by itself: their new and changed files, every 10 minutes |
 | `voice import` / `forget` / `kill` / `access` | Your writing samples / delete a person's page / emergency stop / what was read as you |
 | `session close\|sweep` | Close leftover sessions |
-| `setup` / `init` / `sample remove` / `mcp` | Install, create a vault, remove the sample, run the server |
+| `setup` / `init` / `sample remove` / `mcp` / `uninstall` | Install, create a vault, remove the sample, run the server, remove the app (the vault stays) |
 
 `keepfold --help` prints every command; `docs/GUIDE.md` explains each in detail.
