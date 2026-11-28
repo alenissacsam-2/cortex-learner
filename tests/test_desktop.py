@@ -294,10 +294,16 @@ def test_smoke_checks_the_page_and_the_address_then_quits(gui, vault, monkeypatc
     monkeypatch.setattr(desktop, "SMOKE_LOAD_S", 0.2)
     monkeypatch.setattr(desktop, "SMOKE_SHOW_S", 0)
     monkeypatch.setattr(desktop, "first_run", lambda echo: pytest.fail("turned autostart on"))
+    import faulthandler
+    armed = []  # a stuck check dumps its threads and exits instead of hanging CI (dry run 2)
+    monkeypatch.setattr(faulthandler, "dump_traceback_later",
+                        lambda t, exit, file: armed.append((t, exit)))
+    monkeypatch.setattr(faulthandler, "cancel_dump_traceback_later", lambda: armed.append("off"))
 
     def start(wv):
         if loads:
             wv.windows[0].events.loaded.set()
+        assert armed == [(desktop.SMOKE_DEADLINE_S, True)]  # armed before the window
         assert wv.windows[0].destroyed.wait(10)  # nobody clicks Quit
     gui(start)
     lines = []
@@ -310,6 +316,7 @@ def test_smoke_checks_the_page_and_the_address_then_quits(gui, vault, monkeypatc
     assert ("Keepfold app: smoke ok" in lines) is loads
     assert ("Keepfold app: smoke FAILED" in lines) is not loads
     assert server.running_url() is None
+    assert armed == [(desktop.SMOKE_DEADLINE_S, True), "off"]  # never fires after a finished check
 
 
 def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypatch):

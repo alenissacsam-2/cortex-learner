@@ -42,6 +42,13 @@ EOF
 fi
 shot_rc=$?
 
+# the app quits by itself (Desktop.smoke) or, stuck, dumps its threads and exits (SMOKE_DEADLINE_S
+# in keepfold.app.desktop); never wait past that for it
+for _ in $(seq 240); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+done
+kill -9 "$pid" 2>/dev/null && echo "the app was still running: killed"
 wait "$pid"
 rc=$?
 echo "----- app.log"

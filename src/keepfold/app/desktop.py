@@ -89,6 +89,7 @@ BOX = (560, 120)  # the quick-capture box, CSS px
 # `--smoke` (release-apps.yml): wait this long for the page to load, then keep the window up this
 # long for CI's screenshot
 SMOKE_LOAD_S, SMOKE_SHOW_S = 60, 15
+SMOKE_DEADLINE_S = 180  # a check stuck past this dumps every thread's stack and exits 1
 
 _lock = threading.Lock()
 
@@ -1167,6 +1168,8 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print,
         if not hidden:  # at login: no browser tab nobody asked for
             server.run(root, port=port, echo=echo)
         return
+    if smoke:
+        _smoke_deadline(True)
     # before any window: the taskbar shows and pins Keepfold, not Python
     if sys.platform == "win32":
         import ctypes
@@ -1247,5 +1250,21 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print,
         if d.tray is not None:
             d.tray.stop()
         server.finish(srv, app)
+        if smoke:
+            _smoke_deadline(False)
     if smoke and not d.smoke_ok:
         raise SystemExit(1)
+
+
+def _smoke_deadline(on: bool) -> None:
+    """`--smoke` only: a check stuck anywhere, even before the window, writes every thread's
+    stack to stderr (the app log) and exits 1 after SMOKE_DEADLINE_S, so CI fails with the
+    cause instead of hanging until its job timeout. faulthandler's watchdog needs no GIL."""
+    import faulthandler
+    try:
+        if on:
+            faulthandler.dump_traceback_later(SMOKE_DEADLINE_S, exit=True, file=sys.stderr)
+        else:
+            faulthandler.cancel_dump_traceback_later()
+    except (AttributeError, ValueError, OSError):  # a stderr with no fileno: no deadline
+        pass
