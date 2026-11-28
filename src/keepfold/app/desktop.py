@@ -92,6 +92,7 @@ BOX = (560, 120)  # the quick-capture box, CSS px
 # `--smoke` (release-apps.yml): wait this long for the page to load, then keep the window up this
 # long for CI's screenshot
 SMOKE_LOAD_S, SMOKE_SHOW_S = 60, 15
+FIRST_LOAD_S = 60  # Mac/Linux: a shown start whose page has not loaded by then uses the browser
 SMOKE_DEADLINE_S = 180  # a check stuck past this dumps every thread's stack and exits 1
 
 _lock = threading.Lock()
@@ -918,6 +919,16 @@ class Desktop:
             self.win.restore()
         return True
 
+    def watch_first_load(self, echo=print, wait: float = FIRST_LOAD_S) -> None:
+        """Mac/Linux, a shown start: a window whose page never loads (GTK or Cocoa failing
+        quietly, as trial build 2's icon did) leaves the page in the browser, so the app is never
+        a process with no window. The tray, or Quit on the page, still quits."""
+        w = self.win
+        if w is None or w.events.loaded.wait(wait) or self.app.stop.is_set():
+            return
+        echo("Keepfold app: the window did not open; using the browser")
+        server._open(server.start_url(self.app))
+
     def closing(self) -> bool:
         """The window's X (pywebview's closing event; False cancels the close): remember its
         place and hide it, Keepfold stays in the tray. Quit, a shutdown or no tray closes it."""
@@ -1252,6 +1263,9 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print,
         if smoke:
             threading.Thread(target=d.smoke, args=(echo,), daemon=True,
                              name="keepfold-smoke").start()
+        elif not hidden and sys.platform != "win32":  # WebView2 failing raises below instead
+            threading.Thread(target=d.watch_first_load, args=(echo,), daemon=True,
+                             name="keepfold-first-load").start()
         # blocks this (main) thread until the window is destroyed
         webview.start(icon=str(_window_icon()), **menu)
     except Exception as e:  # noqa: BLE001  (WebView2 failed to start: the page in the browser)

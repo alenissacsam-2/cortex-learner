@@ -319,6 +319,28 @@ def test_smoke_checks_the_page_and_the_address_then_quits(gui, vault, monkeypatc
     assert armed == [(desktop.SMOKE_DEADLINE_S, True), "off"]  # never fires after a finished check
 
 
+@pytest.mark.parametrize("loads,stopped", [(True, False), (False, False), (False, True)])
+def test_a_window_whose_page_never_loads_opens_the_browser(monkeypatch, loads, stopped):
+    """Mac/Linux: a shown window whose page never loads (GTK or Cocoa failing quietly) leaves
+    the page in the browser, so the app is never a process with no window. A loaded window, or
+    an app already stopping, opens nothing."""
+    opened, lines = [], []
+    monkeypatch.setattr(desktop.server, "_open", opened.append)
+    monkeypatch.setattr(desktop.server, "start_url", lambda app: "http://x/#home")
+    app = types.SimpleNamespace(stop=threading.Event())
+    d = desktop.Desktop(app, "http://x")
+    d.win = FakeWindow()
+    if loads:
+        d.win.events.loaded.set()
+    if stopped:
+        app.stop.set()
+    d.watch_first_load(lines.append, wait=0.05)
+    browser = not loads and not stopped
+    assert opened == (["http://x/#home"] if browser else [])
+    assert lines == (["Keepfold app: the window did not open; using the browser"] if browser
+                     else [])
+
+
 def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypatch):
     d = desktop.Desktop(types.SimpleNamespace(), "http://x")
     d.win = FakeWindow()
