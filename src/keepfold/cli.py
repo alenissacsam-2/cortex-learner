@@ -843,7 +843,15 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
     except typer.Exit:  # an AI app's file could not be changed: the rest still runs
         failed = True
     actions.login(types.SimpleNamespace(say=typer.echo), None, False)  # the page's switch, off
-    if (f := desktop.autostart_file()) is not None:
+    mode = update.mode()
+    if mode == "app" and sys.platform == "darwin":  # its login item (SMAppService), not a file
+        try:
+            desktop.set_autostart(False)
+            typer.echo("The Keepfold app no longer starts at login.")
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            failed = True
+    elif (f := desktop.autostart_file()) is not None:
         if f.exists():
             f.unlink()
             typer.echo(f"removed {f}")
@@ -853,7 +861,6 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
     if link.is_symlink():  # a real file there is not ours to delete
         link.unlink()
         typer.echo(f"removed {link}")
-    mode = update.mode()
     typer.echo("Move Keepfold to the Trash from Applications." if mode == "app"
                and sys.platform == "darwin"
                else "Remove the app: sudo apt remove keepfold" if mode == "app"

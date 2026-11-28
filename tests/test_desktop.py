@@ -5,7 +5,6 @@ notifications (once a day, private left out, job ends) and their settings API.""
 
 import json
 import os
-import plistlib
 import shlex
 import sys
 import threading
@@ -152,6 +151,7 @@ def gui(monkeypatch):
     monkeypatch.setattr(desktop, "_shutting_down", lambda: False)
     monkeypatch.setattr(desktop, "_tray_host", lambda: True)
     monkeypatch.setattr(desktop, "_watch_logout", lambda quit: None)
+    monkeypatch.setattr(desktop, "_when_launched", lambda fn: None)
     monkeypatch.delenv("PYSTRAY_BACKEND", raising=False)  # Linux sets it: restored afterwards
 
     def install(start, renderer="edgechromium"):
@@ -663,29 +663,85 @@ def _exec_line(f: Path) -> str:
     return next(s for s in f.read_text(encoding="utf-8").splitlines() if s.startswith("Exec="))
 
 
-def test_autostart_mac_writes_launchagent(monkeypatch):
-    exe = _keepfold_app(monkeypatch, "darwin")
-    f = Path.home() / "Library" / "LaunchAgents" / "io.github.alenissacsam-2.keepfold.plist"
-    assert desktop.AUTOSTART_ID == "io.github.alenissacsam-2.keepfold"
-    assert desktop.autostart_file() == f
+class FakeSMApp:
+    """SMAppService.mainAppService(): status() 0 not registered, 1 enabled, 2 requires
+    approval; register and unregister answer (ok, NSError) as pyobjc does."""
+
+    def __init__(self, status=0, fail=None):
+        self.st, self.fail, self.calls = status, fail, []
+
+    def status(self):
+        return self.st
+
+    def _answer(self, name, st):
+        self.calls.append(name)
+        if self.fail:
+            return False, types.SimpleNamespace(localizedDescription=lambda: self.fail)
+        self.st = st
+        return True, None
+
+    def registerAndReturnError_(self, err):
+        return self._answer("register", 1)
+
+    def unregisterAndReturnError_(self, err):
+        return self._answer("unregister", 0)
+
+
+def test_mac_app_autostart_uses_smappservice(monkeypatch):
+    """Spike S4: the frozen Mac app is its own login item (SMAppService.mainAppService), not a
+    LaunchAgent; switching removes the plist Task 13 wrote."""
+    _keepfold_app(monkeypatch, "darwin")
+    svc = FakeSMApp()
+    monkeypatch.setattr(desktop, "_smapp", lambda: svc)
+    plist = Path.home() / "Library" / "LaunchAgents" / "io.github.alenissacsam-2.keepfold.plist"
+    assert desktop.autostart_file() == plist
+    plist.parent.mkdir(parents=True)
+    plist.write_text("<plist/>", encoding="utf-8")  # Task 13's
     assert desktop.autostart_state() == {"supported": True, "enabled": False,
                                          "label": "Start at login"}
-    assert desktop.set_autostart(True)["enabled"] is True
-    assert plistlib.loads(f.read_bytes()) == {
-        "Label": desktop.AUTOSTART_ID, "ProgramArguments": [exe, "--hidden"], "RunAtLoad": True}
+    lines = []
+    desktop.first_run(lines.append)  # on by default, as on Windows
+    assert lines == [] and svc.calls == ["register"] and not plist.exists()
+    assert desktop.autostart_state()["enabled"] is True
     assert status.config()["app"]["autostart_asked"] is True
     assert desktop.set_autostart(False)["enabled"] is False
-    assert not f.exists()
+    assert svc.calls == ["register", "unregister"]
+    svc.fail = "Operation not permitted"
+    with pytest.raises(ValueError, match="Operation not permitted"):
+        desktop.set_autostart(True)
+    assert desktop.set_autostart(False)["enabled"] is False  # not registered: off is off
 
 
-def test_autostart_linux_desktop_entry(monkeypatch, tmp_path):
+def test_mac_app_autostart_waiting_for_approval_says_where(monkeypatch, gui):
+    """Status 2 (requires approval: switched off in System Settings) is not on, and says where
+    to allow it; the tray's toggle shows that note."""
+    _keepfold_app(monkeypatch, "darwin")
+    svc = FakeSMApp(status=2)
+    monkeypatch.setattr(desktop, "_smapp", lambda: svc)
+    state = desktop.autostart_state()
+    assert state["enabled"] is False
+    assert "System Settings > General > Login Items" in state["note"]
+    svc.fail = "Operation not permitted"  # register while unapproved: no error, the note
+    assert desktop.set_autostart(True)["note"] == state["note"]
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.tray = FakeIcon("k", None, "Keepfold", FakeMenu())
+    d.toggle_autostart()
+    assert d.tray.notes == [state["note"]]
+
+
+def test_linux_app_autostart_uses_stable_launcher(monkeypatch, tmp_path):
+    """The .deb's /usr/bin/keepfold-app picks the newest copy at each login; the frozen
+    executable's own path is versioned and goes away after an update."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    exe = _keepfold_app(monkeypatch, "linux")
+    _keepfold_app(monkeypatch, "linux")
+    monkeypatch.setattr(sys, "executable", "/home/u/.local/share/keepfold/app/0.7.0/keepfold-app")
     f = tmp_path / "xdg" / "autostart" / "io.github.alenissacsam_2.keepfold.desktop"
     assert desktop.autostart_file() == f
     lines = []
     desktop.first_run(lines.append)  # the first start turns it on, as on Windows
-    assert lines == [] and _exec_line(f) == f'Exec="{exe}" "--hidden"'
+    assert lines == [] and _exec_line(f) == 'Exec="/usr/bin/keepfold-app" "--hidden"'
+    assert shlex.split(_exec_line(f).removeprefix("Exec=")) == ["/usr/bin/keepfold-app",
+                                                                "--hidden"]
     assert f.read_text(encoding="utf-8").startswith("[Desktop Entry]\nType=Application\n")
     assert desktop.autostart_state()["enabled"] is True
     desktop.set_autostart(False)
@@ -693,26 +749,89 @@ def test_autostart_linux_desktop_entry(monkeypatch, tmp_path):
     assert not f.exists()
 
 
-@pytest.mark.parametrize("platform", ["darwin", "linux"])
-def test_autostart_files_quote_odd_home(monkeypatch, tmp_path, platform):
-    """Review focus 2: a home folder with a space and a non-ASCII letter still starts the app."""
+def test_linux_autostart_file_in_an_odd_home(monkeypatch, tmp_path):
+    """Review focus 2: a home folder with a space and a non-ASCII letter still gets the entry."""
     h = tmp_path / "Ana María l"
     h.mkdir()
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: h))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    exe = _keepfold_app(monkeypatch, platform)
-    assert "Ana María l/" in exe
+    _keepfold_app(monkeypatch, "linux")
     desktop.set_autostart(True)
     f = desktop.autostart_file()
-    assert f.is_relative_to(h)
-    if platform == "darwin":
-        assert plistlib.loads(f.read_bytes())["ProgramArguments"] == [exe, "--hidden"]
-    else:
-        assert f.parent == h / ".config" / "autostart"
-        line = _exec_line(f)
-        assert line == f'Exec="{exe}" "--hidden"'
-        assert shlex.split(line.removeprefix("Exec=")) == [exe, "--hidden"]
+    assert f.parent == h / ".config" / "autostart" and f.is_file()
+
+
+def test_login_launch_starts_hidden(gui, vault, monkeypatch):
+    """The Mac app's login item passes no --hidden: when NSApp finishes launching, a launch
+    Apple Event marked 'lgit' (keyAELaunchedAsLogInItem) hides the window; anything else, or
+    no way to tell, leaves it shown."""
+    _keepfold_app(monkeypatch, "darwin")
+    monkeypatch.setattr(desktop, "first_run", lambda echo: None)
+    login = [True]
+    monkeypatch.setattr(desktop, "_login_launch", lambda: login[0])
+    for at_login, want in ((True, ["hide"]), (False, [])):
+        login[0], hooks, seen = at_login, [], {}
+        monkeypatch.setattr(desktop, "_when_launched", hooks.append)
+
+        def start(wv, hooks=hooks, seen=seen):
+            (hook,) = hooks
+            hook()  # NSApplicationDidFinishLaunchingNotification
+            w = wv.windows[0]
+            seen["calls"] = list(w.calls)
+            seen["fresh"] = w.events.closing.fns[0].__self__.fresh
+            FakeIcon.made[-1].item("Quit").action()
+            assert w.destroyed.wait(10)
+        gui(start)
+        desktop.run(vault, echo=lambda s: None)
+        assert seen == {"calls": want, "fresh": at_login}
+    hooks = []
+    monkeypatch.setattr(desktop, "_when_launched", hooks.append)
+
+    def quit_now(wv):
+        FakeIcon.made[-1].item("Quit").action()
+        assert wv.windows[0].destroyed.wait(10)
+    gui(quit_now)
+    desktop.run(vault, hidden=True, echo=lambda s: None)  # --hidden: nothing to tell apart
+    assert hooks == []
+
+
+def test_login_launch_reads_the_launch_apple_event(monkeypatch):
+    """`_login_launch`: keyAEPropData of the current Apple Event is 'lgit'; no event, another
+    value or any error is False (the window shows)."""
+    events = []
+
+    def event(code):
+        prop = types.SimpleNamespace(enumCodeValue=lambda: code)
+        return types.SimpleNamespace(paramDescriptorForKeyword_=lambda k: prop
+                                     if k == int.from_bytes(b"prop", "big") else None)
+    manager = types.SimpleNamespace(currentAppleEvent=lambda: events[-1])
+    appkit = types.SimpleNamespace(NSAppleEventManager=types.SimpleNamespace(
+        sharedAppleEventManager=lambda: manager))
+    monkeypatch.setattr(desktop, "_appkit", lambda: appkit)
+    events.append(event(int.from_bytes(b"lgit", "big")))
+    assert desktop._login_launch() is True
+    events.append(event(int.from_bytes(b"xxxx", "big")))
+    assert desktop._login_launch() is False
+    events.append(None)  # not inside the launch event
+    assert desktop._login_launch() is False
+    monkeypatch.setattr(desktop, "_appkit", lambda: 1 / 0)
+    assert desktop._login_launch() is False
+
+    center, ran = types.SimpleNamespace(), []
+
+    def observe(name, obj, queue, block):
+        center.args, center.block = (name, obj, queue), block
+        return "token"
+    center.addObserverForName_object_queue_usingBlock_ = observe
+    appkit = types.SimpleNamespace(
+        NSApplicationDidFinishLaunchingNotification="didFinish",
+        NSNotificationCenter=types.SimpleNamespace(defaultCenter=lambda: center))
+    monkeypatch.setattr(desktop, "_appkit", lambda: appkit)
+    assert desktop._when_launched(lambda: ran.append(1)) == "token"
+    assert center.args == ("didFinish", None, None)  # queue None: on the posting (main) thread
+    center.block(object())
+    assert ran == [1]
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux"])

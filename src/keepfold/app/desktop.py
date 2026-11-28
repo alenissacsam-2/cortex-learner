@@ -36,6 +36,10 @@ from keepfold.app import server, status
 AUTOSTART = "Keepfold"  # the HKCU Run value: `"<Keepfold.exe>" -m keepfold.app.launch --hidden`
 AUTOSTART_ID = "io.github.alenissacsam-2.keepfold"  # the app's LaunchAgent label (bundle id)
 DESKTOP_ID = "io.github.alenissacsam_2.keepfold"  # its .desktop name (no "-" after a dot)
+SM_ENABLED, SM_APPROVAL = 1, 2  # SMAppServiceStatusEnabled, ...RequiresApproval
+APPROVE = "Allow Keepfold in System Settings > General > Login Items to start it at login."
+# the Mac launch Apple Event's keyAEPropData is keyAELaunchedAsLogInItem at a login start
+AE_PROP, AE_LOGIN = int.from_bytes(b"prop", "big"), int.from_bytes(b"lgit", "big")
 # the AppUserModelID, also on the shortcuts: pins and groups as Keepfold
 APP_ID = "Keepfold.Learner"
 ICON = Path(__file__).resolve().parent.parent / "assets" / "keepfold.ico"  # scripts/make_icon.py
@@ -124,7 +128,8 @@ def autostart_label() -> str:
 
 
 def autostart_file() -> Path | None:
-    """Start at login on Mac (a LaunchAgent) and Linux (an XDG autostart entry); None on Windows
+    """Start at login on Linux (an XDG autostart entry) and the Mac's old LaunchAgent (removed:
+    the Mac app is its own login item now, `_smapp`); None on Windows
     (the Run value) and elsewhere."""
     if sys.platform == "darwin":
         return Path.home() / "Library" / "LaunchAgents" / f"{AUTOSTART_ID}.plist"
@@ -135,11 +140,13 @@ def autostart_file() -> Path | None:
 
 
 def autostart_args() -> list[str]:
-    """What the login entry runs off Windows: the Keepfold app, starting in the tray."""
+    """What the Linux login entry runs: the .deb's stable launcher, starting in the tray, never
+    this version's own path (an update replaces it)."""
     from keepfold import update
     if update.mode() != "app":
         raise ValueError("Start at login comes with the Keepfold app.")
-    return [sys.executable, "--hidden"]
+    from keepfold.app import bundle
+    return [bundle.LINUX_APP.as_posix(), "--hidden"]
 
 
 def _autostart_supported() -> bool:
@@ -147,7 +154,19 @@ def _autostart_supported() -> bool:
     return sys.platform == "win32" or (autostart_file() is not None and update.mode() == "app")
 
 
+def _smapp():  # tests replace this: never the real login items in a test
+    """The frozen Mac app as its own login item (SMAppService, macOS 13+). Spike S4: a
+    LaunchAgent shows as "Unknown Developer" and notifies again after every update."""
+    from ServiceManagement import SMAppService
+    return SMAppService.mainAppService()
+
+
 def autostart_state() -> dict:
+    from keepfold.app import bundle
+    if bundle._mac_app():
+        st = _smapp().status()
+        out = {"supported": True, "enabled": st == SM_ENABLED, "label": autostart_label()}
+        return {**out, "note": APPROVE} if st == SM_APPROVAL else out
     on = _autostart_supported()
     if sys.platform == "win32":
         enabled = status.run_get(AUTOSTART) is not None
@@ -159,7 +178,18 @@ def autostart_state() -> dict:
 def set_autostart(enabled: bool) -> dict:
     """Start with Windows (Start at login on Mac and Linux) on or off. Either choice counts as
     made, so the first-run default (`first_run`) never overrides it."""
-    if sys.platform == "win32":
+    from keepfold.app import bundle
+    if bundle._mac_app():
+        svc = _smapp()
+        ok, err = (svc.registerAndReturnError_ if enabled
+                   else svc.unregisterAndReturnError_)(None)
+        # registered but waiting for approval counts as on; autostart_state says where
+        if not ok and (svc.status() in (SM_ENABLED, SM_APPROVAL)) != enabled:
+            why = err.localizedDescription() if err is not None else "no reason given"
+            raise ValueError(f"Start at login could not be turned {'on' if enabled else 'off'}:"
+                             f" {why}")
+        autostart_file().unlink(missing_ok=True)  # the LaunchAgent this replaces
+    elif sys.platform == "win32":
         if enabled:
             status.run_set(autostart_command(), AUTOSTART)
         else:
@@ -520,6 +550,25 @@ def _watch_logout(quit):  # tests replace this
     return bus
 
 
+def _when_launched(fn):  # tests replace this
+    """Mac: fn() when NSApp finishes launching (inside webview.start), the only time the launch
+    Apple Event is current. Returns what keeps the observer alive."""
+    ak = _appkit()
+    return ak.NSNotificationCenter.defaultCenter().addObserverForName_object_queue_usingBlock_(
+        ak.NSApplicationDidFinishLaunchingNotification, None, None, lambda _note: fn())
+
+
+def _login_launch() -> bool:  # tests replace this
+    """Mac: this start is a login item's, its launch Apple Event marked 'lgit'. False when that
+    cannot be told, so the window shows. Not yet seen across a real login (port P3)."""
+    try:
+        ev = _appkit().NSAppleEventManager.sharedAppleEventManager().currentAppleEvent()
+        prop = ev.paramDescriptorForKeyword_(AE_PROP) if ev is not None else None
+        return prop is not None and prop.enumCodeValue() == AE_LOGIN
+    except Exception:  # noqa: BLE001  (no pyobjc, no event: a normal start)
+        return False
+
+
 def _native(win, fn) -> bool:
     """fn(form, control) on the GUI thread, given pywebview's WinForms form and its Edge WebView2
     control; False, with nothing run, for another backend or a window already gone."""
@@ -704,10 +753,18 @@ class Desktop:
 
     def toggle_autostart(self) -> None:
         try:
-            set_autostart(not autostart_state()["enabled"])
+            if note := set_autostart(not autostart_state()["enabled"]).get("note"):
+                self.notify(note)  # a Mac login item the user must allow
         except (OSError, ValueError) as e:
             self.notify(str(e)[:200])
         self.refresh_tray()
+
+    def launched(self) -> None:
+        """The Mac app finished launching: a login start (no --hidden there) goes to the menu
+        bar, as `--hidden` does. With no menu-bar icon the window stays: no way back to it."""
+        if self.tray is not None and _login_launch():
+            self.fresh = True
+            self.hide()
 
     def refresh_tray(self) -> None:
         if self.tray is not None:
@@ -868,6 +925,13 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
             d.refresh_tray()  # its Quick capture text names the key
         if hidden:  # Start with Windows: the page sleeps until the window is first opened
             d.sleep_later()
+        else:
+            from keepfold.app import bundle
+            if bundle._mac_app():  # its login item passes no --hidden: tell from the launch
+                try:
+                    d.launch_watch = _when_launched(d.launched)
+                except Exception as e:  # noqa: BLE001  (no pyobjc: the window shows)
+                    echo(f"Keepfold app: a login start is not told apart ({e})")
         menu = {}
         if d.tray is None and sys.platform != "win32":
             menu = {"menu": _window_menu(d, webview.menu)}

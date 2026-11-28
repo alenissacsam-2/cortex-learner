@@ -833,6 +833,18 @@ def test_uninstall_on_windows_turns_off_the_apps_run_value(home, uninstall_fakes
     assert "Use Settings > Apps > Keepfold." in out
 
 
+def test_uninstall_mac_app_unregisters_its_login_item(home, uninstall_fakes, monkeypatch):
+    """The Mac app's Start at login is SMAppService, not a file: set_autostart(False) ends it
+    (and removes an old LaunchAgent)."""
+    from keepfold import update
+    calls, _ = uninstall_fakes
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    out = run("uninstall", "--yes").output
+    assert calls == ["disconnect", ("login", False), ("autostart", False)]
+    assert "no longer starts at login" in out and "Move Keepfold to the Trash" in out
+
+
 def test_icloud_documents_warns(monkeypatch, tmp_path_factory):
     """Port T17: on a Mac with iCloud Desktop & Documents on, a vault in ~/Documents or
     ~/Desktop is synced though its path never says iCloud."""

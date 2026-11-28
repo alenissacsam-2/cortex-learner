@@ -13,6 +13,7 @@ from keepfold import update
 
 CLI = "keepfold-cli"  # the Mac bundle's CLI; `Keepfold` (the GUI) differs by more than case
 LINUX_CLI = Path("/usr/bin/keepfold")  # the .deb's
+LINUX_APP = Path("/usr/bin/keepfold-app")  # the .deb's launcher: it runs the newest copy
 APPLICATIONS = Path("/Applications")  # tests replace this
 
 
