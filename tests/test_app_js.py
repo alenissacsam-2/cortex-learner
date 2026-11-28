@@ -2139,6 +2139,68 @@ const out = { errors };
 """  # noqa: E501  (JavaScript)
 
 
+UNINSTALL = HARNESS[:HARNESS.index("const out = {};")] + r"""
+const out = { errors };
+(async () => {
+  try {
+    vm.runInThisContext(fs.readFileSync(appPath, 'utf8'), { filename: appPath });
+    await tick();
+    nav.querySelectorAll('button').find((b) => b.dataset.s === 'status').fire('click');
+    await tick();
+    const un = () => $('status').querySelectorAll('button').find((b) => b.textContent === 'Uninstall Keepfold…');
+    out.shown = !!un();
+    if (un()) {
+      un().fire('click');
+      await tick();
+      out.ask = [$('confirm-title').textContent, $('confirm-ok').textContent, $('confirm-body').textContent,
+        fetched.some((f) => f.path === '/api/app/uninstall')];
+      DATA.routes['/api/job'] = { seq: 7, job: { name: 'Uninstalling Keepfold', section: 'uninstall', running: false, cancellable: false, line: '', seconds: 3, error: null, result: DATA.result } };
+      $('confirm-ok').onclick();
+      await tick();
+      out.posts = fetched.filter((f) => f.method === 'POST').map((f) => f.path);
+      out.gone = $('gone').hidden ? '' : $('gone').textContent;
+      out.toast = $('toast-msg').textContent;
+    }
+  } catch (e) { errors.push(String(e && e.stack || e)); }
+  out.sinks = sinks;
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0));  // a pipe write is async on POSIX: exit once flushed
+})();
+"""  # noqa: E501  (JavaScript)
+
+
+@pytest.mark.parametrize("mode,removed", [("installer", True), ("dev", True), ("app", True),
+                                          ("app", False)])
+def test_uninstall_button_only_in_the_mac_and_linux_app(root_committed, tmp_path, monkeypatch,
+                                                        mode, removed):
+    """Port Task 25: Updates ends with Uninstall Keepfold… only in app mode; it asks first in
+    the page's dialog (the vault and settings are kept), and only OK starts the job; removed,
+    the page says so and goes inert; not removed, the note stays up as an error."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    routes = _sweep_routes(root_committed, monkeypatch)
+    routes["/api/status"].update(first_run=False, update={"current": "0.1.0", "mode": mode,
+                                                          "ready": None, "auto": True})
+    note = "Keepfold was not removed. Remove it in a terminal: sudo apt remove keepfold"
+    result = {"removed": True, "steps_failed": False} if removed else \
+        {"removed": False, "note": note, "steps_failed": False}
+    out = _run(node, tmp_path, "uninstall", UNINSTALL,
+               {"routes": routes, "stream": [], "result": result})
+    assert out["errors"] == [] and out["sinks"] == [], out["errors"]
+    assert out["shown"] is (mode == "app")
+    if mode != "app":
+        return
+    title, ok, body, early = out["ask"]
+    assert (title, ok, early) == ("Uninstall Keepfold?", "Uninstall", False)
+    assert "AI app" in body and "login" in body and "Your vault and your Keepfold settings are " \
+        "kept." in body
+    assert out["posts"] == ["/api/app/uninstall"]
+    if removed:
+        assert out["gone"].startswith("Keepfold was removed.")
+    else:
+        assert out["gone"] == "" and out["toast"] == note
+
+
 UNSAFE_JS = HARNESS[:HARNESS.index("const out = {};")] + r"""
 const out = { errors };
 (async () => {

@@ -76,3 +76,31 @@ def test_deb_control_and_desktop_entry():
     assert entry["Exec"] == "/usr/bin/keepfold-app"
     assert entry["StartupWMClass"] == "keepfold-app"  # the frozen program's file name
     assert entry["Icon"] == "keepfold"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="the .deb's prerm runs under /bin/sh on Linux (CI)")
+def test_prerm_disconnects_the_sudo_user_only_on_remove_and_never_fails(tmp_path):
+    """Port Task 25: `apt remove` takes Keepfold out of the AI apps of the user who ran sudo;
+    an upgrade, root or no SUDO_USER does nothing; a failing disconnect never stops apt."""
+    prerm = LINUX / "DEBIAN" / "prerm"
+    assert subprocess.run(["sh", "-n", str(prerm)]).returncode == 0
+    fake, log = tmp_path / "bin", tmp_path / "log"
+    fake.mkdir()
+    (fake / "timeout").write_text(f'#!/bin/sh\necho "$@" >> "{log}"\nexit 3\n',
+                                  encoding="utf-8")  # also the failing disconnect
+    (fake / "timeout").chmod(0o755)
+
+    def run(*args: str, **env: str) -> None:
+        e = {k: v for k, v in os.environ.items() if k != "SUDO_USER"}
+        r = subprocess.run(["sh", str(prerm), *args], capture_output=True, text=True, timeout=30,
+                           env={**e, "PATH": f"{fake}:{e.get('PATH', '/usr/bin:/bin')}", **env})
+        assert r.returncode == 0, r.stderr
+
+    run("upgrade", "0.7.0", SUDO_USER="alice")
+    run("remove")
+    run("remove", SUDO_USER="root")
+    assert not log.exists()
+    run("remove", SUDO_USER="alice")
+    assert log.read_text().split() == ["60", "runuser", "-u", "alice", "--", "/usr/bin/keepfold",
+                                      "disconnect"]

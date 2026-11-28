@@ -818,15 +818,48 @@ def disconnect() -> None:
         raise typer.Exit(1)
 
 
+def uninstall_steps(say) -> bool:
+    """`keepfold uninstall`'s steps, shared with the app's Uninstall Keepfold… (server
+    app_uninstall): disconnect every AI app, turn off both login entries, delete the
+    ~/.local/bin link. The rest still runs after a failed step; True when one failed."""
+    import types
+
+    from keepfold import update
+    from keepfold.app import actions, desktop
+
+    failed = False
+    try:
+        disconnect()
+    except typer.Exit:  # an AI app's file could not be changed: the rest still runs
+        failed = True
+    actions.login(types.SimpleNamespace(say=say), None, False)  # the page's switch, off
+    if update.mode() == "app" and sys.platform == "darwin":  # SMAppService, not a file
+        try:
+            desktop.set_autostart(False)
+            say("The Keepfold app no longer starts at login.")
+        except ValueError as e:
+            say(str(e))
+            failed = True
+    elif (f := desktop.autostart_file()) is not None:
+        if f.exists():
+            f.unlink()
+            say(f"removed {f}")
+    elif sys.platform == "win32":
+        desktop.set_autostart(False)
+        say("The Keepfold app no longer starts with Windows.")
+    link = Path.home() / ".local" / "bin" / "keepfold"
+    if link.is_symlink():  # a real file there is not ours to delete
+        link.unlink()
+        say(f"removed {link}")
+    return failed
+
+
 @app.command()
 def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask first.")] = False,
               ) -> None:
     """Take Keepfold out of your AI apps and stop it starting at login. Your vault and
     ~/.keepfold are kept; the last line says how to remove the program itself."""
-    import types
-
     from keepfold import update
-    from keepfold.app import actions, desktop
 
     link = Path.home() / ".local" / "bin" / "keepfold"
     if not yes:
@@ -837,30 +870,8 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
         if not typer.confirm("Go ahead?"):
             typer.echo("Nothing changed.")
             return
-    failed = False
-    try:
-        disconnect()
-    except typer.Exit:  # an AI app's file could not be changed: the rest still runs
-        failed = True
-    actions.login(types.SimpleNamespace(say=typer.echo), None, False)  # the page's switch, off
+    failed = uninstall_steps(typer.echo)
     mode = update.mode()
-    if mode == "app" and sys.platform == "darwin":  # its login item (SMAppService), not a file
-        try:
-            desktop.set_autostart(False)
-            typer.echo("The Keepfold app no longer starts at login.")
-        except ValueError as e:
-            typer.echo(str(e), err=True)
-            failed = True
-    elif (f := desktop.autostart_file()) is not None:
-        if f.exists():
-            f.unlink()
-            typer.echo(f"removed {f}")
-    elif sys.platform == "win32":
-        desktop.set_autostart(False)
-        typer.echo("The Keepfold app no longer starts with Windows.")
-    if link.is_symlink():  # a real file there is not ours to delete
-        link.unlink()
-        typer.echo(f"removed {link}")
     typer.echo("Move Keepfold to the Trash from Applications." if mode == "app"
                and sys.platform == "darwin"
                else "Remove the app: sudo apt remove keepfold" if mode == "app"

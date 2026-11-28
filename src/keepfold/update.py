@@ -573,3 +573,55 @@ def _relaunch(cmd: list[str], pid: int) -> None:
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, creationflags=NO_WINDOW,
                      env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
+# ---- Uninstall Keepfold… in Settings (port Task 25): after cli.uninstall_steps ----
+
+def remove_app(say) -> dict:
+    """Remove the Mac or Linux app itself, only on the user's confirmed click: the Mac .app to
+    the Trash; on Linux the per-user update copies, then the .deb through pkexec. Returns
+    {"removed": True}, or {"removed": False, "note": what to do by hand}; the caller quits only
+    when it was removed."""
+    if sys.platform == "darwin":
+        from keepfold.app import bundle
+        app = bundle.app_path()
+        try:
+            if app is None:
+                raise OSError("this is not the Keepfold app")
+            _trash(app)
+        except Exception as e:  # pyobjc missing or refused: the user can still drag it
+            return {"removed": False, "note": f"Could not move Keepfold to the Trash ({e}). "
+                    "Quit Keepfold, then drag it from Applications to the Trash."}
+        say(f"moved {app} to the Trash")
+        return {"removed": True}
+    copies = Path.home() / ".local" / "share" / "keepfold" / "app"  # Update now's (_install_linux)
+    shutil.rmtree(copies, ignore_errors=True)
+    say(f"removed {copies}")
+    say("asking for your password to remove the keepfold package")
+    ok, out = _apt_remove()
+    if not ok:
+        return {"removed": False, "note": "Keepfold was not removed: the password prompt was "
+                f"cancelled or apt-get failed ({out or 'no details'}). Remove it in a terminal: "
+                "sudo apt remove keepfold"}
+    say("removed the keepfold package")
+    return {"removed": True}
+
+
+def _trash(path: Path) -> None:  # tests replace this
+    """Move `path` to the Trash through NSFileManager, so Finder's Put Back works."""
+    from Foundation import NSURL, NSFileManager  # pyobjc, the Mac app only
+    ok, _, err = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
+        NSURL.fileURLWithPath_(str(path)), None, None)
+    if not ok:
+        raise OSError(str(err))
+
+
+def _apt_remove() -> tuple[bool, str]:  # tests replace this
+    """`pkexec apt-get remove -y keepfold`: polkit asks for the password; (ok, output)."""
+    try:
+        r = subprocess.run(["pkexec", "apt-get", "remove", "-y", "keepfold"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=900, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    return r.returncode == 0, (r.stdout + r.stderr).strip()[-500:]

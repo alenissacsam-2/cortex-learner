@@ -3562,3 +3562,84 @@ def test_a_browser_that_leaves_mid_answer_is_dropped_quietly(vault, gone):
         assert h.close_connection is True
     finally:
         srv.server_close()
+
+
+# ---- Uninstall Keepfold… (port Task 25) ---------------------------------------------------
+
+@pytest.fixture
+def uninstall(monkeypatch, tmp_path):
+    """Fakes for every step: the shared `keepfold uninstall` steps, the Trash and pkexec."""
+    from keepfold import cli
+    from keepfold.app import bundle
+    calls = []
+    mac_app = tmp_path / "Applications" / "Keepfold.app"
+    monkeypatch.setattr(update, "mode", lambda: "app")
+    monkeypatch.setattr(cli, "uninstall_steps", lambda say: calls.append("steps") or False)
+    monkeypatch.setattr(bundle, "app_path", lambda: mac_app)
+    monkeypatch.setattr(update, "_trash", lambda p: calls.append(("trash", p)))
+    monkeypatch.setattr(update, "_apt_remove", lambda: calls.append("apt") or (True, ""))
+    return calls, mac_app
+
+
+def test_uninstall_refused_outside_the_mac_and_linux_app(app, uninstall, monkeypatch):
+    calls, _ = uninstall
+    for m in ("installer", "dev"):
+        monkeypatch.setattr(update, "mode", lambda m=m: m)
+        st, js, _, _ = call(app, "POST", "/api/app/uninstall", {})
+        assert st == 400 and "Mac and Linux app" in js["error"]
+    assert calls == [] and app.jobs.cur is None
+
+
+def test_uninstall_mac_trashes_the_app_and_quits(app, uninstall, monkeypatch):
+    calls, mac_app = uninstall
+    monkeypatch.setattr(sys, "platform", "darwin")
+    call(app, "POST", "/api/app/uninstall", {})
+    j = wait_job(app)
+    assert j["error"] is None and j["result"]["removed"] is True, j
+    assert calls == ["steps", ("trash", mac_app)]
+    assert app.stop.wait(5)
+
+
+def test_uninstall_mac_trash_failure_says_so_and_stays(app, uninstall, monkeypatch):
+    calls, _ = uninstall
+
+    def no_trash(p):
+        raise OSError("not permitted")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(update, "_trash", no_trash)
+    call(app, "POST", "/api/app/uninstall", {})
+    r = wait_job(app)["result"]
+    assert r["removed"] is False and "not permitted" in r["note"] and "Trash" in r["note"]
+    assert not app.stop.wait(2.5)
+
+
+def test_uninstall_linux_removes_user_copies_then_apt_and_quits(app, uninstall, monkeypatch):
+    calls, _ = uninstall
+    monkeypatch.setattr(sys, "platform", "linux")
+    copies = Path.home() / ".local" / "share" / "keepfold" / "app"
+    (copies / "9.0.0").mkdir(parents=True)
+    (copies / "9.0.0" / "keepfold-app").write_text("x")
+    monkeypatch.setattr(update, "_apt_remove", lambda: calls.append(
+        ("apt", copies.exists())) or (True, ""))
+    call(app, "POST", "/api/app/uninstall", {})
+    r = wait_job(app)["result"]
+    assert r["removed"] is True and calls == ["steps", ("apt", False)]
+    assert (Path.home() / ".local" / "share" / "keepfold").is_dir()  # only app/ goes
+    assert app.stop.wait(5)
+
+
+def test_uninstall_linux_cancelled_pkexec_says_run_apt(app, uninstall, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(update, "_apt_remove", lambda: (False, "Request dismissed"))
+    call(app, "POST", "/api/app/uninstall", {})
+    r = wait_job(app)["result"]
+    assert r["removed"] is False and "sudo apt remove keepfold" in r["note"]
+    assert not app.stop.wait(2.5)
+
+
+def test_uninstall_steps_failure_is_reported(app, uninstall, monkeypatch):
+    from keepfold import cli
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(cli, "uninstall_steps", lambda say: True)
+    call(app, "POST", "/api/app/uninstall", {})
+    assert wait_job(app)["result"]["steps_failed"] is True

@@ -662,3 +662,33 @@ def test_exchange_swaps_two_folders_in_one_step(tmp_path):
     (b / "x").write_text("b")
     update._exchange(a, b)
     assert (a / "x").read_text() == "b" and (b / "x").read_text() == "a"
+
+
+def test_apt_remove_runs_pkexec_with_no_window(monkeypatch):
+    """Uninstall from Settings on Linux: one argv list, never a shell, never a console window."""
+    seen = {}
+
+    def run(args, **kw):
+        seen.update(args=args, **kw)
+        return SimpleNamespace(returncode=126, stdout="", stderr="Request dismissed")
+    monkeypatch.setattr(subprocess, "run", run)
+    assert update._apt_remove() == (False, "Request dismissed")
+    assert seen["args"] == ["pkexec", "apt-get", "remove", "-y", "keepfold"]
+    assert seen["creationflags"] == update.NO_WINDOW and not seen.get("shell")
+
+
+def test_trash_uses_nsfilemanager(monkeypatch, tmp_path):
+    """The Mac .app goes to the Trash through NSFileManager (Finder's Put Back works); a fake
+    Foundation stands in for pyobjc."""
+    got = []
+    ok = [True]
+    fm = SimpleNamespace(trashItemAtURL_resultingItemURL_error_=lambda url, r, e: (
+        got.append(url) or (ok[0], None, None if ok[0] else "denied")))
+    fake = SimpleNamespace(NSFileManager=SimpleNamespace(defaultManager=lambda: fm),
+                           NSURL=SimpleNamespace(fileURLWithPath_=lambda p: ("url", p)))
+    monkeypatch.setitem(sys.modules, "Foundation", fake)
+    update._trash(tmp_path / "Keepfold.app")
+    assert got == [("url", str(tmp_path / "Keepfold.app"))]
+    ok[0] = False
+    with pytest.raises(OSError, match="denied"):
+        update._trash(tmp_path / "Keepfold.app")

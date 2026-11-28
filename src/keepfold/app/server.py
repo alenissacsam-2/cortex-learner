@@ -347,7 +347,7 @@ class App:
                     "/api/browse/private-chats": self.private_chats}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
-            "/api/app/move": self.app_move,
+            "/api/app/move": self.app_move, "/api/app/uninstall": self.app_uninstall,
             "/api/connect/path": self.connect_path,
             "/api/connect/copied": self.pack_copied,
             "/api/profiles": self.profiles_set,
@@ -1661,6 +1661,22 @@ class App:
         bundle.move_to_applications()
         threading.Timer(2, self.stop.set).start()  # the page reads the answer first
         return {"ok": True}
+
+    def app_uninstall(self, body: dict) -> dict:
+        """Uninstall Keepfold… (Mac/Linux app only; Windows keeps Apps & Features): the steps of
+        `keepfold uninstall --yes`, then the app itself goes (update.remove_app) and it quits.
+        The vault and ~/.keepfold are kept."""
+        if update.mode() != "app":
+            raise ValueError("Uninstall from here is only in the Mac and Linux app.")
+
+        def run(job):
+            from keepfold import cli
+            failed = cli.uninstall_steps(job.say)
+            out = update.remove_app(job.say)
+            if out["removed"]:
+                threading.Timer(2, self.stop.set).start()  # the page reads the result first
+            return {**out, "steps_failed": failed}
+        return self.jobs.start("Uninstalling Keepfold", "uninstall", run)
 
     def connect_path(self, body: dict) -> dict:
         """Status's Claude Code Fix (status.claude_code_row): the installed Keepfold's bin folder

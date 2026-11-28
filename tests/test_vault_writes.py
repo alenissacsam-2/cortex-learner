@@ -35,7 +35,8 @@ ALLOWED = {
     "redteam.py": "P2's made-up chat export in the red team's own temp folder, not a vault file",
     "taint.py": "~/.keepfold/config.yaml under its own lock (temp + os.replace)",
     "update.py": "the downloaded installer or update file and its checksum in the update "
-                 "folder, and the Mac or Linux app swapped in by Update now",
+                 "folder, the Mac or Linux app swapped in by Update now, and its per-user "
+                 "copies removed by Uninstall Keepfold…",
     "zotero.py": "copies Zotero's database into a temp folder to read it; never the vault",
     "anki.py": "copies Anki's collection into a temp folder to read it; never the vault",
 }

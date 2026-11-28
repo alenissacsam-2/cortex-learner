@@ -366,6 +366,10 @@
       upd = j;
       if (j.result && j.result.busy) closePrograms(j.result);
       if (j.result && j.result.launched) gone('Keepfold is closing to install the update. It reopens by itself when it is done; you can close this tab.');
+    } else if (j.section === 'uninstall' && j.result) {  // server.app_uninstall's job
+      const r = j.result, apps = r.steps_failed ? ' Some AI apps could not be changed; check their settings.' : '';
+      if (r.removed) gone(`Keepfold was removed. Your vault and your Keepfold settings are kept.${apps}`);
+      else toast(r.note + apps, true, 'error');
     }
     else {
       // a command that stopped with an error (ok: false) failed too
@@ -644,6 +648,12 @@
     const cb = h('input', { type: 'checkbox', id: 'update-check', checked: u.auto !== false });
     out.push(h('div', { class: 'field' }, h('label', { class: 'check', for: 'update-check' }, cb, h('span', { text: 'Check for updates automatically' })),
       h('p', { class: 'help', text: 'Asks GitHub for a new version a minute after the app starts and every 6 hours, and downloads it in the background. Nothing is installed until you click.' })));
+    if (u.mode === 'app') {  // the Mac and Linux app only; Windows keeps Apps & Features
+      out.push(h('div', { class: 'pad' }, btn('Uninstall Keepfold…', () => confirmDialog('Uninstall Keepfold?', 'Uninstall', [
+        h('p', { class: 'ink-2', text: 'Keepfold is removed from every AI app it is connected to, stops starting at login, and the app itself is removed.' }),
+        h('p', { class: 'ink-2', text: 'Your vault and your Keepfold settings are kept.' })],
+      () => job('/api/app/uninstall', {})))));
+    }
     const b = board('Updates', { note: say(u.auto !== false) }, ...out);
     cb.addEventListener('change', () => post('/api/app/update-check', { enabled: cb.checked }, (s) => {
       b.querySelector('.band-note').textContent = say(s && typeof s.enabled === 'boolean' ? s.enabled : cb.checked);
