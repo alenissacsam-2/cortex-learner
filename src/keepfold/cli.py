@@ -862,6 +862,8 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
     typer.echo("Your vault and ~/.keepfold are kept; delete them yourself if you want them gone.")
     if failed:
         raise typer.Exit(1)
+
+
 @app.command(hidden=True)  # the frozen apps' smoke test (release-apps.yml)
 def selftest() -> None:
     """Import every Keepfold module and read every package data file; exit 1 on the first
