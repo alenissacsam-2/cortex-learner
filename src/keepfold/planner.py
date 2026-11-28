@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from keepfold import levels
 from keepfold.catalog import Catalog
-from keepfold.events import EventLog, live, local_day
+from keepfold.events import KINDS, EventLog, live, local_day
 from keepfold.levels import ConceptState
 from keepfold.vault import CHECKED_RE, UNCHECKED_RE, VaultError, invalid, is_private
 
@@ -759,7 +759,7 @@ def week_summary(vault, catalog, *, now: datetime) -> dict:
                if st(before, c) != st(after, c) and c not in hide]
     return {
         "from": start.isoformat(), "to": to.isoformat(),
-        "sessions": len({e["session"] for e in week if e.get("kind") != "open"
+        "sessions": len({e["session"] for e in week if e.get("kind") in KINDS - {"open"}
                          and str(e.get("session")).startswith("s_")}),
         "grades": len(verdicts),
         "correct": verdicts.count("correct"),

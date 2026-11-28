@@ -32,6 +32,9 @@ DEPTH = ("application", "transfer")
 # `log` payload kinds _items folds into learning evidence; keep in step with its checks.
 # The planner's warm-up gap counts only these logs, not always-on ledger lines (touch, need...).
 EVIDENCE_LOG_KINDS = ("taught", "self_report", "problem_status")
+# Event kinds `_items` folds (`void` is applied earlier, by `placed`; `remap` through its map).
+# Only these count as evidence, so a kind a later Keepfold adds never does (D7 1.5).
+FOLD_KINDS = ("ask", "grade", "log", "taught")
 LEECH_LAPSES = 5  # Anki's leech: forgotten this often after it was learned; rewrite, don't drill
 
 
@@ -150,7 +153,7 @@ def _items(events: Iterable[dict], problem_concepts: dict[str, str | list[str]] 
 
     for ev in evs:
         kind = ev.get("kind")
-        if kind in ("remap", "resume", "close", "open", "change"):
+        if kind not in FOLD_KINDS:  # remap, resume, close, open, change and any future kind
             continue
         if kind == "grade" and ev.get("ref") in asks:  # grade of a registered ask item
             ask = asks[ev["ref"]]

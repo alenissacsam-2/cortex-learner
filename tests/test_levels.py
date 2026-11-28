@@ -5,10 +5,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import FakeEmbed
+from typer.testing import CliRunner
 
-from keepfold import events
+from keepfold import claims, events, review, semantic
+from keepfold.cli import app
 from keepfold.events import EventLog
+from keepfold.forget import MARK
 from keepfold.levels import fold, predicted_p, replay
+from keepfold.mcp_server import Keepfold
 from keepfold.vault import Vault
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -622,3 +627,69 @@ def test_answer_time_never_changes_the_fold():
 
     assert run(3) == run(14 * 60) == run(None)
     assert run(3)["c"]["lapses"] == 1
+
+
+# ---- a future event kind or field is not evidence (D7 1.5) ----------------------------------
+
+def _snapshot(root, today):
+    """What the fold, `keepfold replay`, Review, claim tiers and prime say about a vault."""
+    v = Vault(root)
+    evs = list(EventLog(v).iter_events())
+    out = {"fold": json.dumps({k: asdict(s) for k, s in replay(v, today)[0].items()},
+                              sort_keys=True, default=str),
+           "replay": CliRunner().invoke(app, ["replay", "--vault", str(root)]).output,
+           "notes": {p.name: p.read_bytes() for p in sorted((root / "concepts").glob("*.md"))},
+           "review": json.dumps(review.view(v, evs, today), sort_keys=True, default=str),
+           "tiers": [(r["text"], r["tier"]) for r in claims.tiers(v, evs)]}
+    semantic._embedder = FakeEmbed()  # prime recalls through an embedder; tests never fetch one
+    try:
+        out["prime"] = Keepfold(v).keepfold_prime("two pointers practice")["context"]
+    finally:
+        semantic._embedder = None
+    return out
+
+
+@pytest.mark.usefixtures("home")
+def test_unknown_kinds_and_fields(root):
+    canary, today = "zqcanary9x", "2026-11-20"
+    profile = root / "me" / "profile.md"
+    profile.write_text(profile.read_text(encoding="utf-8")
+                       + f"- Old habit\n- My lucky word is {canary} ^c-aaaaa\n", encoding="utf-8")
+    log = EventLog(Vault(root))
+    for day, obj, verdicts in ((10, "two-pointers", "ccw"), (12, "arrays-basics", "cc"),
+                               (14, "two-pointers", "cc"), (15, "two-pointers", "c")):
+        for n, v in enumerate(verdicts):
+            fields = {"object": f"concept:{obj}", "verdict": "wrong" if v == "w" else "correct"}
+            if day == 15:
+                fields["payload"] = {"answer": f"My lucky word is {canary}"}
+            add(log, day, minute=n, **fields)
+    taught(log, "two-pointers", 14)
+
+    # the same vault plus lines no 1.0 writer made: other kinds, other fields
+    other = root.parent / "future"
+    shutil.copytree(root, other)
+    future = [{"id": f"01FUTURE{n}", "ts": f"2026-11-1{n}T12:30:00Z", "day": f"2026-11-1{n}",
+               "session": "cli", "source": "tutor", "kind": "future_kind", "schema": 1,
+               "object": "concept:two-pointers", "verdict": "correct", "problem": "problem:lc-1",
+               "payload": {"kind": "taught", "change": {"kind": "me", "id": "me/profile",
+                                                       "claim": "c-aaaaa", "note": "patched"}},
+               } for n in range(4, 8)]
+    extra = {"x_future": {"label": f"My lucky word is {canary}", "n": 3}, "y_future": [1, 2]}
+    for p in sorted((other / "events").glob("*/*/*.jsonl")):
+        rows = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines()]
+        rows += future if p.name == "cli.jsonl" else []
+        p.write_text("".join(json.dumps({**r, **extra}) + "\n" for r in rows), encoding="utf-8")
+    assert _snapshot(other, today) == _snapshot(root, today)
+
+    # a forget redacts the strings of unknown fields in place and keeps the fields themselves
+    r = CliRunner().invoke(app, ["forget", "me/profile^c-aaaaa", "--vault", str(other), "--yes"])
+    assert r.exit_code == 0, r.output
+    after = list(EventLog(Vault(other)).iter_events())
+    assert canary not in json.dumps(after)
+    assert [e["id"] for e in after if e["kind"] == "future_kind"] == [e["id"] for e in future]
+    assert all(e["y_future"] == [1, 2] and e["x_future"] == {"label": MARK, "n": 3}
+               for e in after)
+
+    # the writer stays strict
+    with pytest.raises(Exception, match="kind must be one of"):
+        log.append(session="cli", kind="future_kind", source="tutor", fields={})
