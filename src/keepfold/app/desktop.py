@@ -780,6 +780,18 @@ def _when_launched(fn):  # tests replace this
         ak.NSApplicationDidFinishLaunchingNotification, None, None, lambda _note: fn())
 
 
+def _place(w) -> dict:
+    """The window's size and place, from its closing handler. GTK runs that handler on its own
+    thread, where pywebview's w.width and w.x queue work for that same thread and wait for it
+    forever (trial build 4: Quit, or the X, froze the app), so there read the Gtk.Window."""
+    native = getattr(w, "native", None)
+    if sys.platform.startswith("linux") and hasattr(native, "get_size"):
+        (width, height), (x, y) = native.get_size(), native.get_position()
+    else:
+        width, height, x, y = w.width, w.height, w.x, w.y
+    return {"width": width, "height": height, "x": x, "y": y}
+
+
 def _app_terminating() -> bool:
     """True when called from inside pywebview's applicationShouldTerminate_ (Cocoa runs the
     closing handlers synchronously, on its own stack)."""
@@ -911,8 +923,7 @@ class Desktop:
         place and hide it, Keepfold stays in the tray. Quit, a shutdown or no tray closes it."""
         if self.state == "normal":
             try:
-                w = self.win
-                save_state("window", {"width": w.width, "height": w.height, "x": w.x, "y": w.y})
+                save_state("window", _place(self.win))
             except Exception:  # noqa: BLE001  (a place not remembered never blocks closing)
                 traceback.print_exc(limit=1)
         if self.quitting or self.tray is None or _shutting_down():

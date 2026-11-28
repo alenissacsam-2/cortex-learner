@@ -332,6 +332,19 @@ def test_close_without_a_tray_or_while_windows_shuts_down_really_closes(monkeypa
     assert d.win.calls == ["show", "restore"]
 
 
+def test_linux_close_reads_the_gtk_window_itself(monkeypatch):
+    """Trial build 4: GTK runs the closing handler on its own thread, where pywebview's w.width
+    waits for that thread forever (Quit and the X froze the app). On Linux the place comes from
+    the Gtk.Window (`w.native`); this window has no pywebview getters at all."""
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_shutting_down", lambda: False)
+    gtk = types.SimpleNamespace(get_size=lambda: (900, 650), get_position=lambda: (40, 30))
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.win = types.SimpleNamespace(native=gtk)
+    assert d.closing() is True  # no tray: the X closes
+    assert desktop.load_state()["window"] == {"width": 900, "height": 650, "x": 40, "y": 30}
+
+
 def test_mac_cmd_q_quits_where_the_red_button_hides(monkeypatch):
     """Owner, 28 Nov: Cmd+Q, or Quit in the app or Dock menu, quits as Mac users expect; the red
     button still hides to the menu bar. Off a Mac the same stack only hides."""
