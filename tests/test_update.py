@@ -435,12 +435,12 @@ def test_download_asset_fetches_this_platforms_file_under_its_cap(tmp_path, monk
     body = b"PK update zip " * 1000
     sha = hashlib.sha256(body).hexdigest()
     routes = {DL + MAC: body, DL + MAC + ".sha256": f"{sha}  {MAC}\n".encode()}
-    i = info(exe_url=DL + MAC, sha_url=DL + MAC + ".sha256", exe_size=300 * 2**20)
+    i = info(exe_url=DL + MAC, sha_url=DL + MAC + ".sha256", exe_size=206 * 2**20)
     out = update.download_asset(i, tmp_path, opener=fake(routes))  # over Windows' 200 MB cap
     assert out == tmp_path / MAC and out.read_bytes() == body
     assert (tmp_path / (MAC + ".sha256")).read_text() == sha  # what install() verifies
-    with pytest.raises(update.UpdateError, match="larger than 400 MB"):
-        update.download_asset({**i, "exe_size": 401 * 2**20}, tmp_path, opener=fake(routes))
+    with pytest.raises(update.UpdateError, match="larger than 207 MB"):  # 2x the zip's baseline
+        update.download_asset({**i, "exe_size": 208 * 2**20}, tmp_path, opener=fake(routes))
 
 
 def test_verify_is_the_one_check_before_a_swap(tmp_path):

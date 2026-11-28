@@ -1,7 +1,7 @@
 {
-  "_note": "Release file sizes in bytes (release-apps.yml, packaging/check_sizes.py). null = no baseline yet: set each from the first release-apps.yml run, which prints the sizes. A file more than 25% over its baseline fails the job. update.MAX_BYTES_BY_OS is then twice the zip's (darwin) and the tarball's (linux) baseline.",
-  "Keepfold-<v>-macos-arm64.dmg": null,
-  "Keepfold-<v>-macos-arm64.zip": null,
-  "keepfold_<v>_amd64.deb": null,
-  "keepfold-<v>-linux-x86_64.tar.gz": null
+  "_note": "Release file sizes in bytes (release-apps.yml, packaging/check_sizes.py), from the 0.6.4 trial build of 28 Nov 2026 (run 46125487137). A file more than 25% over its baseline fails the job. update.MAX_BYTES_BY_OS is twice the zip's (darwin) and the tarball's (linux) baseline; raise both together.",
+  "Keepfold-<v>-macos-arm64.dmg": 118118546,
+  "Keepfold-<v>-macos-arm64.zip": 108220797,
+  "keepfold_<v>_amd64.deb": 144316656,
+  "keepfold-<v>-linux-x86_64.tar.gz": 183196692
 }
