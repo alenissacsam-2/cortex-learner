@@ -862,6 +862,17 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
     typer.echo("Your vault and ~/.keepfold are kept; delete them yourself if you want them gone.")
     if failed:
         raise typer.Exit(1)
+@app.command(hidden=True)  # the frozen apps' smoke test (release-apps.yml)
+def selftest() -> None:
+    """Import every Keepfold module and read every package data file; exit 1 on the first
+    failure. Catches what a PyInstaller build missed."""
+    from keepfold import selftest as st
+
+    try:
+        typer.echo(st.run())
+    except st.Failed as e:
+        typer.echo(f"selftest failed: {e}", err=True)
+        raise typer.Exit(1) from None
 
 
 sample_app = typer.Typer(no_args_is_help=True, help="The sample vault (a made-up learner).")

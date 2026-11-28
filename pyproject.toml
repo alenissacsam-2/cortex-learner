@@ -59,6 +59,19 @@ keepfold-receiver = "keepfold.app.launch:receiver"
 
 [dependency-groups]
 dev = ["pytest", "pytest-xdist>=3.8.0", "ruff"]
+# the frozen Mac and Linux apps alone: `uv sync --locked --no-dev --group app`. pywebview and pystray
+# repeat here without their win32 marker, so the PyPI metadata above stays as it is
+app = [
+    "pyinstaller==6.22.3",
+    "pywebview>=6.2,<7 ; sys_platform != 'win32'",
+    "pystray>=0.19.5,<0.20 ; sys_platform != 'win32'",
+    "pyobjc-framework-Cocoa ; sys_platform == 'darwin'",
+    "pyobjc-framework-Vision ; sys_platform == 'darwin'",
+    "pyobjc-framework-LocalAuthentication ; sys_platform == 'darwin'",
+    "pyobjc-framework-UserNotifications ; sys_platform == 'darwin'",
+    "pyobjc-framework-ServiceManagement ; sys_platform == 'darwin'",
+    "faster-whisper==1.2.1",  # voice memos, bundled: a frozen app has no env to install into
+]
 
 [build-system]
 requires = ["hatchling", "hatch-fancy-pypi-readme"]
