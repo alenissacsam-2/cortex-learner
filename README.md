@@ -17,6 +17,8 @@
 
 Free. One file. No account. Windows 10 and 11.
 
+From Keepfold 0.7.0 there is also an app for Macs with Apple silicon and for Ubuntu: see [Install](#install).
+
 Keepfold is in beta until 1.0: its maker uses it every day, but expect rough edges, and please [open an issue](https://github.com/alenissacsam-2/keepfold/issues) when something breaks.
 
 Windows may say it "protected your PC", because the installer is not code-signed yet. Click **More info**, then **Run anyway**. You can read the [source code](https://github.com/alenissacsam-2/keepfold) and check the file's SHA-256, which is on each [release page](https://github.com/alenissacsam-2/keepfold/releases/latest).
@@ -185,7 +187,26 @@ Later, open Keepfold from the **Keepfold** shortcut on the desktop or in the Sta
 
 **Updating:** click **Restart to update** when it appears, or **Check for updates** under **Status** → **Updates** (0.1.0 has no such button: run a newer `KeepfoldSetup.exe` once). On 0.6.1 or older, the update check can't find new releases, because the GitHub repo was renamed: download `KeepfoldSetup.exe` from the [releases page](https://github.com/alenissacsam-2/keepfold/releases/latest) once and run it. **Uninstalling:** click **Quit** in the app, then remove **Keepfold** under **Settings > Apps > Installed apps**. Your vault and `~/.keepfold` settings are kept; delete them yourself if you want them gone. Silent install options are in [docs/INSTALL.md](docs/INSTALL.md).
 
-On macOS or Linux, or as a developer: see [Install on macOS and Linux](#install-on-macos-and-linux).
+### On a Mac (from Keepfold 0.7.0)
+
+For Macs with Apple silicon (M1 or later) on macOS 14 or later. Intel Macs are not supported ([why](#install-on-macos-and-linux)).
+
+1. **Download** `Keepfold-<version>-macos-arm64.dmg` from the [latest release](https://github.com/alenissacsam-2/keepfold/releases/latest).
+2. **Open it** and drag **Keepfold** onto **Applications**.
+3. **Open Keepfold** from Applications. The app is not notarized by Apple, so the first time macOS says it was not opened: click **Done**, open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**, then confirm with Touch ID or your password. You do this once.
+4. If you opened it from Downloads or the disk image, Keepfold asks you to **Move** it to Applications first. A welcome guide then walks you through the rest.
+
+### On Ubuntu (from Keepfold 0.7.0)
+
+For Ubuntu 24.04 or later on a 64-bit Intel or AMD PC.
+
+1. **Download** `keepfold_<version>_amd64.deb` from the [latest release](https://github.com/alenissacsam-2/keepfold/releases/latest).
+2. **Open it** with App Center and click **Install** (it asks for your password), or in a terminal run `sudo apt install ./keepfold_*.deb` in the folder you saved it to.
+3. **Open Keepfold** from the app menu. A welcome guide walks you through the rest.
+
+**Updating on a Mac or Ubuntu:** click **Update now** under **Status** → **Updates** when a new version is out. The Mac and Ubuntu files are attached to a release about half an hour after it appears; until then Keepfold says to check again soon. **Uninstalling:** click **Uninstall Keepfold…** under **Status** → **Updates**. Your vault and `~/.keepfold` settings are kept. [docs/INSTALL.md](docs/INSTALL.md) has the details.
+
+Without the app, or as a developer: see [Install on macOS and Linux](#install-on-macos-and-linux).
 
 ## FAQ
 
@@ -199,7 +220,7 @@ On macOS or Linux, or as a developer: see [Install on macOS and Linux](#install-
 
 **Will it slow my PC?** In our measurement on a vault of 1,000 made-up pages, a long-running Keepfold process used about 510 MB of memory with its search models loaded, and about 190 MB after 10 idle minutes, when it lets the models go ([how we measured](docs/benchmarks/memory.md)). An optional local model needs more while it runs.
 
-**Mac or Linux?** The installer is for Windows only, and Keepfold is tested most on Windows; its tests also run on macOS and Linux on every change. On macOS and Linux, install it with one `uv` command: see [Install on macOS and Linux](#install-on-macos-and-linux).
+**Mac or Linux?** The installer is for Windows only, and Keepfold is tested most on Windows; its tests also run on macOS and Linux on every change. From Keepfold 0.7.0 there is an app for Apple silicon Macs and for Ubuntu ([On a Mac](#on-a-mac-from-keepfold-070), [On Ubuntu](#on-ubuntu-from-keepfold-070)). On other Linux systems, or without the app, install it with one `uv` command: see [Install on macOS and Linux](#install-on-macos-and-linux).
 
 **How do I report a problem?** In the app, open **Status**, then **Something not working?**, press **Copy details** and paste them into a new issue ([how](#found-a-problem)). For a security or privacy problem, report it privately as [SECURITY.md](SECURITY.md) explains, never in a public issue.
 
@@ -536,6 +557,8 @@ Model sizes the app suggests (Qwen 3.5):
 Without an NVIDIA card the app recommends at most the 4B model; the 9B one stays selectable. Without the app: install Ollama, run `ollama pull qwen3.5:4b`, add `localllm: {enabled: true}` to `~/.keepfold/config.yaml`, and check with `keepfold llm status`.
 
 ## Install on macOS and Linux
+
+From Keepfold 0.7.0, most people on a Mac or Ubuntu want the app instead: see [On a Mac](#on-a-mac-from-keepfold-070) and [On Ubuntu](#on-ubuntu-from-keepfold-070). The steps below are for other Linux systems, for a terminal-only install, and for developers.
 
 Keepfold is on [PyPI](https://pypi.org/project/keepfold/). With [uv](https://docs.astral.sh/uv/getting-started/installation/) installed, in a terminal:
 

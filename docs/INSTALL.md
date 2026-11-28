@@ -43,7 +43,55 @@ Keepfold was called Cortex before 0.6.2. The old names stop working (there are n
 - **Install:** running `KeepfoldSetup.exe` over a Cortex install stops the old app, installs Keepfold, moves your data, and removes the old program folder (only when it is in the default place), its shortcuts, its Start with Windows entries and its uninstall entry.
 - **Version 0.6.1 or older** can't find the renamed GitHub repository, so **Check for updates** won't offer 0.6.2. Download `KeepfoldSetup.exe` once from the [latest release page](https://github.com/alenissacsam-2/keepfold/releases/latest) and run it. Updates work again from then on.
 
-On macOS or Linux, or to work on Keepfold's code, use the steps below.
+## macOS: the app (from Keepfold 0.7.0)
+
+The Mac app is for Apple silicon (M1 or later) on macOS 14 or later. Intel Macs are not supported, because Keepfold's search engine (onnxruntime) has no Intel Mac build.
+
+1. Download `Keepfold-<version>-macos-arm64.dmg` from the repository's **Releases** page on GitHub.
+2. Double-click it, and drag **Keepfold** onto the **Applications** folder beside it.
+3. Open **Keepfold** from Applications (or Launchpad). The app is signed only by its build, not notarized by Apple, so the first time macOS says it was not opened. Click **Done**. Open **System Settings > Privacy & Security**, scroll down to the line about Keepfold, click **Open Anyway** and confirm with Touch ID or your password. You do this once.
+4. If you opened it straight from Downloads or the disk image, macOS runs it from a temporary place. Keepfold then shows **Move Keepfold to Applications**: click **Move**, and it copies itself there and opens again. Until then it does not connect AI apps, because their settings would point at the temporary place. If **Move** fails, quit Keepfold, drag it to Applications in Finder and open it from there.
+5. The app's **Setup** screen walks you through the rest, as on Windows.
+
+Keepfold opens in its own window and puts an icon in the menu bar. Closing the window keeps Keepfold running there: click the icon for **Open Keepfold**, **Start at login** (on after the first start) and **Quit**. The first time Keepfold wants to notify you, macOS asks whether to allow its notifications. AI apps run the `keepfold` command from inside the app, at `/Applications/Keepfold.app/Contents/MacOS/keepfold-cli`; setup also links it as `~/.local/bin/keepfold` for the terminal.
+
+**Updating.** Keepfold checks GitHub as on Windows, but it downloads an update only when you click. Open **Status**, click **Check for updates** under **Updates**, then **Update now**. Keepfold downloads the new app, checks it against the release's SHA-256 checksum, puts it in place of the old one and opens again. If AI apps or the browsing receiver are still running Keepfold, it lists them and asks before closing them. The version you had is kept in `~/Library/Application Support/Keepfold/previous/`. If your Mac account cannot change the Applications folder (a standard account, not an administrator), Keepfold links the release page instead: download the new `.dmg` and drag it over the old app. The Mac file is attached to a release about half an hour after the release appears; until then Keepfold says to check again soon. After an update, macOS may ask again for permissions you gave the old version, such as notifications.
+
+**Uninstalling.** In the app, open **Status** and click **Uninstall Keepfold…** under **Updates**. It removes Keepfold from your AI apps, stops it starting at login, moves the app to the Trash and quits. Or, in Terminal:
+
+```
+/Applications/Keepfold.app/Contents/MacOS/keepfold-cli uninstall
+```
+
+then quit Keepfold and drag it from Applications to the Trash. Either way, your vault and `~/.keepfold` are kept; delete them yourself if you want them gone. Restart your AI apps afterwards.
+
+## Ubuntu: the app (from Keepfold 0.7.0)
+
+The Ubuntu app is for Ubuntu 24.04 or later on a 64-bit Intel or AMD PC (amd64).
+
+1. Download `keepfold_<version>_amd64.deb` from the repository's **Releases** page on GitHub.
+2. Double-click it to open it in App Center, and click **Install**. It asks for your password, as any system install does, and installs what Keepfold needs with it. Or, in a terminal, in the folder you saved it to:
+
+   ```
+   sudo apt install ./keepfold_*.deb
+   ```
+
+3. Open **Keepfold** from the app menu. The app's **Setup** screen walks you through the rest. In a terminal, the command is `keepfold`.
+
+Keepfold opens in its own window and puts an icon in the top bar. Closing the window keeps Keepfold running there: click the icon for **Open Keepfold**, **Start at login** (on after the first start) and **Quit**. Ubuntu shows the icon through its AppIndicator extension, which is on by default; without it, closing the window quits Keepfold. For reading scanned PDFs, App Center or apt also installs `tesseract-ocr` when it can.
+
+**Updating.** Open **Status**, click **Check for updates** under **Updates**, then **Update now**. Keepfold downloads the new version, checks it against the release's SHA-256 checksum, unpacks it into `~/.local/share/keepfold/app/` and opens again. This needs no password. The `keepfold` command and the app menu always run the newest copy, either that one or the one the `.deb` installed; the version before is kept. Installing a newer `.deb` by hand works too. The Ubuntu file is attached to a release about half an hour after the release appears; until then Keepfold says to check again soon.
+
+**Uninstalling.** In the app, open **Status** and click **Uninstall Keepfold…** under **Updates**. It removes Keepfold from your AI apps, stops it starting at login, deletes the updated copies, asks for your password to remove the package, and quits. Or, in a terminal:
+
+```
+keepfold uninstall
+sudo apt remove keepfold
+```
+
+Either way, your vault and `~/.keepfold` are kept; delete them yourself if you want them gone. Restart your AI apps afterwards.
+
+On other Linux systems, on macOS without the app, or to work on Keepfold's code, use the steps below.
 
 ## 1. What you get
 
