@@ -1,0 +1,12 @@
+Package: keepfold
+Version: @VERSION@
+Architecture: amd64
+Maintainer: Keepfold <alenissacsam-2@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: gir1.2-gtk-3.0, gir1.2-webkit2-4.1, libgirepository-2.0-0, gir1.2-ayatanaappindicator3-0.1
+Recommends: tesseract-ocr
+Section: utils
+Priority: optional
+Homepage: https://github.com/alenissacsam-2/keepfold
+Description: One memory for all your AI apps
+ Keepfold keeps one memory for all your AI apps, as plain Markdown files on your own computer.

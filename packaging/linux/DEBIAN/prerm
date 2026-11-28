@@ -1,0 +1,8 @@
+#!/bin/sh
+# Before apt removes Keepfold: take it out of the AI apps of the user who ran sudo, so their
+# configs do not point at a deleted program. A best effort that never stops the removal, and
+# never on an upgrade (dpkg passes "upgrade"), where the AI apps keep using Keepfold.
+if [ "$1" = remove ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    timeout 60 runuser -u "$SUDO_USER" -- /usr/bin/keepfold disconnect || true
+fi
+exit 0

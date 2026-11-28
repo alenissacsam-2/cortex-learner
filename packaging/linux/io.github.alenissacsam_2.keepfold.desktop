@@ -1,0 +1,12 @@
+# The app menu entry (/usr/share/applications). StartupWMClass: GTK names the window after the
+# program's file name, WM_CLASS keepfold-app on X11 and the app id keepfold-app on Wayland.
+[Desktop Entry]
+Type=Application
+Name=Keepfold
+Comment=One memory for all your AI apps, kept as plain Markdown files on your own computer.
+Exec=/usr/bin/keepfold-app
+Icon=keepfold
+Terminal=false
+Categories=Utility;
+StartupWMClass=keepfold-app
+X-GNOME-UsesNotifications=true
