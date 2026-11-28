@@ -594,9 +594,6 @@ def remove_app(say) -> dict:
                     "Quit Keepfold, then drag it from Applications to the Trash."}
         say(f"moved {app} to the Trash")
         return {"removed": True}
-    copies = Path.home() / ".local" / "share" / "keepfold" / "app"  # Update now's (_install_linux)
-    shutil.rmtree(copies, ignore_errors=True)
-    say(f"removed {copies}")
     say("asking for your password to remove the keepfold package")
     ok, out = _apt_remove()
     if not ok:
@@ -604,6 +601,10 @@ def remove_app(say) -> dict:
                 f"cancelled or apt-get failed ({out or 'no details'}). Remove it in a terminal: "
                 "sudo apt remove keepfold"}
     say("removed the keepfold package")
+    # last, just before the quit: this app may run from one of these copies
+    copies = Path.home() / ".local" / "share" / "keepfold" / "app"  # Update now's (_install_linux)
+    shutil.rmtree(copies, ignore_errors=True)
+    say(f"removed {copies}")
     return {"removed": True}
 
 

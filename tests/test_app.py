@@ -3613,27 +3613,36 @@ def test_uninstall_mac_trash_failure_says_so_and_stays(app, uninstall, monkeypat
     assert not app.stop.wait(2.5)
 
 
-def test_uninstall_linux_removes_user_copies_then_apt_and_quits(app, uninstall, monkeypatch):
-    calls, _ = uninstall
-    monkeypatch.setattr(sys, "platform", "linux")
+def _user_copies() -> Path:
     copies = Path.home() / ".local" / "share" / "keepfold" / "app"
     (copies / "9.0.0").mkdir(parents=True)
     (copies / "9.0.0" / "keepfold-app").write_text("x")
+    return copies
+
+
+def test_uninstall_linux_apt_first_then_user_copies_and_quits(app, uninstall, monkeypatch):
+    """apt first; the per-user copies (this app may run from one) go last, after apt worked."""
+    calls, _ = uninstall
+    monkeypatch.setattr(sys, "platform", "linux")
+    copies = _user_copies()
     monkeypatch.setattr(update, "_apt_remove", lambda: calls.append(
         ("apt", copies.exists())) or (True, ""))
     call(app, "POST", "/api/app/uninstall", {})
     r = wait_job(app)["result"]
-    assert r["removed"] is True and calls == ["steps", ("apt", False)]
+    assert r["removed"] is True and calls == ["steps", ("apt", True)]  # still there during apt
+    assert not copies.exists()
     assert (Path.home() / ".local" / "share" / "keepfold").is_dir()  # only app/ goes
     assert app.stop.wait(5)
 
 
 def test_uninstall_linux_cancelled_pkexec_says_run_apt(app, uninstall, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
+    copies = _user_copies()
     monkeypatch.setattr(update, "_apt_remove", lambda: (False, "Request dismissed"))
     call(app, "POST", "/api/app/uninstall", {})
     r = wait_job(app)["result"]
     assert r["removed"] is False and "sudo apt remove keepfold" in r["note"]
+    assert (copies / "9.0.0" / "keepfold-app").is_file()  # kept: Keepfold is still installed
     assert not app.stop.wait(2.5)
 
 
