@@ -780,7 +780,8 @@ def test_the_app_api_for_autostart_notify_and_window(served, win32, _no_real_run
     assert _no_real_run_key == {desktop.AUTOSTART: win32}
     assert call(app, "POST", "/api/app/autostart", {"enabled": "yes"})[0] == 400
     assert call(app, "GET", "/api/app/notify")[1] == {"reviews": True, "exams": True,
-                                                       "jobs": True, "updates": True}
+                                                       "jobs": True, "updates": True,
+                                                       "system_off": False}
     assert call(app, "POST", "/api/app/notify", {"jobs": False})[1]["jobs"] is False
     assert desktop.notify_settings() == {"reviews": True, "exams": True, "jobs": False,
                                          "updates": True}
@@ -899,6 +900,157 @@ def test_the_tray_notifies_and_toggles_start_with_windows(win32, _no_real_run_ke
     assert _no_real_run_key == {desktop.AUTOSTART: win32} and d.tray.updates == 1
     d.toggle_autostart()
     assert _no_real_run_key == {}
+
+
+class FakeUNCenter:
+    """UNUserNotificationCenter: the authorization answer is given by the test (`answer`)."""
+
+    def __init__(self):
+        self.asked, self.sent = [], []
+
+    def requestAuthorizationWithOptions_completionHandler_(self, options, done):
+        self.asked.append(options)
+        self.answer = done
+
+    def addNotificationRequest_withCompletionHandler_(self, request, done):
+        self.sent.append(request)
+
+
+class FakeUNContent:
+    @classmethod
+    def alloc(cls):
+        return cls()
+
+    def init(self):
+        return self
+
+    def setTitle_(self, t):
+        self.title = t
+
+    def setBody_(self, b):
+        self.body = b
+
+
+@pytest.fixture
+def unc(monkeypatch, home):
+    """A Mac with a fake UserNotifications, fresh authorization state and no real osascript."""
+    center = FakeUNCenter()
+    un = types.SimpleNamespace(
+        UNAuthorizationOptionAlert=4, UNAuthorizationOptionSound=2,
+        UNUserNotificationCenter=types.SimpleNamespace(currentNotificationCenter=lambda: center),
+        UNMutableNotificationContent=FakeUNContent,
+        UNNotificationRequest=types.SimpleNamespace(
+            requestWithIdentifier_content_trigger_=lambda i, c, t: (c.title, c.body, t)))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(desktop, "_unc", lambda: un)
+    monkeypatch.setattr(desktop, "_MAC", {"granted": None, "pending": None})
+    monkeypatch.setattr(launch, "_run_alert", lambda argv: pytest.fail("ran osascript"))
+    return center
+
+
+def test_mac_notifies_through_user_notifications_asking_once(unc):
+    """The first notification asks for authorization; notifications sent while it is asked
+    wait for the answer; later ones never ask again. Under Keepfold's own name, not the tray."""
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.tray = FakeIcon("keepfold", None, "Keepfold", FakeMenu())
+    d.notify("3 reviews due today")
+    d.notify("An exam tomorrow")
+    assert unc.asked == [4 | 2] and unc.sent == []
+    unc.answer(True, None)
+    d.notify("Importing finished")
+    assert unc.asked == [6]
+    assert unc.sent == [("Keepfold", t, None) for t in
+                        ("3 reviews due today", "An exam tomorrow", "Importing finished")]
+    assert d.tray.notes == [] and desktop.load_state()["notify_denied"] is False
+
+
+def test_mac_denied_drops_notifications_and_notes_it(unc, served):
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.notify("3 reviews due today")
+    unc.answer(False, None)
+    d.notify("An exam tomorrow")
+    assert unc.asked == [6] and unc.sent == []
+    assert desktop.load_state()["notify_denied"] is True
+    assert call(served, "GET", "/api/app/notify")[1]["system_off"] is True
+
+
+@pytest.mark.parametrize("broken", [ImportError, RuntimeError])
+def test_mac_falls_back_to_osascript_without_the_framework(unc, monkeypatch, broken):
+    """No UserNotifications (or no bundle, so no center): osascript's display notification,
+    the text an AppleScript string in an argv list."""
+    ran = []
+
+    def unavailable():
+        raise broken("no UserNotifications")
+    monkeypatch.setattr(desktop, "_unc", unavailable)
+    monkeypatch.setattr(launch, "_run_alert", ran.append)
+    desktop.Desktop(types.SimpleNamespace(), "http://x").notify('say "hi"; rm -rf ~')
+    assert ran == [["osascript", "-e",
+                    'display notification "say \\"hi\\"; rm -rf ~" with title "Keepfold"']]
+
+
+class FakeGApp:
+    made = []
+
+    def __init__(self, app_id, flags):
+        self.app_id, self.flags, self.registered, self.sent = app_id, flags, 0, []
+        FakeGApp.made.append(self)
+
+    def register(self, cancellable):
+        self.registered += 1
+        return True
+
+    def send_notification(self, nid, n):
+        self.sent.append((nid, n.title, n.body))
+
+
+class FakeGNotification:
+    def __init__(self, title):
+        self.title = title
+
+    def set_body(self, body):
+        self.body = body
+
+
+@pytest.fixture
+def gnote(monkeypatch):
+    FakeGApp.made = []
+    gio = types.SimpleNamespace(
+        ApplicationFlags=types.SimpleNamespace(NON_UNIQUE=32),
+        Application=types.SimpleNamespace(new=FakeGApp),
+        Notification=types.SimpleNamespace(new=FakeGNotification))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_gio", lambda: gio)
+    monkeypatch.setattr(desktop, "_GAPP", [])
+    monkeypatch.setattr(launch, "_run_alert", lambda argv: pytest.fail("ran notify-send"))
+    return FakeGApp.made
+
+
+def test_linux_notifies_through_one_gio_application_with_the_desktop_id(gnote):
+    d = desktop.Desktop(types.SimpleNamespace(), "http://x")
+    d.notify("3 reviews due today")
+    d.notify("An exam tomorrow")
+    (app,) = gnote
+    assert (app.app_id, app.flags, app.registered) == ("io.github.alenissacsam_2.keepfold", 32, 1)
+    assert app.app_id == desktop.DESKTOP_ID
+    assert app.sent == [(None, "Keepfold", "3 reviews due today"),
+                        (None, "Keepfold", "An exam tomorrow")]
+
+
+def test_linux_falls_back_to_notify_send_without_gio(gnote, monkeypatch):
+    ran = []
+
+    def no_gi():
+        raise ImportError("No module named 'gi'")
+    monkeypatch.setattr(desktop, "_gio", no_gi)
+    monkeypatch.setattr(launch, "_run_alert", ran.append)
+    desktop.Desktop(types.SimpleNamespace(), "http://x").notify('say "hi"; rm -rf ~')
+    assert ran == [["notify-send", "--app-name=Keepfold", "Keepfold", 'say "hi"; rm -rf ~']]
+
+    def missing(argv):
+        raise FileNotFoundError("notify-send")
+    monkeypatch.setattr(launch, "_run_alert", missing)
+    desktop.Desktop(types.SimpleNamespace(), "http://x").notify("dropped, quietly")
 
 
 def test_desktop_json_is_written_whole(home):

@@ -402,6 +402,85 @@ def _gio():  # tests replace this
     return Gio
 
 
+def _unc():  # tests replace this
+    """pyobjc's UserNotifications, on a Mac only."""
+    import UserNotifications
+    return UserNotifications
+
+
+_NOTE_LOCK = threading.Lock()
+_MAC = {"granted": None, "pending": None}  # this run's one authorization ask, and what waits on it
+_GAPP: list = []  # Linux: the one registered Gio.Application
+
+
+def _notify_mac(text: str) -> None:
+    """UNUserNotificationCenter, under the bundle's own name. The first notification asks for
+    authorization (the OS prompts once; later runs just get the answer); while it is asked,
+    notifications wait; denied drops them and is noted (`system_off` on the app API).
+    osascript, whose notification belongs to Script Editor, only when the framework is missing
+    or there is no bundle (a source run)."""
+    from keepfold.app import launch
+    try:
+        un = _unc()
+        center = un.UNUserNotificationCenter.currentNotificationCenter()
+    except Exception:  # noqa: BLE001  (no pyobjc framework, or no bundle: no center)
+        try:
+            launch._run_alert(["osascript", "-e", "display notification "
+                               f'{launch._quote_applescript(text)} with title "Keepfold"'])
+        except OSError:
+            pass
+        return
+
+    def post():
+        c = un.UNMutableNotificationContent.alloc().init()
+        c.setTitle_("Keepfold")
+        c.setBody_(text)
+        center.addNotificationRequest_withCompletionHandler_(
+            un.UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                os.urandom(8).hex(), c, None), None)
+
+    def answered(granted, _error):
+        with _NOTE_LOCK:
+            _MAC["granted"], waiting, _MAC["pending"] = bool(granted), _MAC["pending"], None
+        save_state("notify_denied", not granted)
+        for p in waiting if granted else ():
+            p()
+
+    with _NOTE_LOCK:
+        if _MAC["granted"] is not None:
+            if _MAC["granted"]:
+                post()
+            return
+        ask = _MAC["pending"] is None
+        if ask:
+            _MAC["pending"] = []
+        _MAC["pending"].append(post)
+    if ask:
+        center.requestAuthorizationWithOptions_completionHandler_(
+            un.UNAuthorizationOptionAlert | un.UNAuthorizationOptionSound, answered)
+
+
+def _notify_linux(text: str) -> None:
+    """Gio.Notification through a Gio.Application whose id is the .desktop id, so the shell
+    shows Keepfold's name and icon; notify-send without gi or a session bus."""
+    from keepfold.app import launch
+    try:
+        gio = _gio()
+        with _NOTE_LOCK:
+            if not _GAPP:
+                a = gio.Application.new(DESKTOP_ID, gio.ApplicationFlags.NON_UNIQUE)
+                a.register(None)
+                _GAPP.append(a)
+        n = gio.Notification.new("Keepfold")
+        n.set_body(text)
+        _GAPP[0].send_notification(None, n)
+    except Exception:  # noqa: BLE001  (no gi, no session bus)
+        try:
+            launch._run_alert(["notify-send", "--app-name=Keepfold", "Keepfold", text])
+        except OSError:  # no notify-send either: dropped
+            pass
+
+
 def _tray_host() -> bool:  # tests replace this
     """Linux: something shows tray icons, a StatusNotifierWatcher on the session bus (Ubuntu's
     AppIndicator extension, KDE); False without one or without D-Bus."""
@@ -616,7 +695,11 @@ class Desktop:
         self.app.quit({})  # cancels a running job and sets app.stop
 
     def notify(self, text: str) -> None:
-        if self.tray is not None:
+        if sys.platform == "darwin":
+            _notify_mac(text)
+        elif sys.platform.startswith("linux"):
+            _notify_linux(text)
+        elif self.tray is not None:
             self.tray.notify(text, "Keepfold")
 
     def toggle_autostart(self) -> None:

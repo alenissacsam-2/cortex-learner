@@ -2601,7 +2601,9 @@ class App:
 
     def notify(self) -> dict:
         from keepfold.app import desktop
-        return desktop.notify_settings()
+        # system_off: a Mac denied notifications in System Settings, so none are shown
+        return {**desktop.notify_settings(),
+                "system_off": desktop.load_state().get("notify_denied") is True}
 
     def notify_set(self, body: dict) -> dict:
         from keepfold.app import desktop
