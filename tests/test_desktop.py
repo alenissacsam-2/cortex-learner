@@ -723,10 +723,12 @@ def test_mac_app_autostart_waiting_for_approval_says_where(monkeypatch, gui):
     assert "System Settings > General > Login Items" in state["note"]
     svc.fail = "Operation not permitted"  # register while unapproved: no error, the note
     assert desktop.set_autostart(True)["note"] == state["note"]
+    shown = []  # a Mac notification goes through the notification center, not the tray
+    monkeypatch.setattr(desktop, "_notify_mac", shown.append)
     d = desktop.Desktop(types.SimpleNamespace(), "http://x")
     d.tray = FakeIcon("k", None, "Keepfold", FakeMenu())
     d.toggle_autostart()
-    assert d.tray.notes == [state["note"]]
+    assert shown == [state["note"]]
 
 
 def test_linux_app_autostart_uses_stable_launcher(monkeypatch, tmp_path):
