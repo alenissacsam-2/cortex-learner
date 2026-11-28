@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -2231,7 +2232,9 @@ def test_the_quick_capture_key_row_and_its_taken_note(root_committed, tmp_path, 
         pytest.skip("node is not installed")
     routes = _sweep_routes(root_committed, monkeypatch)
     routes["/api/status"]["first_run"] = False
-    hk = server.App(root_committed).hotkey()  # the server's own answer (no desktop here)
+    with monkeypatch.context() as m:  # the Windows labels; a Mac or Linux run has its own keys
+        m.setattr(sys, "platform", "win32")
+        hk = server.App(root_committed).hotkey()  # the server's own answer (no desktop here)
     if where == "desktop":
         hk.update(desktop=True, key="ctrl+alt+k", taken=True)
     routes["/api/app/hotkey"] = hk
