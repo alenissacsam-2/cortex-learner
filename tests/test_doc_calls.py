@@ -1,6 +1,7 @@
 """P1 call lint: every `keepfold_<tool>(...)` snippet the model reads (the skill and its modes,
-INSTRUCTIONS, tool descriptions, string literals in mcp_server.py) must match the real input
-schemas. The MCP SDK silently drops an unknown argument, so a wrong name in a doc never errors.
+INSTRUCTIONS, tool descriptions, string literals in mcp_server.py and mcp_tools/) must match the
+real input schemas. The MCP SDK silently drops an unknown argument, so a wrong name in a doc
+never errors.
 
 Rules: the tool exists; every `name=` is a real parameter; a quoted (or bare word) value of an
 enum parameter is in the enum. A positional argument is either a bare parameter name, the
@@ -48,7 +49,10 @@ def sources() -> list[tuple[str, str]]:
     return ([(str(p.relative_to(ROOT)), p.read_text(encoding="utf-8")) for p in files]
             + [("INSTRUCTIONS", mcp_server.INSTRUCTIONS)]
             + [(f"DESCRIPTIONS[{k}]", v) for k, v in mcp_server.DESCRIPTIONS.items()]
-            + [("mcp_server.py", s) for s in _strings(ROOT / "src" / "keepfold" / "mcp_server.py")])
+            + [("mcp_server.py", s) for s in _strings(ROOT / "src" / "keepfold" / "mcp_server.py")]
+            + [(f"mcp_tools/{p.name}", s)
+               for p in sorted((ROOT / "src" / "keepfold" / "mcp_tools").glob("*.py"))
+               for s in _strings(p)])
 
 
 def _split(text: str) -> list[str] | None:
