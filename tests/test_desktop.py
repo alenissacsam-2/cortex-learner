@@ -82,6 +82,10 @@ def fake_webview(start, renderer="edgechromium"):
 
     def start_gui(**kw):
         wv.start_kw = kw
+        # as pywebview: start() shows every window, a hidden one shown and hidden at once, so
+        # each one's `shown` fires (without it keepfold-end waited 30 s on the capture box)
+        for w in wv.windows:
+            w.events.shown.flag.set()
         return start(wv)
     wv.start = start_gui
     return wv
@@ -164,10 +168,11 @@ def _until(cond, timeout=10.0):
 
 
 def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
-        gui, vault, monkeypatch, _no_real_run_key):
+        gui, vault, monkeypatch, _no_real_run_key, capsys):
     """The window shows the app's own link; X hides it (the server and tray stay); a second
     `keepfold-app` brings it up, `--hidden` does nothing; no idle stop; Quit in the tray closes
-    the window, ends the loop, stops the tray, removes app.json and remembers the place."""
+    the window, ends the loop, stops the tray, removes app.json and remembers the place. Nothing
+    fails on the way: no "window failed" fallback and no traceback once keepfold-end is done."""
     monkeypatch.setattr(server, "IDLE_S", 0)  # the browser app would stop at once
     monkeypatch.setattr(server, "WATCH_S", 0.05)
     daytime(monkeypatch)
@@ -211,6 +216,10 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     assert any("tray" in s for s in lines)
     token = seen["url"].split("?t=")[1]  # D1 §4.3: the window opens with the key, the log has none
     assert token and not any(token in s for s in lines)
+    for t in threading.enumerate():
+        if t.name == "keepfold-end":
+            t.join(60)
+    assert not any("failed" in s for s in lines) and "Traceback" not in capsys.readouterr().err
 
 
 def test_hidden_start_and_the_remembered_place(gui, vault, monkeypatch):
