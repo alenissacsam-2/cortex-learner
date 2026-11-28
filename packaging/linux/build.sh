@@ -5,6 +5,9 @@
 # uv on PATH and the headers PyGObject and pycairo compile against:
 #   sudo apt-get install -y libgirepository-2.0-dev libcairo2-dev libffi-dev pkg-config
 set -euo pipefail
+# uv's own Python (as the spike froze): its libpython and stdlib modules live outside /usr, so the
+# spec's system-library filter keeps them; Ubuntu's /usr Python would lose libpython3.12.so
+export UV_PYTHON_PREFERENCE=only-managed
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 HERE=$ROOT/packaging/linux
 WORK=$ROOT/build/linux

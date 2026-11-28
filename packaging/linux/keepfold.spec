@@ -37,6 +37,8 @@ a = Analysis(
                                             "Soup": "3.0"}}},
 )
 a.binaries = [b for b in a.binaries if not b[1].startswith(SYSTEM)]
+assert any(os.path.basename(b[0]).startswith("libpython") for b in a.binaries), (
+    "no libpython left: freeze with uv's own Python (build.sh sets UV_PYTHON_PREFERENCE)")
 a.datas = [d for d in a.datas if not (d[1].startswith(SYSTEM) or d[0].startswith(GI_DATA))]
 assert any(s[0] == "pyi_rth_gi" for s in a.scripts), "PyInstaller renamed its gi runtime hooks"
 a.scripts = [s for s in a.scripts if s[0] not in GI_RTHOOKS]
