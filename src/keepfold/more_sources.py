@@ -80,7 +80,6 @@ PARSE_TIMEOUT = 30.0  # seconds one PDF or .docx may take in the child before it
 # so far well inside PARSE_TIMEOUT (unchanged) instead of being killed with nothing
 OCR_PAGES, OCR_BUDGET = 100, 20.0
 OCR_LINE = "Read with Windows OCR: check names and numbers."  # an OCR'd document page's mark
-_CHILD = [sys.executable, "-c", "from keepfold.more_sources import _parse_child; _parse_child()"]
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
 _OLE = b"\xd0\xcf\x11\xe0"  # a password-protected .docx is an OLE container, not a zip
@@ -356,8 +355,18 @@ def _parse_child() -> None:
         out.flush()
 
 
+def _child_argv() -> list[str]:
+    """The parse child's command line. A frozen Mac/Linux app takes no `-c`, so it starts its
+    own CLI (next to `sys.executable` in the onedir folder) with the hidden `_parse-child`."""
+    if getattr(sys, "frozen", False):
+        from keepfold.app.bundle import CLI
+        name = CLI if sys.platform == "darwin" else "keepfold"
+        return [str(Path(sys.executable).with_name(name)), "_parse-child"]
+    return [sys.executable, "-c", "from keepfold.more_sources import _parse_child; _parse_child()"]
+
+
 class _Parser:
-    """RR-37: PDF and .docx parsing in a child process (`_CHILD`), so a hostile file that
+    """RR-37: PDF and .docx parsing in a child process (`_child_argv`), so a hostile file that
     hangs or crashes pypdf is one "parse timed out" (or "unreadable") skip after
     PARSE_TIMEOUT, not a hung import. One child serves the whole walk; a timeout kills it and
     the next document starts a new one."""
@@ -367,8 +376,9 @@ class _Parser:
 
     def __call__(self, kind: str, data: bytes) -> tuple[str, str, str] | str:
         if self.proc is None:
-            self.proc = subprocess.Popen(_CHILD, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+            self.proc = subprocess.Popen(_child_argv(), stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         creationflags=NO_WINDOW)
             self.lines = queue.Queue()
             threading.Thread(target=self._pump, args=(self.proc.stdout, self.lines),
                              daemon=True).start()

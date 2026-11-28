@@ -134,10 +134,10 @@ def test_a_parse_that_hangs_or_crashes_is_a_skip(tmp_path, monkeypatch):
     (d / "a.pdf").write_bytes(_pdf("first"))
     (d / "b.pdf").write_bytes(_pdf("second"))
     monkeypatch.setattr(more_sources, "PARSE_TIMEOUT", 1.0)
-    monkeypatch.setattr(more_sources, "_CHILD", [sys.executable, "-c",
-                                                  "import time; time.sleep(60)"])
+    monkeypatch.setattr(more_sources, "_child_argv", lambda: [sys.executable, "-c",
+                                                              "import time; time.sleep(60)"])
     assert list(more_sources.docs_source(d).items()) == ["parse timed out"] * 2
-    monkeypatch.setattr(more_sources, "_CHILD", [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(more_sources, "_child_argv", lambda: [sys.executable, "-c", "pass"])
     # a child that exits at once; the default timeout, so a slow start on a busy PC is no hang
     monkeypatch.setattr(more_sources, "PARSE_TIMEOUT", 30.0)
     assert list(more_sources.docs_source(d).items()) == ["unreadable"] * 2
@@ -841,3 +841,29 @@ def test_cli_imports_each_new_source(root_plain, tmp_path):
     out = runner.invoke(app, ["import", str(clip), "--dry-run", "--vault",
                               str(root_plain)]).output
     assert "Highlights: read 3, imported 2" in out and "dry run" in out
+
+
+def test_child_argv_from_source_uses_dash_c(monkeypatch):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "executable", "/venv/bin/python")
+    argv = more_sources._child_argv()
+    assert argv[:2] == ["/venv/bin/python", "-c"] and "_parse_child()" in argv[2]
+
+
+@pytest.mark.parametrize("platform,exe,cli", [
+    ("darwin", "/Applications/Keepfold.app/Contents/MacOS/Keepfold", "keepfold-cli"),
+    ("linux", "/usr/lib/keepfold/keepfold-app", "keepfold")])
+def test_child_argv_frozen_uses_hidden_command(monkeypatch, platform, exe, cli):
+    """A frozen program takes no `-c`: the child is the app's own CLI with a hidden command."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "executable", exe)
+    assert more_sources._child_argv() == [str(Path(exe).with_name(cli)), "_parse-child"]
+
+
+def test_hidden_parse_child_command_answers_one_request():
+    data = _docx(["Hello child"])
+    r = CliRunner().invoke(app, ["_parse-child"], input=f"docx {len(data)}\n".encode() + data)
+    assert r.exit_code == 0, r.output
+    assert "Hello child" in r.output and len(r.output.strip().splitlines()) == 1
+    assert "_parse-child" not in CliRunner().invoke(app, ["--help"]).output
