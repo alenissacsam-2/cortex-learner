@@ -20,6 +20,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import NamedTuple
 
 from keepfold import (
@@ -1156,6 +1157,31 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     convo_id = convo_id or new()
     msgs = load(vault, convo_id)  # validates the id
     t0, today = time.monotonic(), today or _today()
+    t = SimpleNamespace(vault=vault, id=convo_id, text=text, runner=runner, emit=emit,
+                        cancel=cancel, s=s, today=today, files=files, read=read, msgs=msgs)
+    if not _route_stage(t):
+        return convo_id
+    t.model = t.runner.model if t.passages and t.runner is not None else "Keepfold"
+    msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
+    _save(vault, convo_id, msgs, s["history"])
+    emit({"t": "start", "id": convo_id, "model": t.model})
+    _retrieve(t)
+    _prompt(t)
+    _stream(t)
+    _finish(t, t0)
+    return convo_id
+
+
+# `reply`'s stages share one turn, `t` (a SimpleNamespace: `reply` fills the inputs, each stage
+# adds what the next reads). Every module name tests patch is looked up when a stage runs.
+
+def _route_stage(t: SimpleNamespace) -> bool:
+    """Turn `t`'s path, decided before `start` is sent: a data answer by code (`codes`,
+    `listed`), a typed facts answer (`route`, `fq`) or the passage search (`passages`: `query`,
+    `got`, `said`, two `searches`, a routed `front` half), and the runner it needs. Sends the
+    err and returns False when the search model or a local runner is missing."""
+    vault, text, s, msgs, today = t.vault, t.text, t.s, t.msgs, t.today
+    files, read, runner, emit, convo_id = t.files, t.read, t.runner, t.emit, t.id
     prev = next((m["text"] for m in reversed(msgs) if m["role"] == "user"), "")
     # the last answer as the model would still see it (`history`): its list, if any, is what
     # "the second one" points at
@@ -1213,7 +1239,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         if front is None:
             emit({"t": "err", "code": "not_set_up", "message": NO_SEARCH_MODEL,
                   "id": convo_id})
-            return convo_id
+            return False
         blocked = NO_SEARCH_MODEL
     if passages and not blocked and callable(runner) \
             and not isinstance(runner, localllm.Runner):
@@ -1222,26 +1248,38 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
         except ValueError as e:  # a refused localllm setting (cloud model, non-loopback url)
             if not files and front is None:
                 emit({"t": "err", "code": "no_local_model", "message": str(e), "id": convo_id})
-                return convo_id
+                return False
             runner, blocked = None, None if files else str(e)
     if passages and not blocked and not _local(runner):
         if not files and front is None:
             emit({"t": "err", "code": "no_local_model", "message": ask.NO_MODEL,
                   "id": convo_id})
-            return convo_id
+            return False
         # a file never reaches any other runner: its passages are shown instead
         runner, blocked = None, None if files else ask.NO_MODEL
     if blocked:  # the routed half by code, and why the rest has no answer
         codes, listed, passages = [front], "", False
-    model = runner.model if passages and runner is not None else "Keepfold"
-    msgs.append({"role": "user", "text": text.strip(), "ts": _now()})
-    _save(vault, convo_id, msgs, s["history"])
-    emit({"t": "start", "id": convo_id, "model": model})
+    vars(t).update(got=got, said=said, query=query, split=split, route=route, codes=codes,
+                   front=front, searches=searches, fq=fq, listed=listed, passages=passages,
+                   searched_pages=searched_pages, days=days, blocked=blocked, runner=runner)
+    return True
+
+
+def _retrieve(t: SimpleNamespace) -> None:
+    """Turn `t`'s data, after `start`: each code answer, sent as it is counted (`listed`,
+    `parts`); a facts answer's `facts` and the pages read to word them (`word`: a model words
+    them); or a routed half's `front_text` and the passages searched (`found`, with `stats`
+    and `also` for the coverage line)."""
+    vault, s, today, files, read, emit = t.vault, t.s, t.today, t.files, t.read, t.emit
+    cancel, runner, route, fq, listed, codes = t.cancel, t.runner, t.route, t.fq, t.listed, t.codes
+    blocked, front, got, said, query, split = t.blocked, t.front, t.got, t.said, t.query, t.split
+    searches, model = t.searches, t.model
     found: list = []
     also: list = []  # people's names `relatives` added to the search
     stats: dict = {}  # ask._passages' match count, for the coverage line
     parts: list = []
-    messages = facts = kept = None
+    facts = None
+    word = False  # a facts answer the model words (`_prompt`)
     max_tokens = LENGTH[s["length"]]
     front_text = ""  # a routed half's answer, in front of the other half's passages
     if listed is not None:
@@ -1281,9 +1319,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
             model, max_tokens = runner.model, LENGTH["short"]  # 1 to 3 sentences
             emit({"t": "step", "s": f"Wording the facts with {runner.model}" + (
                 f" and reading {len(found)} page{'s' * (len(found) != 1)}" if found else "")})
-            messages = [{"role": "system", "content": chat_facts.SYSTEM.format(
-                today=f"{today:%A}, {today.isoformat()}")},
-                        {"role": "user", "content": chat_facts.prompt(facts, found, text, today)}]
+            word = True
     else:
         if front:
             emit({"t": "step", "s": front.step})
@@ -1337,8 +1373,26 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                         stats["more"] = True
             if files:
                 stats["matched"] = stats.get("matched", 0) + sum(h[1] for h in hits)
-    if listed is not None or fq is not None:
+    vars(t).update(found=found, also=also, stats=stats, parts=parts, facts=facts, word=word,
+                   max_tokens=max_tokens, front_text=front_text, model=model, runner=runner,
+                   listed=listed)
+
+
+def _prompt(t: SimpleNamespace) -> None:
+    """Turn `t`'s `messages` for the model (facts to word, or the passages), or its answer
+    when no model reads: a file's passages shown as found (saved as `kept`: their labels
+    only), or NO_ANSWER."""
+    vault, text, s, today, msgs, emit = t.vault, t.text, t.s, t.today, t.msgs, t.emit
+    files, runner, found, parts, facts = t.files, t.runner, t.found, t.parts, t.facts
+    t.messages = t.kept = None
+    if t.listed is not None:
         pass
+    elif t.fq is not None:
+        if t.word:
+            t.messages = [{"role": "system", "content": chat_facts.SYSTEM.format(
+                today=f"{today:%A}, {today.isoformat()}")},
+                          {"role": "user", "content": chat_facts.prompt(facts, found, text,
+                                                                        today)}]
     elif files and runner is None:
         said_once = askfile.cloud_set() and not all(f.told for f in files)
         for f in files if said_once else []:
@@ -1349,10 +1403,10 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                          or [askfile.NO_MATCH])))
         emit({"t": "tok", "s": parts[0]})
         # the saved chat names the file's passages, never their text
-        kept = "\n\n".join(head + (["\n".join(f"- {p['title']} [{n}]" for n, p in
-                                              enumerate(found, 1))] if found
-                                   else [askfile.NO_MATCH]))
-    elif not found and not front_text:
+        t.kept = "\n\n".join(head + (["\n".join(f"- {p['title']} [{n}]" for n, p in
+                                                enumerate(found, 1))] if found
+                                     else [askfile.NO_MATCH]))
+    elif not found and not t.front_text:
         parts.append(NO_ANSWER)
         emit({"t": "tok", "s": NO_ANSWER})
     else:
@@ -1360,12 +1414,18 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                                 f"{runner.model}"})
         me = about(vault, s["sources"], today)
         # a routed half's answer goes first, as data the model words with the passages
-        head = _wrap("facts", "Facts computed by Keepfold:\n" + front_text) + "\n\n" \
-            if front_text else ""
-        messages = [{"role": "system",
-                     "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}") + me},
-                    *history(msgs[:-1], s["sources"], len(me)),
-                    {"role": "user", "content": head + ask.prompt(found, text) + CITE}]
+        head = _wrap("facts", "Facts computed by Keepfold:\n" + t.front_text) + "\n\n" \
+            if t.front_text else ""
+        t.messages = [{"role": "system",
+                       "content": SYSTEM.format(today=f"{today:%A}, {today.isoformat()}") + me},
+                      *history(msgs[:-1], s["sources"], len(me)),
+                      {"role": "user", "content": head + ask.prompt(found, text) + CITE}]
+
+
+def _stream(t: SimpleNamespace) -> None:
+    """Streams turn `t`'s `messages` through its runner into `parts`: a loop cut to each line
+    once, leaked tokens dropped, and asked once more when the model says nothing."""
+    messages, runner, parts, emit, cancel = t.messages, t.runner, t.parts, t.emit, t.cancel
     if messages:
         thought = []
 
@@ -1380,8 +1440,8 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                     emit({"t": "text", "s": ""})
                 emit({"t": "step", "s": f"{runner.model} said nothing; asking once more"})
             try:
-                for piece in runner.stream(messages, temperature=s["temperature"],
-                                           max_tokens=max_tokens, cancel=cancel,
+                for piece in runner.stream(messages, temperature=t.s["temperature"],
+                                           max_tokens=t.max_tokens, cancel=cancel,
                                            on_thinking=thinking):
                     parts.append(piece)
                     emit({"t": "tok", "s": piece})
@@ -1397,10 +1457,19 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
                 emit({"t": "text", "s": said})
             if said or (cancel is not None and cancel.is_set()):
                 break
-    answer = "".join(parts).strip()
+
+
+def _finish(t: SimpleNamespace, t0: float) -> None:
+    """Turn `t`'s answer, its fallbacks (the facts in plain words, SAID_NOTHING) or the
+    no_answer err; then its sources, coverage, quote proof, certainty, conflicts and horizon,
+    saved on the answer and sent as `src`, then `done`."""
+    vault, text, s, today, msgs, emit = t.vault, t.text, t.s, t.today, t.msgs, t.emit
+    cancel, convo_id, runner, found, facts = t.cancel, t.id, t.runner, t.found, t.facts
+    listed, stats, also, front_text, days = t.listed, t.stats, t.also, t.front_text, t.days
+    answer = "".join(t.parts).strip()
     stopped = cancel is not None and cancel.is_set()
     # only the model's words: Keepfold's own (a digest, a site list, its fallbacks) quote titles
-    by_model = bool(answer) and messages is not None
+    by_model = bool(answer) and t.messages is not None
     if not answer and not stopped and facts is not None:  # the model said nothing: plain words
         answer = chat_facts.say(facts, today)
         emit({"t": "tok", "s": answer})
@@ -1411,7 +1480,7 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     if not answer and not stopped:
         emit({"t": "err", "code": "no_answer", "id": convo_id,
               "message": f"{runner.describe()} did not answer; try again."})
-        return convo_id
+        return
     cited = ask.cites(answer)
 
     def pill(p):  # titles are untrusted page text: no links, images or markup
@@ -1441,16 +1510,16 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
     clash = [{"old": side(a), "new": side(b)} for a, b in _conflicts(
         vault, [p for n, p in enumerate(found, 1) if n in cited or not sources])]
     hz = _horizon(days if days is not None else _horizon_days(vault, s["sources"])) \
-        if searched_pages else None
+        if t.searched_pages else None
     extra = {**({"certainty": sure} if sure else {}),
              **({"horizon": {"first": hz["first"], "last": hz["last"]}} if hz else {}),
              **({"conflicts": clash} if clash else {})}
-    msgs.append({"role": "assistant", "text": kept or answer, "ts": _now(), "sources": sources,
+    msgs.append({"role": "assistant", "text": t.kept or answer, "ts": _now(), "sources": sources,
                  **({"searched": searched} if searched else {}),
                  **({"unquoted": unquoted} if unquoted else {}),
                  **({"facts": facts} if facts is not None else {}),
                  **({"coverage": coverage} if coverage else {}),
-                 "model": model, "switches": dict(s["sources"]),
+                 "model": t.model, "switches": dict(s["sources"]),
                  **({"unanswered": True} if unanswered else {}),
                  **({"stopped": True} if stopped else {}), **extra})
     _save(vault, convo_id, msgs, s["history"])
@@ -1458,7 +1527,6 @@ def reply(vault: Vault, convo_id: str | None, text: str, runner, emit, cancel,
           **({"unquoted": unquoted} if unquoted else {}),
           **({"coverage": coverage} if coverage else {}), **extra,
           **({"horizon": hz} if hz else {})})
-    emit({"t": "done", "id": convo_id, "model": model, "stopped": stopped,
+    emit({"t": "done", "id": convo_id, "model": t.model, "stopped": stopped,
           "seconds": round(time.monotonic() - t0, 1),
           "remembers": remembers(msgs, s["sources"])})
-    return convo_id
