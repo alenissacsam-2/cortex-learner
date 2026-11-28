@@ -625,6 +625,8 @@ def claude_code_row() -> dict | None:
     system PATH, which Windows reads first."""
     from keepfold import clients, update
     from keepfold.app import winpath
+    if update.mode() == "app":  # a Windows PATH fix; the Mac app links ~/.local/bin instead
+        return None
     exe, found = clients.installed_keepfold(), shutil.which("keepfold")
     if not exe or not found or Path(found).resolve() == exe.resolve():
         return None

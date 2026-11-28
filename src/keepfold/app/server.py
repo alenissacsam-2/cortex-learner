@@ -32,7 +32,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from keepfold import update
-from keepfold.app import actions, exports, news, status, targets, wizard
+from keepfold.app import actions, bundle, exports, news, status, targets, wizard
 
 HOST = "127.0.0.1"
 IDLE_S = 30 * 60
@@ -347,6 +347,7 @@ class App:
                     "/api/browse/private-chats": self.private_chats}
         self.post = {
             "/api/connect/plan": self.connect_plan, "/api/connect/apply": self.connect_apply,
+            "/api/app/move": self.app_move,
             "/api/connect/path": self.connect_path,
             "/api/connect/copied": self.pack_copied,
             "/api/profiles": self.profiles_set,
@@ -1640,20 +1641,33 @@ class App:
         return want
 
     def connect_plan(self, body: dict) -> dict:
+        if bundle.translocated():  # the configs would name a temporary path: Move first
+            return {"move": True}
         return {"rows": targets.plan_all(self._want(body), self.entry())}
 
     def connect_apply(self, body: dict) -> dict:
+        if bundle.translocated():
+            return {"move": True}
         want, base = self._want(body), self.entry()
-        return self.jobs.start("Connecting AI apps", "connect",
-                               lambda job: {"ok": True,
-                                            "rows": targets.apply_all(want, base, job.say)})
+
+        def run(job):
+            bundle.link_local_bin()  # the Mac app's ~/.local/bin/keepfold; elsewhere nothing
+            return {"ok": True, "rows": targets.apply_all(want, base, job.say)}
+        return self.jobs.start("Connecting AI apps", "connect", run)
+
+    def app_move(self, body: dict) -> dict:
+        """Move Keepfold to Applications: copy the translocated Mac app there and quit; the copy
+        opens once this app has ended."""
+        bundle.move_to_applications()
+        threading.Timer(2, self.stop.set).start()  # the page reads the answer first
+        return {"ok": True}
 
     def connect_path(self, body: dict) -> dict:
         """Status's Claude Code Fix (status.claude_code_row): the installed Keepfold's bin folder
         first on the user PATH, so the `keepfold` Claude Code starts is the app's."""
         from keepfold import clients
         from keepfold.app import winpath
-        exe = clients.installed_keepfold()
+        exe = clients.installed_keepfold() if update.mode() != "app" else None  # a Windows fix
         if exe is None:
             raise ValueError("This copy of Keepfold was not installed with KeepfoldSetup.exe.")
         winpath.put_first(str(exe.parent))

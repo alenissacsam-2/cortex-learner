@@ -190,6 +190,7 @@
   async function post(path, body, done) {
     try {
       const r = await api(path, body || {});
+      if (r && r.move) { moveScreen(); return null; }  // a translocated Mac app connects nothing
       if (done) done(r);
       return r;
     } catch (e) {
@@ -1363,6 +1364,11 @@
     $('confirm-no').onclick = () => dlg.close();
     dlg.showModal();
   }
+  // the Mac app runs from Downloads or its disk image: AI apps would get a temporary path
+  const moveScreen = () => confirmDialog('Move Keepfold to Applications', 'Move', [
+    h('p', { class: 'ink-2', text: 'Keepfold is running from a temporary place, so it cannot connect AI apps yet. Move copies it to your Applications folder and opens it from there.' }),
+    h('p', { class: 'ink-2', text: 'If Move does not work: quit Keepfold, drag Keepfold from its disk image or your Downloads folder to Applications in Finder, and open it from there.' })],
+  () => post('/api/app/move', {}, () => toast.ok('Keepfold is reopening from Applications.')));
   const confirmChanges = (rows, ok) => confirmDialog('Apply these changes?', 'Apply',
     [h('p', { class: 'ink-2', text: 'Keepfold will change these files, backing each one up first:' }), changeList(rows)], ok);
 

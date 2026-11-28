@@ -65,8 +65,12 @@ def _registry_install() -> Path | None:  # tests replace this: never the real re
 
 def installed_keepfold() -> Path | None:
     """`bin\\keepfold.exe` of the KeepfoldSetup.exe install (the folder this Python runs from, else
-    the one Apps & Features names, else the installer's default folder), else None."""
+    the one Apps & Features names, else the installer's default folder); the Mac or Linux app's
+    own CLI (bundle.cli_path); else None."""
     from keepfold import update
+    from keepfold.app import bundle
+    if (cli := bundle.cli_path()) is not None:
+        return cli
     local = os.environ.get("LOCALAPPDATA")
     for d in (update.install_dir(), _registry_install(),
               Path(local, "Programs", "Keepfold") if local else None):
