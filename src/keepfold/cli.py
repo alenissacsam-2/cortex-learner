@@ -877,13 +877,13 @@ def selftest() -> None:
         raise typer.Exit(1) from None
 
 
-
 @app.command("_parse-child", hidden=True)  # the frozen apps' PDF/.docx parse child (RR-37)
 def parse_child() -> None:
     """Parse documents from stdin in a child process; see more_sources._child_argv."""
     from keepfold import more_sources
 
     more_sources._parse_child()
+
 
 sample_app = typer.Typer(no_args_is_help=True, help="The sample vault (a made-up learner).")
 app.add_typer(sample_app, name="sample")
