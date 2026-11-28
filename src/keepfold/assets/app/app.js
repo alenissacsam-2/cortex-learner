@@ -364,6 +364,7 @@
       else Object.assign(guide, { done: j, upload: j.result && j.result.need ? guide.upload : null });
     } else if (j.section === 'update') {  // shown in the Updates board
       upd = j;
+      if (j.result && j.result.busy) closePrograms(j.result);
       if (j.result && j.result.launched) gone('Keepfold is closing to install the update. It reopens by itself when it is done; you can close this tab.');
     }
     else {
@@ -603,6 +604,12 @@
   /* Updates: the app checks GitHub every 6 hours and prepares a newer release (u.ready); it is
      installed only on a click */
   let upd = null;  // the last check or update job
+  // Programs in use (Mac/Linux Update now): end them only once the user agrees, then update again
+  function closePrograms(r) {
+    confirmDialog('Close Keepfold programs?', 'Close them and update', [h('p', { class: 'ink-2', text: r.note }),
+      h('ul', {}, r.busy.map(([pid, path]) => h('li', { text: `${String(path).split(/[\\/]/).pop()} (pid ${pid})` })))],
+    () => job('/api/update/apply', { close: r.busy.map(([pid]) => pid) }));
+  }
   function updatesBoard(u, cur) {
     const r = upd && upd.result;
     const cmd = (c) => h('div', { class: 'pad' }, h('div', { class: 'token' }, h('code', { text: c }),
@@ -611,14 +618,20 @@
       btn('Check for updates', () => { upd = null; return job('/api/update/check', {}); })])];
     if (upd && upd.error) out.push(row('That did not work', null, upd.error, null));
     else if (r && r.cancelled) out.push(row('Cancelled', null, 'Nothing was installed; update again any time.', null));
-    else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
-    else if (r) {
+    else if (r && r.waiting) {  // Mac/Linux: a newer release whose file for this computer is not attached yet
+      out.push(row(`Keepfold ${r.latest} is available`, null, 'The Mac and Linux files are attached about half an hour after a release. Check again soon.',
+        [ext(r.notes_url, 'Release notes')]));
+    } else if (r && !r.newer) out.push(row('You have the latest version', r.latest, null, null));
+    else if (r && r.download_url) {  // Mac/Linux: this account cannot replace the app
+      out.push(row('Install the update yourself', null, r.note, [ext(r.download_url, 'Open the release page')]));
+    } else if (r) {
       const mb = r.size ? ` (about ${Math.max(1, Math.round(r.size / 2 ** 20))} MB)` : '';  // unknown when the API was busy
-      const now = () => confirmDialog('Update Keepfold?', 'Update now',
-        [h('p', { class: 'ink-2', text: `Keepfold will download the update${mb}, close, and reopen when it's done. AI apps connected to Keepfold may need a restart.` })],
+      const say = r.mode === 'app' ? `Keepfold will download the update${mb}, swap it in and reopen. The version you have now is kept, in case you need it back. AI apps connected to Keepfold may need a restart.`
+        : `Keepfold will download the update${mb}, close, and reopen when it's done. AI apps connected to Keepfold may need a restart.`;
+      const now = () => confirmDialog('Update Keepfold?', 'Update now', [h('p', { class: 'ink-2', text: say })],
         () => job('/api/update/apply', {}));
       out.push(row(`Keepfold ${r.latest} is available`, null, r.command ? 'Run this in a terminal to update:' : null,
-        [ext(r.notes_url, 'Release notes'), r.mode === 'installer' ? btn('Update now', now, 'btn lit') : null]));
+        [ext(r.notes_url, 'Release notes'), r.mode === 'installer' || r.mode === 'app' ? btn('Update now', now, 'btn lit') : null]));
       if (r.command) out.push(cmd(r.command));
     } else if (u.ready) {  // found and prepared by the app's own check
       out.push(row(`Keepfold ${u.ready.version} is ready`, null, u.ready.command ? 'Run this in a terminal to update:'

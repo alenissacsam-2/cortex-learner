@@ -383,6 +383,45 @@ const out = {};
     await tick();
     out.refresh.push($('status').className, $('status').getAttribute('aria-busy'));
     out.inertBefore = ['top', 'jobline', 'shell'].map((id) => !!$(id).inert);
+    // Mac/Linux app: waiting for this computer's file, Update now, Programs in use, the release page
+    const updRow = (t) => $('status').querySelectorAll('.brow').find((r) => r.querySelector('.ttl').textContent === t);
+    const rowParts = (r) => [r.querySelector('.sub').textContent, r.querySelectorAll('button').map((b) => b.textContent),
+      r.querySelectorAll('a').map((a) => [a.textContent, a.getAttribute('href')])];
+    const notes = 'https://github.com/o/r/releases/tag/v0.2.0';
+    const appJob = (seq, result) => { DATA.routes['/api/job'] = { seq, job: { name: 'Updating Keepfold', section: 'update', running: false, cancellable: true, line: '', seconds: 1, error: null, result } }; };
+    const app = { current: '0.1.0', latest: '0.2.0', newer: true, notes_url: notes, mode: 'app', size: 31 * 2 ** 20 };
+    appJob(3, { ...app, newer: false, waiting: true, size: 0, note: 'still being prepared' });
+    rowBtn('Keepfold 0.1.0', 'Check for updates').fire('click');
+    await tick();
+    out.appWaiting = rowParts(updRow('Keepfold 0.2.0 is available'));
+    appJob(3, app);
+    rowBtn('Keepfold 0.1.0', 'Check for updates').fire('click');
+    await tick();
+    const appNow = () => updRow('Keepfold 0.2.0 is available').querySelectorAll('button').find((b) => b.textContent === 'Update now').fire('click');
+    appNow();
+    await tick();
+    out.appConfirm = [$('confirm-title').textContent, $('confirm-body').textContent];
+    const busy = { ...app, launched: false, note: 'Keepfold is in use by 2 programs.',
+      busy: [[101, '/Applications/Keepfold.app/Contents/MacOS/keepfold'], [202, '/opt/keepfold/keepfold-browse']] };
+    appJob(4, busy);
+    $('confirm-ok').onclick();
+    await tick();
+    out.appBusy = [$('confirm-title').textContent, $('confirm-ok').textContent,
+      $('confirm-body').querySelectorAll('p').map((e) => e.textContent), $('confirm-body').querySelectorAll('li').map((e) => e.textContent)];
+    const applies = () => fetched.filter((f) => f.path === '/api/update/apply').map((f) => f.body);
+    $('confirm-no').onclick();  // Cancel: nothing more is sent
+    await tick();
+    out.appCancel = applies();
+    appNow();
+    await tick();
+    $('confirm-ok').onclick();
+    await tick();
+    appJob(5, { ...app, launched: false, download_url: notes, note: 'Keepfold cannot replace itself where it is installed.' });
+    $('confirm-ok').onclick();  // Close them and update
+    await tick();
+    out.appClose = applies();
+    out.appYourself = rowParts(updRow('Install the update yourself'));
+    const updMark = fetched.length;
     const checked = { current: '0.1.0', latest: '0.2.0', newer: true, notes_url: 'https://github.com/o/r/releases/tag/v0.2.0', mode: 'installer', size: 31 * 2 ** 20 };
     DATA.routes['/api/job'] = { seq: 3, job: { name: 'Checking for updates', section: 'update', running: false, cancellable: false, line: '', seconds: 1, error: null, result: checked } };
     rowBtn('Keepfold 0.1.0', 'Check for updates').fire('click');
@@ -394,11 +433,11 @@ const out = {};
     avail.querySelectorAll('button').find((b) => b.textContent === 'Update now').fire('click');
     await tick();
     out.updConfirm = { title: $('confirm-title').textContent, ok: $('confirm-ok').textContent,
-      body: $('confirm-body').textContent, applied: fetched.some((f) => f.path === '/api/update/apply') };
+      body: $('confirm-body').textContent, applied: fetched.slice(updMark).some((f) => f.path === '/api/update/apply') };
     DATA.routes['/api/job'] = { seq: 4, job: { name: 'Updating Keepfold', section: 'update', running: false, cancellable: true, line: '', seconds: 9, error: null, result: { ...checked, launched: true } } };
     $('confirm-ok').onclick();
     await tick();
-    out.updAfter = { posts: fetched.filter((f) => f.path.startsWith('/api/update')).map((f) => f.path), gone: $('gone').hidden ? '' : $('gone').textContent };
+    out.updAfter = { posts: fetched.slice(updMark).filter((f) => f.path.startsWith('/api/update')).map((f) => f.path), gone: $('gone').hidden ? '' : $('gone').textContent };
     // Quit asks first in the page's own dialog; only its OK posts /api/quit
     $('quit').fire('click');
     await tick();
@@ -571,6 +610,23 @@ def test_app_js_boots_into_setup_and_upload_progress(root_committed, tmp_path, m
         "body": "Keepfold will download the update (about 31 MB), close, and reopen when it's "
                 "done. AI apps connected to Keepfold may need a restart."}
     assert out["updAfter"]["posts"] == ["/api/update/check", "/api/update/apply"]
+    # the Mac/Linux app (update.mode() == "app")
+    assert out["appWaiting"] == [
+        "The Mac and Linux files are attached about half an hour after a release. "
+        "Check again soon.",
+        [], [["Release notes", "https://github.com/o/r/releases/tag/v0.2.0"]]]
+    assert out["appConfirm"] == [
+        "Update Keepfold?", "Keepfold will download the update (about 31 MB), swap it in and "
+        "reopen. The version you have now is kept, in case you need it back. AI apps connected "
+        "to Keepfold may need a restart."]
+    assert out["appBusy"] == ["Close Keepfold programs?", "Close them and update",
+                              ["Keepfold is in use by 2 programs."],
+                              ["keepfold (pid 101)", "keepfold-browse (pid 202)"]]
+    assert out["appCancel"] == [{}]
+    assert out["appClose"] == [{}, {}, {"close": [101, 202]}]
+    assert out["appYourself"] == ["Keepfold cannot replace itself where it is installed.", [],
+                                  [["Open the release page",
+                                    "https://github.com/o/r/releases/tag/v0.2.0"]]]
     assert out["updAfter"]["gone"].startswith("Keepfold is closing to install the update.")
     assert out["quit"] == {"title": "Stop Keepfold?", "ok": "Quit", "before": False, "after": True,
                            "body": "Running jobs are cancelled; your vault is not affected."}
