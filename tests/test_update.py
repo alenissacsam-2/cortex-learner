@@ -76,6 +76,13 @@ def files(routes=None, sha=SHA):
 # ---- latest ---------------------------------------------------------------------------------
 
 
+@pytest.fixture
+def windows(monkeypatch):
+    """The Windows release file, KeepfoldSetup.exe, whatever OS runs the tests."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+
+@pytest.mark.usefixtures("windows")
 def test_latest_reads_the_release_with_a_generic_request():
     op = fake({API: release()})
     got = update.latest(opener=op)
@@ -121,6 +128,7 @@ def test_newer_older_same():
     (moved(DL.replace("v0.2.0", "v0.1.0")), "not this release"),
     (moved(DL + "../../../x/y/"), "not this release"),
 ])
+@pytest.mark.usefixtures("windows")
 def test_latest_refuses_what_cannot_be_installed(data, match):
     with pytest.raises(update.UpdateError, match=match):
         update.latest(opener=fake({API: data}))

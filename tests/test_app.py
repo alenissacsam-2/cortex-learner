@@ -1129,6 +1129,9 @@ def test_recommendation_by_memory(monkeypatch):
                                  "label": "8 GB of graphics memory (NVIDIA)"}
     monkeypatch.setattr(targets, "_which", lambda c: None)
     assert wizard.hardware()["kind"] == "gpu"  # cached
+    # no Apple Silicon or AMD card either: a Mac runner's unified memory counts as graphics memory
+    monkeypatch.setattr(wizard.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(wizard, "_amd_vram_gb", lambda: None)
     wizard.hardware.cache_clear()
     assert wizard.hardware()["kind"] == "ram"
     wizard.hardware.cache_clear()
@@ -1354,7 +1357,7 @@ def test_setup_vault_refuses_a_temp_folder_before_making_anything(app, vault, tm
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(systemp))
     cli._write_config(vault=str(vault))
     code, out, _, _ = call(app, "POST", "/api/setup/vault", {"path": str(systemp / "demo")})
-    assert code == 400 and out["error"] == wizard.TEMP_REFUSED  # one message, no failed job
+    assert code == 400 and out["error"] == wizard.temp_refused()  # one message, no failed job
     assert str(systemp) not in out["error"]
     assert not (systemp / "demo").exists() and app.root == vault
     assert Path(taint.config()["vault"]) == vault

@@ -716,7 +716,9 @@ def test_extra_path_windows_is_registry(monkeypatch):
 
 def test_git_exe_found_in_extra_path_off_windows(home, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(sm_mod, "extra_path", real_extra_path)
+    # only the real list's home folders: a Mac runner's own /opt/homebrew/bin/git comes first
+    monkeypatch.setattr(sm_mod, "extra_path", lambda: os.pathsep.join(
+        d for d in real_extra_path().split(os.pathsep) if d.startswith(str(home))))
     monkeypatch.setenv("PATH", "")
     exe = home / ".local" / "bin" / "git"
     exe.parent.mkdir(parents=True)

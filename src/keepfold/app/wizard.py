@@ -195,7 +195,7 @@ def install_plan() -> dict:
         ok = targets._which("winget") is not None
         return {"run": ["winget", "install", "--id", "Ollama.Ollama", "-e", *WINGET]
                 if ok else None, "source": "winget package Ollama.Ollama, from ollama.com",
-                "size": OLLAMA_SIZE, "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
+                "size": _OLLAMA_SIZES["win32"][0], "page": OLLAMA_PAGE, "license": OLLAMA_LICENSE}
     size = _ollama_size()[0]
     if sys.platform == "darwin" and targets._which("brew") is not None:
         return {"run": ["brew", "install", "ollama"], "source": "Homebrew",
