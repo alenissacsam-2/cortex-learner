@@ -1,4 +1,12 @@
 {
+  "0.7.0": {
+    "items": [
+      "Keepfold now has an app for Macs with Apple silicon (macOS 14 or later) and for Ubuntu 24.04 or later: the same window, an icon in the menu bar or top bar, quick capture, notifications, Start at login, Update now and Uninstall. Get them from the release page on GitHub.",
+      "In a terminal, keepfold uninstall disconnects Keepfold from your AI apps and stops it starting at login, then says what is left to remove. Your vault is kept.",
+      "On a Mac or Ubuntu, the Private switch asks for Touch ID or your password, scanned PDFs are read with the system's own text recognition (Tesseract on Ubuntu), and a local AI model (Ollama) installs with one click."
+    ],
+    "do": []
+  },
   "0.6.4": {
     "items": [
       "Two saves made at almost the same moment (within about 16 ms on a default Windows PC) no longer both go ahead at once, and saves still take turns after the PC's clock is set back (as on some dual-boot PCs right after login).",

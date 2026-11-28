@@ -7,12 +7,12 @@
     "url": "https://github.com/alenissacsam-2/keepfold",
     "source": "github"
   },
-  "version": "0.6.4",
+  "version": "0.7.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "keepfold",
-      "version": "0.6.4",
+      "version": "0.7.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
