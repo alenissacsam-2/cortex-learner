@@ -9,6 +9,7 @@ __pycache__/
 dist/
 build/
 *.spec
+!packaging/**/*.spec
 .pytest_cache/
 .ruff_cache/
 
