@@ -387,7 +387,8 @@ class App:
             "/api/job/cancel": self.cancel, "/api/quit": self.quit,
             "/api/setup/skip": self.setup_skip, "/api/update/check": self.update_check,
             "/api/update/apply": self.update_apply, "/api/whats_new/seen": self.news_seen,
-            "/api/window/show": self.window_show, "/api/app/autostart": self.autostart_set,
+            "/api/window/show": self.window_show, "/api/window/capture": self.window_capture,
+            "/api/app/autostart": self.autostart_set,
             "/api/app/notify": self.notify_set, "/api/app/chat-import": self.chat_import_set,
             "/api/app/welcome": self.welcome_set, "/api/app/hotkey": self.hotkey_set,
             "/api/app/update-check": self.update_check_set,
@@ -2626,6 +2627,10 @@ class App:
         """A second `keepfold-app` launch brings this app's window up (False: the browser app)."""
         return {"shown": self.desktop is not None and self.desktop.show()}
 
+    def window_capture(self, body: dict) -> dict:
+        """`keepfold capture` (GNOME's shortcut) shows the quick capture box."""
+        return {"shown": self.desktop is not None and self.desktop.capture()}
+
     def autostart(self) -> dict:
         from keepfold.app import desktop
         return desktop.autostart_state()
@@ -2649,13 +2654,15 @@ class App:
 
     def hotkey(self) -> dict:
         """Quick capture's key: the choice, the choices, and whether another app holds it
-        (`taken`). `desktop`: false in the browser app, which has no hotkey."""
+        (`taken`). `desktop`: false in the browser app, which has no hotkey, and on a Linux
+        desktop other than GNOME, which says so in `note`."""
         from keepfold.app import desktop
         h = self.desktop.hotkey if self.desktop is not None else None
+        linux = self.desktop is not None and h is None and sys.platform.startswith("linux")
         return {"desktop": h is not None, "key": desktop.hotkey_setting(),
-                "choices": [{"key": k, "label": v[2] if v else "Off"}
-                            for k, v in desktop.HOTKEYS.items()],
-                "taken": bool(h and h.taken)}
+                "choices": [{"key": k, "label": desktop.hotkey_label(k)}
+                            for k in desktop.HOTKEYS],
+                "taken": bool(h and h.taken), "note": desktop.HOTKEY_NOTE if linux else None}
 
     def hotkey_set(self, body: dict) -> dict:
         from keepfold.app import desktop
@@ -3037,12 +3044,21 @@ def running_url() -> str | None:
 def show_window(url: str) -> bool:
     """Ask the app at `url` (from running_url) to bring its window up; False when it has no
     window (the browser app) or does not answer."""
+    return _ask_shown(url, "/api/window/show")
+
+
+def show_capture(url: str) -> bool:
+    """Ask the app at `url` to show its quick capture box; False as for show_window."""
+    return _ask_shown(url, "/api/window/capture")
+
+
+def _ask_shown(url: str, path: str) -> bool:
     import http.client
     u = urlsplit(url)
     token = (parse_qs(u.query).get("t") or [""])[0]
     c = http.client.HTTPConnection(HOST, u.port, timeout=10)
     try:
-        c.request("POST", "/api/window/show", body=b"{}", headers={
+        c.request("POST", path, body=b"{}", headers={
             "Host": u.netloc, "X-Keepfold-Token": token, "Content-Type": "application/json"})
         r = c.getresponse()
         return r.status == 200 and json.loads(r.read()).get("shown") is True

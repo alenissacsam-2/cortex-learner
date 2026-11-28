@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from keepfold import update
+from keepfold._proc import NO_WINDOW
 
 CLI = "keepfold-cli"  # the Mac bundle's CLI; `Keepfold` (the GUI) differs by more than case
 LINUX_CLI = Path("/usr/bin/keepfold")  # the .deb's
@@ -68,6 +69,20 @@ def link_local_bin() -> Path | None:
     return link
 
 
+def start_app() -> None:  # tests replace this: never a real app start in a test
+    """Start the Keepfold app with its window, detached from this process: the Mac bundle
+    (`open`), the .deb's launcher, else this Python's `keepfold.app.launch` (which also
+    finds the Windows install)."""
+    if (app := app_path()) is not None:
+        args = ["open", str(app)]
+    elif update.mode() == "app" and sys.platform.startswith("linux"):
+        args = [str(LINUX_APP)]
+    else:
+        args = [sys.executable, "-m", "keepfold.app.launch"]
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, creationflags=NO_WINDOW)
+
+
 def _ditto(src: Path, dest: Path) -> tuple[bool, str]:  # tests replace this
     from keepfold.app import targets
     return targets._run(["ditto", str(src), str(dest)])
@@ -76,7 +91,6 @@ def _ditto(src: Path, dest: Path) -> tuple[bool, str]:  # tests replace this
 def _open_after(dest: Path, pid: int) -> None:  # tests replace this
     """Open `dest` once process `pid` (this app) has ended; while it runs, its local server
     would answer the new copy's start and only show this window."""
-    from keepfold._proc import NO_WINDOW
     subprocess.Popen(["/bin/sh", "-c", 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; '
                       'exec open "$2"', "sh", str(pid), str(dest)],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

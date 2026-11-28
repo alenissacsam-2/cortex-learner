@@ -150,6 +150,53 @@ def _no_real_hotkey(monkeypatch):
     return fake
 
 
+class FakeCarbon:
+    """The Carbon calls the Mac hotkey makes (keepfold.app.desktop.MacHotkey), in `calls`;
+    `held` (modifiers, key code) pairs another app holds; `press()` runs the installed handler."""
+
+    def __init__(self):
+        self.calls, self.held, self.handler, self.registered = [], set(), None, set()
+
+    def GetApplicationEventTarget(self):  # noqa: N802
+        self.calls.append(("target",))
+        return 7
+
+    def InstallEventHandler(self, target, proc, n, spec, data, out):  # noqa: N802
+        s = spec._obj
+        self.calls.append(("install", target, n, s.eventClass, s.eventKind))
+        self.handler = proc
+        return 0
+
+    def RegisterEventHotKey(self, code, mods, hkid, target, opts, out):  # noqa: N802
+        self.calls.append(("register", mods, code, target))
+        if (mods, code) in self.held:
+            return -9878  # eventHotKeyExistsErr
+        out._obj.value = 100 + code
+        self.registered.add(out._obj.value)
+        return 0
+
+    def UnregisterEventHotKey(self, ref):  # noqa: N802
+        self.calls.append(("unregister",))
+        self.registered.discard(ref.value)
+        return 0
+
+    def press(self):
+        return self.handler(None, None, None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_carbon(monkeypatch):
+    """Tests never register a real Mac hotkey nor write a real GNOME keybinding: a FakeCarbon,
+    main-thread hops run at once, and no GNOME session. Returns the FakeCarbon."""
+    from keepfold.app import desktop
+
+    fake = FakeCarbon()
+    monkeypatch.setattr(desktop, "_carbon", lambda: fake)
+    monkeypatch.setattr(desktop, "_on_main", lambda fn: fn())
+    monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def _no_real_windows_hello(monkeypatch):
     """Tests never show a real Windows Hello prompt: the Private switch's tests mock it."""

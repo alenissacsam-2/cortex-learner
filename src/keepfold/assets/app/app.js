@@ -567,7 +567,7 @@
   function quickCaptureBoard() {
     const field = h('div', { class: 'field', id: 'hotkey-field' }, h('span', { class: 'lbl', text: 'Quick capture key' }));
     api('/api/app/hotkey').then((d) => {
-      if (!d.desktop) { field.append(h('p', { class: 'help', text: 'Only in the desktop app.' })); return; }
+      if (!d.desktop) { field.append(h('p', { class: 'help', text: d.note || 'Only in the desktop app.' })); return; }
       const sel = h('select', { id: 'hotkey' }, d.choices.map((c) => h('option', { value: c.key, text: c.label })));
       sel.value = d.key;
       const taken = h('p', { class: 'help taken', id: 'hotkey-taken', role: 'status' });

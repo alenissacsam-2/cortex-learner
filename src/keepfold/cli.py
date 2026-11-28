@@ -882,6 +882,29 @@ def uninstall(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask f
         raise typer.Exit(1)
 
 
+CAPTURE_WAIT_S = 60  # a cold start of the app: its server, then its windows
+
+
+@app.command(hidden=True)  # what GNOME's quick capture shortcut runs
+def capture() -> None:
+    """Show the Keepfold app's quick capture box, starting the app first when none runs."""
+    from keepfold.app import bundle, server
+    if url := server.running_url():
+        if server.show_capture(url):
+            return
+        typer.echo("Quick capture comes with the Keepfold app's window; this Keepfold runs in "
+                   "the browser.", err=True)
+        raise typer.Exit(1)
+    bundle.start_app()
+    end = time.monotonic() + CAPTURE_WAIT_S
+    while time.monotonic() < end:  # the box exists once the app's windows do
+        time.sleep(0.5)
+        if (url := server.running_url()) and server.show_capture(url):
+            return
+    typer.echo("The Keepfold app did not start in time.", err=True)
+    raise typer.Exit(1)
+
+
 @app.command(hidden=True)  # the frozen apps' smoke test (release-apps.yml)
 def selftest() -> None:
     """Import every Keepfold module and read every package data file; exit 1 on the first

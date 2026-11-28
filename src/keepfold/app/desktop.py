@@ -9,8 +9,10 @@ pystray's Windows icon runs its own message loop on any thread:
 - keepfold-tray: the tray icon (Open Keepfold, Start with Windows, Quit) and its notifications,
   Windows only;
 - keepfold-notify: the once-a-day notifications (reviews due, an exam in 3 days or tomorrow);
-- keepfold-hotkey: quick capture's global hotkey (`Hotkey`, Windows only), a GetMessageW loop that
-  shows the capture box (a second, hidden window) on each press; Quit posts it WM_QUIT;
+- keepfold-hotkey: quick capture's global hotkey (`Hotkey`, Windows), a GetMessageW loop that
+  shows the capture box (a second, hidden window) on each press; Quit posts it WM_QUIT. A Mac's
+  `MacHotkey` (Carbon) runs on the main thread's loop instead; GNOME's (`GnomeHotkey`) is a
+  system shortcut running `keepfold capture`;
 - keepfold-end: waits for `app.stop` (Quit in the tray or on the page, an update) and destroys
   the window, which ends the main thread's GUI loop; `run` then stops the rest.
 Closing the window only hides it, and its page sleeps a minute later (`Desktop.hide`). With no
@@ -22,8 +24,11 @@ the browser, as `keepfold app` does.
 
 from __future__ import annotations
 
+import ast
+import ctypes
 import json
 import os
+import shlex
 import sys
 import threading
 import traceback
@@ -61,6 +66,23 @@ HOTKEYS = {"ctrl+alt+space": (MOD_CONTROL | MOD_ALT, VK_SPACE, "Ctrl+Alt+Space")
            "ctrl+alt+k": (MOD_CONTROL | MOD_ALT, VK_K, "Ctrl+Alt+K"),
            "off": None}
 HOTKEY_DEFAULT = "ctrl+alt+space"
+# the same choices on a Mac (Carbon: modifiers, virtual key code, label) and on GNOME (an
+# accelerator for its custom keybinding, label)
+MAC_CMD, MAC_OPTION, MAC_CONTROL = 0x100, 0x800, 0x1000
+KVK_SPACE, KVK_K = 0x31, 0x28
+KEYB, HOTKEY_PRESSED = int.from_bytes(b"keyb", "big"), 5  # kEventClassKeyboard, ...HotKeyPressed
+MAC_HOTKEYS = {"ctrl+alt+space": (MAC_CONTROL | MAC_OPTION, KVK_SPACE, "Ctrl+Option+Space"),
+               "win+alt+space": (MAC_CMD | MAC_OPTION, KVK_SPACE, "Cmd+Option+Space"),
+               "ctrl+alt+k": (MAC_CONTROL | MAC_OPTION, KVK_K, "Ctrl+Option+K"),
+               "off": None}
+GNOME_HOTKEYS = {"ctrl+alt+space": ("<Control><Alt>space", "Ctrl+Alt+Space"),
+                 "win+alt+space": ("<Super><Alt>space", "Super+Alt+Space"),
+                 "ctrl+alt+k": ("<Control><Alt>k", "Ctrl+Alt+K"),
+                 "off": None}
+GNOME_SCHEMA = "org.gnome.settings-daemon.plugins.media-keys"
+GNOME_KB = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/keepfold/"
+HOTKEY_NOTE = ("The quick capture key works on GNOME. On this desktop, add a keyboard shortcut "
+               "in its settings that runs: keepfold capture")
 BOX = (560, 120)  # the quick-capture box, CSS px
 
 _lock = threading.Lock()
@@ -338,6 +360,197 @@ class Hotkey:
         self._post(WM_QUIT)
         if self.thread is not None:
             self.thread.join(2)
+
+
+def hotkey_label(k: str) -> str:
+    """A choice's name on this OS ("Off" for off)."""
+    table = (MAC_HOTKEYS if sys.platform == "darwin" else
+             GNOME_HOTKEYS if sys.platform.startswith("linux") else HOTKEYS)
+    return table[k][-1] if table[k] else "Off"
+
+
+def _gnome() -> bool:
+    return sys.platform.startswith("linux") and "GNOME" in os.environ.get(
+        "XDG_CURRENT_DESKTOP", "").upper().split(":")
+
+
+def _hotkey(on_press):
+    """This OS's quick capture key: None on Linux desktops other than GNOME (HOTKEY_NOTE)."""
+    if sys.platform == "win32":
+        return Hotkey(on_press)
+    if sys.platform == "darwin":
+        return MacHotkey(on_press)
+    return GnomeHotkey() if _gnome() else None
+
+
+class _EventTypeSpec(ctypes.Structure):
+    _fields_ = [("eventClass", ctypes.c_uint32), ("eventKind", ctypes.c_uint32)]
+
+
+class _EventHotKeyID(ctypes.Structure):
+    _fields_ = [("signature", ctypes.c_uint32), ("id", ctypes.c_uint32)]
+
+
+# OSStatus (*)(EventHandlerCallRef, EventRef, void *userData)
+_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+
+
+def _carbon():  # tests replace this: never a real global hotkey in a test
+    """Carbon's hotkey calls (HIToolbox), typed."""
+    c = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
+    p = ctypes.POINTER(ctypes.c_void_p)
+    c.GetApplicationEventTarget.restype = ctypes.c_void_p
+    c.GetApplicationEventTarget.argtypes = []
+    c.InstallEventHandler.argtypes = [ctypes.c_void_p, _HANDLER, ctypes.c_ulong,
+                                      ctypes.POINTER(_EventTypeSpec), ctypes.c_void_p, p]
+    c.RegisterEventHotKey.argtypes = [ctypes.c_uint32, ctypes.c_uint32, _EventHotKeyID,
+                                      ctypes.c_void_p, ctypes.c_uint32, p]
+    c.UnregisterEventHotKey.argtypes = [ctypes.c_void_p]
+    for f in (c.InstallEventHandler, c.RegisterEventHotKey, c.UnregisterEventHotKey):
+        f.restype = ctypes.c_int32
+    return c
+
+
+def _on_main(fn) -> None:  # tests replace this
+    """fn() on the Mac's main thread, in the NSApplication loop `webview.start` runs."""
+    from PyObjCTools import AppHelper
+    AppHelper.callAfter(fn)
+
+
+class MacHotkey:
+    """Quick capture's global hotkey on a Mac: Carbon's RegisterEventHotKey, which needs no
+    Accessibility permission. Its handler sits on the application event target, so the main
+    run loop (pywebview's NSApplication) delivers each press. `start` runs on the main thread
+    before `webview.start`; `change` and `stop` hop to it. A taken combination: `taken`."""
+
+    SIGNATURE = int.from_bytes(b"kpfd", "big")
+
+    def __init__(self, on_press):
+        self.on_press = on_press
+        self.key: str | None = None
+        self.taken = self.on = False
+        self.ref, self.handler = ctypes.c_void_p(), ctypes.c_void_p()
+        self.proc = _HANDLER(self._pressed)  # kept here: Carbon holds only the pointer
+        self.done = threading.Event()
+        self.c = None
+
+    def label(self) -> str | None:
+        return hotkey_label(self.key) if self.on and self.key else None
+
+    def _pressed(self, _call, _event, _data) -> int:
+        try:
+            self.on_press()
+        except Exception:  # noqa: BLE001  (a failed show never ends the hotkey)
+            traceback.print_exc(limit=1)
+        return 0  # noErr
+
+    def start(self) -> None:
+        self.c = _carbon()
+        spec = _EventTypeSpec(KEYB, HOTKEY_PRESSED)
+        self.c.InstallEventHandler(self.c.GetApplicationEventTarget(), self.proc, 1,
+                                   ctypes.byref(spec), None, ctypes.byref(self.handler))
+        self._register()
+
+    def _release(self) -> None:
+        if self.on:
+            self.c.UnregisterEventHotKey(self.ref)
+            self.on = False
+
+    def _register(self) -> None:
+        self._release()
+        self.key = hotkey_setting()
+        spec = MAC_HOTKEYS[self.key]
+        self.on = bool(spec) and self.c.RegisterEventHotKey(
+            spec[1], spec[0], _EventHotKeyID(self.SIGNATURE, 1),
+            self.c.GetApplicationEventTarget(), 0, ctypes.byref(self.ref)) == 0
+        self.taken = bool(spec) and not self.on
+        self.done.set()
+
+    def change(self) -> None:
+        """Register app.hotkey again (on the main thread); returns once it has (or after 2 s)."""
+        self.done.clear()
+        _on_main(self._register)
+        self.done.wait(2)
+
+    def stop(self) -> None:
+        if threading.current_thread() is threading.main_thread():
+            self._release()
+        else:
+            _on_main(self._release)
+
+
+def _gnome_list(text: str) -> list[str]:
+    """gsettings' text of an `as` value (`@as []`, `['/a/', '/b/']`) as a list; ValueError for
+    anything else, so a list never read is never rewritten."""
+    t = text.strip().removeprefix("@as").strip()
+    try:
+        v = ast.literal_eval(t)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"not a gsettings string list: {text[:80]!r}") from e
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise ValueError(f"not a gsettings string list: {text[:80]!r}")
+    return v
+
+
+def _gsettings(*args: str) -> tuple[bool, str]:
+    from keepfold.app import targets
+    return targets._run(["gsettings", *args], timeout=10)
+
+
+def _gnome_binding(accel: str | None) -> bool:
+    """GNOME's custom keyboard shortcut running `keepfold capture` set to `accel`, or removed
+    (None). Keepfold's path is added to or removed from the custom-keybindings list; every
+    other entry stays. False when gsettings fails or the list cannot be read."""
+    ok, out = _gsettings("get", GNOME_SCHEMA, "custom-keybindings")
+    try:
+        paths = _gnome_list(out) if ok else None
+    except ValueError:
+        paths = None
+    if paths is None:
+        return False
+    entry = f"{GNOME_SCHEMA}.custom-keybinding:{GNOME_KB}"
+    if accel is None:
+        if GNOME_KB in paths:
+            ok = _gsettings("set", GNOME_SCHEMA, "custom-keybindings",
+                            repr([p for p in paths if p != GNOME_KB]))[0]
+        return _gsettings("reset-recursively", entry)[0] and ok
+    from keepfold import clients
+    from keepfold.app import bundle
+    cli = bundle.cli_path()
+    command = f"{shlex.quote(cli.as_posix() if cli else clients.keepfold_command())} capture"
+    for key, value in (("name", "Keepfold quick capture"), ("command", command),
+                       ("binding", accel)):
+        if not _gsettings("set", entry, key, repr(value))[0]:
+            return False
+    if GNOME_KB in paths:
+        return True
+    return _gsettings("set", GNOME_SCHEMA, "custom-keybindings", repr([*paths, GNOME_KB]))[0]
+
+
+class GnomeHotkey:
+    """Quick capture's key on GNOME: a custom keyboard shortcut that runs `keepfold capture`
+    (works on Wayland too). Written when the key is on, removed when off; Quit keeps it, as
+    `keepfold capture` starts the app."""
+
+    taken = False  # GNOME does not say when another shortcut uses the same keys
+
+    def __init__(self):
+        self.key: str | None = None
+        self.on = False
+
+    def label(self) -> str | None:
+        return hotkey_label(self.key) if self.on and self.key else None
+
+    def start(self) -> None:
+        self.change()
+
+    def change(self) -> None:
+        self.key = hotkey_setting()
+        spec = GNOME_HOTKEYS[self.key]
+        self.on = _gnome_binding(spec[0] if spec else None) and bool(spec)
+
+    def stop(self) -> None:
+        pass
 
 
 def daily_notes(root: Path, now: datetime) -> list[tuple[str, str]]:
@@ -618,6 +831,28 @@ def _show_box(form, control) -> None:
     control.Focus()
 
 
+def _box_origin(mouse, screens, size) -> tuple[float, float]:
+    """Mac: the box's bottom-left corner (Cocoa's y runs up), centred on the screen holding
+    `mouse`, a third of the way down its visible area, as on Windows. `screens`: (frame,
+    visibleFrame) pairs of (x, y, width, height), the main screen first (the fallback)."""
+    mx, my = mouse
+    _, (x, y, w, h) = next((s for s in screens if s[0][0] <= mx <= s[0][0] + s[0][2]
+                            and s[0][1] <= my <= s[0][1] + s[0][3]), screens[0])
+    return x + (w - size[0]) / 2, y + h * 2 / 3 - size[1] / 2
+
+
+def _place_box_mac(win) -> None:
+    """Move the box to the screen with the mouse (on the main thread, before its show)."""
+    def place():
+        ak = _appkit()
+        rect = lambda r: (r.origin.x, r.origin.y, r.size.width, r.size.height)  # noqa: E731
+        m, f = ak.NSEvent.mouseLocation(), win.native.frame().size
+        x, y = _box_origin((m.x, m.y), [(rect(s.frame()), rect(s.visibleFrame()))
+                                        for s in ak.NSScreen.screens()], (f.width, f.height))
+        win.native.setFrameOrigin_(ak.NSPoint(x, y))
+    _on_main(place)
+
+
 def _sleep(form, control) -> None:
     if not form.Visible and control.CoreWebView2 is not None:  # still hidden, WebView2 ready
         control.CoreWebView2.TrySuspendAsync()
@@ -679,6 +914,11 @@ class Desktop:
         """The hotkey or the tray's Quick capture: show the box, its input focused."""
         if self.box is None:
             return False
+        if sys.platform == "darwin":
+            try:
+                _place_box_mac(self.box)
+            except Exception:  # noqa: BLE001  (shown where it was rather than not at all)
+                traceback.print_exc(limit=1)
         if not _native(self.box, _show_box):
             self.box.show()
         return True
@@ -919,10 +1159,14 @@ def run(root: Path | None, *, hidden: bool = False, port: int = 0, echo=print) -
             height=BOX[1], background_color=GROUND)
         d.box.events.closing += d.box_closing
         d.sleep_later(d.box)  # hidden until the first press: no awake renderer meanwhile
-        if sys.platform == "win32":
-            d.hotkey = Hotkey(d.capture)
-            d.hotkey.start()
-            d.refresh_tray()  # its Quick capture text names the key
+        try:
+            d.hotkey = _hotkey(d.capture)
+            if d.hotkey is not None:  # on a Mac: here, on the main thread
+                d.hotkey.start()
+                d.refresh_tray()  # its Quick capture text names the key
+        except Exception as e:  # noqa: BLE001  (no Carbon: the tray's Quick capture still works)
+            d.hotkey = None
+            echo(f"Keepfold app: no quick capture key ({type(e).__name__}: {e})")
         if hidden:  # Start with Windows: the page sleeps until the window is first opened
             d.sleep_later()
         else:

@@ -221,7 +221,8 @@ def test_window_tray_close_hides_second_launch_shows_and_quit_ends(
     assert seen["kw"]["hidden"] is False and seen["kw"]["width"] == desktop.SIZE[0]
     assert seen["alive"] is True
     assert seen["calls"] == ["hide", "show"]
-    key = " (Ctrl+Alt+Space)" if sys.platform == "win32" else ""  # the hotkey: Windows only
+    # the hotkey: Windows, a Mac (a FakeCarbon), not Linux off GNOME (conftest: no GNOME here)
+    key = {"win32": " (Ctrl+Alt+Space)", "darwin": " (Ctrl+Option+Space)"}.get(sys.platform, "")
     assert seen["menu"] == [("Open Keepfold", True), (f"Quick capture{key}", False),
                             (desktop.autostart_label(), False), ("Quit", False)]
     assert FakeIcon.made[0].stopped.is_set() and ran == ["first_run"]
